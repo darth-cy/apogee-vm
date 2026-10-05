@@ -55,13 +55,12 @@ fn the_registry_is_one_table() {
     assert_eq!(
         DELEGATIONS.len(),
         10,
-        "S21 registers one delegation family, S23 two more, S26 a fourth, S26c two more \
-         and S-RECURSION four"
+        "ten delegation families: the base format's six and the recursion format's four"
     );
     assert_eq!(
         constants::delegation::BASE_TYPES,
         6,
-        "the base format's prefix is S26c's six, and is frozen"
+        "the base format's prefix is its six families"
     );
     for (fam, number, space, words) in DELEGATIONS {
         assert_eq!(delegation_family(number), Some(fam));
@@ -208,17 +207,11 @@ fn a_number_no_family_answers_is_refused() {
     // the ABI — not silently ignored, which would make the guest's own call
     // fail much later and much less clearly.
     let base = constants::guest_memory::RAM_ORIGIN;
-    // `PRECOMPILE_FIRST + 3` is `0x503`, which S26 gave to `MOD_MUL` and S26b
-    // **retired and burned** when that family's frame changed shape; `+ 4` is
-    // the number the specialized call took, and S26c took `+ 5` and `+ 6` for
-    // `SHA256_COMP` and `EC_ADD`. S26d did it a second time: `KECCAK_F`'s frame
-    // gained the round word, so `+ 1` was retired and burned and the call took
-    // `+ 7`. S26e did it a third: `SHA256_COMP`'s frame became four rounds and a
-    // window, so `+ 5` was burned and the call took `+ 8`. S-RECURSION took
-    // `+ 9` through `+ 12` for the field families. So the unanswered numbers are
-    // the **three** retired ones and 13 and up — and every retired one belongs
-    // in this sweep precisely because burning a number means nothing may answer
-    // it, ever.
+    // The precompile numbers no family answers are the **three** retired ones
+    // — `+ 1`, `+ 3` and `+ 5`, whose frames those of `+ 7`, `+ 4` and `+ 8`
+    // replace (`docs/spec/ecall-abi.md` §4) — and `+ 13` and up. Every retired
+    // one belongs in this sweep precisely because a retired number is never
+    // reassigned: nothing may answer it.
     for number in [
         0u32,
         ecall::EXIT,
@@ -256,17 +249,16 @@ fn a_truncated_record_declares_nothing() {
 // Every committed guest
 // ---------------------------------------------------------------------------
 
-/// S21 acceptance 8's first half and S23 acceptance 9's, over every guest in
-/// the tree: a guest declares exactly the delegation families whose shims it
-/// links, and **a guest that links none declares nothing at all** — not even
-/// the ones that link the SDK.
+/// Over every guest in the tree: a guest declares exactly the delegation
+/// families whose shims it links, and **a guest that links none declares
+/// nothing at all** — not even the ones that link the SDK.
 ///
 /// The second clause is the one that matters. `guests/Cargo.toml` pins
 /// `codegen-units = 1`, so the SDK is one object file; a `#[used]` record
 /// would be in every guest that links it, `fib` included, and detachment
 /// would mean nothing.
 ///
-/// Since S23 the set is wider than the guests that name a shim: `field`'s and
+/// The set is wider than the guests that name a shim: `field`'s and
 /// `transcript`'s guest-target backends route `Fr`'s arithmetic and the
 /// permutation through the delegation shims, so **every guest that links
 /// either crate declares both families**. That is the seam working, not a
@@ -316,7 +308,7 @@ fn every_guest_declares_exactly_what_it_links() {
     }
 }
 
-/// Reachability survives `opt-level = 3`, which is the half of acceptance 8
+/// Reachability survives `opt-level = 3`, which is the half of the property
 /// the committed fixtures cannot show: they are built at `debug`.
 ///
 /// This is the regression the `core::hint::black_box` in

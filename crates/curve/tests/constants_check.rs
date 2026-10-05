@@ -1,4 +1,4 @@
-//! Every frozen constant this crate depends on is re-derived here rather than
+//! Every constant this crate depends on is re-derived here rather than
 //! trusted, and so is every arithmetic *fact* the implementation leans on.
 //!
 //! Two kinds of silence motivate this. A wrong Montgomery constant leaves
@@ -26,7 +26,7 @@ use curve::{Fq, Fq2, G1Affine, G2Affine};
 use num_bigint::{BigInt, BigUint};
 use test_support::{to_hex, Rng};
 
-/// The master prompt's frozen Fq modulus, in decimal.
+/// The Fq modulus in decimal, as `docs/spec/primitives.md` §2 writes it.
 const FQ_MODULUS_DECIMAL: &str =
     "21888242871839275222246405745257275088696311157297823662689037894645226208583";
 
@@ -367,7 +367,7 @@ fn g2_cofactor_is_two_q_minus_r_and_odd() {
 }
 
 // ---------------------------------------------------------------------------
-// The pairing constants (S06)
+// The pairing constants
 //
 // Each is a power of `xi`, so each has a closed form, and each is checked
 // three ways where the check is cheap: against its closed form as an integer

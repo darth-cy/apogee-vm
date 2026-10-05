@@ -1,7 +1,7 @@
-//! Acceptance 1: the decoder against llvm-objdump.
+//! The decoder against llvm-objdump.
 //!
-//! Every instruction of the committed listings — `fib`, `rvc-dense` and `amm`
-//! from S10, and the hand-encoded corpus of every RV32IMA mnemonic — is decoded
+//! Every instruction of the committed listings — the guests `fib`, `rvc-dense`
+//! and `amm`, and the hand-encoded corpus of every RV32IMA mnemonic — is decoded
 //! here and **rendered in the disassembler's own syntax**, and the two strings
 //! must be equal. That compares the mnemonic, every register and every
 //! immediate at once, with the disassembler's reading as the authority.

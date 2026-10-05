@@ -1,7 +1,7 @@
 //! The trace archive: the self-contained post-execution snapshot, in the
 //! container every later prover phase appends to.
 //!
-//! # The container, frozen
+//! # The container
 //!
 //! A file is two `postcard` values back to back, deterministic payload first:
 //!
@@ -17,7 +17,7 @@
 //! to skip a field. A phase has timing exactly when it has content, and the
 //! filled phases are a prefix of the five, post-execution always among them.
 //!
-//! This stage fills post-execution only. Its content is one `postcard` value:
+//! This crate defines post-execution's content, one `postcard` value:
 //!
 //! ```text
 //! ( families: [(family u32, height u32, cycle [u64], pc [u32], next_pc [u32],
@@ -40,10 +40,10 @@
 //! input window's payload and the journal's — and `advice` is what the prover
 //! supplied at `guest_memory::ADVICE_ORIGIN`, which a resumed prover needs to
 //! rebuild `ADVICE_WINDOWS`' init column (`docs/spec/public-values.md`).
-//! Neither fd 0 nor fd 1 is here: a proof binds neither.
 //!
-//! The four later phases' contents are theirs to define; this stage carries
-//! them as opaque bytes and never interprets them.
+//! The four later phases' contents are the prover's to define
+//! (`docs/spec/streaming.md` §6); the archive carries them as opaque bytes and
+//! never interprets them.
 //!
 //! No compression: an uncompressed canonical encoding is what makes two runs'
 //! payloads byte-identical with nothing further to argue.
@@ -97,12 +97,8 @@ pub struct PhaseTiming {
 
 /// An execution's **public values**: the public input window's payload and the
 /// journal's (`docs/spec/public-values.md`). `transcript::io_digest(&input,
-/// &output)` is the public I/O digest, and since S-IO the two windows are what
-/// bind it to the execution.
-///
-/// The shape is S12's and the meaning is not: these were the fd 0 bytes the
-/// guest consumed and the fd 1 bytes it wrote, neither of which a proof bound.
-/// fd 1 is `Execution::stdout` now, and a proof binds none of it.
+/// &output)` is the public I/O digest, and the two windows are what bind it to
+/// the execution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IoStreams {
     pub input: Vec<u8>,
@@ -122,7 +118,7 @@ pub struct TraceArchive {
     /// (`docs/spec/public-values.md` §6). Nothing binds it; it is here so the
     /// snapshot is self-contained.
     advice: Vec<u8>,
-    /// Post-commit through final, opaque. Every one is `None` at S12.
+    /// Post-commit through final, opaque; `None` until a prover phase fills it.
     later: [Option<Vec<u8>>; 4],
     timing: [Option<PhaseTiming>; 5],
 }
@@ -192,7 +188,7 @@ impl TraceArchive {
     }
 
     /// Fill a later phase with its content and its wall-clock timing — how a
-    /// prover phase exports its snapshot (S16; the schemas are
+    /// prover phase exports its snapshot (the schemas are
     /// `docs/spec/streaming.md` §6). Refuses post-execution, which the
     /// constructor fills, a phase already filled, and a phase whose
     /// predecessor is empty: the filled phases stay a prefix, which is the rule
@@ -249,9 +245,6 @@ impl TraceArchive {
     }
 
     /// Write the archive: the payload section, then the timing section.
-    ///
-    /// `impl Write` because the stage prompt freezes that signature; master
-    /// anti-goal 2 would not have written it, and the handoff records the call.
     pub fn export(&self, mut w: impl Write) -> Result<(), String> {
         let timing: [(u8, Option<u64>); 5] =
             std::array::from_fn(|i| (i as u8, self.timing[i].map(|t| t.wall_nanos)));
@@ -557,10 +550,9 @@ fn decode_post_execution(
 /// constructor and the reader share.
 ///
 /// - every buffer names a family `constants::family` has, and one that
-///   claims a pc — the two init families claim none, so their buffers are
-///   empty;
+///   claims a pc — a window family claims none, so its buffer is empty;
 /// - every buffer's columns have one length, its height is on the menu, no
-///   `present` bit names a role past the seventh, a role a row does not have
+///   `present` bit names a role past the sixth, a role a row does not have
 ///   is `Query::ABSENT`, and the families ascend;
 /// - the profile counts the buffers, row for row;
 /// - the rows' cycles are exactly `1..=total`, each once;
@@ -581,9 +573,9 @@ fn check_parts(
         if !program::FAMILIES.contains(&t.family) {
             return Err(format!("family {} is not in constants::family", t.family));
         }
-        // A family whose rows are not cycles owns no buffer rows: the two RAM
-        // window families, the three S-IO ones, and a delegation family, whose
-        // invocations live in a `DelegationTrace` and not here.
+        // A family whose rows are not cycles owns no buffer rows: every window
+        // family, and a delegation family, whose invocations live in a
+        // `DelegationTrace` and not here.
         if !family::CYCLE_OWNING[t.family as usize] && n != 0 {
             return Err(format!(
                 "{} claims no pc, yet its buffer holds {n} rows",
@@ -614,12 +606,9 @@ fn check_parts(
         for r in 0..n {
             let row = t.row(r);
             // There are six roles and `present` is a `u8`, so bits 6 and 7
-            // name nothing and a row carrying one is malformed. The mask was
-            // full between S21 and the deletion of the POSIX layer — which
-            // took `Arg1` and `Arg2` with it — and this refusal was
-            // unreachable for exactly that span. It is reachable again, so it
-            // stands again. A seventh role narrows the spare bits, which is a
-            // schema change (`docs/spec/execution-trace.md` §7).
+            // name nothing and a row carrying one is malformed. A seventh role
+            // narrows the spare bits, which is a schema change
+            // (`docs/spec/execution-trace.md` §7).
             const SPARE: u8 = !0 << ROLES.len();
             if row.present & SPARE != 0 {
                 return Err(format!(
@@ -833,9 +822,9 @@ fn encode<T: Serialize + ?Sized>(value: &T) -> Vec<u8> {
 
 /// A `Vec<T>` read back from a sequence.
 ///
-/// The workspace's serde has no `alloc` feature (S01's choice, and
-/// `crates/loader` explains the cost), so `Vec` has no `Deserialize` of its
-/// own. Writing needs nothing: a slice serializes as a sequence in `core`.
+/// The workspace's serde has no `alloc` feature (`crates/loader` explains the
+/// cost), so `Vec` has no `Deserialize` of its own. Writing needs nothing: a
+/// slice serializes as a sequence in `core`.
 struct Seq<T>(Vec<T>);
 
 impl<'de, T: Deserialize<'de>> Deserialize<'de> for Seq<T> {
@@ -870,7 +859,7 @@ mod tests {
     use crate::family::{Query, Row};
     use constants::address_space;
 
-    /// A one-cycle archive, built through the frozen constructor.
+    /// A one-cycle archive, built through the constructor.
     fn tiny() -> TraceArchive {
         let mut log = MemoryEventLog::new();
         log.record(AddressSpace::Pc, 0, 4, 0x1_0000, 0x1_0004);
@@ -1065,19 +1054,16 @@ mod tests {
             ),
             // Bit 5 is `Role::Delegate`, the last real role, so a row claiming
             // it is not refused for naming a role that does not exist but for
-            // claiming a delegation request that no invocation answers. Since
-            // S23 the mirror query's address space is the *invocation's*, so a
-            // row claiming one without an invocation has no space to name, and
+            // claiming a delegation request that no invocation answers. The
+            // mirror query's address space is the *invocation's*, so a row
+            // claiming one without an invocation has no space to name, and
             // that is the refusal.
             (
                 "claims a delegation request and no invocation rides it",
                 post(|a| a.traces.families[0].present[0] = 0x20, None),
             ),
-            // Bit 7 names nothing. The mask was full from S21 until the POSIX
-            // layer took `Arg1` and `Arg2` with it, and for exactly that span
-            // this refusal was unreachable and stood commented out rather than
-            // run; six roles leave two spare bits, so it is reachable again and
-            // this is what proves it fires.
+            // Bit 7 names nothing: six roles leave two spare bits, and this is
+            // what proves the refusal fires.
             (
                 "names a role that does not exist",
                 post(|a| a.traces.families[0].present[0] = 0x80, None),
@@ -1133,13 +1119,11 @@ mod tests {
             assert!(e.contains(want), "expected '{want}': {e}");
         }
 
-        // A tag no address space claims. **Derived, never written down.** This
-        // case was the literal 9 until S26c gave 9 to `EC_ADD`, at which point
-        // it stopped exercising an unknown tag and started exercising a known
-        // one — so the reader produced a different message and the case failed
-        // for the right reason. `address_space::DELEGATION` is append-only and
-        // is the one list of the claimed tags, so one past its maximum is
-        // unclaimed by construction and stays unclaimed as families are added.
+        // A tag no address space claims. **Derived, never written down**: a
+        // literal would start exercising a known tag the moment a family took
+        // it. `address_space::DELEGATION` is append-only and is the one list
+        // of the claimed tags, so one past its maximum is unclaimed by
+        // construction and stays unclaimed as families are added.
         let unclaimed = address_space::DELEGATION
             .iter()
             .copied()

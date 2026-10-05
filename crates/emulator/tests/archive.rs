@@ -1,5 +1,5 @@
-//! The trace archive over real runs: acceptance 7 (round trip, determinism,
-//! answering without re-execution) and acceptance 8 (the five phases).
+//! The trace archive over real runs: the round trip, determinism, answering
+//! without re-execution, and the five phases.
 //! `crates/trace/src/archive.rs` holds the refusals that need a hand-built
 //! archive.
 
@@ -27,7 +27,7 @@ fn export(archive: &TraceArchive) -> Vec<u8> {
     bytes
 }
 
-/// Acceptance 7: export, import, export is byte-identical.
+/// Export, import, export is byte-identical.
 #[test]
 fn an_archive_round_trips_byte_for_byte() {
     for name in ["fib", "heap", "opcodes"] {
@@ -114,10 +114,10 @@ fn an_imported_archive_answers_without_reexecution() {
     archive.memory_log().self_check(&t.initial()).unwrap();
 }
 
-/// Acceptance 8: the section table lists all five phases; post-execution is
+/// The section table lists all five phases; post-execution is
 /// filled and timed, the four later ones are present and empty; and an
 /// archive claiming a later phase filled out of order is refused, beside the
-/// in-order control. The byte patches follow the frozen wire form in
+/// in-order control. The byte patches follow the wire form in
 /// `crates/trace/src/archive.rs`: each empty section is `tag 00`, and the
 /// timing section is five `(tag, Option<varint>)` pairs.
 #[test]

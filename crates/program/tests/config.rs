@@ -1,4 +1,4 @@
-//! The frozen wire forms — `VmConfig` and `ProgramIdentity` — the statement
+//! The wire forms — `VmConfig` and `ProgramIdentity` — the statement
 //! descriptor, and the RAM window rules of `docs/spec/memory.md` §3.
 
 mod common;
@@ -43,9 +43,9 @@ fn the_vm_config_wire_form_is_frozen_and_round_trips() {
         (family::MEM_SUBWORD, 1 << 22),
         (family::INIT_TEARDOWN, 1 << 22),
         (family::ZERO_WINDOWS, 1 << 22),
-        // S-IO's three, in every config: the two public value families at their
-        // pinned height and the advice windows at the window height
-        // (`docs/spec/public-values.md` §4).
+        // The three value window families, in every config: the two public
+        // value families at their pinned height and the advice windows at the
+        // window height (`docs/spec/public-values.md` §4).
         (family::PUBLIC_INPUT, family::PUBLIC_WINDOW_HEIGHT),
         (family::PUBLIC_OUTPUT, family::PUBLIC_WINDOW_HEIGHT),
         (family::ADVICE_WINDOWS, 1 << 22),
@@ -253,8 +253,9 @@ fn a_config_without_both_init_families_at_one_height_is_refused() {
 fn the_window_rules_hold_at_their_boundaries() {
     let config = fib_config();
     // One shard for each instruction family, then INIT_TEARDOWN's and
-    // ZERO_WINDOWS', then S-IO's three: one public input shard, one journal
-    // shard and no advice window (`docs/spec/public-values.md` §4).
+    // ZERO_WINDOWS', then the value window families': one public input
+    // shard, one journal shard and no advice window
+    // (`docs/spec/public-values.md` §4).
     let counts = |init: u32, zero: u32| [1, 1, 1, 1, 1, 1, init, zero, 1, 1, 0];
     let check =
         |counts: [u32; 11], windows: &[u32]| check_memory_windows(&config, &counts, windows);

@@ -1,13 +1,13 @@
-/* The guest memory map, frozen at S10. `prompts/S10-toolchain.md` pins this
-   script; `docs/spec/ecall-abi.md` §6 documents the symbols.
+/* The guest memory map, which `docs/spec/ecall-abi.md` §6 documents, symbols
+   included.
 
    The symbol names __bss_start, __bss_end, __heap_start and __stack_top are
-   frozen: crt0 in src/lib.rs zeroes the first range and the bump allocator
-   lives between the last two.
+   referenced by name: crt0 in src/lib.rs zeroes the first range and the bump
+   allocator lives between the last two.
 
    Every writable byte the guest can touch is declared as one loadable segment
    that runs to the top of RAM. The zkVM executor does not need that -- it makes
-   the whole RAM window addressable by construction -- but an image whose stack
+   the whole of RAM addressable by construction -- but an image whose stack
    and heap are in no PT_LOAD is an image whose program headers are a lie about
    its own memory, and any loader that believes them leaves the first push
    pointing at nothing. The headers say what the image needs, whoever reads

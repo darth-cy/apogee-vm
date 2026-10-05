@@ -9,7 +9,7 @@ publish.workspace = true
 # from the decoder.
 
 [dev-dependencies]
-# The acceptance-1 differential reads the loader's committed guest ELFs and
+# The llvm-objdump differential reads the loader's committed guest ELFs and
 # their llvm-objdump listings, and needs the loader's expansion of every
 # compressed instruction to decode it.
 loader.workspace = true

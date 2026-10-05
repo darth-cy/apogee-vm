@@ -1,6 +1,5 @@
-//! The trace: the memory self-check (acceptances 3 and 4), the timestamp
-//! convention (acceptance 5, must-be-exact 3 and 10), routing (acceptance 6),
-//! and the family buffers against the log they were recorded beside.
+//! The trace: the memory self-check, the timestamp convention, routing, and
+//! the family buffers against the log they were recorded beside.
 
 mod common;
 
@@ -24,7 +23,7 @@ fn rows_by_cycle(t: &common::Traced) -> Vec<(u32, Row)> {
     rows
 }
 
-/// Acceptance 3: the read and write multisets balance, with init and
+/// The read and write multisets balance, with init and
 /// teardown derived, for every traced guest.
 #[test]
 fn the_memory_argument_balances() {
@@ -67,10 +66,10 @@ fn the_heap_traffic_is_in_the_balanced_log() {
     t.log.self_check(&t.initial()).unwrap();
 }
 
-/// Acceptance 4: one corrupted event fails the self-check, naming the
+/// One corrupted event fails the self-check, naming the
 /// address space, the address and the timestamp where the log stops
 /// balancing — for a RAM read, a register write mid-chain, a pc write, and a
-/// timestamp that no longer precedes its write.
+/// read timestamp that does not precede its write.
 #[test]
 fn a_corrupted_event_is_named() {
     let t = traced("fib");
@@ -133,7 +132,7 @@ fn a_corrupted_event_is_named() {
         (AddressSpace::Pc, 0, events[p].ts + memory::TS_STEP)
     );
 
-    // A read that no longer strictly precedes its write: a negative gap.
+    // A read that does not strictly precede its write: a negative gap.
     let mut tampered = events.to_vec();
     tampered[i].read_ts = tampered[i].ts;
     let e = check(tampered).unwrap_err();
@@ -193,10 +192,10 @@ fn a_corrupted_event_is_named() {
     );
 }
 
-/// Acceptance 5 and must-be-exact 3: every event of every traced guest on
-/// the four-slot clock — cycles from 1 advancing by one, each opening with
-/// its pc query at slot 0, slots non-decreasing inside a cycle, every gap
-/// non-negative, and no two queries at one address sharing a slot.
+/// Every event of every traced guest on the four-slot clock — cycles from 1
+/// advancing by one, each opening with its pc query at slot 0, slots
+/// non-decreasing inside a cycle, every gap non-negative, and no two queries
+/// at one address sharing a slot.
 #[test]
 fn every_event_keeps_the_four_slot_clock() {
     for name in TRACED {
@@ -255,7 +254,7 @@ fn every_event_keeps_the_four_slot_clock() {
     }
 }
 
-/// Acceptance 5: an `amoadd.w` in `atomics`' loop fills all four slots of
+/// An `amoadd.w` in `atomics`' loop fills all four slots of
 /// its cycle, with the RAM read-modify-write and the `rd` write sharing slot 3.
 #[test]
 fn an_amoadd_w_occupies_all_four_slots() {
@@ -292,7 +291,7 @@ fn an_amoadd_w_occupies_all_four_slots() {
     }
 }
 
-/// Acceptance 6: fib's cycles each land in exactly one family, the one an
+/// fib's cycles each land in exactly one family, the one an
 /// independent reading of the image assigns its pc, and the counts sum to the
 /// cycle count.
 #[test]
@@ -330,7 +329,7 @@ fn atomics_cycles_route_to_the_atomics_family() {
     assert!(atomic_rows > 37 * 9, "only {atomic_rows} atomic cycles");
 }
 
-/// Must-be-exact 4: a pc no table claims is a loud internal error, never a
+/// A pc no table claims is a loud internal error, never a
 /// skip. fib with its jump/branch family taken out of both the tables and
 /// the config reaches such a pc at its first jump.
 #[test]
@@ -399,7 +398,7 @@ fn frame(instr: &Instr, row: &Row) -> u8 {
     }
 }
 
-/// Must-be-exact 3 and 10, row by row: each cycle has exactly its class's
+/// Row by row: each cycle has exactly its class's
 /// roles; each register role names the instruction's own register — or, on
 /// an ecall row, `a7` and `a0` read and `a0` written, an ecall taking exactly
 /// one argument; `rd = x0` logs a write-back of 0; an absent role is all zero;
@@ -647,10 +646,9 @@ fn the_final_state_is_the_last_write_of_every_address() {
 /// `docs/spec/memory.md` §3.4: `ZERO_WINDOWS`' shard list is the RAM windows
 /// above 0 the log touches. fib's stack sits just below `2^31`, in the last
 /// window `2^29 / h - 1` at every height, and at each of these three all else
-/// it touches is in window 0 — not at the menu's `2^8`, which S21 added for
-/// the keccak delegation family and where a window is 1 KiB, small enough that
-/// fib's own image reaches past window 0. The test below holds `init_windows`
-/// to the whole menu at every guest.
+/// it touches is in window 0 — not at the menu's `2^8` or `2^12`, where a
+/// window is 1 or 16 KiB, too small for fib's own image. The test below holds
+/// `init_windows` to the whole menu at every guest.
 #[test]
 fn fib_touches_only_the_image_window_and_the_stack_window() {
     let t = traced("fib");
@@ -663,11 +661,11 @@ fn fib_touches_only_the_image_window_and_the_stack_window() {
 /// window, and every listed window holds one, at every menu height — and the
 /// list passes the verifier's window rules.
 ///
-/// Every *admissible* window height, that is. `2^8` is on the menu for the
-/// delegation families and for the two public value ones, and it is not a
-/// window height: `4h` would be 1 KiB, so RAM window 0 would not contain the
-/// two public windows and a `ZERO_WINDOWS` id could claim one
-/// (`docs/spec/public-values.md` §2). The rule refuses it by name, which is
+/// Every *admissible* window height, that is. `2^8` and `2^12` are on the menu
+/// for the delegation families and the two public value ones, and neither is a
+/// window height: `4h` would be 1 or 16 KiB, so RAM window 0 would not contain
+/// the two public windows and a `ZERO_WINDOWS` id could claim one
+/// (`docs/spec/public-values.md` §2). The rule refuses both by name, which is
 /// asserted here rather than skipped.
 #[test]
 fn the_window_list_is_exactly_the_touched_windows_above_zero() {
@@ -736,7 +734,7 @@ fn the_window_list_is_exactly_the_touched_windows_above_zero() {
     }
 }
 
-/// Must-be-exact 2: every ecall row answers as `docs/spec/ecall-abi.md` says.
+/// Every ecall row answers as `docs/spec/ecall-abi.md` says.
 /// Each is `(a7, a0 read, a0 written)`, and the middle is zero where the call
 /// reads no argument at all — an ecall takes one or none. `opcodes`'
 /// `cover_ecall` makes one call at the top of each of the two ranges nothing
@@ -786,7 +784,7 @@ fn every_ecall_answers_as_the_abi_says() {
         }
         if name == "opcodes" {
             // The top of each range nothing answers. Not the *bottom* of the
-            // precompile range: since S23 the low numbers are delegations, and
+            // precompile range: the low numbers are delegations, and
             // calling one a guest did not declare is fatal rather than
             // `-ENOSYS`.
             let edges = [

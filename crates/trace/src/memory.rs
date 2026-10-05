@@ -2,8 +2,8 @@
 //! family's frame and its witness, a RAM window's teardown, and the register
 //! and PC finals the verifier's boundary reads.
 //!
-//! `docs/spec/memory.md` is normative: §2.1 the frame, §2.4 its witness, §3.4
-//! a window's columns, §4.1 the finals. Every column is keyed by
+//! `docs/spec/memory.md` specifies them: §2.1 the frame, §2.4 its witness,
+//! §3.4 a window's columns, §4.1 the finals. Every column is keyed by
 //! `constraints::memory`'s layout, which is where the layout lives.
 
 use constants::lookup_channel;
@@ -54,8 +54,8 @@ fn column(mut values: Vec<u64>, height: usize) -> MultilinearPoly {
 /// cycle's pc write, `4·(cycle − 1)`; every other field is in the row. What is
 /// **not** here is a delegation invocation's frame accesses: they ride this
 /// cycle's timestamp but they are the delegation family's own rows, not this
-/// one's (`docs/spec/delegation.md` §4), and the frame builders skipped them
-/// when they read the log.
+/// one's (`docs/spec/delegation.md` §4), and `checker::memory_columns_from_log`,
+/// which reads the log, skips them.
 ///
 /// `crates/trace/src/archive.rs`'s `check_parts` is the same derivation in the
 /// other direction — it holds an archived log to the rows event for event — so
@@ -92,12 +92,9 @@ fn row_events(row: &Row) -> Vec<MemoryEvent> {
 /// the result is a slot of that list.
 ///
 /// An event takes the first slot of its row still free whose space and slot are
-/// its own. That is exact for every query but the three slot-2 register ones,
-/// `rs2` and `load`, which [`ROLES`] orders in that order. Since the POSIX
-/// layer went there is no ambiguity left to resolve: `arg1` and `arg2` shared
-/// slot 2 with them and are deleted, so each surviving role's
-/// `(space, Δ)` pair is unique and a query's events route by that pair alone
-/// (`docs/spec/execution-trace.md` §6, §7).
+/// its own. That is exact: no two roles share a `(space, Δ)` pair — `rs2` and
+/// `load` share slot 2, in [`ROLES`] order, but not a space — so a query's
+/// events route by that pair alone (`docs/spec/execution-trace.md` §6, §7).
 ///
 /// Panics on `rows.len() > height`, and — naming the event — on a query no free
 /// slot takes, which is how a frame too narrow for the family filling it fails

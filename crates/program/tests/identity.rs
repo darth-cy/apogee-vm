@@ -1,5 +1,5 @@
-//! Program identity: determinism, the recipe, and sensitivity. Acceptance 8
-//! and 9, and the recipe of `docs/spec/program.md` §8.
+//! Program identity: determinism, the recipe of `docs/spec/program.md` §8,
+//! and sensitivity.
 //!
 //! **Every test here but the last two is `#[ignore]`d.** Identity is Mercury
 //! commitments over the public SRS, which is PSE's 19 GB ceremony file,
@@ -11,8 +11,8 @@
 //!
 //!     cargo test --release -p program --test identity -- --ignored
 //!
-//! Running that twice is acceptance 8's two local process runs: each run
-//! compares against the same committed value.
+//! Running that twice is two local process runs, each comparing against the
+//! same committed value.
 
 mod common;
 
@@ -75,8 +75,8 @@ fn flip_byte(image: &ProgramImage, addr: u32) -> ProgramImage {
     flipped
 }
 
-/// Acceptance 8: fib's identity at the frozen defaults, computed twice in one
-/// process, equals itself and the committed value.
+/// fib's identity at the defaults, computed twice in one process, equals
+/// itself and the committed value.
 #[test]
 #[ignore = "needs assets/ptau/ppot_0080_24.ptau; run with --ignored"]
 fn fib_at_the_defaults_is_deterministic_and_pinned() {
@@ -136,7 +136,7 @@ fn the_identity_is_the_documented_recipe() {
         lists.iter().filter(|l| l.is_empty()).count(),
         4,
         "four families have no setup column and so absorb an empty list: \
-         ZERO_WINDOWS, and since S-IO PUBLIC_INPUT, PUBLIC_OUTPUT and \
+         ZERO_WINDOWS, PUBLIC_INPUT, PUBLIC_OUTPUT and \
          ADVICE_WINDOWS. fib declares no delegation family, or each of those \
          would add one more"
     );
@@ -147,9 +147,9 @@ fn the_identity_is_the_documented_recipe() {
     );
 }
 
-/// Acceptance 9, and what S14 binds: each of the inputs moves the identity —
-/// one instruction word, one `.rodata` byte, one `.data` byte, the entry pc,
-/// `bytecode_size_words`, one family removed from the set, one height.
+/// Each of the inputs moves the identity: one instruction word, one `.rodata`
+/// byte, one `.data` byte, the entry pc, `bytecode_size_words`, one family
+/// removed from the set, one height.
 #[test]
 #[ignore = "needs assets/ptau/ppot_0080_24.ptau; run with --ignored"]
 fn every_input_moves_the_identity() {
@@ -251,7 +251,7 @@ fn a_segment_without_file_bytes_does_not_move_the_identity_by_its_size() {
     );
 }
 
-/// Acceptance 8's last clause: fib rebuilt from source, twice, into fresh
+/// fib rebuilt from source, twice, into fresh
 /// target directories, has one identity — and on the machine the fixture was
 /// built on, it is the committed one.
 #[test]
@@ -274,20 +274,20 @@ fn a_rebuilt_guest_has_the_same_identity() {
     }
 }
 
-/// `identity_from_commitments` is §6.2's steps 1–5 over given lists, rebuilt
-/// here message by message: `PROGRAM_IDENTITY`, `VM_CONFIG`, `PROGRAM_ENTRY`,
-/// then one `COMMITMENT` list per family — a distinct point per family, and an
-/// empty list for the families that commit nothing — then one raw sample.
-/// Needs no SRS, so it runs in CI. Fails if a message moved, or a family's
-/// list were absorbed out of order.
+/// `identity_from_commitments` is `docs/spec/program.md` §8's recipe over
+/// given lists, rebuilt here message by message: `PROGRAM_IDENTITY`,
+/// `VM_CONFIG`, `PROGRAM_ENTRY`, then one `COMMITMENT` list per family — a
+/// distinct point per family, and an empty list for `ZERO_WINDOWS` and
+/// `KECCAK_F`, which commit nothing — then one raw sample. Needs no SRS, so it
+/// runs in CI. Fails if a message moved, or a family's list were absorbed out
+/// of order.
 ///
-/// Two guests. `fib`'s config is the nine-family one, whose single empty list
-/// is `ZERO_WINDOWS`'. `keccak-test` declares `KECCAK_F`
+/// Two guests. `fib`'s config is the eleven-family one, whose single empty
+/// list here is `ZERO_WINDOWS`'. `keccak-test` declares `KECCAK_F`
 /// (`docs/spec/delegation.md` §7), which is invoked rather than decoded and so
-/// commits nothing either — and its id is above both window families', so the
-/// digest absorbs **two adjacent empty `COMMITMENT` messages**. That is the
-/// shape a framing without a length would collapse, and no config could
-/// produce it before S21.
+/// commits nothing either — and its id is just above the two RAM window
+/// families', so the digest absorbs **two adjacent empty `COMMITMENT`
+/// messages**. That is the shape a framing without a length would collapse.
 #[test]
 fn the_digest_over_commitments_is_the_documented_recipe() {
     let mut empties = Vec::new();

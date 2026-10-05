@@ -1,6 +1,5 @@
-//! S15 acceptance 10 and S18 acceptance 6: the generic channel's committed
-//! table, against an independent reference computation of each of its three
-//! tables.
+//! The generic channel's committed table, against an independent reference
+//! computation of each of its three tables.
 //!
 //! The reference is written here from the ISA's own definitions — a bitwise AND
 //! of two bytes, bit 15 of a halfword, and the power of two a shift amount
@@ -58,7 +57,7 @@ fn reference() -> Vec<[u32; GENERIC_WIDTH]> {
     out
 }
 
-/// Acceptance 10. Every committed cell of the packed table, `U16GetSign`
+/// Every committed cell of the packed table, `U16GetSign`
 /// included, equals the reference: row 0 is the `ZeroEntry`, rows 1 onward are
 /// the three tables in order, and every row past them is the `ZeroEntry` again.
 #[test]
@@ -121,7 +120,7 @@ fn a_poisoned_row_differs_from_the_committed_table() {
     let sign = AND_ROWS + 0x8000;
     assert_eq!(poisoned[sign], [SIGN_BASE + 0x8000 + 1, 1, 0]);
     poisoned[sign][1] = 0;
-    // `2^(31 − 5) = 2^26`; claim `2^27`, which no longer pairs to `2^32`.
+    // `2^(31 − 5) = 2^26`; claim `2^27`, which does not pair to `2^32`.
     let shift = AND_ROWS + SIGN_ROWS + 5;
     assert_eq!(poisoned[shift], [SHIFT_BASE + 5 + 1, 1 << 5, 1 << 26]);
     poisoned[shift][2] <<= 1;

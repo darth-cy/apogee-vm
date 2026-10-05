@@ -1,4 +1,4 @@
-//! The family partition and static detachment: acceptance 3, 4 and 5.
+//! The family partition, detachment, and the derived family set.
 
 mod common;
 
@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use constants::family;
 use program::{decode_program, family_name, ProgramParams};
 
-/// Acceptance 3: every executable pc lands in exactly one family table, and
+/// Every executable pc lands in exactly one family table, and
 /// nothing else does.
 ///
 /// The claimed-pc union is recomputed from the finished tables — the pc a live
@@ -70,7 +70,7 @@ fn every_instruction_is_claimed_by_exactly_one_family() {
     }
 }
 
-/// Acceptance 4: an `amoadd.w` whose family is detached is claimed by nobody,
+/// An `amoadd.w` whose family is detached is claimed by nobody,
 /// and derivation fails naming its pc. That failure is what makes detachment
 /// sound: a config without a family cannot quietly drop that family's
 /// instructions.
@@ -115,7 +115,7 @@ fn an_atomic_under_detached_atomics_fails_naming_its_pc() {
     assert!(config.height(family::ATOMICS).is_some());
 }
 
-/// Acceptance 5: the family set is derived from each program.
+/// The family set is derived from each program.
 #[test]
 fn each_program_derives_only_the_families_it_uses() {
     let fib = decode_program(&common::guest("fib"), &ProgramParams::defaults())
@@ -150,7 +150,7 @@ fn each_program_derives_only_the_families_it_uses() {
             family::MEM_SUBWORD,
             family::INIT_TEARDOWN,
             family::ZERO_WINDOWS,
-            // S-IO's three are in every config, derived or not
+            // The three value window families are in every config, derived or not
             // (`docs/spec/public-values.md` §4).
             family::PUBLIC_INPUT,
             family::PUBLIC_OUTPUT,
@@ -168,15 +168,15 @@ fn each_program_derives_only_the_families_it_uses() {
     assert_eq!(detached.1, config);
 }
 
-/// Every committed guest preprocesses at the frozen default heights, and the
+/// Every committed guest preprocesses at the default heights, and the
 /// height rule that would refuse one still fires.
 ///
 /// The suites that are not about the heights take `common::fitting`, so without
 /// this nothing would notice a guest — or growth in an existing one — crossing
 /// a default. A family's table is indexed by absolute pc, so `2^16` rows run
 /// out at pc `0x20000`, and a guest whose `.text` reaches past that needs a
-/// taller one: `guests/mod-mul-ops` reaches `0x452c6` and takes `2^18`. Every
-/// guest fits at the frozen defaults; the second half shortens one family back
+/// taller one: `guests/mod-mul-ops` reaches `0x45be6` and takes `2^18`. Every
+/// guest fits at the defaults; the second half shortens one family back
 /// to `2^16` so the refusal keeps a test.
 #[test]
 fn the_default_heights_hold_every_committed_guest() {

@@ -1,8 +1,8 @@
 //! ELF loading and RVC expansion: guest bytes in, [`ProgramImage`] out.
 //!
 //! The image is a deterministic function of the ELF bytes and nothing else —
-//! no clock, no filesystem, no hash map iteration order — because S11 derives
-//! program identity from it.
+//! no clock, no filesystem, no hash map iteration order — because program
+//! identity is derived from it.
 //!
 //! # What a load does
 //!
@@ -86,7 +86,7 @@ pub enum LoaderError {
     UnsupportedElfType { e_type: u16 },
     /// A `PT_LOAD` header that cannot describe this VM's memory: odd address,
     /// `filesz` above `memsz`, an overlap with another segment, or a span that
-    /// leaves the frozen RAM window.
+    /// leaves guest RAM.
     BadSegment { vaddr: u32, reason: &'static str },
     /// No `PT_LOAD` segment is executable, so there is no instruction stream.
     NoExecutableSegment,
@@ -149,10 +149,10 @@ pub enum Slot {
 /// A loaded program: the post-load memory image, the entry pc, and the
 /// expanded instruction stream at halfword granularity.
 ///
-/// **Frozen at S10**, fields and serialization both. The wire form is
-/// `postcard` over these four fields in declaration order — sorted vectors,
-/// never a hash map — so two loads of the same ELF serialize to the same
-/// bytes on any machine.
+/// Fields and serialization are a fixed format (`docs/spec/program.md` §3).
+/// The wire form is `postcard` over these four fields in declaration order —
+/// sorted vectors, never a hash map — so two loads of the same ELF serialize
+/// to the same bytes on any machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProgramImage {
     /// `e_entry`. Always the address of an [`Slot::Instruction`].
@@ -425,10 +425,11 @@ fn read_segments(
                 reason: "p_filesz above p_memsz",
             });
         }
-        // The frozen memory map, enforced. Nothing outside it is addressable,
-        // so a segment that leaves it is not something this VM can run — and
-        // checking it here is also what stops a hostile `p_memsz` from sizing
-        // the slot vector, which is a function of the image span.
+        // The memory map, enforced. An image initializes RAM and nothing else —
+        // the public windows and the advice region start from the statement and
+        // the prover — so a segment that leaves RAM is not something this VM
+        // can run, and checking it here is also what stops a hostile `p_memsz`
+        // from sizing the slot vector, which is a function of the image span.
         let ram_lo = guest_memory::RAM_ORIGIN as u64;
         let ram_hi = ram_lo + guest_memory::RAM_LENGTH as u64;
         if (vaddr as u64) < ram_lo || vaddr as u64 + memsz as u64 > ram_hi {
@@ -553,11 +554,10 @@ fn u32le(b: &[u8], at: usize) -> u32 {
 // macro enters the build. Each type is its fields in declaration order, which
 // `postcard` writes as a bare concatenation.
 //
-// The workspace takes `serde` with no features at all, which is what S01 chose
-// so that the shipped configuration is the one the tests exercise. That means
-// no `Vec` impls, so the three sequences below carry their own visitors. It is
-// more lines than a feature flag would be, and it is the reason the feature
-// graph is still the one S01 froze.
+// The workspace takes `serde` with no features at all, so that the shipped
+// configuration is the one the tests exercise. That means no `Vec` impls, so
+// the three sequences below carry their own visitors. It is more lines than a
+// feature flag would be, and it keeps the feature graph one configuration.
 // ---------------------------------------------------------------------------
 
 use core::fmt;
@@ -830,8 +830,8 @@ impl<'de> serde::Deserialize<'de> for ProgramImage {
 ///
 /// `load_elf` establishes all of these by construction, so this exists for the
 /// deserialization path: a wire form is untrusted input, and `ProgramImage` is
-/// frozen here as the thing S11 derives program identity from and S12 executes.
-/// A field the reader accepts is a field a later stage will believe.
+/// what program identity is derived from and the emulator executes. A field
+/// the reader accepts is a field every later step will believe.
 fn validate(image: &ProgramImage) -> Result<(), &'static str> {
     if !image.slot_base.is_multiple_of(2) {
         return Err("malformed program image: slot_base is odd");

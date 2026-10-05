@@ -1,4 +1,4 @@
-//! BN254's base field tower level one, and both curve groups.
+//! BN254's curve side: the base field `Fq` and its tower, G1 and G2, the pairing and MSM.
 //!
 //! The full tower, both curve groups, the optimal ate pairing, and the
 //! Pippenger multi-scalar multiplication the prover leans on.
@@ -35,9 +35,8 @@
 //! rather than panicking on any failure. There is no compressed form, and no
 //! decompression, anywhere in the protocol.
 //!
-//! Note that this byte form is *not* how a point enters a transcript: the
-//! frozen rule there is four ~128-bit `Fr` limbs per point, which is a later
-//! stage's business.
+//! Note that this byte form is *not* how a point enters a transcript: there a
+//! point is four ~128-bit `Fr` limbs (`docs/spec/transcript.md` §4).
 //!
 //! # Numbers this crate relies on
 //!

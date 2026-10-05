@@ -1,4 +1,4 @@
-//! Acceptance 3 and 5: the five backings are one polynomial in five costumes,
+//! The five backings are one polynomial in five costumes,
 //! and the lift is lazy in the sense that is observable — bind-triggered, never
 //! read-triggered.
 
@@ -76,7 +76,7 @@ fn assert_backings_agree(values: &[u64], point: &[Fr]) {
         let gets: Vec<Fr> = (0..p.len()).map(|i| p.get(i)).collect();
         assert_eq!(gets, reference_gets, "{name}: get");
         assert_eq!(p.evaluate(point), reference_eval, "{name}: evaluate");
-        // Must-be-exact 3: neither read touched the backing.
+        // Neither read touched the backing.
         assert_eq!(p.backing(), backing, "{name}: a read mutated the backing");
 
         let mut q = p;
@@ -88,7 +88,7 @@ fn assert_backings_agree(values: &[u64], point: &[Fr]) {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 3
+// Every backing, one polynomial
 // ---------------------------------------------------------------------------
 
 /// All 256 three-variable 0/1 tables, exhaustively: `U1` against every wider
@@ -147,12 +147,11 @@ fn backings_agree_at_the_edges_of_their_width() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 5
+// The lazy lift
 // ---------------------------------------------------------------------------
 
-/// Lazy means bind-triggered. `backing()` is the discriminant accessor the
-/// stage asks for: it is the only way to tell, and it says `U16` until a
-/// challenge arrives.
+/// Lazy means bind-triggered. `backing()` is the discriminant accessor: it is
+/// the only way to tell, and it says `U16` until a challenge arrives.
 #[test]
 fn the_lift_is_lazy_and_one_way() {
     let mut rng = Rng::new(20260914);

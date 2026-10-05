@@ -179,7 +179,7 @@ fn read(columns: &[(PolyAddress, MultilinearPoly)], src: &Source, row: usize) ->
     }
 }
 
-/// The recount, S15 must-be-exact 11: `given`'s multiplicity columns are
+/// The recount: `given`'s multiplicity columns are
 /// exactly [`build_multiplicities`]'s, cell for cell. A column that disagrees
 /// is a build error, named by its channel and the first row that differs.
 pub fn check_multiplicities(
@@ -236,9 +236,9 @@ fn key(tuple: &[Fr]) -> Key {
 }
 
 /// The gated value of tuple position `j`. The three conventions of
-/// `docs/spec/lookup.md` §4: a range channel gates to 0, the generic channel to
-/// the all-zero `ZeroEntry` with its key offset by one, and the decoder channel
-/// to `MINUS_ONE` in every column.
+/// `docs/spec/lookup.md` §4: a range channel and `XOR8` gate to 0, the generic
+/// channel to the all-zero `ZeroEntry` with its key offset by one, and the
+/// decoder channel to `MINUS_ONE` in every column.
 fn gate(channel: u32, j: usize, s: Fr, raw: Fr) -> Fr {
     match channel {
         lookup_channel::GENERIC if j == 0 => s * (raw + Fr::ONE),

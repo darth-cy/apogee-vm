@@ -1,5 +1,5 @@
 //! `curve::msm`: the committed corpus, the live differential, the small path,
-//! and totality on every degenerate input S07 must-be-exact 1 names.
+//! and totality on every degenerate input.
 
 mod common;
 
@@ -69,7 +69,7 @@ fn case(pattern: &str, n: usize, seed: u64) -> (Vec<G1Affine>, Vec<Fr>) {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 1 — the committed arkworks vectors
+// The committed arkworks vectors
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -97,7 +97,7 @@ fn committed_vectors_match() {
     assert_eq!(checked, 13, "every committed case ran");
 }
 
-/// The negative control S07 acceptance 11 asks for: one corrupted byte in the
+/// The negative control: one corrupted byte in the
 /// corpus has to fail, or the corpus is not being read.
 #[test]
 fn a_corrupted_vector_fails() {
@@ -119,7 +119,7 @@ fn a_corrupted_vector_fails() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 2 — the live differential
+// The live differential
 // ---------------------------------------------------------------------------
 
 /// 100 random MSMs of mixed sizes against `ark_ec::VariableBaseMSM`, plus the
@@ -172,7 +172,7 @@ fn check_against_arkworks(n: usize, rng: &mut Rng) {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 3 — the small path
+// The small path
 // ---------------------------------------------------------------------------
 
 /// `msm_small_u32(b, s) == msm(b, lift(s))` on u16-range, u32-range, all-zero
@@ -239,7 +239,7 @@ fn small_path_against_arkworks() {
 }
 
 // ---------------------------------------------------------------------------
-// Must-be-exact 1 — totality
+// Totality
 // ---------------------------------------------------------------------------
 
 /// Every degenerate input answers, and none of them panics. The naive

@@ -1,29 +1,28 @@
-//! S24's acceptance, everything short of the proof.
+//! The revm guest, everything short of the proof.
 //!
 //! The workload is `guests/revm-block`: revm over a synthetic pre-state with
 //! one funded account, two transactions, and a counter contract that writes a
 //! storage slot and emits a log. `tools/kat-gen/src/revm.rs` builds the
 //! witness and the answer; this suite is what holds the guest to them.
 //!
-//! | Acceptance | Test |
+//! | Property | Test |
 //! | --- | --- |
-//! | 2 family set and partition | [`a2_the_family_set_is_the_program_s`] |
-//! | 4 guest against native host revm | [`a4_the_guest_agrees_with_native_revm`] |
-//! | 5 the delegated keccak against the software one | [`a5_every_delegated_permutation_is_the_reference`] |
-//! | 9 cycles and occupancy | [`a9_the_cycle_and_occupancy_report`] |
-//! | 10 image size against the ceiling | [`a10_the_image_fits_its_declared_ceiling`] |
+//! | family set and partition | [`a2_the_family_set_is_the_program_s`] |
+//! | guest against native host revm | [`a4_the_guest_agrees_with_native_revm`] |
+//! | the delegated keccak against a reference | [`a5_every_delegated_permutation_is_the_reference`] |
+//! | cycles and occupancy | [`a9_the_cycle_and_occupancy_report`] |
+//! | image size against the ceiling | [`a10_the_image_fits_its_declared_ceiling`] |
 //!
-//! Acceptance 1 (a reproducible identity), 6, 7 and 8 need an SRS or a proof
-//! and live in `crates/prover/tests/revm.rs`.
+//! A reproducible identity and the proved block need an SRS or a proof and
+//! live in `crates/prover/tests/revm.rs`.
 //!
 //! **The guest is built from source, never from a committed ELF.** It is
 //! 2.2 MB at `--release` and 7.8 MB at `debug`, and the only thing derived
 //! from its bytes is its identity, which this suite does not need; committing
 //! it would also enrol it in the suites that decode every committed guest,
-//! whose cost at this guest's height is measured in minutes.
-//! `docs/handoff/S24-revm.md` records the decision. Every test that needs a
-//! build is therefore `#[ignore]`d and CI asks for it by name, which is what
-//! `crates/program/tests/delegation.rs` does for the same reason.
+//! whose cost at this guest's height is measured in minutes. Every test that
+//! needs a build is therefore `#[ignore]`d and CI asks for it by name, which
+//! is what `crates/program/tests/delegation.rs` does for the same reason.
 
 mod common;
 
@@ -63,12 +62,6 @@ fn output_bytes() -> Vec<u8> {
     vector("revm_block_output.bin")
 }
 
-/// Every keccak-f permutation the committed run delegated, as 50-word input
-/// states — the frames of its **round-0** invocations, whose state word is the
-/// permutation's input. Since S26d one invocation is one round, so harvesting
-/// every frame would give 24 records per permutation and 23 of them would be
-/// mid-permutation states; `tools/kat-gen/src/revm.rs` filters on the round
-/// word, which is what keeps this fixture 200 bytes a permutation.
 /// The output commitment's `count` per-transaction records, and the offset the
 /// two 32-byte commitments begin at. `docs/spec/ethereum.md` §3.
 fn tx_records(bytes: &[u8], count: usize) -> (Vec<(u8, u64, Vec<u8>)>, usize) {
@@ -85,6 +78,12 @@ fn tx_records(bytes: &[u8], count: usize) -> (Vec<(u8, u64, Vec<u8>)>, usize) {
     (records, at)
 }
 
+/// Every keccak-f permutation the committed run delegated, as 50-word input
+/// states — the frames of its **round-0** invocations, whose state word is the
+/// permutation's input. One invocation is one round, so harvesting
+/// every frame would give 24 records per permutation and 23 of them would be
+/// mid-permutation states; `tools/kat-gen/src/revm.rs` filters on the round
+/// word, which is what keeps this fixture 200 bytes a permutation.
 fn committed_frames() -> Vec<[u32; keccak::STATE_WORDS]> {
     let bytes = vector("revm_block_keccak.bin");
     let width = 4 * keccak::STATE_WORDS;
@@ -115,8 +114,8 @@ fn committed_frames() -> Vec<[u32; keccak::STATE_WORDS]> {
 /// Every family but a delegation family at `height`, with this program's
 /// pinned span ceiling.
 ///
-/// A delegation family keeps its default `2^8`: its rows are invocations, not
-/// halfwords, and it is the only height whose forward pass a machine holds
+/// A delegation family keeps its default height, `KECCAK_F`'s being `2^18`:
+/// its rows are invocations, not halfwords, and its height is chosen for them
 /// (`docs/spec/delegation.md` §9).
 fn params(height: u32) -> ProgramParams {
     let mut heights = ProgramParams::defaults().heights;
@@ -211,8 +210,8 @@ struct Traced {
 // The witness, which needs no guest
 // ---------------------------------------------------------------------------
 
-/// Must-be-exact 5 and 6: the committed bytes are a canonical witness, and
-/// the same logical state has exactly one encoding.
+/// The committed bytes are a canonical witness, and the same logical state
+/// has exactly one encoding.
 #[test]
 fn the_committed_witness_is_canonical() {
     let bytes = witness_bytes();
@@ -339,8 +338,8 @@ fn a_witness_out_of_canonical_order_is_refused() {
     );
 }
 
-/// Half of acceptance 4, and the half that needs no guest: native host revm
-/// over the committed witness produces the committed output.
+/// The half of the guest-against-native-revm check that needs no guest: native
+/// host revm over the committed witness produces the committed output.
 ///
 /// It is also the regression pin on revm itself — a version bump that changed
 /// a gas schedule would land here first.
@@ -353,11 +352,11 @@ fn native_revm_produces_the_committed_output() {
     );
 }
 
-/// Must-be-exact 7: the output commitment's shape, read back field by field.
+/// The output commitment's shape, read back field by field.
 ///
 /// The numbers are the workload's: a 21,000-gas ether transfer that spends
 /// exactly the intrinsic cost, and a call that increments the counter from 5
-/// to 6 and returns it. A change to either is a change to what this stage
+/// to 6 and returns it. A change to either is a change to what this workload
 /// proves, and it fails here rather than silently in a digest.
 #[test]
 fn the_output_commitment_has_the_frozen_shape() {
@@ -394,12 +393,11 @@ fn the_output_commitment_has_the_frozen_shape() {
     let post_state = take(32);
     assert_eq!(at, bytes.len(), "three sections and nothing after them");
 
-    // Pinned, not merely non-zero. These are `keccak256` of the encodings in
-    // `docs/spec/ethereum.md` §3 and §3, and those encodings are frozen:
-    // without the literals here, changing one and regenerating the fixture
-    // would leave every test in this file green, because every one of them
-    // reads the regenerated fixture. A deliberate change edits these two lines
-    // and says so in the spec.
+    // Pinned, not merely non-zero. These are `keccak256` of the encodings
+    // `docs/spec/ethereum.md` §3 specifies: without the literals here,
+    // changing one and regenerating the fixture would leave every test in this
+    // file green, because every one of them reads the regenerated fixture. A
+    // deliberate change edits these two lines and says so in the spec.
     assert_eq!(
         test_support::to_hex(&logs),
         "5c3d64188bff0ac36b5fd75fe606a5f647bde688ac632d9d486b6c12746e877c",
@@ -421,8 +419,8 @@ fn the_output_commitment_has_the_frozen_shape() {
 ///
 /// Built here rather than committed: these are blocks the workload does not
 /// contain, written to pin behaviour the committed fixture cannot reach. The
-/// addresses lead with `0xee` for the reason `docs/tools.md` §7
-/// gives — every precompile's address is nineteen zero bytes and a label.
+/// addresses lead with `0xee` so that none is a precompile's — every
+/// precompile's address is nineteen zero bytes and a label.
 fn synthetic_witness(block_gas_limit: u64, code: Vec<u8>, gas_limits: &[u64]) -> BlockWitness {
     let committed = BlockWitness::decode(&witness_bytes()).expect("the committed witness decodes");
     let (mut sender, mut callee) = ([0xeeu8; 20], [0xeeu8; 20]);
@@ -435,7 +433,7 @@ fn synthetic_witness(block_gas_limit: u64, code: Vec<u8>, gas_limits: &[u64]) ->
     env.gas_limit = block_gas_limit;
 
     // Three accounts, not two: the **beneficiary** is read by every block that
-    // pays a fee, and since S25 an address the witness does not carry is an
+    // pays a fee, and an address the witness does not carry is an
     // error rather than an empty account. It is recorded with every field zero,
     // which is how the witness says "asked about, and not there" — revm creates
     // it when the fee lands, exactly as it would on chain.
@@ -535,16 +533,12 @@ fn a_block_past_its_gas_limit_is_refused() {
     );
 }
 /// `BLOCKHASH` reads what the witness recorded, and **refuses what it did
-/// not** — S24's one acknowledged gap, closed at S25.
+/// not**.
 ///
-/// S24 gave revm a `CacheDB<EmptyDB>` with an empty block-hash cache, so every
-/// lookup fell through to `EmptyDB`, which returns `keccak256` of the block
-/// number's decimal string. The old shape of this test asserted that
-/// placeholder *on purpose*, so that closing the gap would have to be a
-/// decision rather than an accident. This is that decision:
 /// `BlockEnvWitness::block_hashes` carries the ancestors and
 /// `WitnessDb::block_hash` errors on any other, which reaches the caller as a
-/// refusal to execute rather than as a made-up word.
+/// refusal to execute rather than as a made-up word — such as `EmptyDB`'s,
+/// `keccak256` of the block number's decimal string.
 ///
 /// Both directions, because only the pair is the property: a recorded ancestor
 /// is answered with the recorded hash, and an unrecorded one is refused.
@@ -587,19 +581,20 @@ fn blockhash_reads_the_recorded_ancestor_and_refuses_the_rest() {
     assert_ne!(
         records[0].2,
         revm_block::keccak(previous.to_string().as_bytes()).to_vec(),
-        "BLOCKHASH is still answering EmptyDB's placeholder"
+        "BLOCKHASH answered EmptyDB's placeholder"
     );
 }
 
-/// Acceptance 5, over the committed frames: what the delegation computes on
+/// Over the committed frames: what the delegation computes on
 /// every keccak input this workload produces is what an outside
 /// implementation computes.
 ///
-/// `emulator::keccak_f` **is the delegation**: it is the function the executor
-/// runs for the ecall and the one the `KECCAK_F` circuit's forward pass is
-/// checked against. `tiny-keccak` is the outside implementation. So what this
-/// pins is the delegated answer against a reference, on the inputs this
-/// workload actually produced — and it runs in the fast gate, without a guest.
+/// `emulator::keccak_f` **is the delegation**: its rounds, `keccak_round`, are
+/// what the executor runs for each ecall and what the `KECCAK_F` circuit's
+/// forward pass is checked against. `tiny-keccak` is the outside implementation.
+/// So what this pins is the delegated answer against a reference, on the inputs
+/// this workload actually produced — and it runs in the workspace suite,
+/// without a guest.
 ///
 /// The **software fallback** is a different function — `guest-sdk`'s own, which
 /// no host test can link — and this workload does not reach it: the executor
@@ -626,11 +621,11 @@ fn a5_every_delegated_permutation_is_the_reference() {
 // The guest
 // ---------------------------------------------------------------------------
 
-/// Acceptance 2: the derived `VmConfig` is the program's own.
+/// The derived `VmConfig` is the program's own.
 ///
 /// `KECCAK_F` is in it because the image declares it — the guest reaches
 /// `guest_sdk::keccak256` through `alloy-primitives`' `native-keccak` hook —
-/// and S23's two delegation families are **not**, because nothing in this
+/// and `POSEIDON2` and `FR_ARITH` are **not**, because nothing in this
 /// image does `Fr` arithmetic. That is static detachment doing its job on a
 /// program nobody wrote for it (`docs/spec/delegation.md` §7).
 ///
@@ -679,9 +674,9 @@ fn a2_the_family_set_is_the_program_s() {
     );
 }
 
-/// Acceptance 4: the guest's committed output is native host revm's.
+/// The guest's committed output is native host revm's.
 ///
-/// This is the target differential the stage asks for, run live rather than
+/// This is the target differential, run live rather than
 /// through a fixture: the same `revm_block::run`, compiled for a 64-bit host
 /// and for `riscv32imac`, over the same witness. What it catches is everything
 /// the two builds do not share — 32-bit `usize`, the bump allocator, and the
@@ -701,7 +696,7 @@ fn a4_the_guest_agrees_with_native_revm() {
     assert_eq!(run.execution.io.output, output_bytes());
 }
 
-/// Acceptance 5, end to end: the delegation and the software fallback are the
+/// End to end: the delegation and the software fallback are the
 /// same function behind one signature.
 ///
 /// The harvested frames are what the delegation was handed on this workload,
@@ -709,7 +704,7 @@ fn a4_the_guest_agrees_with_native_revm() {
 /// them here is also what keeps that fixture honest: a changed workload that
 /// hashed different bytes would fail here, not silently pass there.
 ///
-/// **Since S26d one invocation is one round**, so the fixture holds a
+/// **One invocation is one round**, so the fixture holds a
 /// permutation's *input state*: the frame of each round-0 invocation with the
 /// round word itself dropped. `tools/kat-gen/src/revm.rs`'s `guest_frames`
 /// harvests exactly that, and this is the same reading over the same run.
@@ -757,8 +752,8 @@ fn a5_the_harvested_frames_are_the_committed_ones() {
     }
 }
 
-/// Acceptance 9: the cycle count, the per-family occupancy and the shard plan,
-/// printed for the handoff and asserted where a number is load-bearing.
+/// The cycle count, the per-family occupancy and the shard plan, printed, and
+/// asserted where a number is load-bearing.
 #[test]
 #[ignore = "builds the revm guest from source"]
 fn a9_the_cycle_and_occupancy_report() {
@@ -813,7 +808,7 @@ fn a9_the_cycle_and_occupancy_report() {
     );
 }
 
-/// Acceptance 10: the image against the two ceilings it has to fit, reported
+/// The image against the two ceilings it has to fit, reported
 /// and asserted.
 ///
 /// Both are consequences of the same rule — a decoded table is pc/2-indexed

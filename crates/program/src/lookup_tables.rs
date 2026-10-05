@@ -20,7 +20,7 @@
 //! The taxonomy stays small on purpose. XOR and AND are positional — a wide
 //! field says nothing extra about a byte's seventh bit — and `U16GetSign` is
 //! load-bearing in a way it was not over a small field: with a whole word in one
-//! column, its top bit is no longer a column that already exists, so every sign
+//! column, its top bit is not a column that already exists, so every sign
 //! comes from here. `ShiftPowers` has a row for each of the 32 shift amounts
 //! and for no other value, so it fixes `2^s` and its copower for an amount the
 //! shift family has already bounded (`docs/spec/shift-bitwise.md` §3.3).

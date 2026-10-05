@@ -256,11 +256,11 @@ pub fn instructions_in(image: &ProgramImage, begin: u32, end: u32) -> Vec<Expand
     out
 }
 
-/// The frozen wire form: `postcard` over the image.
+/// The wire form: `postcard` over the image.
 ///
 /// `postcard` is taken with no features, so there is no `to_allocvec`; the
 /// buffer is a heap `Vec` sized from the image and `to_slice` writes into it.
-/// Keeping the feature graph as S01 froze it is worth four lines here.
+/// Keeping the feature graph one configuration is worth four lines here.
 pub fn to_postcard(image: &ProgramImage) -> Vec<u8> {
     let bound = 64
         + image.slots.len() * 8
@@ -276,9 +276,9 @@ pub fn to_postcard(image: &ProgramImage) -> Vec<u8> {
 
 /// Build one guest into a fresh target directory and return its ELF bytes.
 ///
-/// The command is acceptance 1's, typed out: nothing but `cargo build --target
+/// The command is the manual's, typed out: nothing but `cargo build --target
 /// riscv32imac-unknown-none-elf`, from the guest's own directory, with the
-/// target, the runner and the linker flags coming from
+/// target and the linker flags coming from
 /// `guests/.cargo/config.toml`.
 ///
 /// Everything that could reach rustc from the ambient environment is cleared,
@@ -292,13 +292,11 @@ pub fn build(name: &str, slot: &str) -> Vec<u8> {
 /// `APOGEE_GUEST_PROFILE` names another.
 ///
 /// `guests/Cargo.toml` pins dev and release to the same *semantics* -- release
-/// keeps `overflow-checks` and `debug-assertions` on -- so every test that
-/// witnesses behaviour must give the same answer under either. That is what
-/// holds the pin
-/// honest: unpinned, a release guest commits a wrapped `u32` to its journal
-/// where a dev guest panics, which would make the optimisation level part of
-/// the statement being proven. `crates/prover/tests/one_feature.rs` is what
-/// asserts the pin itself.
+/// keeps `overflow-checks` on, and the guest's own `debug-assertions` -- so
+/// every test that witnesses behaviour must give the same answer under either.
+/// That is what holds the pin honest: unpinned, a release guest commits a
+/// wrapped `u32` to its journal where a dev guest panics, which would make the
+/// optimisation level part of the statement being proven.
 ///
 /// `layout.rs` and `reproducible.rs` stay on debug deliberately -- they are
 /// about the committed artifacts, which are dev builds.

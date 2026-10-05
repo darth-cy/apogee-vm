@@ -28,16 +28,15 @@
 //! which is the representation the published doubling and addition line
 //! formulas are written in. It is a different chart from
 //! [`crate::G2Projective`]'s Jacobian one, so it is a private type here rather
-//! than a second constructor on a frozen struct.
+//! than a second constructor on a public struct.
 //!
 //! # What this module does *not* check
 //!
 //! Nothing here validates that a `G1Affine` is on the curve or that a
 //! `G2Affine` is in the order-`r` subgroup. That is the caller's job, at the
 //! point where a point is decoded — [`crate::G1Affine::from_bytes`] and
-//! [`crate::G2Affine::from_bytes`] do it — as the master prompt's frozen
-//! invariant says. Feeding this module a point off the curve produces a
-//! meaningless `Fq12`, not an error.
+//! [`crate::G2Affine::from_bytes`] do it. Feeding this module a point off the
+//! curve produces a meaningless `Fq12`, not an error.
 
 use constants::{
     ATE_LOOP_NAF, FINAL_EXP_LAMBDA_0, FINAL_EXP_LAMBDA_1, FINAL_EXP_LAMBDA_2, G2_B_C0, G2_B_C1,
@@ -152,7 +151,7 @@ pub fn miller_loop(pairs: &[(G1Affine, G2Affine)]) -> Fq12 {
 ///   lambda_2 =    6x^2 + 1
 /// ```
 ///
-/// This is the decomposition S06 calls the Devegili-style one. The reference
+/// This is the decomposition known as the Devegili-style one. The reference
 /// for it is Scott, Benger, Charlemagne, Dominguez Perez and Kachisa, *On the
 /// final exponentiation for calculating pairings on ordinary elliptic curves*,
 /// ePrint 2008/490 — the procedure Beuchat et al. 2010/354 section 4.2 states
@@ -229,7 +228,7 @@ pub fn pairing_check(pairs: &[(G1Affine, G2Affine)]) -> bool {
 /// ```
 ///
 /// Beuchat et al. 2010/354 write the same lines in *Jacobian* coordinates in
-/// their section 4.1; S06 asks for the homogeneous projective chart, which is
+/// their section 4.1; this is the homogeneous projective chart, which is
 /// also the one ark-bn254 implements — so `tests/differential.rs` compares two
 /// independent codes over the same formulas rather than one code against
 /// itself.
@@ -310,7 +309,7 @@ fn addition_step(t: &mut G2Homogeneous, q: &G2Affine) -> (Fq2, Fq2, Fq2) {
 ///
 /// Building the whole `Fq12` and multiplying it in generically is the point:
 /// the sparse `mul_by_034` that libraries use here is an optimisation with its
-/// own coefficient identities to get right, and this stage has no need of it.
+/// own coefficient identities to get right, and this crate has no need of it.
 fn line(coefficients: (Fq2, Fq2, Fq2), p: &G1Affine) -> Fq12 {
     let (c0, c1, c2) = coefficients;
     Fq12 {

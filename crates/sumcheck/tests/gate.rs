@@ -1,6 +1,6 @@
 //! `Gate` construction and evaluation.
 //!
-//! Must-be-exact 2 puts the degree-≤2 check at construction. Here it is
+//! The degree-≤2 check belongs at construction, and here it is
 //! structural: a [`GateTerm`] names at most two factors, so no value of the
 //! type can express a cubic — there is no degree to check at prove time because
 //! there is no way to have built a gate with one. What construction *can*
@@ -91,7 +91,7 @@ fn evaluating_with_the_wrong_number_of_values_panics() {
 
 // ---------------------------------------------------------------------------
 // The prover's own preconditions. These are programmer errors — a caller that
-// pairs the wrong columns with a gate — so they panic, per master rule 8.
+// pairs the wrong columns with a gate — so they panic.
 // ---------------------------------------------------------------------------
 
 #[test]

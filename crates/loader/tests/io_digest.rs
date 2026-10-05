@@ -1,9 +1,9 @@
-//! The public I/O digest over a real guest's recorded streams.
+//! The public I/O digest over a real guest's recorded public values.
 //!
 //! `crates/transcript/tests/io_digest.rs` is where the digest is checked against
 //! its committed vectors and where its sensitivity properties are proven. This
-//! is the other half of acceptance 10: the fd 0 and fd 1 bytes that
-//! `guests/fib` actually produces, digested, and digested again.
+//! is the other half: the public input and the journal `guests/fib` actually
+//! has, digested, and digested again.
 //!
 //! It lives here because the record does: `fib_io.txt` is a guest artifact, and
 //! `crates/loader` is the host-side crate that owns those.
@@ -29,12 +29,12 @@ fn fib_streams() -> (Vec<u8>, Vec<u8>) {
     )
 }
 
-/// Acceptance 10's last clause: the fib fixture's digest, twice, identical.
+/// The fib fixture's digest, twice, identical.
 #[test]
 fn the_fib_record_digests_to_the_same_value_twice() {
     let (input, output) = fib_streams();
-    assert_eq!(input.len(), 4, "fd 0 is one little-endian u32");
-    assert_eq!(output.len(), 4, "fd 1 is one little-endian u32");
+    assert_eq!(input.len(), 4, "the public input is one little-endian u32");
+    assert_eq!(output.len(), 4, "the journal is one little-endian u32");
 
     let first = io_digest(&input, &output);
     let second = io_digest(&input, &output);
@@ -54,8 +54,8 @@ fn the_fib_digest_depends_on_both_streams() {
     let (input, output) = fib_streams();
     let reference = io_digest(&input, &output);
 
-    assert_ne!(reference, io_digest(&[], &output), "fd 0 does not reach it");
-    assert_ne!(reference, io_digest(&input, &[]), "fd 1 does not reach it");
+    assert_ne!(reference, io_digest(&[], &output), "the input is ignored");
+    assert_ne!(reference, io_digest(&input, &[]), "the journal is ignored");
     assert_ne!(
         reference,
         io_digest(&output, &input),

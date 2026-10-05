@@ -12,21 +12,18 @@
 //! of input and output are *memory*, reached with ordinary loads and stores:
 //! [`public_input`] is the verifier-bound input, [`advice`] is prover-supplied
 //! and bound by nothing, and [`commit`] appends to the verifier-bound journal.
-//! `docs/spec/public-values.md` is normative for all three.
+//! `docs/spec/public-values.md` specifies all three.
 //!
-//! What is left of the ecall ABI is [`exit`] and the four delegation calls. An
-//! ecall carries its number in `a7`, its argument in `a0` and its result in
-//! `a0`, with errors as a negated errno; `docs/spec/ecall-abi.md` is the
-//! normative table and every number comes from [`constants::ecall`].
+//! The ecall ABI is [`exit`] and the delegation calls. An ecall carries its
+//! number in `a7`, its argument in `a0` and its result in `a0`, with errors as
+//! a negated errno; `docs/spec/ecall-abi.md` is the table and every number
+//! comes from [`constants::ecall`].
 //!
-//! # Two anti-goals this crate is exempt from, and why
+//! # `unsafe`, and global state
 //!
-//! Master anti-goal 4 bans `unsafe` and anti-goal 7 bans global mutable state.
 //! A startup stub, a `#[global_allocator]` and a syscall shim cannot be written
-//! without both. Master rule 13 applies: the stage names these deliverables, so
-//! the stage wins and the deviation is recorded here and in
-//! `docs/handoff/S10-toolchain.md`. Every `unsafe` block in the workspace lives
-//! in this file. Nothing else in the repository is allowed to follow suit.
+//! without `unsafe` and global mutable state, so this crate has both. No crate
+//! of the root workspace has an `unsafe` block.
 
 use core::alloc::{GlobalAlloc, Layout};
 use core::arch::global_asm;
@@ -92,10 +89,9 @@ global_asm!(
 /// collide. The function takes no arguments and returns `()`; returning from it
 /// is an `exit(0)`.
 ///
-/// This is a `macro_rules!` and not the `#[entry]` attribute the stage prompt
-/// names, because an attribute macro requires a `proc-macro` crate — which
-/// cannot export anything else, so it would mean a second package for the sake
-/// of one spelling. Recorded in `docs/handoff/S10-toolchain.md`.
+/// This is a `macro_rules!` and not an `#[entry]` attribute, because an
+/// attribute macro requires a `proc-macro` crate — which cannot export anything
+/// else, so it would mean a second package for the sake of one spelling.
 #[macro_export]
 macro_rules! entry {
     ($f:ident) => {
@@ -110,8 +106,8 @@ macro_rules! entry {
 // Raw ecall
 // ---------------------------------------------------------------------------
 
-// One shim, one argument: every ecall a guest may now issue takes exactly one.
-// `EXIT` takes a status and the four delegations take a frame base pointer.
+// One shim, one argument: every ecall a guest may issue takes exactly one.
+// `EXIT` takes a status and every delegation a frame base pointer.
 // A six-argument shim with zeroes passed in would be strictly worse -- an
 // unused `in(...)` register is still a constraint on the register allocator.
 //
@@ -121,7 +117,7 @@ macro_rules! entry {
 //
 // No clobber list either, and that is a load-bearing assumption rather than an
 // omission: **an ecall preserves every register except `a0`**, which
-// `docs/spec/ecall-abi.md` §1 states as part of the frozen ABI. A
+// `docs/spec/ecall-abi.md` §1 states as part of the ABI. A
 // precompile circuit that scratched `t0` would produce silently wrong guest
 // arithmetic, which is why the rule is written down there and not only here.
 
@@ -265,11 +261,8 @@ pub fn exit(code: i32) -> ! {
     }
 }
 
-/// Status used when [`commit`] is handed more bytes than the journal holds.
-///
-/// Named for an executor-level I/O failure, which is what it meant while the
-/// SDK had descriptors to fail on; the journal overflow is the one case left,
-/// and the number is kept because it appears in recorded exit statuses.
+/// Status used when [`commit`] is handed more bytes than the journal holds:
+/// the one I/O failure a guest can have.
 const EXIT_IO_ERROR: i32 = 70;
 
 /// Status used when an allocation would reach the stack: see [`BumpAllocator`].
@@ -289,8 +282,7 @@ const EXIT_PANIC: i32 = 101;
 /// Poseidon2 over a width-3 state, as a precompile.
 ///
 /// `state` is three canonical little-endian `Fr` elements, 32 bytes each, in
-/// lane order, permuted in place. S10 froze this signature and S23 gave the
-/// number a circuit; the call is now a **delegation**
+/// lane order, permuted in place. The call is a **delegation**
 /// (`docs/spec/delegation-circuits.md` §3), so an executor that has the circuit
 /// answers 0 and one that does not answers `-ENOSYS`.
 ///
@@ -320,15 +312,16 @@ pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool {
     answered
 }
 
-/// The delegation shims the recursion guest's field and hash work rides on.
+/// The delegation shims, every family's but `KECCAK_F`'s.
 ///
-/// Every entry point here is a raw delegation call over a word-aligned frame:
-/// it hands the frame over, and it answers `false` on exactly `-ENOSYS` so the
-/// caller can run its own software path. **There is no software path in this
-/// module**, and there must not be: the callers are `field` and `transcript`,
-/// whose own implementations *are* the fallback, so the delegated path and the
-/// fallback are the same function by construction rather than two copies held
-/// equal by a test.
+/// Every entry point here is a delegation call over a word-aligned frame. A
+/// base-format one answers `false` on exactly `-ENOSYS` so the caller can run
+/// its own software path, and **there is no software path in this module**:
+/// the callers — `field`, `transcript`, the vendored crates, this crate's own
+/// [`super::sha256`] and [`super::ec_add`] — hold their own implementations as
+/// the fallback, so the delegated path and the fallback are the same function
+/// by construction rather than two copies held equal by a test. A
+/// recursion-format call has no fallback at all.
 ///
 /// The declaration records live here too. One per shim, referenced by that
 /// shim and by nothing else, so a guest that never reaches a shim drops the
@@ -362,7 +355,7 @@ pub mod recursion {
     static DELEGATION_EC_ADD: [u8; delegation::MARKER_BYTES] =
         super::record(ecall::PRECOMPILE_EC_ADD);
 
-    /// `FR_OP`'s declaration record (S-RECURSION). The four field families'
+    /// `FR_OP`'s declaration record. The four field families'
     /// records are their bytes as three little-endian words — the same bytes
     /// in `.rodata` — so a call reads its number with one load where a byte
     /// array takes four: a replay asks once a body, and a point's template is
@@ -370,15 +363,15 @@ pub mod recursion {
     #[link_section = ".rodata.apogee.delegations.fr_op"]
     static DELEGATION_FR_OP: [u32; 3] = super::record_words(ecall::PRECOMPILE_FR_OP);
 
-    /// `P2_FIELD`'s declaration record (S-RECURSION).
+    /// `P2_FIELD`'s declaration record.
     #[link_section = ".rodata.apogee.delegations.p2_field"]
     static DELEGATION_P2_FIELD: [u32; 3] = super::record_words(ecall::PRECOMPILE_P2_FIELD);
 
-    /// `FIELD_IO`'s declaration record (S-RECURSION).
+    /// `FIELD_IO`'s declaration record.
     #[link_section = ".rodata.apogee.delegations.field_io"]
     static DELEGATION_FIELD_IO: [u32; 3] = super::record_words(ecall::PRECOMPILE_FIELD_IO);
 
-    /// `FQ_OP`'s declaration record (S-RECURSION).
+    /// `FQ_OP`'s declaration record.
     #[link_section = ".rodata.apogee.delegations.fq_op"]
     static DELEGATION_FQ_OP: [u32; 3] = super::record_words(ecall::PRECOMPILE_FQ_OP);
 
@@ -582,16 +575,16 @@ pub mod recursion {
 
     // The frame's word layout, which [`ModMulFrame::of`]'s array literal spells
     // out rather than indexing: a literal is 25 stores where an all-zero array
-    // followed by 17 writes was a `memset` and then those stores, and at 6,705
-    // invocations on S26's pinned mini-block that zeroing pass alone was 0.5
+    // followed by 17 writes is a `memset` and then those stores, and at 6,705
+    // invocations on the pinned mini-block that zeroing pass alone is 0.5
     // million guest cycles — 6% of what the delegation saves. So the layout is
     // pinned here instead, and a renumbering fails the build.
     //
-    // **Re-point these, never delete them.** They are the only thing holding
-    // this hand-spelled literal equal to the executor's indexed reads: a
-    // 25-word executor reading `out` from words 17..25 against a guest whose
-    // `result()` reads 24..32 is a wrong answer with no error anywhere in the
-    // emulator, the trace, the prover or the verifier.
+    // **These are the only thing holding this hand-spelled literal equal to the
+    // executor's indexed reads**: a 25-word executor reading `out` from words
+    // 17..25 against a guest whose `result()` reads 24..32 is a wrong answer
+    // with no error anywhere in the emulator, the trace, the prover or the
+    // verifier.
     const _: () = assert!(mod_mul::SELECTOR_WORD == 0);
     const _: () = assert!(mod_mul::A_WORD == 1);
     const _: () = assert!(mod_mul::B_WORD == 9);
@@ -661,11 +654,11 @@ pub mod recursion {
     pub struct EcAddFrame(pub [u32; ec::FRAME_WORDS]);
 
     // The two frames' word layouts, which the constructors below index through
-    // these names and never by a literal. **Re-point these, never delete
-    // them**: they are what holds a guest's reads and writes equal to the
-    // executor's, and a frame whose `Z1` a guest reads at word 17 against an
-    // executor that writes it at 18 is a wrong answer with no error anywhere in
-    // the emulator, the trace, the prover or the verifier.
+    // these names and never by a literal. **They are what holds a guest's reads
+    // and writes equal to the executor's**, and a frame whose `Z1` a guest
+    // reads at word 17 against an executor that writes it at 18 is a wrong
+    // answer with no error anywhere in the emulator, the trace, the prover or
+    // the verifier.
     const _: () = assert!(sha::GROUP_WORD == 0);
     const _: () = assert!(sha::STATE_WORD == 1);
     const _: () = assert!(sha::WINDOW_WORD == 9);
@@ -725,9 +718,9 @@ pub mod recursion {
         /// one fewer thing for a caller to get right, at 48 stores a call
         /// against the three modular multiplications this replaces.
         ///
-        /// **One pass, every word written once** (S26e): an array literal in
-        /// the order the `const` assertions above pin, where S26c zeroed all
-        /// 388 bytes and then copied the six input lanes over 192 of them.
+        /// **One pass, every word written once**: an array literal in the
+        /// order the `const` assertions above pin, rather than zeroing all 388
+        /// bytes and then copying the six input lanes over 192 of them.
         /// `k256`'s point additions call this about 27,000 times on one
         /// stateless block.
         ///
@@ -933,13 +926,13 @@ pub mod recursion {
 /// the linker's garbage collection works at section granularity, so three
 /// records sharing one `#[link_section]` are one input section and are kept
 /// or dropped together. With one name every guest that reached *any* shim
-/// declared *every* family, and detachment said nothing. The names all begin
-/// `.rodata.`, so `link.ld` absorbs them unchanged and the byte-wise scan does
-/// not care what they are called.
+/// would declare *every* family, and detachment would say nothing. The names
+/// all begin `.rodata.`, so `link.ld` absorbs them unchanged and the byte-wise
+/// scan does not care what they are called.
 ///
-/// [`keccak_f1600`] reads its ecall number **out of this record**, which is
-/// what makes the record load-bearing rather than decorative: a shim that
-/// exists has one, and the number it calls is the number it declares.
+/// [`keccak_round_delegated`] reads its ecall number **out of this record**,
+/// which is what makes the record load-bearing rather than decorative: a shim
+/// that exists has one, and the number it calls is the number it declares.
 ///
 /// **No `#[used]`, deliberately.** The record must be in the image exactly
 /// when the shim is, and `#[used]` would put it in *every* guest that links
@@ -1009,7 +1002,7 @@ fn delegation_number(record: &'static [u8; delegation::MARKER_BYTES]) -> u32 {
 /// array has alignment 1, and a stack local's address is the code generator's
 /// to choose: LLVM places align-1 stack objects at odd offsets whenever the
 /// frame packs that way, at every optimisation level.
-/// `docs/spec/delegation.md` §4 rule 1 requires a word-aligned base, and a
+/// `docs/spec/delegation.md` §4 requires a word-aligned base, and a
 /// misaligned one is a fatal `EmuError::Misaligned`. An unaligned buffer would
 /// therefore be a guest killed by where codegen happened to put a local, which
 /// is why the alignment is the type's and not a caller's promise.
@@ -1023,8 +1016,9 @@ struct Frame {
     state: [u8; keccak::STATE_BYTES],
 }
 
-/// The frame rules of `docs/spec/delegation.md` §4 and `docs/spec/delegation-circuits.md` §1 as type-level
-/// assertions: word-aligned, and laid out as the frame table says.
+/// The frame rules of `docs/spec/delegation.md` §4 and
+/// `docs/spec/delegation-circuits.md` §1 as type-level assertions:
+/// word-aligned, and laid out as the frame table says.
 const _: () = assert!(core::mem::align_of::<Frame>() >= 4);
 const _: () = assert!(core::mem::size_of::<Frame>() == keccak::FRAME_BYTES);
 const _: () = assert!(keccak::ROUND_WORD == 0 && keccak::STATE_WORD == 1);
@@ -1058,9 +1052,9 @@ fn keccak_round_delegated(frame: &mut Frame) -> bool {
 /// `crates/constants/tests/keccak.rs` re-derives from the Keccak reference's
 /// generators. `crates/emulator` carries its own copy for the executor side;
 /// the two are held bit-identical, and both to `tiny-keccak`, by
-/// `crates/emulator/tests/keccak.rs`. A crate whose only purpose was to be
-/// shared by two callers would be the abstraction the master's anti-goals
-/// refuse, and this crate is not a workspace member in any case.
+/// `crates/emulator/tests/keccak.rs`. Sharing one copy would take a crate
+/// whose only purpose was to be shared by two callers, and this crate is not a
+/// workspace member in any case.
 fn keccak_f_software(lanes: &mut [u64; keccak::LANES]) {
     for round in 0..keccak::ROUNDS {
         let mut c = [0u64; 5];
@@ -1096,8 +1090,8 @@ fn keccak_f_software(lanes: &mut [u64; keccak::LANES]) {
 /// The frame the delegation dereferences is a [`Frame`], so it satisfies the
 /// two frame rules of `docs/spec/delegation.md` §4 for different reasons. The
 /// **window** rule holds by construction: the buffer is a stack local, the
-/// stack lies below `__stack_top`, and `__stack_top` is the top of the RAM
-/// window, so `base + 204` cannot leave it. The **alignment** rule does not
+/// stack lies below `__stack_top`, and `__stack_top` is the top of RAM, so
+/// `base + 204` cannot leave it. The **alignment** rule does not
 /// hold by construction, which is why [`Frame`] carries it.
 ///
 /// The 24 calls transform the frame **in place**, so nothing is copied between
@@ -1131,9 +1125,9 @@ fn permute(frame: &mut Frame) {
 
 /// keccak256 of `input`: Ethereum's Keccak, not SHA-3.
 ///
-/// **This signature is frozen** (`docs/spec/delegation.md`): it is the patchable
-/// entry point a hash hook routes through, and the delegated path and the
-/// software fallback are bit-identical behind it.
+/// **This signature is the patchable entry point** a hash hook routes through
+/// (`docs/spec/delegation.md` §10), and the delegated path and the software
+/// fallback are bit-identical behind it.
 ///
 /// The sponge and the padding run here, in guest code, and one delegation ecall
 /// covers each keccak-f block. Padding is `pad10*1` in the original Keccak
@@ -1178,9 +1172,8 @@ pub fn keccak256(input: &[u8]) -> [u8; keccak::DIGEST_BYTES] {
 /// FIPS 180-4 §6.2.2 over one block's sixteen schedule words, the remaining
 /// forty-eight derived here. `crates/emulator`'s `sha256_frame` carries the
 /// executor's own copy and `crates/constraints::sha256` the circuit's; all
-/// three are held equal to the published test vectors, and a crate whose only
-/// purpose was to be shared by them would be the abstraction the master's
-/// anti-goals refuse.
+/// three are held equal to the published test vectors rather than shared
+/// through a crate whose only purpose would be to share them.
 fn sha256_compress_software(
     state: &mut [u32; sha256c::STATE_WORDS],
     block: &[u32; sha256c::BLOCK_WORDS],
@@ -1408,13 +1401,12 @@ static mut BUMP: usize = 0;
 /// - The live `sp`. A stack already deeper than its reserve still never has a
 ///   block handed out on top of a frame in use.
 ///
-/// Until S12 the ceiling was `__stack_top` itself, and running out of heap was
+/// With `__stack_top` itself as the ceiling, running out of heap would be
 /// silent corruption rather than an exit: a block ending anywhere between the
-/// live `sp` and the top was handed out *over live stack frames*, so safe code
-/// writing into a `Vec` rewrote the caller's locals and return addresses. It
-/// was found by running a guest's own source on the host and comparing the two
-/// runs — the suite that did so is gone, and what holds the rule now is that
-/// each half exits 71 rather than corrupting anything.
+/// live `sp` and the top would be handed out *over live stack frames*, so safe
+/// code writing into a `Vec` would rewrite the caller's locals and return
+/// addresses. Each half of the ceiling exits 71 rather than corrupting
+/// anything.
 ///
 /// What no allocator can see is a stack that grows past its reserve *after* the
 /// heap has filled the space below it. Catching that needs a guard below every
@@ -1471,7 +1463,7 @@ unsafe impl GlobalAlloc for BumpAllocator {
         // than returning null: a guest that quietly gets a null pointer here
         // reports a Rust allocation error through a path that needs an
         // allocation. `saturating_sub` guards `__stack_top` itself being below
-        // the reserve, which the frozen memory map makes impossible; it is
+        // the reserve, which the memory map makes impossible; it is
         // three instructions for a case that cannot arise, kept because a map
         // is a thing that can change and an underflow here would hand out the
         // whole address space.
@@ -1507,7 +1499,6 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     // (`docs/spec/public-values.md` §7).
     //
     // What this buys is worth more than the message: with no write on the
-    // panic path, **a panicking guest is provable**. Until the POSIX layer was
-    // deleted it was not, because its handler reached fd 2.
+    // panic path, **a panicking guest is provable**.
     exit(EXIT_PANIC)
 }

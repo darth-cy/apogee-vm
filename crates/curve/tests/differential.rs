@@ -4,8 +4,8 @@
 //! The committed fixtures freeze arkworks' answers as of the day they were
 //! generated. This file asks the arkworks in the current dependency graph the
 //! same questions live, which is the check that notices if the two ever part
-//! ways. Acceptance 8 asks for at least 500 random group operations in one
-//! run: [`G1_ROUNDS`] and [`G2_ROUNDS`] contribute 5 each, for 1,500.
+//! ways. One run makes 1,500 random group operations, five a round over
+//! [`G1_ROUNDS`] and [`G2_ROUNDS`].
 
 mod common;
 
@@ -317,7 +317,7 @@ fn g2_subgroup_check_matches_arkworks_off_the_subgroup() {
 }
 
 // ---------------------------------------------------------------------------
-// The tower and the pairing (S06)
+// The tower and the pairing
 // ---------------------------------------------------------------------------
 
 /// Five Fq6 and six Fq12 operations per round, plus every Frobenius power.

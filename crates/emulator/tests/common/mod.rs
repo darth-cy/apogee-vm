@@ -1,7 +1,7 @@
 //! Shared plumbing for the emulator's suites.
 //!
 //! Every guest here is the committed ELF under `crates/loader/tests/vectors`,
-//! pinned by digest in `crates/loader/tests/common/mod.rs` — the same bytes
+//! pinned by digest in `crates/loader/tests/common/mod.rs`.
 
 #![allow(dead_code)]
 
@@ -30,7 +30,7 @@ pub fn image(name: &str) -> ProgramImage {
 }
 
 /// A run whose bytes are its **public input**, which is where every guest that
-/// reads anything now finds them (`docs/spec/public-values.md` §2).
+/// reads anything finds them (`docs/spec/public-values.md` §2).
 pub fn io(input: &[u8]) -> GuestIo {
     GuestIo {
         input: input.to_vec(),
@@ -212,7 +212,7 @@ pub fn guest_profile() -> String {
 ///
 /// The command is the manual's: `cargo build --target
 /// riscv32imac-unknown-none-elf` from the guest's own directory, with the
-/// target, the runner and the linker flags coming from
+/// target and the linker flags coming from
 /// `guests/.cargo/config.toml`, and nothing from the ambient environment that
 /// could reach rustc.
 pub fn build_guest(name: &str, profile: &str) -> Vec<u8> {

@@ -1,15 +1,14 @@
-//! `ProgramImage`: the structural invariants, and the frozen serialization.
+//! `ProgramImage`: the structural invariants, and the serialization.
 
 mod common;
 
 use loader::{load_elf, LoaderError, ProgramImage, Segment, Slot};
 
-/// Every committed guest, which is every compiled ELF the loader is held to.
+/// The committed guests the structural checks here run over.
 ///
-/// One list rather than three copies, because a guest added to `guests/` and
-/// wired into the fixtures should reach every structural check here without a
-/// second edit -- the checks below are about the shape of an image, and there
-/// is no image they are meant to skip.
+/// One list rather than three copies, so that a guest added to it reaches
+/// every structural check here without a second edit -- the checks below are
+/// about the shape of an image, and there is no image they are meant to skip.
 const GUESTS: [&str; 7] = [
     "fib.elf",
     "echo.elf",
@@ -20,7 +19,7 @@ const GUESTS: [&str; 7] = [
     "atomics.elf",
 ];
 
-/// The frozen wire form reads back to the value it was written from.
+/// The wire form reads back to the value it was written from.
 #[test]
 fn the_image_round_trips_through_postcard() {
     for name in ["minimal.elf"].into_iter().chain(GUESTS) {
@@ -225,7 +224,7 @@ fn the_slot_vector_is_structurally_sound() {
     }
 }
 
-/// The frozen memory map is enforced: a segment outside the guest RAM window is
+/// The memory map is enforced: a segment outside guest RAM is
 /// not something this VM can run, and refusing it is also what bounds the slot
 /// vector a hostile `p_memsz` can ask for.
 #[test]

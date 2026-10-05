@@ -1,4 +1,4 @@
-//! The frozen constants are re-derived here rather than trusted. A wrong
+//! The constants are re-derived here rather than trusted. A wrong
 //! Montgomery constant is silent: every operation stays self-consistent while
 //! the field is the wrong one.
 
@@ -11,7 +11,7 @@ use constants::{FR_INV, FR_MODULUS, FR_MODULUS_MINUS_TWO, FR_R, FR_R2, PROTOCOL_
 use field::Fr;
 use test_support::to_hex;
 
-/// The master prompt's frozen Fr modulus, in decimal.
+/// The Fr modulus in decimal, as `docs/spec/primitives.md` §1 writes it.
 const FR_MODULUS_DECIMAL: &str =
     "21888242871839275222246405745257275088548364400416034343698204186575808495617";
 
@@ -31,7 +31,7 @@ fn modulus_is_the_bn254_scalar_field() {
         "FR_MODULUS must be Fr, not Fq"
     );
 
-    // The decimal in the master prompt is pinned from both sides: p - 1 is the
+    // The decimal is pinned from both sides: p - 1 is the
     // largest element, and p itself is not an element at all.
     let p_minus_one_decimal =
         "21888242871839275222246405745257275088548364400416034343698204186575808495616";
@@ -44,7 +44,7 @@ fn modulus_is_the_bn254_scalar_field() {
         "the decimal modulus must reduce to zero"
     );
 
-    // ...and the hex form of the limbs is the master prompt's hex form.
+    // ...and the hex form of the limbs is pinned too.
     assert_eq!(
         to_hex(&limbs_to_bytes(&FR_MODULUS)),
         "010000f093f5e1439170b97948e833285d588181b64550b829a031e1724e6430",

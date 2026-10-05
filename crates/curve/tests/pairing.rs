@@ -40,7 +40,7 @@ fn g2(k: &Fr) -> G2Affine {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 3: bilinearity
+// Bilinearity
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -95,7 +95,7 @@ fn pairing_is_additive_in_the_first_argument() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 4: the final-exponentiation identities
+// The final-exponentiation identities
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -161,7 +161,7 @@ fn final_exponentiation_maps_anything_nonzero_into_the_subgroup() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 5: infinity
+// Infinity
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -211,7 +211,7 @@ fn infinity_pairs_contribute_the_identity() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 6: the product relations, each with its negative twin
+// The product relations, each with its negative twin
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -300,7 +300,7 @@ fn pairing_check_verifies_a_toy_kzg_opening() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 7, and Must-be-exact 3
+// Multi-pair products, and one final exponentiation a check
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -319,9 +319,9 @@ fn multi_pair_matches_the_product_of_single_pairs() {
     }
 }
 
-/// Must-be-exact 3, pinned behaviourally on top of the code inspection in the
-/// handoff note: `pairing_check` is exactly one `miller_loop` followed by one
-/// `final_exponentiation` compared against `ONE`, whatever the pair count.
+/// Pinned behaviourally: `pairing_check` is exactly one `miller_loop` followed
+/// by one `final_exponentiation` compared against `ONE`, whatever the pair
+/// count.
 ///
 /// A second final exponentiation anywhere in `pairing_check` would be a second
 /// application of the `(q^12 - 1)/r` power, and `f^((q^12-1)/r)` is not
@@ -370,7 +370,7 @@ fn pairing_is_the_single_pair_case_of_the_loop() {
 }
 
 // ---------------------------------------------------------------------------
-// Must-be-exact 6, against the definition rather than against an oracle
+// The exact final exponent, against the definition rather than an oracle
 // ---------------------------------------------------------------------------
 
 fn to_biguint(limbs: &[u64; 4]) -> BigUint {
@@ -413,7 +413,8 @@ fn pow_big(a: &Fq12, e: &BigUint) -> Fq12 {
 /// convention that turns the negative lambdas into conjugations fails here.
 ///
 /// Deliberately not a fixed power of the right answer: a Fuentes-Castañeda
-/// style shortcut would fail this test, which is the point of Must-be-exact 6.
+/// style shortcut would fail this test, which is the point: the final
+/// exponentiation is the exact power (`docs/spec/primitives.md` §4).
 #[test]
 fn final_exponentiation_is_the_literal_exponent() {
     let exponent = full_final_exponent();

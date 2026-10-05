@@ -3,8 +3,7 @@
 //! The fixtures pin values; this file pins *identities* — associativity,
 //! bilinearity of the scalar action, `batch_to_affine` against the per-point
 //! path — and walks the identity and the inverse through every public method
-//! that can see them, since S05's Must-be-exact 5 requires a correct answer
-//! rather than a panic for each.
+//! that can see them, since each owes a correct answer rather than a panic.
 
 mod common;
 

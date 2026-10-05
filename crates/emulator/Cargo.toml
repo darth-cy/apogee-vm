@@ -6,7 +6,7 @@ publish.workspace = true
 
 [dependencies]
 constants.workspace = true
-# S23's two delegations are `field::Fr`'s arithmetic and
+# The `FR_ARITH` and `POSEIDON2` delegations are `field::Fr`'s arithmetic and
 # `transcript::poseidon2_permute`, and the executor runs *those*, not a second
 # copy of either: a delegation whose executor and whose circuit were written
 # twice would be two definitions to keep equal.
@@ -19,14 +19,14 @@ trace.workspace = true
 
 [dev-dependencies]
 test-support.workspace = true
-# S26c's `EC_ADD` executor is held to this crate's own BN254 G1 arithmetic,
+# The `EC_ADD` executor is held to this crate's own BN254 G1 arithmetic,
 # which is an independent implementation in a different coordinate system: the
 # delegation is homogeneous projective and `curve::G1Projective` is Jacobian,
 # so agreeing on the affine result is a real comparison rather than two copies
 # of one formula.
 curve.workspace = true
 tiny-keccak.workspace = true
-# S24's workload guest, likewise: `tests/revm.rs` calls `revm_block::run` on
+# The revm workload guest, likewise: `tests/revm.rs` calls `revm_block::run` on
 # the host as the native-revm oracle the guest's committed output is held to.
 revm-block = { path = "../../guests/revm-block" }
 # `tests/revm.rs`' negative controls encode a witness the decoder must refuse,

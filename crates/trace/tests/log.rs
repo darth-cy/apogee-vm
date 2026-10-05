@@ -1,4 +1,4 @@
-//! The address spaces: the frozen tags, which addresses each space has, and
+//! The address spaces: the tags, which addresses each space has, and
 //! which of them chain — the gate `record`, `from_events`, `self_check` and
 //! the archive reader all pass every event through.
 
@@ -55,12 +55,12 @@ fn the_tags_are_the_frozen_constants() {
         assert_eq!(AddressSpace::from_tag(tag), None, "tag {tag}");
     }
     // **Every delegation space round-trips, derived rather than listed.**
-    // `from_tag` is a match on a `u8` and so needs a catch-all, which is
-    // exactly what let S26c add two spaces to the enum, to `tag`, and to five
-    // other match sites while leaving `from_tag` answering `None` for both —
-    // a silent `trace::Row::delegation_space` panic reachable only from a
-    // guest that invokes the family. This is the half the compiler cannot
-    // check, so it is checked here.
+    // `from_tag` is a match on a `u8` and so needs a catch-all, which would
+    // let a space be added to the enum, to `tag` and to every other match
+    // site while `from_tag` answers `None` for it — a silent
+    // `trace::Row::delegation_space` panic reachable only from a guest that
+    // invokes the family. This is the half the compiler cannot check, so it
+    // is checked here.
     for space in trace::DELEGATION_SPACES {
         assert_eq!(
             AddressSpace::from_tag(space.tag()),
@@ -68,7 +68,7 @@ fn the_tags_are_the_frozen_constants() {
             "{space:?} does not round-trip through its tag"
         );
     }
-    // The delegation set is the four tags and nothing else: one `deleg` frame
+    // The delegation set is the ten tags and nothing else: one `deleg` frame
     // query serves them all, and `frame_query_takes` reads this array.
     assert_eq!(
         trace::DELEGATION_SPACES.map(|s| s.tag()),
@@ -100,16 +100,16 @@ fn each_space_has_exactly_its_addresses() {
                 "{space:?}: {addr:#x} is not a word address"
             );
         }
-        // Not `origin - 4` any more: since S-STREAM that is the journal's last
-        // word, which `Ram` holds and a delegation space does not, so it is
-        // asserted with the other public addresses below.
+        // Not `origin - 4`: that is the journal's last word, which `Ram`
+        // holds and a delegation space does not, so it is asserted with the
+        // other public addresses below.
         assert!(
             !space.holds(0),
             "{space:?}: 0 is below RAM and in no public window"
         );
     }
 
-    // **`Ram` is wider than ordinary RAM since S-IO** and a delegation space is
+    // **`Ram` is wider than ordinary RAM** and a delegation space is
     // not: the two public windows sit below `RAM_ORIGIN` and the advice region
     // above RAM, and all three are `address_space::RAM` tuples
     // (`docs/spec/public-values.md` §4). A delegation frame may be in none of
@@ -124,11 +124,11 @@ fn each_space_has_exactly_its_addresses() {
         assert!(AddressSpace::Ram.holds(addr), "Ram: {addr:#x}");
         assert!(!AddressSpace::KeccakF.holds(addr), "KeccakF: {addr:#x}");
     }
-    // And the hole stays a hole. **Since S-STREAM the hole is only below the
-    // windows**: at `2^12` the two of them fill `[0x8000, RAM_ORIGIN)`
-    // exactly, so there is no gap above them any more and the geometry is
-    // asserted instead — that equality is what makes `2^12` the ceiling, and
-    // it is the thing a later constant change would silently break.
+    // And the hole stays a hole. **The hole is only below the windows**: at
+    // `2^12` the two of them fill `[0x8000, RAM_ORIGIN)` exactly, so there is
+    // no gap above them and the geometry is asserted instead — that equality
+    // is what makes `2^12` the ceiling, and it is the thing a constant change
+    // would silently break.
     assert_eq!(
         guest_memory::PUBLIC_OUTPUT_ORIGIN + guest_memory::PUBLIC_WINDOW_BYTES,
         origin,

@@ -21,10 +21,10 @@ use trace::{
 };
 
 /// `docs/spec/memory.md` §2.1: query 0 is the pc query, at `PC` and slot 0,
-/// and queries 1–8 are `ROLES` in order, each at its role's space and slot and
+/// and queries 1–6 are `ROLES` in order, each at its role's space and slot and
 /// named after it. Kills a frame table that drifts from the trace's roles.
 ///
-/// S21's eighth role, `Role::Delegate`, is the one whose columns are not its
+/// The last role, `Role::Delegate`, is the one whose columns are not its
 /// own name lowercased: the frame spells them `deleg_*`, as
 /// `constraints::memory::DELEG` and the committed artifacts do
 /// (`docs/spec/delegation.md` §5.1). That exception is written out here
@@ -103,8 +103,8 @@ fn the_finals_refuse_a_nonzero_x0() {
 }
 
 /// A family buffer of `rows`, one row per `(cycle, queries present)` entry: the
-/// input the frame builders take since the streaming stage, which is a shard's
-/// rows rather than the whole execution's log.
+/// input the frame builders take, which is a shard's rows rather than the
+/// whole execution's log.
 fn buffer(rows: &[Row]) -> FamilyTrace {
     let mut trace = FamilyTrace::new(constants::family::JUMP_BRANCH_SLT, 4);
     for row in rows {
@@ -293,10 +293,7 @@ fn every_instruction() -> Vec<Instr> {
 /// `Instr::fields()`. The rest are the class's: a load's word at slot 2, a
 /// store's or an atomic's at slot 3. An ecall reads `a7` and `a0` — its one
 /// argument — and writes `a0`; its register fields are not encoded, so
-/// `fields()` says nothing about it. It read `a1` and `a2` and brought a RAM
-/// transfer row with it while `read` and `write` existed, which is what
-/// `arg1`, `arg2` and add/sub's `ram` query were for; all three went with the
-/// POSIX layer. Since S21 an ecall row may also carry
+/// `fields()` says nothing about it. An ecall row may also carry
 /// `DELEG`, the delegation request's mirror query at slot 3 in the delegation
 /// family's own address space, whose address is the frame base the row read
 /// from `a0` (`docs/spec/delegation.md` §5.1) — a delegation call is an
@@ -340,7 +337,7 @@ fn queries_of(instr: &Instr) -> Vec<usize> {
     queries
 }
 
-/// `docs/spec/memory.md` §2.1, the rule S16 inherits: a family's frame holds
+/// `docs/spec/memory.md` §2.1: a family's frame holds
 /// **exactly** the queries the instructions routed to it can make.
 ///
 /// The per-instruction table above is this test's own reading of
@@ -352,7 +349,7 @@ fn queries_of(instr: &Instr) -> Vec<usize> {
 /// instruction of the family makes.
 ///
 /// Equality is the assertion, not containment. A query short of the union
-/// would leave S16 nothing to constrain that instruction's written value
+/// would leave the family's circuit nothing to constrain that instruction's written value
 /// against; a query beyond it would be five memory columns and a witness
 /// column that are 0 on every row, committed, opened, and their obligations
 /// discharged vacuously.
@@ -363,9 +360,9 @@ fn every_familys_frame_is_exactly_its_instructions_queries() {
         let (family, _) = row_kind(&instr);
         union.entry(family).or_default().extend(queries_of(&instr));
     }
-    // Seven of `constants::family`'s ten. The two init families run no cycles
-    // and no instruction routes to them, and `KECCAK_F` is invoked rather than
-    // decoded, so no instruction word names it either
+    // Seven of `constants::family`'s twenty-three. The window families run no
+    // cycles and no instruction routes to them, and a delegation family is
+    // invoked rather than decoded, so no instruction word names one either
     // (`docs/spec/delegation.md` §1).
     assert_eq!(
         union.len(),
@@ -386,10 +383,10 @@ fn every_familys_frame_is_exactly_its_instructions_queries() {
     assert!(queries_of(&Instr::Ebreak).is_empty());
 }
 
-/// The delegation family is the third family with no query-table frame, and it
-/// has none for its own reason: its rows are invocations, and its frame is 50
-/// words at fixed offsets from one base pointer rather than a subset of the
-/// query table (`docs/spec/delegation.md` §4). Asking `frame_queries` for it is
+/// A delegation family has no query-table frame either, and for its own
+/// reason: its rows are invocations, and its frame is words at fixed offsets
+/// from one base pointer — 51 of them for `KECCAK_F` — rather than a subset of
+/// the query table (`docs/spec/delegation.md` §4). Asking `frame_queries` for it is
 /// a caller that took it for an execution family, so it refuses loudly rather
 /// than answering with the request side's list.
 #[test]
@@ -409,7 +406,7 @@ fn the_delegation_family_has_no_query_table_frame() {
 /// therefore always 0: the pc's last write before cycle `c` is cycle `c − 1`'s
 /// pc query, whatever family owned that cycle, so the gap is
 /// `4c − 4(c − 1) − 1`. That is also why a buffer does not store the pc query's
-/// read timestamp (`crates/trace/CLAUDE.md`), and the rows below are four
+/// read timestamp (`docs/spec/execution-trace.md` §11), and the rows below are four
 /// cycles of one family with other families' cycles in between.
 #[test]
 fn the_gap_columns_hold_the_high_chunk_at_the_chunks_edge() {

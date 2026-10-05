@@ -1,7 +1,7 @@
 //! End-to-end zerochecks, honest and tampered.
 //!
-//! Acceptance 1, 2, 3, 4, 6, 7 and 8. Acceptance 5's independent oracle lives
-//! in `oracle.rs`; `Gate` construction lives in `gate.rs`.
+//! The independent oracle lives in `oracle.rs`; `Gate` construction lives in
+//! `gate.rs`.
 
 mod common;
 
@@ -38,7 +38,7 @@ fn prove_then_verify(
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 1 and 7
+// An honest proof binds every column
 // ---------------------------------------------------------------------------
 
 /// The binding really is one-way and the lift really happened: after proving,
@@ -66,17 +66,16 @@ fn proving_binds_every_column_to_the_challenge_point() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 2
+// A witness swapped after the digest
 // ---------------------------------------------------------------------------
 
-/// Acceptance 2, as intended: the digest is taken over one witness and the
-/// proof is produced over another that *also* satisfies the gate. The zerocheck
-/// cannot see the swap — the swapped witness is perfectly valid — so the proof
-/// verifies, and the failure surfaces exactly where the stage says it must, in
-/// the final-evals discharge against the digest-bound witness. An error class,
-/// not a panic.
+/// The digest is taken over one witness and the proof is produced over another
+/// that *also* satisfies the gate. The zerocheck cannot see the swap — the
+/// swapped witness is perfectly valid — so the proof verifies, and the failure
+/// surfaces where it must, in the final-evals discharge against the
+/// digest-bound witness. An error class, not a panic.
 ///
-/// This is the check that will become "open the commitment" once Mercury lands.
+/// In a proof over commitments, this check is the opening.
 #[test]
 fn a_witness_swapped_after_the_digest_fails_the_discharge() {
     let n = 12;
@@ -109,10 +108,10 @@ fn a_witness_swapped_after_the_digest_fails_the_discharge() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 3
+// Tampered proofs
 // ---------------------------------------------------------------------------
 
-/// Acceptance 3: one corrupted round-polynomial coefficient in an otherwise
+/// One corrupted round-polynomial coefficient in an otherwise
 /// honest proof. Every single-coefficient change moves `g(0) + g(1)`, which is
 /// `2*c0 + c1 + c2 + c3`, so the verifier rejects at that very round.
 #[test]
@@ -208,10 +207,10 @@ fn a_proof_of_the_wrong_shape_is_rejected() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 6
+// A witness that does not satisfy the gate
 // ---------------------------------------------------------------------------
 
-/// Acceptance 6: the witness does not satisfy the gate and the digest is taken
+/// The witness does not satisfy the gate and the digest is taken
 /// over that same witness, so the transcript binding is intact and the
 /// zerocheck itself is what must catch it — at round 0's `g(0) + g(1) == 0`.
 #[test]
@@ -251,10 +250,10 @@ fn a_non_satisfying_witness_fails_round_zero() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 8
+// A second gate
 // ---------------------------------------------------------------------------
 
-/// Acceptance 8: a second, structurally different gate — five inputs, three
+/// A second, structurally different gate — five inputs, three
 /// terms, and a formula that is not a square — at `n = 12`. `Gate` is general,
 /// not hardcoded to `A * A - B`.
 #[test]
@@ -276,7 +275,7 @@ fn the_wide_gate_proves_and_verifies() {
     discharge(&columns, &claim).expect("the honest witness discharges the claim");
 }
 
-/// Acceptance 8's tamper half, both kinds: a witness swapped after the digest
+/// The second gate's tamper half, both kinds: a witness swapped after the digest
 /// (caught by the discharge) and a witness that does not satisfy the gate
 /// (caught by the zerocheck).
 #[test]

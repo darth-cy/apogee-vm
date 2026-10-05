@@ -1,18 +1,18 @@
 //! The reference permutation, against `tiny-keccak`.
 //!
 //! `emulator::keccak_f` is the one keccak-f[1600] the host side of this
-//! repository has: the delegation ecall runs it, and every fixture the
-//! delegation circuit is checked against comes out of it. This suite holds it
-//! to an outside implementation on the zero-state KAT and on a corpus wide
-//! enough that a wrong rho offset, a wrong pi map or a dropped round constant
-//! cannot survive — one round at a time, so a divergence names its round
-//! rather than the whole permutation.
+//! repository has: the delegation ecall runs its rounds, one a call, and every
+//! fixture the delegation circuit is checked against comes out of it. This
+//! suite holds it to an outside implementation on the zero-state KAT and on a
+//! corpus wide enough that a wrong rho offset, a wrong pi map or a dropped
+//! round constant cannot survive — one round at a time, so a divergence names
+//! its round rather than the whole permutation.
 //!
 //! The frame/lane packing is checked here too: `lanes_of` and `words_of` are
 //! how a 200-byte state becomes 25 lanes and back, and a swapped half would
 //! give a permutation that is self-consistent and wrong.
 //!
-//! Since S26d the unit one invocation performs is `emulator::keccak_round`, so
+//! The unit one invocation performs is `emulator::keccak_round`, so
 //! that is what the last two tests hold: 24 of them are the permutation, and a
 //! round differs from another exactly when its round constant does — which is
 //! **not** the same as "pairwise distinct", the LFSR repeating twice.
@@ -85,7 +85,7 @@ fn the_frame_packing_round_trips() {
 
 #[test]
 fn the_frame_is_the_states_little_endian_bytes() {
-    // `docs/spec/delegation.md` §4: the frame is the state in SHA-3 byte
+    // `docs/spec/delegation-circuits.md` §2.1: the frame is the state in SHA-3 byte
     // order, lane `i` at bytes `8i..8i+8`, little-endian — so reading the
     // frame's words as bytes must give exactly `tiny-keccak`'s byte view.
     let lanes = state(23);
@@ -102,10 +102,10 @@ fn the_frame_is_the_states_little_endian_bytes() {
     assert_eq!(bytes.len(), keccak::STATE_BYTES);
 }
 
-/// The 24 rounds a guest now delegates compose to the permutation an oracle
+/// The 24 rounds a guest delegates compose to the permutation an oracle
 /// computes, and each is the round the executor's own `keccak_round` performs.
 ///
-/// This is the S26d invariant no other test reaches: `keccak_round` is what one
+/// This is the invariant no other test reaches: `keccak_round` is what one
 /// invocation does and what the circuit is checked against, and the only thing
 /// that makes 24 of them a keccak-f is that they are the right 24 in the right
 /// order. Comparing the composition against `tiny-keccak` is what says so.
