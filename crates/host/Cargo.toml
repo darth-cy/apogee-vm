@@ -18,12 +18,21 @@ publish.workspace = true
 [dependencies]
 # `family::COUNT` and `family::DEFAULT_HEIGHTS`, for the revm guest's heights.
 constants.workspace = true
+# `recursion` decodes a shard's commitments and opening and runs the native
+# deferred verification for the `cm*` hint a guest cannot compute, then lays
+# each shard's tape slots out as field elements and point limbs.
+curve.workspace = true
+field.workspace = true
+pcs.workspace = true
 emulator.workspace = true
+# `decider`: the tree's root in a Groth16 circuit.
+groth16.workspace = true
 loader.workspace = true
 program.workspace = true
 prover.workspace = true
 srs.workspace = true
 trace.workspace = true
+transcript.workspace = true
 verifier.workspace = true
 verifier-core.workspace = true
 
@@ -76,6 +85,5 @@ loader.workspace = true
 checker.workspace = true
 constraints.workspace = true
 field.workspace = true
-curve.workspace = true
 rayon.workspace = true
 trace.workspace = true

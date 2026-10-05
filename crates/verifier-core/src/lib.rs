@@ -10,28 +10,36 @@
 //! claim chain through `gkr-verify`, the LogUp root checks, and the memory
 //! argument's reconciliation; [`reduce_shard`] runs them in order and returns
 //! the opening claim. `crates/verifier` decodes the curve points and runs that
-//! opening through `pcs::batch_verify`: a Mercury proof's field-side logic is
-//! not factored out of `pcs` (the owner's decision, S16), and a curve point is
-//! held here as its 64 canonical bytes and absorbed through
-//! `transcript::append_g1_points`.
+//! opening through `pcs::batch_verify`, whose field side is `pcs-verify`'s
+//! since S-RECURSION; a curve point is held here as its 64 canonical bytes and
+//! absorbed through `transcript::append_g1_points`.
+//!
+//! S-RECURSION added the recursion half (`docs/spec/recursion.md`): the
+//! stacked opening, and [`tape`], [`chain`], [`fold`] and [`node`], which write
+//! a node's verification as coprocessor calls over field cells.
 
 extern crate alloc;
 
 mod block;
+pub mod chain;
+pub mod fold;
+pub mod node;
 mod reduce;
 mod statement;
+pub mod tape;
 mod types;
 pub mod wire;
 
 pub use block::{check_ts_windows, BlockProof, BlockReconciliation, ShardRecord};
 pub use reduce::{
-    derive_global_phase, reduce_shard, verify_global_memory, verify_shard_local, GlobalChallenges,
+    derive_global_phase, reduce_shard, stack_challenges, stack_values, verify_global_memory,
+    verify_shard_local, GlobalChallenges,
 };
 pub use statement::{
     absorb_statement_descriptor, advice_first_window, boundary_scalars, check_memory_windows,
     global_commit, identity_digest, memory_slots, public_io_words, shard_challenges,
-    shard_transcript, srs_digest, statement_shards, window_height, GlobalTranscript,
-    ProgramIdentity, VmConfig, TRIVIAL_TS_WINDOW,
+    shard_transcript, shard_window, srs_digest, stack_count, statement_shards, window_height,
+    GlobalTranscript, ProgramIdentity, VmConfig, STACK_LOG, TRIVIAL_TS_WINDOW,
 };
 pub use types::{
     read_gkr, write_gkr, OpeningClaim, PublicInputs, ShardProof, VerifyError, VerifyingKey,

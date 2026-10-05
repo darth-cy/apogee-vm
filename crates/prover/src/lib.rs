@@ -81,7 +81,7 @@ use curve::G1Affine;
 use field::Fr;
 use gkr::{forward, prove, BaseLayer};
 use loader::ProgramImage;
-use pcs::{batch_open, commit, MercuryCommitment};
+use pcs::{commit, MercuryCommitment};
 use poly::MultilinearPoly;
 use program::lookup_tables::generic_commitments;
 use program::{setup_commitments, DecodedTables, FamilyId};
@@ -89,7 +89,7 @@ use rayon::prelude::*;
 use srs::Srs;
 use trace::{
     advice_window_count, build_boundary_finals, build_multiplicities, init_windows, plan_shards,
-    TraceArchive,
+    MemoryState, TraceArchive,
 };
 use transcript::{Transcript, TranscriptEvent, TranscriptSnapshot};
 use verifier_core::{
@@ -167,7 +167,8 @@ pub fn register(config: &VmConfig) -> Result<Vec<FamilyRegistration>, ProverErro
         .iter()
         .map(|&(family, height)| {
             let unregistered = ProverError::Unregistered { family, height };
-            let circuit = constraints::family_circuit(family, height.trailing_zeros())
+            let circuit = config
+                .circuit(family, height.trailing_zeros())
                 .ok_or(unregistered.clone())?;
             let fill = family_fill(family).ok_or(unregistered)?;
             Ok(FamilyRegistration {
@@ -318,6 +319,7 @@ pub struct GlobalCommitState {
 pub(crate) fn shard_counts(
     config: &VmConfig,
     profile: &trace::CycleProfile,
+    state: &MemoryState,
     advice: &[u8],
     windows: &[u32],
     height: u32,
@@ -333,6 +335,14 @@ pub(crate) fn shard_counts(
             // having published something (`docs/spec/public-values.md` §4).
             family::PUBLIC_INPUT | family::PUBLIC_OUTPUT => 1,
             family::ADVICE_WINDOWS => advice_window_count(advice, height),
+            // The field memory's windows, consecutive from cell 0 through the
+            // highest cell the execution touched (`docs/spec/recursion.md`
+            // §2.2).
+            family::FIELD_WINDOWS => state.field_windows(
+                config
+                    .height(family::FIELD_WINDOWS)
+                    .expect("a counted family is present"),
+            ),
             _ => count,
         })
         .collect()
@@ -349,6 +359,7 @@ pub(crate) fn window_of(family: FamilyId, index: u32, windows: &[u32], height: u
         family::PUBLIC_INPUT => family::PUBLIC_INPUT_WINDOW,
         family::PUBLIC_OUTPUT => family::PUBLIC_OUTPUT_WINDOW,
         family::ADVICE_WINDOWS => advice_first_window(height) + index,
+        family::FIELD_WINDOWS => index,
         _ => 0,
     }
 }
@@ -367,6 +378,7 @@ pub fn statement_inputs(
     let counts = shard_counts(
         config,
         archive.cycle_profile(),
+        log.state(),
         archive.advice(),
         &windows,
         h,
@@ -439,9 +451,29 @@ fn commit_all(srs: &Srs, columns: &[&MultilinearPoly]) -> Vec<[u8; 64]> {
         .collect()
 }
 
-/// [`commit_all`] over columns the caller owns.
-pub(crate) fn commit_all_owned(srs: &Srs, columns: &[MultilinearPoly]) -> Vec<[u8; 64]> {
-    commit_all(srs, &columns.iter().collect::<Vec<_>>())
+/// A phase's commitments: one a column in the base format, one a stack of
+/// `2^σ` columns in the recursion format (`docs/spec/recursion.md` §1.3).
+pub(crate) fn commit_phase(srs: &Srs, columns: &[&MultilinearPoly], sigma: u32) -> Vec<[u8; 64]> {
+    if sigma == 0 {
+        return commit_all(srs, columns);
+    }
+    columns
+        .par_chunks(1 << sigma)
+        .map(|stack| {
+            pcs::commit_stack(srs, stack)
+                .unwrap_or_else(|e| panic!("committing a stack: {e:?}"))
+                .0
+                .to_bytes()
+        })
+        .collect()
+}
+
+/// `family`'s `σ` under `config`.
+pub(crate) fn sigma_of(setup: &ProverSetup, family: FamilyId) -> u32 {
+    setup
+        .program
+        .config
+        .stack_vars(&setup.registration(family).circuit.artifact)
 }
 
 /// The global commit phase, `docs/spec/shard-proof.md` §2: every shard's
@@ -481,10 +513,16 @@ pub fn global_commit_phase(
             .collect::<Vec<_>>()
             .join(" ")
     );
-    let memory_commitments: Vec<Vec<[u8; 64]>> = inputs
-        .memory_columns
+    let memory_commitments: Vec<Vec<[u8; 64]>> = statement_shards(&vk.config, &inputs.shard_counts)
         .iter()
-        .map(|columns| commit_all(srs, &columns.iter().collect::<Vec<_>>()))
+        .zip(&inputs.memory_columns)
+        .map(|((family, _), columns)| {
+            let circuit = vk
+                .circuit(*family)
+                .expect("a statement family has a circuit");
+            let sigma = vk.config.stack_vars(&circuit.artifact);
+            commit_phase(srs, &columns.iter().collect::<Vec<_>>(), sigma)
+        })
         .collect();
     let statement = PublicInputs {
         input: inputs.input.clone(),
@@ -780,7 +818,8 @@ impl ProvingContext<'_> {
         let witness: Vec<&MultilinearPoly> = (0..artifact.witness.len() as u32)
             .map(|i| base.get(PolyAddress::Witness(i)).expect("a witness column"))
             .collect();
-        let witness_commitments = commit_all(&self.setup.srs, &witness);
+        let sigma = sigma_of(self.setup, family);
+        let witness_commitments = commit_phase(&self.setup.srs, &witness, sigma);
         let ts_window = ts_window(family, base);
         let (mut t, g, beta) = shard_transcript(
             self.global.digest,
@@ -1021,11 +1060,23 @@ impl ProvingContext<'_> {
             },
             point.len()
         );
+        // Stacks of `2^σ` columns, M then W, and each setup column alone, at
+        // `u ‖ r` — at `σ = 0` exactly the base format's column-per-commitment
+        // batch (`docs/spec/recursion.md` §1.3).
+        let sigma = sigma_of(self.setup, family);
+        let r = verifier_core::stack_challenges(&mut transcript, sigma);
+        let (m, w) = (artifact.memory.len(), artifact.witness.len());
+        let mut stacks: Vec<Vec<&MultilinearPoly>> = Vec::new();
+        for phase in [&columns[..m], &columns[m..m + w]] {
+            stacks.extend(phase.chunks(1 << sigma).map(|s| s.iter().collect()));
+        }
+        stacks.extend(columns[m + w..].iter().map(|c| vec![c]));
         let (values, mercury) =
-            batch_open(&self.setup.srs, &columns, &cms, &point, &mut transcript)
+            pcs::batch_open_stacked(&self.setup.srs, &stacks, &cms, &point, &r, &mut transcript)
                 .unwrap_or_else(|e| panic!("opening shard ({family}, {index}): {e:?}"));
         assert_eq!(
-            values, gkr.layers[0].final_evals,
+            values,
+            verifier_core::stack_values(&gkr.layers[0].final_evals, m, w, &r),
             "the opened values are the base claims"
         );
         let proof = ShardProof {

@@ -622,7 +622,9 @@ dependencies = [
  "emulator",
  "field",
  "gkr",
+ "groth16",
  "host",
+ "loader",
  "pcs",
  "poly",
  "program",
@@ -636,6 +638,7 @@ dependencies = [
  "test-support",
  "trace",
  "transcript",
+ "verifier",
  "verifier-core",
 ]
 
@@ -1485,6 +1488,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
+name = "groth16"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "curve",
+ "field",
+ "rayon",
+ "test-support",
+]
+
+[[package]]
 name = "group"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1569,8 +1583,10 @@ dependencies = [
  "curve",
  "emulator",
  "field",
+ "groth16",
  "k256",
  "loader",
+ "pcs",
  "program",
  "prover",
  "rayon",
@@ -1581,6 +1597,7 @@ dependencies = [
  "srs",
  "test-support",
  "trace",
+ "transcript",
  "verifier",
  "verifier-core",
 ]
@@ -2002,10 +2019,22 @@ dependencies = [
  "constants",
  "curve",
  "field",
+ "pcs-verify",
  "poly",
  "rayon",
  "srs",
  "sumcheck",
+ "test-support",
+ "transcript",
+]
+
+[[package]]
+name = "pcs-verify"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "field",
+ "poly",
  "test-support",
  "transcript",
 ]
@@ -3310,6 +3339,7 @@ dependencies = [
  "constraints",
  "field",
  "gkr-verify",
+ "pcs-verify",
  "poly",
  "transcript",
 ]

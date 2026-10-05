@@ -12,7 +12,7 @@ use constants::memory::TS_BITS;
 use constants::{generic_table, lookup_channel};
 use constraints::lookup::{check_discharge, ChannelSpec};
 use constraints::memory::check_memory;
-use constraints::{family_circuit, CircuitArtifact, FamilyCircuit, PolyAddress, VirtualKind};
+use constraints::{CircuitArtifact, FamilyCircuit, PolyAddress, VirtualKind};
 use field::Fr;
 use gkr_verify::{BoundaryFinals, GkrProof, SumcheckProof};
 use transcript::Transcript;
@@ -505,7 +505,9 @@ impl VerifyingKey {
                 ));
             }
             let trace_vars = height.trailing_zeros();
-            let canonical = family_circuit(*family, trace_vars)
+            let canonical = self
+                .config
+                .circuit(*family, trace_vars)
                 .ok_or(format!("{name}: no circuit proves it at height {height}"))?;
             if *c != canonical {
                 return Err(format!("{name}: the circuit is not the protocol's"));

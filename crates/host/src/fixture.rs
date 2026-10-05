@@ -184,15 +184,30 @@ pub fn revm_params() -> program::ProgramParams {
 /// the release image, and the debug image needs `2^22` — four times the rows in
 /// every shard, for a build nothing proves.
 ///
-/// It builds in a scratch target directory of its own and removes it, and it
-/// clears every environment variable that would otherwise leak the host's build
-/// configuration into a `riscv32imac` build. There is no committed ELF for this
-/// guest (root `CLAUDE.md`), so building it is the only way to have it.
+/// There is no committed ELF for this guest (root `CLAUDE.md`), so building it
+/// is the only way to have it; [`build_guest`] says how.
 pub fn build_revm_guest(mode: Mode) -> Result<Vec<u8>, String> {
-    let bin = mode.binary();
-    let guest_dir =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../guests/revm-block");
-    let target_dir = std::env::temp_dir().join(format!("apogee-guest-{bin}"));
+    build_guest("revm-block", mode.binary(), &[])
+}
+
+/// Binary `bin` of guest crate `guests/<guest>`, built from source at
+/// `--release`: how a guest with no committed ELF is had at all.
+///
+/// It builds in a scratch target directory of its own, keyed on the process id
+/// so that two processes building one guest cannot remove each other's tree,
+/// and removes it; and it clears every environment variable that would
+/// otherwise leak the host's build configuration into a `riscv32imac` build.
+/// `envs` are set for the build: what a guest's `build.rs` reads.
+pub fn build_guest(
+    guest: &str,
+    bin: &str,
+    envs: &[(&str, &std::path::Path)],
+) -> Result<Vec<u8>, String> {
+    let guest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../guests")
+        .join(guest);
+    let target_dir =
+        std::env::temp_dir().join(format!("apogee-guest-{bin}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&target_dir);
     let mut command =
         std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
@@ -206,7 +221,8 @@ pub fn build_revm_guest(mode: Mode) -> Result<Vec<u8>, String> {
             "--bin",
             bin,
         ])
-        .env("CARGO_TARGET_DIR", &target_dir);
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .envs(envs.iter().copied());
     for key in [
         "RUSTFLAGS",
         "CARGO_ENCODED_RUSTFLAGS",

@@ -25,6 +25,11 @@ pcs.workspace = true
 host.workspace = true
 prover.workspace = true
 verifier-core.workspace = true
+# `recurse`: a recursion program's ELF decoded, a node's proof verified, and
+# the decider's key made and read.
+groth16.workspace = true
+loader.workspace = true
+verifier.workspace = true
 emulator.workspace = true
 program.workspace = true
 trace.workspace = true

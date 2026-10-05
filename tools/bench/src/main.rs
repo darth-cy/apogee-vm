@@ -21,6 +21,7 @@ mod mercury;
 mod mercury_batch;
 mod msm;
 mod poly_bind;
+mod recurse;
 mod report;
 mod square;
 mod timing;
@@ -79,8 +80,9 @@ fn usage() {
     for (name, what, _) in ROUTINES {
         println!("  {name:width$}  {what}");
     }
-    println!("\nAnd one verb, which takes arguments of its own:\n");
+    println!("\nAnd verbs, which take arguments of their own:\n");
     println!("{}", block::usage());
+    println!("{}", recurse::usage());
 }
 
 fn main() {
@@ -90,6 +92,23 @@ fn main() {
     // block and what the hardware costs, which the routine table's `fn()` has
     // nowhere to put. It is matched before the table rather than added to it,
     // so the eight existing routines keep their signature.
+    // Four more: a recursion tree, one node of it, its decider's key and its
+    // root's decision (`recurse.rs`).
+    let recursion = match args.first().map(String::as_str) {
+        Some("recurse") => Some(recurse::run(&args[1..])),
+        Some("recurse-node") => Some(recurse::node(&args[1..])),
+        Some("ceremony") => Some(recurse::ceremony(&args[1..])),
+        Some("decide") => Some(recurse::decide(&args[1..])),
+        _ => None,
+    };
+    if let Some(result) = recursion {
+        if let Err(why) = result {
+            eprintln!("bench: {why}\n\n{}", recurse::usage());
+            std::process::exit(1);
+        }
+        return;
+    }
+
     if args.first().map(String::as_str) == Some("prove") {
         match block::parse(&args[1..]) {
             Ok(options) => {

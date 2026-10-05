@@ -12,7 +12,7 @@
 use alloc::vec::Vec;
 
 use constants::memory::{READ_ROOT, TS_BITS, WRITE_ROOT};
-use constants::{family, guest_memory};
+use constants::{family, guest_memory, transcript_tags as tags};
 use constraints::PolyAddress;
 use field::Fr;
 use gkr_verify::{
@@ -22,7 +22,7 @@ use poly::{MultilinearPoly, PolyBacking};
 
 use crate::statement::{
     check_memory_windows, global_commit, public_io_words, shard_challenges, shard_transcript,
-    statement_shards,
+    stack_count, statement_shards,
 };
 use crate::types::{OpeningClaim, PublicInputs, ShardProof, VerifyError, VerifyingKey};
 
@@ -106,7 +106,8 @@ pub fn derive_global_phase(
         let circuit = vk
             .circuit(*family)
             .expect("step 1 matched the circuits to the config");
-        if list.len() != circuit.artifact.memory.len() {
+        let sigma = config.stack_vars(&circuit.artifact);
+        if list.len() != stack_count(circuit.artifact.memory.len(), sigma) {
             return Err(statement(
                 "a shard's commitment list is not its family's memory width",
             ));
@@ -176,7 +177,8 @@ pub fn verify_shard_local(
         .expect("a statement shard's family is a config family");
     let circuit = &vk.circuits[family_index];
     let artifact = &circuit.artifact;
-    if proof.witness_commitments.len() != artifact.witness.len() {
+    let sigma = config.stack_vars(artifact);
+    if proof.witness_commitments.len() != stack_count(artifact.witness.len(), sigma) {
         return Err(malformed(
             "the witness commitments are not the circuit's width",
         ));
@@ -302,18 +304,59 @@ pub fn verify_shard_local(
     // 11. The opening the wrapper owes: M from the statement, W from the
     //     proof, S from the key — identity's, then, for a family that reads
     //     the generic channel, the generic table's — in layout order.
+    //     In the recursion format the M and W columns are stacks of `2^σ`:
+    //     `σ` challenges `r` follow the GKR pass, each stack's value is its
+    //     columns' `Σ_j eq(r, j)·v_j`, and a setup column is a stack of one,
+    //     `eq(r, 0)·v`, at the point `u ‖ r` (`docs/spec/recursion.md` §1.3).
+    //     At `σ = 0` all of this is the identity.
     let mut commitments = public.memory_commitments[position].clone();
     commitments.extend_from_slice(&proof.witness_commitments);
     commitments.extend_from_slice(&vk.setup_commitments[family_index]);
     if circuit.reads_generic_table() {
         commitments.extend_from_slice(&vk.generic_table);
     }
+    let r = stack_challenges(&mut t, sigma);
+    let values: Vec<Fr> = claims.iter().map(|c| c.value).collect();
+    let values = stack_values(&values, artifact.memory.len(), artifact.witness.len(), &r);
+    let mut point = point;
+    point.extend(r);
     Ok(OpeningClaim {
         commitments,
         point,
-        values: claims.iter().map(|c| c.value).collect(),
+        values,
         transcript: t,
     })
+}
+
+/// A recursion-format shard's `σ` stack challenges `r`, drawn after its GKR
+/// pass (`docs/spec/recursion.md` §1.3); none at `σ = 0`.
+pub fn stack_challenges(t: &mut transcript::Transcript, sigma: u32) -> Vec<Fr> {
+    (0..sigma)
+        .map(|_| t.challenge_scalar(tags::STACK_CHALLENGE))
+        .collect()
+}
+
+/// The values a shard's batch opening claims, from its committed columns'
+/// values in layout order: each stack of `2^σ` memory and then witness columns
+/// takes `Σ_j eq(r, j)·v_j`, and each setup column, a stack of one, takes
+/// `eq(r, 0)·v`. At `r = []` the columns' own values, unchanged.
+pub fn stack_values(values: &[Fr], memory: usize, witness: usize, r: &[Fr]) -> Vec<Fr> {
+    let eq_r = poly::eq_table(r);
+    let stacked = |columns: &[Fr]| -> Vec<Fr> {
+        columns
+            .chunks(eq_r.len())
+            .map(|stack| {
+                stack
+                    .iter()
+                    .zip(&eq_r)
+                    .fold(Fr::ZERO, |acc, (v, e)| acc + *v * *e)
+            })
+            .collect()
+    };
+    let mut out = stacked(&values[..memory]);
+    out.extend(stacked(&values[memory..memory + witness]));
+    out.extend(values[memory + witness..].iter().map(|v| *v * eq_r[0]));
+    out
 }
 
 /// The memory argument's **statement half**, `docs/spec/shard-proof.md` §6

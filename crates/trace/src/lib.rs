@@ -16,8 +16,8 @@ mod memory;
 
 pub use archive::{IoStreams, Phase, PhaseTiming, TraceArchive, PHASES};
 pub use family::{
-    DelegationTrace, FamilyTrace, FamilyTraces, FrameSlice, Query, QueryColumns, Role, Row,
-    RowSlice, WordSlice, ROLES,
+    Access, AccessColumns, AccessSlice, DelegationTrace, FamilyTrace, FamilyTraces, FrameSlice,
+    Query, QueryColumns, Role, Row, RowSlice, WordSlice, ROLES,
 };
 pub use log::{
     addressable, in_ram, AddressSpace, FinalValue, InitialMemory, MemoryEvent, MemoryEventLog,
