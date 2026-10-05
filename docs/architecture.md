@@ -142,8 +142,7 @@ own independent oracle.
 | the decider | the proof checked natively, and the contract executed in revm |
 
 Committed fixtures are regenerated and compared in CI ([tools.md](tools.md) §7). The suites that
-prove real shards need the ceremony file and tens of GiB, and run outside CI
-([README](../README.md)).
+prove real shards, over a toy SRS, need tens of GiB and run outside CI ([README](../README.md)).
 
 ## 7. Cost
 

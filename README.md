@@ -95,8 +95,8 @@ cargo run --release -p verifier -- block <stem>.vk <identity-hex> <stem>.public 
 cargo run --release -p bench -- recurse <dir>/<stem> --out <out>
 ```
 
-The suites that prove real shards are `#[ignore]`d and CI does not run them; each needs the
-ceremony file and tens of GiB:
+The suites that prove real shards are `#[ignore]`d and CI does not run them: each proves over a toy
+SRS of its own and needs tens of GiB.
 
 ```sh
 cargo test --release -p prover --test <suite> -- --include-ignored --test-threads=1

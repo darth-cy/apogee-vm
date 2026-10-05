@@ -252,7 +252,7 @@ Each file written prints its SHA-256, which the tests reading it pin.
 and are skipped without it. CI runs the default groups and both oracles (§8) and fails on any
 `git diff` in the vector directories. A guest ELF is not reproducible across machines, since
 rustc embeds absolute paths in the panic-location strings of `core` and of crates outside the
-guest workspace and stable Rust cannot remap them; two clean builds on one machine agree. So
+guest workspace, which the guest build does not remap; two clean builds on one machine agree. So
 `guests` is run by hand on one machine, and CI regenerates only what derives from the ELFs.
 
 ## 8. Reference oracles
