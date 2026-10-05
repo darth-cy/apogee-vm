@@ -10,8 +10,8 @@ pragma solidity ^0.8.24;
 /// owe a pairing, and the scalar it derived for it, to the values this
 /// contract holds, which does the two multi-scalar multiplications itself.
 ///
-/// **The key is a development key**: its trapdoors come from a seed, so a
-/// proof it checks is worth what that seed's secrecy is.
+/// The key the constructor takes is a ceremony's, and a proof this checks is
+/// worth that ceremony: one honest contributor to each of its trapdoors.
 contract ApogeeVerifier {
     /// BN254's scalar field and base field.
     uint256 private constant R = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
