@@ -48,12 +48,12 @@ use crate::shared::{hex_fr, hex_g1, hex_g2};
 
 const SEED: u64 = 20260940;
 
-/// How many powers the KZG fixtures run over: `2^17`, so the acceptance's
-/// degree-2^16 case has its `2^16 + 1` coefficients with room to spare. Only
+/// How many powers the KZG fixtures run over: `2^17`, so the degree-2^16 case
+/// has its `2^16 + 1` coefficients with room to spare. Only
 /// this prefix is read, which is 8 MB of a 19 GB file.
 const CEREMONY_POWER: u32 = 17;
 
-/// Degrees from S07 acceptance 7.
+/// The polynomial degrees the KZG vectors cover.
 const DEGREES: [usize; 4] = [1, 100, 1024, 65536];
 
 /// Where the pinned points are taken from: the first few powers, one in the

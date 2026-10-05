@@ -1,5 +1,4 @@
-//! S03 acceptance 10: the lift plus the full bind chain of a `u32`-backed
-//! polynomial.
+//! The lift plus the full bind chain of a `u32`-backed polynomial.
 //!
 //! No threshold — the number is recorded, not asserted. The table is built and
 //! cloned outside the timed region, so what is measured is the first bind's
@@ -12,7 +11,7 @@ use test_support::Rng;
 
 use crate::timing::{ms, next_canonical, Best, REPS, SEED};
 
-/// The polynomial size S03 asks for.
+/// The polynomial size, in variables.
 const VARS: usize = 20;
 
 pub fn run() {

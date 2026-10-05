@@ -1,5 +1,4 @@
-//! S09 acceptance 11: 16 columns of `2^20` opened as one batch, and as 16
-//! single openings.
+//! 16 columns of `2^20` opened as one batch, and as 16 single openings.
 //!
 //! The comparison the shard prover cares about. A batch is one opening of
 //! `f* = sum rho^i f_i`, so it pays for the combination — `k` multiply-adds per
@@ -24,7 +23,7 @@ use srs::Srs;
 use test_support::Rng;
 use transcript::Transcript;
 
-/// The stage's numbers: sixteen columns at `2^20`.
+/// Sixteen columns at `2^20`.
 const LOG_N: u32 = 20;
 const COLUMNS: usize = 16;
 

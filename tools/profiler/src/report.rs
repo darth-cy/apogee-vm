@@ -30,8 +30,8 @@ pub struct FuncRow {
     pub cycles: u64,
     pub share: f64,
     pub calls: u64,
-    /// `cycles / calls`, or 0 where the entry never ran — which happens when a
-    /// function is only ever *jumped into*, a tail call's target.
+    /// `cycles / calls`, or 0 where the entry never ran — which happens when
+    /// control only ever enters the function past its first instruction.
     pub cycles_per_call: f64,
 }
 

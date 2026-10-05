@@ -1,4 +1,4 @@
-//! S01: `Fr` arithmetic against ark-bn254, element for element.
+//! `Fr` arithmetic against ark-bn254, element for element.
 //!
 //! Both libraries are handed the same canonical bytes, so the ratio is a
 //! statement about the implementations and not about the inputs.

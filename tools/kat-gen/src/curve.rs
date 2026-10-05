@@ -39,7 +39,7 @@ const FQ_SEED: u64 = 20260910;
 const G1_SEED: u64 = 20260911;
 const G2_SEED: u64 = 20260912;
 
-/// Acceptance 1 and 3 both ask for at least a thousand random vectors.
+/// Random vectors per field and per group.
 const RANDOM_VECTORS: usize = 1_000;
 
 // ---------------------------------------------------------------------------
@@ -130,7 +130,7 @@ fn fq_kats() -> String {
     let mut out = String::from(FQ_HEADER);
     let mut rng = Rng::new(FQ_SEED);
 
-    // R and R^2 as field *values*, as S01's Fr vectors carry them: a wrong
+    // R and R^2 as field *values*, as the Fr vectors carry them: a wrong
     // Montgomery constant is most visible on its own radix.
     let r: Fq = Fq::from(2u64).pow([256u64, 0, 0, 0]);
     let r2: Fq = r * r;
@@ -294,9 +294,9 @@ const G1_HEADER: &str = "\
 #   g1_scalar_edge <name> <P> <k> <kP>             k = 0, 1, r-1, r
 #   g1_reject      <P> <reason>                    from_bytes must return None
 #
-# Rejection reasons name the class from S05's Must-be-exact 3: non_canonical_x,
-# non_canonical_y, off_curve, and nonzero_infinity_pattern (an encoding that is
-# all-zero but for one byte, so it is not infinity and is not on the curve).
+# Rejection reasons name the class: non_canonical_x, non_canonical_y,
+# off_curve, and nonzero_infinity_pattern (an encoding that is all-zero but for
+# one byte, so it is not infinity and is not on the curve).
 #
 # The `k = r` scalar edge is the one line whose scalar is not an Fr value: r is
 # Fr's modulus, so `Fr::from_bytes` rejects it. See the test.
@@ -440,11 +440,12 @@ fn g1_rejections(rng: &mut Rng) -> Vec<Rejection> {
         });
     }
 
-    // Must-be-exact 3's fourth class: an encoding that is all-zero except for
-    // one byte is *not* infinity, and every such coordinate pair is off the
-    // curve. `x = 0` has no on-curve `y` at all, because 3 is a nonresidue mod
-    // q and `y^2 = 3` has no solution -- which is also what makes the all-zero
-    // infinity encoding unambiguous. Asserted here, not assumed.
+    // The fourth rejection class, `nonzero_infinity_pattern`: an encoding that
+    // is all-zero except for one byte is *not* infinity, and every such
+    // coordinate pair is off the curve. `x = 0` has no on-curve `y` at all,
+    // because 3 is a nonresidue mod q and `y^2 = 3` has no solution -- which is
+    // also what makes the all-zero infinity encoding unambiguous. Asserted
+    // here, not assumed.
     assert!(
         Fq::from(3u64).sqrt().is_none(),
         "3 must be a nonresidue mod q"
@@ -575,7 +576,7 @@ fn g2_rejections(rng: &mut Rng) -> Vec<Rejection> {
 
     // On-curve, outside the order-r subgroup: a random x with the cofactor
     // left un-cleared. G1 cannot have these -- its cofactor is 1 -- which is
-    // why acceptance 5's G1 half uses off-curve points instead.
+    // why G1's rejection lines use off-curve points instead.
     let b2 = <ark_bn254::g2::Config as ark_ec::short_weierstrass::SWCurveConfig>::COEFF_B;
     let mut found = 0;
     while found < 4 {
@@ -596,7 +597,7 @@ fn g2_rejections(rng: &mut Rng) -> Vec<Rejection> {
         found += 1;
     }
 
-    // Must-be-exact 3's fourth class, once per coordinate half.
+    // `nonzero_infinity_pattern`, once per coordinate half.
     let zeros = to_hex(&[0u8; 32]);
     let one = hex_fq(&Fq::one());
     for half in 0..4 {

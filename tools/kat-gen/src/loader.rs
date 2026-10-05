@@ -43,89 +43,89 @@ pub const ELF_FIXTURES: [(&str, &str); 22] = [
     (
         "atomics",
         "every A-extension instruction as the compiler emits them: the atomics \
-         family's fixture, and the one S11 force-detaches",
+         family's fixture, and the one the partition test decodes with that \
+         family detached",
     ),
     (
         "opcodes",
         "every RV32IMAC instruction executed with edge-case operands: the \
-         output oracle's coverage fixture, and its misalignment one",
+         coverage fixture, and the misalignment one",
     ),
     (
         "heap",
-        "Vec and Box churned through the bump allocator: S12's allocator \
+        "Vec and Box churned through the bump allocator: the allocator \
          exercise",
     ),
     (
         "addsub",
-        "S16's tiny guest: add/sub/addi/lui/auipc, a fence and an exit, and \
-         nothing else -- the first program proven end to end",
+        "a tiny guest: add/sub/addi/lui/auipc, a fence and an exit, and \
+         nothing else -- one execution family and the two RAM window families",
     ),
     (
         "control",
-        "S17's guest: the twelve jump/branch/slt instructions over the \
-         stage's acceptance matrix, self-checking, beside add/sub rows",
+        "the twelve jump/branch/slt instructions at the operands where each is \
+         easiest to get wrong, self-checking, beside add/sub rows",
     ),
     (
         "alu",
-        "S18's guest: the twelve shift/bitwise and eight mul/div instructions \
-         over the stage's acceptance matrices, self-checking",
+        "the twelve shift/bitwise and eight mul/div instructions at the \
+         operands where each is easiest to get wrong, self-checking",
     ),
     (
         "mem",
-        "S19's guest: `lw`/`sw`, the six sub-word loads and stores at every \
-         legal offset, and all eleven atomics, over the stage's acceptance \
-         matrices, self-checking",
+        "`lw`/`sw`, the six sub-word loads and stores at every legal offset, \
+         and all eleven atomics, each checked against a literal",
     ),
     (
         "shards",
-        "S20's guest: a counted loop of unrolled `add`s whose add/sub family \
-         runs 1,064,970 cycles, so one execution is two shards of one family",
+        "a counted loop of unrolled `add`s whose add/sub family runs \
+         1,064,970 cycles, so one execution is two shards of one family",
     ),
     (
         "keccak-test",
-        "S21's guest: `guest_sdk::keccak256` over the sponge's six shapes, \
-         self-checking, and the first program whose image declares a delegation",
+        "`guest_sdk::keccak256` over the sponge's six shapes, self-checking: \
+         the KECCAK_F delegation's fixture",
     ),
     (
         "keccak-unused",
-        "S21's zero-shard fixture: it links the keccak shim, so its image \
+        "a zero-shard fixture: it links the keccak shim, so its image \
          declares the family, and never calls it",
     ),
     (
         "recursion-ops",
-        "S23's guest: `field::Fr` arithmetic and `transcript::poseidon2_permute`, which \
+        "`field::Fr` arithmetic and `transcript::poseidon2_permute`, which \
          the guest-target backends route through the two delegations",
     ),
     (
         "recursion-unused",
-        "S23's zero-shard fixture: it links both backends, so its image declares both \
-         families, and reaches neither",
+        "a zero-shard fixture: it links both backends, so its image declares \
+         both families, and reaches neither",
     ),
     (
         "public-io",
-        "S-IO's guest: its public input and its advice are ordinary loads and its \
-         journal ordinary stores, so it issues no ecall but EXIT and is provable",
+        "its public input and its advice are ordinary loads and its journal \
+         ordinary stores, so it issues no ecall but EXIT",
     ),
     (
         "mod-mul-ops",
-        "S26's guest, specialized at S26b: the MOD_MUL delegation by name over \
-         all four selectors, each answer computed a second way in software and \
-         compared, and the three vendored callers that name no shim at all -- \
-         `k256`'s group arithmetic and its scalar, and ark-bn254's two fields",
+        "the MOD_MUL delegation by name over all four selectors, each answer \
+         computed a second way in software and compared, and the three vendored \
+         callers that name no shim at all -- `k256`'s group arithmetic and its \
+         scalar, and ark-bn254's two fields",
     ),
     (
         "sha256-ops",
-        "S26c's guest: the SHA256_COMP delegation by name against FIPS 180-4's \
-         own one-block vector, and the digest surface at every length that \
-         moves the Merkle-Damgard padding, each answer checked against a \
-         published digest and against `sha2`",
+        "the SHA256_COMP delegation by name against FIPS 180-4's own \
+         one-block vector, and the digest surface at every length that moves \
+         the Merkle-Damgard padding, each answer checked against a published \
+         digest and against `sha2`",
     ),
     (
         "ec-ops",
-        "S26c's guest: the EC_ADD delegation by name on both curves, every \
-         addition computed a second way in software and compared limb for \
-         limb, the point checked against `k256` and `ark-bn254` by \
-         cross-multiplication, and all four completeness cases",
+        "the EC_ADD delegation by name on both curves, every addition computed \
+         a second way in software and compared limb for limb, the point checked \
+         against `k256` and `ark-bn254` by cross-multiplication, and all four \
+         completeness cases",
     ),
 ];
 
@@ -133,12 +133,12 @@ pub const ELF_FIXTURES: [(&str, &str); 22] = [
 ///
 /// Not `echo`: its listing is 300 kB of the same kind of evidence `fib`
 /// already gives, and its job here is to be executed. `amm` earns one where
-/// the other two new guests do not, for two reasons. Its text is long stretches
+/// `orderbook` and `vault` do not, for two reasons. Its text is long stretches
 /// of open-coded 128-bit arithmetic -- LLVM legalises `i128` into 32-bit limbs
 /// on this target and calls no builtin for it, so the multiply, the shifts and
 /// the compares are all written out in line, which is a shape no hand-written
 /// fixture would produce. And it carries the `c.unimp` padding whose carve-out
-/// `differential.rs` now has to get right, in the smallest quantity of the
+/// `differential.rs` has to get right, in the smallest quantity of the
 /// three: exactly one halfword, against `vault`'s two and `orderbook`'s
 /// sixteen.
 const DISASSEMBLED: [&str; 3] = ["fib", "rvc-dense", "amm"];
@@ -232,9 +232,8 @@ pub(crate) fn parse_objdump_line(line: &str) -> Option<(u32, String, String)> {
 
 /// `<name>.nm.txt`: the text symbols, `address name`, sorted.
 ///
-/// Acceptance 5 is about these: every symbol address must be the address of an
-/// instruction in the image, which is what "addresses are never compacted"
-/// means in practice.
+/// Every symbol address must be the address of an instruction in the image,
+/// which is what "addresses are never compacted" means in practice.
 fn nm_listing(name: &str) {
     let elf = vector_path(&format!("{name}.elf"));
     let out = run(

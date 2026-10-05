@@ -1,4 +1,4 @@
-//! The `lookup` group: S15's combined toy circuit, written through
+//! The `lookup` group: the combined lookup toy circuit, written through
 //! `constraints::memory::frame_with_channels_artifact`.
 //!
 //! This function is the toy's only definition. The prover and verifier never
@@ -53,7 +53,7 @@ pub const TRACE_VARS: u32 = 20;
 
 /// The family the toy is a circuit for: its frame, its cycles and its decoded
 /// table. `JUMP_BRANCH_SLT` is the narrowest frame carrying `rs1`, `rs2` and
-/// `rd` — four queries — so it holds S14's future-read attack (two `x0` reads
+/// `rd` — four queries — so it holds the future-read attack (two `x0` reads
 /// with their timestamps swapped) and the x0 gadget, at half the leaves of the
 /// widest frame. Its lookup tuple is seven columns, the widest any channel
 /// carries, and its packed mask has twelve one-hot bits.
@@ -67,7 +67,7 @@ pub const DECODER_WIDTH: usize = 7;
 pub const MASK_BITS: usize = 12;
 
 /// The channels this toy declares, in the order its multiplicity columns and its
-/// `ChannelSpec`s take. **Not every channel that exists**: S15's toy is one
+/// `ChannelSpec`s take. **Not every channel that exists**: the toy is one
 /// family's shape, and a channel it does not carry has no multiplicity column
 /// here.
 const TOY_CHANNELS: [u32; 4] = [
@@ -144,7 +144,7 @@ const MULT: u32 = KIND + MASK_BITS as u32;
 /// The setup layout: the generic table, then the decoder's.
 const DECODER_TABLE: u32 = GENERIC_WIDTH as u32;
 
-/// S15's combined toy, over `TRACE_VARS` variables.
+/// The combined toy, over `TRACE_VARS` variables.
 pub fn toy() -> CircuitArtifact {
     let pc_mask = frame(0, FIELD_MASK);
     let mut witness = names(&["word", "word_hi", "and_a", "and_b", "and_c", "and_on"]);
@@ -159,10 +159,10 @@ pub fn toy() -> CircuitArtifact {
     ]));
     witness.extend((0..MASK_BITS).map(|k| format!("kind_{k}")));
     // One multiplicity per channel **this toy declares**, in the order
-    // `channels()` below lists them — and not one per channel that exists.
-    // Until S26d those were the same four; adding `XOR8` to
-    // `constants::lookup_channel` made them differ, and iterating `NAMES` here
-    // gave the toy a committed column for a channel it does not carry.
+    // `channels()` below lists them — and not one per channel that exists:
+    // `XOR8` is in `constants::lookup_channel` and not here, and iterating
+    // `NAMES` would give the toy a committed column for a channel it does not
+    // carry.
     witness.extend(
         TOY_CHANNELS
             .iter()
@@ -228,9 +228,10 @@ pub fn toy() -> CircuitArtifact {
         // `pc_write_value` is the pc the row really wrote, and the table's
         // `next_pc` is the fall-through, which an exit row's `HALT_PC` and
         // every taken branch differ from (`docs/spec/memory.md` §5). Tying the
-        // two is S16's. The selector is the pc mask — the row's liveness — and
-        // a switched-off row looks up the MINUS_ONE padding tuple S11's height
-        // rule guarantees is in the table.
+        // two is each family circuit's `next_pc` gate. The selector is the pc
+        // mask — the row's liveness — and a switched-off row looks up the
+        // MINUS_ONE padding tuple the decoded table's height rule guarantees is
+        // in the table.
         LookupExpr {
             name: "decode_row".into(),
             channel: lookup_channel::DECODER,
@@ -314,7 +315,7 @@ mod tests {
     /// above is covered by nothing but CI's regenerate-and-diff step, and a
     /// change to it that a developer regenerates over is a change no test sees.
     /// `crates/constraints/tests/memory.rs`' `the_fixtures_are_the_constructors_bytes`
-    /// is the same assertion for S14's frames.
+    /// is the same assertion for the memory frames.
     #[test]
     fn the_fixture_is_the_constructors_bytes() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

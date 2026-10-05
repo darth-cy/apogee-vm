@@ -1,6 +1,8 @@
-//! Regenerates every committed known-answer vector file from arkworks.
+//! Regenerates the committed fixtures (`docs/tools.md` §7): known-answer
+//! vectors from arkworks, listings from the pinned toolchain's LLVM tools, and
+//! regression pins of this repository's own constructions.
 //!
-//!     cargo run -p kat-gen              # every group, which is what CI runs
+//!     cargo run -p kat-gen              # the default groups, which is what CI runs
 //!     cargo run -p kat-gen -- tower     # just crates/curve's Fq6/Fq12 vectors
 //!
 //! Deterministic: same toolchain and same arkworks version produce
@@ -23,13 +25,15 @@
 //! | `loader`  | `crates/loader/tests/vectors/*` (from the committed guest ELFs) |
 //! | `isa`     | `crates/isa/tests/vectors/*` (the hand-encoded corpus, via llvm-objdump) |
 //! | `program` | `crates/program/tests/vectors/*` (the identities need the ceremony file) |
-//! | `gkr`     | `crates/constraints/tests/vectors/toy_*` (the S13 toy circuit, cached and cache-free) |
-//! | `memory`  | `crates/constraints/tests/vectors/{memory_frame,image_window,zero_window}.bin` (S14's memory artifacts) |
-//! | `lookup`  | `crates/constraints/tests/vectors/lookup_toy.bin` (S15's combined toy) |
-//! | `family`  | `crates/constraints/tests/vectors/{add_sub,jump_branch_slt}.bin` (S16's and S17's family circuits) |
+//! | `gkr`     | `crates/constraints/tests/vectors/toy_*` (the toy circuit, cached and cache-free) |
+//! | `memory`  | `crates/constraints/tests/vectors/{memory_frame_*,image_window,zero_window}.bin` (the four execution-family frames and two window circuits) |
+//! | `lookup`  | `crates/constraints/tests/vectors/lookup_toy.bin` (the combined lookup toy) |
+//! | `family`  | `crates/constraints/tests/vectors/{add_sub,jump_branch_slt,shift_bitwise,mul_div,mem_word,mem_subword,atomics}.bin` (the seven execution-family circuits) |
 //! | `delegation` | `crates/constraints/tests/vectors/{keccak,poseidon2,fr_arith,mod_mul,sha256,ec_add}.txt` (the six delegation circuits, by digest: the artifacts are megabytes) |
-//! | `block`   | `crates/host/tests/vectors/*` (S25's recorded mini-block). **Needs `ETH_RPC_URL`; opt-in only, see `DEFAULT_GROUPS`** |
-//! | `revm`    | `crates/emulator/tests/vectors/revm_block_*` (S24's synthetic block, what native revm makes of it, and the keccak-f frames the guest delegates) |
+//! | `moduli`  | `crates/constants/tests/vectors/moduli.txt` (`MOD_MUL`'s four moduli) |
+//! | `tape`    | `crates/checker/tests/vectors/global_tape.txt` (the global commit phase's absorb sequence) |
+//! | `revm`    | `crates/emulator/tests/vectors/revm_block_*` (a synthetic block, what native revm makes of it, and the keccak-f frames the guest delegates) |
+//! | `block`   | `crates/host/tests/vectors/*` (the recorded mini-block). **Needs `ETH_RPC_URL`; opt-in only, see `DEFAULT_GROUPS`** |
 //! | `guests`  | the guest ELFs themselves -- opt-in only, see `DEFAULT_GROUPS` |
 //! | `zkevm`   | `crates/host/tests/vectors/zkevm-subset.json` (a `tests-zkevm` release's stateless pairs, one per rule the validator applies). **Needs `APOGEE_ZKEVM_FIXTURES`; opt-in only** |
 
@@ -93,14 +97,13 @@ const GROUPS: [(&str, fn()); 22] = [
 /// `guests` is not one of them. It rebuilds the guest ELFs, and a guest ELF is
 /// **not** reproducible across machines: rustc embeds absolute paths in the
 /// panic-location strings of every crate outside the guest workspace, and of
-/// `core` itself, and stable Rust has no way to remap them (`trim-paths` is
-/// still unstable in the pinned cargo). Two clean builds on one machine agree
-/// exactly -- `crates/loader/tests/reproducible.rs` proves it, and that is what
-/// acceptance 2 asks -- but a CI regeneration would diff against fixtures built
-/// elsewhere and fail every time. So the ELFs are refreshed deliberately, on
-/// one machine, with `cargo run -p kat-gen -- guests`, and everything CI can
-/// reproduce from them -- the objdump and nm listings -- is in `loader`, which
-/// does run by default.
+/// `core` itself, and the guest build does not remap them. Two clean builds on
+/// one machine agree exactly -- `crates/loader/tests/reproducible.rs` checks
+/// it -- but a CI regeneration would diff against fixtures built elsewhere and
+/// fail every time. So the ELFs are refreshed deliberately, on one machine,
+/// with `cargo run -p kat-gen -- guests`, and everything CI can reproduce from
+/// them -- the objdump and nm listings -- is in `loader`, which does run by
+/// default.
 const DEFAULT_GROUPS: [&str; 19] = [
     "field",
     "poly",
@@ -182,8 +185,6 @@ pub fn write_bytes(relative_path: &str, contents: &[u8]) {
     println!("wrote {relative_path} (sha256 {digest})");
 }
 
-/// A generator whose input stream had collapsed would still write a thousand
-/// lines that all "match".
 /// The same as [`write_bytes`], but at an absolute path.
 ///
 /// The `block` group writes into `crates/host/tests/vectors/`, which it names
@@ -202,6 +203,8 @@ pub fn write_bytes_at(path: &std::path::Path, contents: &[u8]) {
     );
 }
 
+/// A generator whose input stream had collapsed would still write a thousand
+/// lines that all "match".
 pub fn assert_distinct(values: &[String], what: &str) {
     let mut sorted = values.to_vec();
     sorted.sort();

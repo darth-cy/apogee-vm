@@ -71,19 +71,19 @@ fn identities() {
         .expect("reading fib.elf");
     let image = load_elf(&fib).expect("fib loads");
 
-    // The menu's **third** entry: it opens with `2^8` for three delegation
-    // families and, since S-STREAM, `2^12` for the two public-value ones —
-    // neither a height an instruction table can take, a delegation row being
-    // an invocation rather than a halfword and a public window being 4,096
-    // words of the hole below `RAM_ORIGIN` (`docs/spec/delegation.md` §9,
-    // `docs/spec/public-values.md` §3). The pinned identity is fib's at a
+    // The menu's **third** entry: it opens with `2^8` for two delegation
+    // families and `2^12` for the two public-value ones — neither a height an
+    // instruction table can take, a delegation row being an invocation rather
+    // than a halfword and a public window being 4,096 words of the hole below
+    // `RAM_ORIGIN` (`docs/spec/delegation.md` §9,
+    // `docs/spec/public-values.md` §2). The pinned identity is fib's at a
     // uniform `2^16` and must stay that, so the height is asserted rather
     // than left to an index.
     let smallest_height = constants::family::HEIGHT_MENU[2];
     assert_eq!(
         smallest_height,
         1 << 16,
-        "the menu's third entry is no longer 2^16, and identity.txt pins 2^16"
+        "the menu's third entry is not 2^16, and identity.txt pins 2^16"
     );
     let smallest = ProgramParams {
         heights: [smallest_height; constants::family::COUNT as usize],
@@ -122,7 +122,7 @@ fn identities() {
 
 /// The packed generic table's three commitments over the ceremony — what every
 /// verifying key carries and its SRS digest covers
-/// (`docs/spec/jump-branch-slt.md` §6) — after checking that the table over
+/// (`docs/spec/lookup.md` §9) — after checking that the table over
 /// each menu height it fits commits to the same three points, which is what
 /// lets one set serve every height.
 fn generic_table(srs: &Srs) {

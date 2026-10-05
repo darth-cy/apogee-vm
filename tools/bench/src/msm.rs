@@ -1,13 +1,11 @@
-//! S07 acceptance 9 and 10: the MSM performance gate.
+//! The MSM benchmark.
 //!
-//! Two measurements at `2^22` points, the master trace-height ceiling, over
-//! **real ceremony bases** read from the powers-of-tau file:
+//! Two measurements at `2^22` points, the trace-height ceiling, over **real
+//! ceremony bases** read from the powers-of-tau file:
 //!
 //! 1. the owned general `msm` against `ark_ec::VariableBaseMSM`, on the same
-//!    machine, the same bases and the same scalars, in one process. The gate
-//!    is 2x;
-//! 2. the small-scalar path against the general one on `u32`-bounded scalars,
-//!    where the gate is simply that the small path wins.
+//!    machine, the same bases and the same scalars, in one process;
+//! 2. the small-scalar path against the general one on `u32`-bounded scalars.
 //!
 //! Both arkworks and this workspace parallelise with rayon — `ark-ec` and
 //! `ark-ff` carry their `parallel` feature in the workspace manifest — so the
@@ -15,7 +13,7 @@
 //! one and a serial one.
 //!
 //! Nothing here asserts a threshold. A number that must not regress belongs in
-//! a test; this prints what the machine did, and the S07 handoff records it.
+//! a test; this prints what the machine did.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -29,8 +27,7 @@ use test_support::Rng;
 
 use crate::timing::{ms, next_canonical, Best, REPS, SEED};
 
-/// The master's trace-height ceiling, which is the size the prover's MSM runs
-/// at.
+/// The trace-height ceiling, which is the size the prover's MSM runs at.
 const LOG_N: u32 = 22;
 
 /// Bases come from the real ceremony, because "fast on random points" is not
@@ -95,7 +92,7 @@ pub fn run() {
         "the small path disagrees with the general one"
     );
 
-    // -- acceptance 9: general path against arkworks ----------------------
+    // -- 1. general path against arkworks ---------------------------------
     let mut mine = Best::new();
     let mut ark = Best::new();
     for _ in 0..REPS {
@@ -111,7 +108,7 @@ pub fn run() {
         assert_eq!(a.to_affine().to_bytes(), ark_g1_bytes(&b.into_affine()));
     }
 
-    // -- acceptance 10: the small path against the general one ------------
+    // -- 2. the small path against the general one ------------------------
     let general_on_small = crate::timing::best(|| {
         msm(bases, &lifted).expect("equal lengths");
     });

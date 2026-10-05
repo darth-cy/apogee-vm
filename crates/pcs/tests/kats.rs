@@ -25,8 +25,8 @@ use transcript::Transcript;
 const ABSORB_KATS: &str = include_str!("vectors/g1_absorb_kats.txt");
 const PROOF_KAT: &str = include_str!("vectors/mercury_proof.txt");
 
-const ABSORB_SHA256: &str = "9ee465300bd28bd596dcaf463280d0b330d9e5004d624d4e9b592f84681391f6";
-const PROOF_SHA256: &str = "0f6c03662c2d0bc03f3cfbfc651ab7fa8c7981f8523089aedeab779705c95308";
+const ABSORB_SHA256: &str = "a34ded45ceb940fca24b188f8330eaa41c98cb39969965adde0873fe407da47a";
+const PROOF_SHA256: &str = "e86eda0ff725d0f00dbd2f13ee379dea4af03e448ed41e6591ee8c3e4681097e";
 
 #[test]
 fn the_committed_files_are_the_pinned_ones() {

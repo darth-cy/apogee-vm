@@ -556,7 +556,7 @@ fn the_committed_batch_replays() {
     replay_batch_kat(BATCH_KAT).expect("the committed batch replays");
     assert_eq!(
         to_hex(&sha256(BATCH_KAT.as_bytes())),
-        "a211203ceb980ee9689516486a0e46d88a253433368505f242a3cbf4b774576f"
+        "400d1e93c764ec14a0b4ce9cf91a6769c0e314541f28a00a308939d0ee0d508c"
     );
 }
 

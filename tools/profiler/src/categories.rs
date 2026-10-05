@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// A semantic workload. Every function of a guest lands in exactly one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Category {
-    /// `keccak256`, wherever it is computed — including the S21 shim.
+    /// `keccak256`, wherever it is computed — including the SDK's keccak shim.
     Keccak,
     /// SHA-256 and RIPEMD-160: the EVM's other two hash precompiles.
     OtherHash,
@@ -47,8 +47,8 @@ pub enum Category {
     /// It is deliberately NOT "the work the delegations replace": the keccak
     /// sponge around the delegated permutation is `keccak256` work and is
     /// counted there, because a category called "already delegated" that held it
-    /// would hide 4% of a real block behind a reassuring name. The answer to
-    /// "the existing delegations against ordinary RV32 execution" is the
+    /// would hide 4% of a real block behind a reassuring name. What the
+    /// delegations do against ordinary RV32 execution is read off the
     /// **family** invocation counts beside these cycles.
     Delegated,
     /// Decoding the block witness, and the guest's own block executor.
@@ -105,8 +105,8 @@ impl Category {
 /// rule is where it is; the order is the whole of the semantics.
 pub const RULES: [(&str, Category); 53] = [
     // --- the delegation shims, before anything else -----------------------
-    // `guest_sdk::recursion` is S23's two shims, and `recursion` rather than
-    // the full path because a partially decoded v0 name has no `::` in it
+    // `guest_sdk::recursion` holds the delegation shims, and `recursion` rather
+    // than the full path because a partially decoded v0 name has no `::` in it
     // (`crate::demangle`). The keccak SHIM is not here: it is the sponge, which
     // is keccak work, and the rule below claims it.
     ("recursion", Category::Delegated),
@@ -151,7 +151,7 @@ pub const RULES: [(&str, Category); 53] = [
     // guest they do exactly one thing: decode the block witness and, for the
     // canonicity rule, re-encode it (`docs/spec/ethereum.md` §2.1). They must
     // also come before the `core::` fallback, which `serde_core::` contains as a
-    // substring -- the bug this rule was added to fix.
+    // substring.
     ("serde", Category::BlockSetup),
     ("postcard", Category::BlockSetup),
     ("BlockWitness", Category::BlockSetup),
@@ -203,8 +203,8 @@ pub const FALLBACK_RULES: [(&str, Category); 9] = [
 /// Both, because a crate and module name appears literally in both mangling
 /// schemes and the v0 decoder is deliberately partial
 /// (`crate::demangle`): a rule that matched only the decoded path would
-/// misclassify a name the decoder read badly, which is exactly what
-/// `compiler_builtins::mem::memcpy` did before this took the raw name too.
+/// misclassify a name the decoder reads badly, `compiler_builtins::mem::memcpy`
+/// among them.
 pub fn classify(path: &str, raw: &str) -> Category {
     let hit = |pattern: &str| path.contains(pattern) || raw.contains(pattern);
     for (pattern, category) in RULES {
@@ -250,13 +250,13 @@ pub const CANDIDATES: [Candidate; 5] = [
         // 32-byte hash, 64-byte signature, recovery id, 20-byte address out.
         //
         // This is the **ceiling** and it models a whole-`ecrecover` delegation,
-        // which is not what S26 built: `MOD_MUL` replaces the field *multiply*
-        // inside it, one call per multiply over a 32-word frame, and S22's
-        // cancellation rules out a family that verifies a signature. What that
-        // actually removed, measured, is 54% of this category on S26's pinned
-        // mini-block (`docs/handoff/S26-cycle.md` §6.2) — the rest being the
-        // ladder's bookkeeping, `conditional_select` and `memcpy`. So the figure
-        // below stays a ceiling and is labelled one; it is not a prediction.
+        // which is not how secp256k1 runs here: `MOD_MUL` replaces the field
+        // *multiply* inside it, one call per multiply over a 25-word frame, and
+        // `EC_ADD` the point additions, and no family verifies a signature
+        // (`docs/spec/delegation.md` §10, §11). What is left is guest code
+        // around them: the ladder's bookkeeping, `conditional_select` and
+        // `memcpy`. So the figure below is a ceiling and is labelled one; it is
+        // not a prediction.
         frame_words: 8 + 16 + 1 + 5,
     },
     Candidate {
@@ -264,8 +264,8 @@ pub const CANDIDATES: [Candidate; 5] = [
         // No single entry: the arithmetic is inlined into 27 opcode handlers,
         // so this one's figure is a ceiling with no shim charged.
         //
-        // **`MOD_MUL` is not this category's accelerator and never was.** The
-        // EVM's `MULMOD` takes an arbitrary modulus, which S26b's frame has no
+        // **`MOD_MUL` is not this category's accelerator.** The EVM's `MULMOD`
+        // takes an arbitrary modulus, which `MOD_MUL`'s frame has no
         // representation for; what would serve this category is a different
         // family. The frame below is therefore a hypothetical one — two
         // operands, a modulus and a result — and not
@@ -276,29 +276,30 @@ pub const CANDIDATES: [Candidate; 5] = [
     Candidate {
         category: Category::Bn254,
         entries: &["bn128", "run_pair", "run_add", "run_mul"],
-        // Since S26b this category **is** delegated, through
-        // `guests/vendor/ark-ff`'s two calls a Montgomery multiply, and since
-        // S26c its `0x06` and `0x07` group operations are too, through
-        // `revm::install_crypto` over `EC_ADD`. What is left is the **pairing**,
-        // `0x08`, which is where the measured BN254 cycles in every profiled
-        // block actually are: `sum_of_products` call counts pin block
+        // This category's field multiply **is** delegated, through
+        // `guests/vendor/ark-ff`'s two `MOD_MUL` calls a Montgomery multiply,
+        // and so are its `0x06` and `0x07` group operations, through the
+        // vendored `revm-precompile`'s `Crypto::{bn254_g1_add, bn254_g1_mul}`
+        // over `EC_ADD` (`docs/spec/delegation.md` §10). What is left is the
+        // **pairing**, `0x08`, which is where the measured BN254 cycles in every
+        // profiled block are: `sum_of_products` call counts pin block
         // 26,059,700's to one ~4-pair pairing plus some thirteen cheap G1 calls,
         // so ECADD and ECMUL together were 0.7–2.7% of that block and not the
-        // 18% the category as a whole reads. This figure stays a ceiling on what
-        // a pairing family could remove and is not a measurement of what S26c
-        // did.
+        // 18% the category as a whole reads. This figure is a ceiling on what a
+        // pairing family could remove.
         frame_words: 8 * 8,
     },
     Candidate {
         category: Category::OtherHash,
         entries: &["sha256_run", "ripemd160_run", "compress256"],
-        // One 64-byte block in, eight words of state — which since S26c is
-        // `constants::sha256::FRAME_WORDS` exactly, this category's SHA-256 half
-        // being delegated (`docs/spec/delegation-circuits.md` §6). What is left is
+        // `constants::sha256::FRAME_WORDS`, `SHA256_COMP`'s frame: the round
+        // group, eight words of state and a sixteen-word schedule window, this
+        // category's SHA-256 half being delegated through it four rounds a call
+        // (`docs/spec/delegation-circuits.md` §6.1). What is left is
         // RIPEMD-160, which shares the category and nothing else: it is
         // little-endian where SHA-256 is big-endian, five words of state where
         // SHA-256 has eight, and a different round function, so one frame does
-        // not serve both and this figure is now a ceiling on the **ripemd**
+        // not serve both and this figure is a ceiling on the **ripemd**
         // remainder rather than a prediction for the pair.
         frame_words: constants::sha256::FRAME_WORDS as u32,
     },

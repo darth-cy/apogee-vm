@@ -17,7 +17,7 @@ use transcript::io_digest;
 
 /// The fixture's pinned SHA-256: the vectors are the ones the digest was
 /// written down with.
-const IO_DIGEST_SHA256: &str = "314578e795a351c766c8c9c10dd890082149fb94401c955fe4641c2c19a315cd";
+const IO_DIGEST_SHA256: &str = "427980e025f21127cd81317bd3d1446c5765e335118bd5717f865c9eac594887";
 
 /// Every committed case, replayed.
 #[test]

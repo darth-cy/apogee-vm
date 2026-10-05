@@ -1,7 +1,6 @@
 //! The instance both zerocheck routines run on: `A * A - B = 0`, with `A` a
-//! `u16` column and `B = A^2` a `u32` one. It is S04 acceptance 1's witness,
-//! so the prove number and the verify comparison are measured over the same
-//! claim.
+//! `u16` column and `B = A^2` a `u32` one. Both routines run on it, so the
+//! prove number and the verify comparison are measured over the same claim.
 
 use field::Fr;
 use poly::{MultilinearPoly, PolyBacking};

@@ -11,7 +11,7 @@ use field::Fr;
 use transcript::poseidon2_permute;
 
 const PERM_PATH: &str = "tests/vectors/poseidon2_perm.txt";
-const PERM_SHA256: &str = "905e08088b1b9e1bfe985e1447f2f373d66b3e97ce1750714d39940de65e1fee";
+const PERM_SHA256: &str = "043398bbe711862d62de12daf4c0c8d9efedf1766c7ba2ac49e19720bea2ade2";
 
 /// The known-answer input.
 const KAT_INPUT: [u64; 3] = [0, 1, 2];

@@ -1,18 +1,18 @@
-//! S08 acceptance 11: Mercury commit, open and verify at `2^22`.
+//! Mercury commit, open and verify at `2^22`.
 //!
 //! Three things, all over **real ceremony bases** read from the powers-of-tau
 //! file, because "fast over random points" is not the claim anyone cares about:
 //!
-//! 1. wall-clock for `commit`, `open` and `verify` at the master's trace-height
+//! 1. wall-clock for `commit`, `open` and `verify` at the trace-height
 //!    ceiling;
 //! 2. the scalar-multiplication accounting for an opening — the sizes of every
 //!    MSM it runs, which is what "`2n + O(sqrt n)`" means concretely;
 //! 3. `commit` on a `u32`-backed column against an `Fr`-backed column *of the
 //!    same values*, where the only thing that differs is which MSM path
-//!    must-be-exact 10 routes the backing to.
+//!    `pcs::commit` routes the backing to.
 //!
 //! Nothing here asserts a threshold. A number that must not regress belongs in
-//! a test; this prints what the machine did, and the S08 handoff records it.
+//! a test; this prints what the machine did.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -26,8 +26,7 @@ use transcript::Transcript;
 
 use crate::timing::{ms, next_canonical, Best, REPS, SEED};
 
-/// The master's trace-height ceiling, and the largest instance Mercury has to
-/// open.
+/// The trace-height ceiling, and the largest instance a base shard opens.
 const LOG_N: u32 = 22;
 
 fn ceremony_path() -> PathBuf {

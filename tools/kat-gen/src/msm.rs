@@ -21,9 +21,8 @@
 //! `crates/curve/tests/msm.rs` — so a drift in either expansion changes the
 //! expected value and fails, and CI's regenerate-and-diff sees it.
 //!
-//! The patterns exist to cover S07 must-be-exact 1, which asks for empty
-//! input, zero scalars, interspersed points at infinity, a single element and
-//! all-identical scalars:
+//! The patterns cover empty input, zero scalars, interspersed points at
+//! infinity, a single element and all-identical scalars:
 //!
 //! | pattern | bases | scalars |
 //! | --- | --- | --- |
@@ -46,10 +45,10 @@ use crate::shared::hex_g1;
 
 const SEED: u64 = 20260918;
 
-/// `(pattern, n)`, in the order the file lists them. The sizes are S07
-/// acceptance 1's — 1, 2, 100, 2^10, 2^16 — plus the degenerate empty case,
-/// and the other patterns run at two sizes each: one below the window
-/// heuristic's 32-point threshold and one above it.
+/// `(pattern, n)`, in the order the file lists them. `random` runs at 1, 2,
+/// 100, 2^10 and 2^16, plus the degenerate empty case, and the other patterns
+/// run at two sizes each: one below the window heuristic's 32-point threshold
+/// and one above it.
 const CASES: [(&str, usize); 13] = [
     ("random", 0),
     ("random", 1),

@@ -13,11 +13,10 @@
 //!
 //! It proves the pinned fixture end to end and verifies the result, filling
 //! every field of the report from the run. The per-stage timings are the
-//! streaming run's own clocks (`prover::StreamingReport`) — since S-STREAM
-//! there is no `TraceArchive` and so no phase sections — and the
-//! crate's standing rule still holds: **no assertions, no thresholds**. The one
-//! thing it does assert is that the proof verifies, because a timing for a
-//! proof that does not verify is not a measurement of anything.
+//! streaming run's own clocks (`prover::StreamingReport`), and the crate's
+//! standing rule holds: **no assertions, no thresholds**. The one thing it
+//! does assert is that the proof verifies, because a timing for a proof that
+//! does not verify is not a measurement of anything.
 //!
 //! # A stateless input
 //!
@@ -42,10 +41,7 @@
 //! does not prove, a proved journal that is not the expected one, and an
 //! `--out` directory the proof does not write to. The last two fail only after
 //! the report is printed, because the measurement is still good and it cost
-//! the whole run. What the verb asserts still panics, and a usage error still
-//! exits 2. Until S-STREAM's review the ordinary failures each printed a line
-//! and exited 0, so a script waiting on a proof could not tell that none had
-//! been made.
+//! the whole run. What the verb asserts panics, and a usage error exits 2.
 //!
 //! # The SRS
 //!
@@ -113,9 +109,9 @@ pub struct Options {
     /// How many workers the **streaming** prover runs, each holding one shard
     /// at a time (`docs/spec/streaming.md` §5), which is what bounds the peak.
     ///
-    /// Not an `Option` since S-STREAM: streaming is the only proving path, so
-    /// there is no second arm for this to select and the flag only tunes the
-    /// one. [`DEFAULT_IN_FLIGHT`] is what an unset `--in-flight` means.
+    /// Not an `Option`: streaming is the only proving path, so there is no
+    /// second arm for this to select and the flag only tunes the one.
+    /// [`DEFAULT_IN_FLIGHT`] is what an unset `--in-flight` means.
     pub in_flight: usize,
     /// Where to write the proved block's four files, if anywhere
     /// (`verifier::proof_archive`). **The only thing a proving run archives.**
@@ -264,7 +260,7 @@ fn stateless_job(path: &Path, case: Option<&str>) -> Result<Job, String> {
 ///
 /// Every ordinary failure comes back as an error naming what failed, which
 /// `main` prints and exits 1 on (`# Failure` above); what the verb asserts
-/// still panics.
+/// panics.
 pub fn run(options: &Options) -> Result<(), String> {
     let job = match &options.source {
         Source::Fixture(stem) => fixture_job(stem)?,
@@ -285,15 +281,15 @@ pub fn run(options: &Options) -> Result<(), String> {
         input: Vec::new(),
         advice: job.advice,
     };
-    // **One proving path** (S-STREAM), and since S-PIPELINE a pipelined one.
-    // There is no archive and so no five phase sections: the `StreamingReport`'s
-    // clocks are mapped onto the names the report already has, and the printed
-    // table says how (`crate::report::Phases`). `commit_ms` and `gkr_ms` are
-    // the two passes' wall clocks; `execution_ms` is the executor's time in
-    // both, which runs inside them while the workers commit and prove, so it is
-    // not a third slice of the wall. `opening_ms` and `final_ms` are 0.0
-    // because the streaming prover does not separate them from `gkr_ms` — one
-    // shard's GKR and its opening are one interval there.
+    // **One proving path**, and a pipelined one. There is no archive and so no
+    // five phase sections: the `StreamingReport`'s clocks are mapped onto the
+    // report's five names, and the printed table says how
+    // (`crate::report::Phases`). `commit_ms` and `gkr_ms` are the two passes'
+    // wall clocks; `execution_ms` is the executor's time in both, which runs
+    // inside them while the workers commit and prove, so it is not a third
+    // slice of the wall. `opening_ms` and `final_ms` are 0.0 because the
+    // streaming prover does not separate them from `gkr_ms` — one shard's GKR
+    // and its opening are one interval there.
     let proving_started = Instant::now();
     let proven = host::prove(&setup, &io, options.in_flight)?;
     let report = proven.report;
@@ -318,10 +314,10 @@ pub fn run(options: &Options) -> Result<(), String> {
 
     // **The one thing a proving run archives**, and only after it verified:
     // a proof that does not verify is not worth a reader's disk, and a reader
-    // is the point — recursion development loads these four back through
-    // `verifier::proof_archive::read_proof` (S-STREAM). A write that fails
-    // fails the run, but only once the report is out: the measurement below is
-    // still good, and it cost the whole run.
+    // is the point — `bench`'s recursion verbs load these four back through
+    // `verifier::proof_archive::read_proof`. A write that fails fails the run,
+    // but only once the report is out: the measurement below is still good,
+    // and it cost the whole run.
     let archived = match &options.out {
         Some(dir) => match host::proof_archive::write_proof(dir, &job.name, &setup.vk, &block) {
             Ok(paths) => {
@@ -509,10 +505,8 @@ fn hex(bytes: &[u8]) -> String {
 
 /// A family's name, as `program::family_name` spells it.
 ///
-/// One source: this file carried its own table until S-STREAM, and it was a
-/// stale one — it stopped at `MOD_MUL`, so a report printed "family 16" and
-/// "family 17" where S26c's `SHA256_COMP` and `EC_ADD` belonged. The defect
-/// was the second source of one fact, not the two missing arms.
+/// One source: a table of names here would be a second source of one fact,
+/// and would fall behind the first as families are added.
 fn family_name(id: u32) -> String {
     program::family_name(id).to_string()
 }

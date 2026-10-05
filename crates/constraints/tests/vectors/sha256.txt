@@ -1,5 +1,5 @@
 # the SHA256_COMP delegation family's circuit, by SHA-256 of `artifact(n).to_bytes()`
-# docs/spec/delegation.md is normative; docs/spec/constraint-manifest.md §19 is the accounting
+# docs/spec/delegation-circuits.md §6 specifies it; docs/spec/circuits.md §1 lists its shape
 # the artifact itself is megabytes, so what is committed is its digest
 # n memory witness layers inner relations outputs bytes sha256
 18 104 520 28 2802 2921 6 845456 85d9f2676cc9ecfb3b5a73e3abd3486f401729e12c1183b1b7ff05ac42034575

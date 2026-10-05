@@ -1,5 +1,5 @@
-//! Rust symbol demangling, both mangling schemes, written here because master
-//! anti-goal 6 makes `rustc-demangle` an eight-lines-yourself dependency.
+//! Rust symbol demangling, both mangling schemes, written here rather than taken
+//! from `rustc-demangle`: the workspace takes no dependency for a convenience.
 //!
 //! `guests/revm-block` carries **both** forms — 1,154 legacy and 139 v0, the v0
 //! ones being the precompiled sysroot crates, `core` and `compiler_builtins` —

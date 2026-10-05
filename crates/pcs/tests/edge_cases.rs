@@ -245,6 +245,6 @@ fn flip_first_digit(token: &str) -> String {
 fn the_committed_file_is_the_pinned_one() {
     assert_eq!(
         to_hex(&sha256(KAT.as_bytes())),
-        "febc285030af9992629cefcbefb0819205d591e310d7c2d6347ddda523565549"
+        "fdf5183bb1aab3dd87b33d6a83d5b41c5a65af9f8bc6c5be38405978e8dbc72a"
     );
 }

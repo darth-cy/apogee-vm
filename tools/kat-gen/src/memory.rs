@@ -1,10 +1,11 @@
-//! The `memory` group: S14's three memory artifacts at `trace_vars` 22, the
-//! height every family defaults to.
+//! The `memory` group: the memory argument's artifacts at `trace_vars` 22, the
+//! largest default height — the four distinct execution-family frames and two
+//! of the window circuits.
 //!
 //! `constraints::memory`'s constructors are the only definition of these
 //! circuits; this group writes their bytes, and CI regenerates and diffs them.
-//! Neither file is an oracle. What each holds is `docs/spec/memory.md` §2 (the
-//! execution family's memory subtree) and §3.3 (the two window artifacts), and
+//! No file is an oracle. What each holds is `docs/spec/memory.md` §2 (the
+//! execution family's memory subtree) and §3.3 (the window artifacts), and
 //! `crates/gkr/tests/memory.rs` holds the leaves to hand-written arithmetic.
 
 use constants::family;

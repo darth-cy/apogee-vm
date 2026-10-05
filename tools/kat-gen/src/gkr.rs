@@ -1,4 +1,4 @@
-//! The `gkr` group: S13's toy circuit, written directly as a
+//! The `gkr` group: the toy circuit, written directly as a
 //! `CircuitArtifact`, and its cache-free compilation.
 //!
 //! This function is the toy's only definition. The prover and verifier never

@@ -1,5 +1,6 @@
-//! Export a guest ELF as the `ProgramImage` artifact later stages consume, and
-//! a report of that artifact a person can read — or print its decoded tables.
+//! Export a guest ELF as its `ProgramImage` artifact (`docs/spec/program.md`
+//! §3), and a report of that artifact a person can read — or print its decoded
+//! tables.
 //!
 //!     cargo run -p artifact-dump -- guests/target/riscv32imac-unknown-none-elf/debug/fib
 //!     cargo run -p artifact-dump -- <elf> --out artifacts/
@@ -10,12 +11,12 @@
 //!
 //! | File | What |
 //! | --- | --- |
-//! | `<name>.img` | the artifact: the frozen `postcard` wire form, nothing else |
+//! | `<name>.img` | the artifact: the `postcard` wire form, nothing else |
 //! | `<name>.img.txt` | the report of that artifact |
 //!
 //! `tables` prints to stdout instead: every instruction's pc, mnemonic, decoded
 //! fields and owning family, the derived `VmConfig`, and — given PSE's ceremony
-//! file with `--ptau` — the program identity at the frozen default parameters.
+//! file with `--ptau` — the program identity at the default parameters.
 //!
 //! `docs/guest-program-manual.md` is the walkthrough, from an empty crate to
 //! these files.
@@ -86,8 +87,8 @@ fn main() {
     );
 }
 
-/// `tables <elf> [--ptau <file>]`: print the decoded tables at the frozen
-/// default parameters.
+/// `tables <elf> [--ptau <file>]`: print the decoded tables at the default
+/// parameters.
 fn tables(args: &[String]) {
     let mut elf: Option<PathBuf> = None;
     let mut ptau: Option<PathBuf> = None;
@@ -120,7 +121,7 @@ fn tables(args: &[String]) {
         .heights
         .iter()
         .max()
-        .expect("eight heights")
+        .expect("a height per family")
         .trailing_zeros();
     let srs = ptau.map(|path| {
         srs::Srs::from_ptau(&path, power)
@@ -169,8 +170,8 @@ fn usage(why: &str) -> ! {
     eprintln!("usage: cargo run -p artifact-dump -- <guest.elf> [--out <dir>]");
     eprintln!("       cargo run --release -p artifact-dump -- tables <guest.elf> [--ptau <file>]");
     eprintln!();
-    eprintln!("The first writes <name>.img -- the frozen ProgramImage wire form, which is");
-    eprintln!("the artifact later stages read -- and <name>.img.txt, a report of it.");
+    eprintln!("The first writes <name>.img -- the ProgramImage in its postcard wire form,");
+    eprintln!("nothing around it -- and <name>.img.txt, a report of it.");
     eprintln!("`tables` prints the decoded per-family tables, the VmConfig and, with the");
     eprintln!("PSE ceremony file, the program identity. See docs/guest-program-manual.md.");
     std::process::exit(if why.is_empty() { 0 } else { 2 });

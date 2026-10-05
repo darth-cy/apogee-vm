@@ -1,14 +1,14 @@
 //! `BenchReport`: one proving job, as JSON and as a table.
 //!
-//! S25 freezes this schema. It is **one flat serde struct** — scalars and lists
-//! of pairs, no nested report, no optional section whose absence changes the
-//! shape — for the reason every wire format in this repository is flat: a
-//! reader who has the type has the whole of it.
+//! The schema is **one flat serde struct** — scalars and lists of pairs, no
+//! nested report, no optional section whose absence changes the shape — for
+//! the reason every wire format in this repository is flat: a reader who has
+//! the type has the whole of it.
 //!
 //! # What it is for
 //!
-//! *"Its output mirrors what an ethproofs submission needs (block number/hash,
-//! proving time, cost, hardware description)."* ethproofs' own `proofs` table
+//! Its output mirrors what an ethproofs submission needs: block number and
+//! hash, proving time, cost, hardware description. ethproofs' own `proofs` table
 //! carries `proving_time` (ms), `proving_cycles`, `size_bytes` and a block
 //! number, and derives a dollar cost from the hardware's hourly price:
 //!
@@ -19,48 +19,42 @@
 //! which is their `num_gpus · hourly_price · proving_time_ms / 3_600_000` with
 //! a CPU box's on-demand price in place of a GPU count times a GPU price. This
 //! report carries both inputs, so **the cost is recomputable from the report**
-//! — must-be-exact 7 — rather than being a number a reader must trust.
+//! rather than being a number a reader must trust.
 //!
 //! # Where the timings come from
 //!
-//! Must-be-exact 5: *"read from the `TraceArchive` phase sections whose schemas
-//! S16 froze, not from ad-hoc stopwatches sprinkled in the prover."* The
-//! archive went with the archived path at S-STREAM, and the rule's point
-//! survived it: [`Phases`] below is `prover::StreamingReport`'s clocks, which
-//! the prover measures around its own two passes and its own executor, and
-//! nothing here holds a stopwatch over anything inside the prover. Two honest
-//! caveats, both reported rather than smoothed over:
+//! [`Phases`] below is `prover::StreamingReport`'s clocks, which the prover
+//! measures around its own two passes and its own executor; nothing here holds
+//! a stopwatch over anything inside the prover. Two honest caveats, both
+//! reported rather than smoothed over:
 //!
 //! - The phases do **not** sum to the proving wall-clock. The block assembly
 //!   and `host::prove`'s own work sit outside both passes. The remainder is
 //!   `unattributed_ms` and it is **named rather than absorbed**: a total that
 //!   silently swallows the work no clock claims is a total nobody can check
 //!   against a clock.
-//! - **`execution_ms` is not a slice of the wall at all** (S-PIPELINE). The
-//!   guest is stepped by whichever worker needs the next shard while the others
-//!   commit or prove theirs, so the executor's time is inside the two passes'
-//!   wall clocks, and [`Phases::total_ms`] leaves it out.
+//! - **`execution_ms` is not a slice of the wall at all.** The guest is
+//!   stepped by whichever worker needs the next shard while the others commit
+//!   or prove theirs, so the executor's time is inside the two passes' wall
+//!   clocks, and [`Phases::total_ms`] leaves it out.
 //!
 //! # No comparative claims
 //!
-//! Acceptance 6: *"No comparative or positioning claims appear anywhere in the
-//! output."* There are none, and there is nowhere to put one: every field is a
-//! measurement of this run on this machine, and the table prints the same
-//! machine-dependence note `tools/bench`'s other routines do.
+//! The output makes no comparative or positioning claim, and has nowhere to put
+//! one: every field is a measurement of this run on this machine, and the table
+//! prints the same machine-dependence note `tools/bench`'s other routines do.
 
 use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
-/// The proving run's timings, in milliseconds, under the five names S12 gave
-/// the `TraceArchive`'s phase sections — which is what this struct held until
-/// S-STREAM, and why its JSON still has five fields.
+/// The proving run's timings, in milliseconds, under the five names of the
+/// archived path's phases (`docs/spec/streaming.md` §6), which is why its JSON
+/// has five fields and two of them are 0.
 ///
-/// Since S-PIPELINE they are `prover::StreamingReport`'s clocks: two wall
-/// clocks, one per pass, and the executor's time, which runs **inside** them.
-/// So `execution_ms` is a part of `commit_ms` and `gkr_ms` and not a slice
-/// beside them, and a figure here is comparable with neither a pre-S-STREAM one
-/// nor a pre-S-PIPELINE one.
+/// They are `prover::StreamingReport`'s clocks: two wall clocks, one per pass,
+/// and the executor's time, which runs **inside** them. So `execution_ms` is a
+/// part of `commit_ms` and `gkr_ms` and not a slice beside them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Phases {
     /// The executor's time in both passes, summed over every step any worker
@@ -104,9 +98,9 @@ pub struct Hardware {
     pub os: String,
     /// `std::env::consts::ARCH`.
     pub arch: String,
-    /// Rayon's worker count for this run, which is what bounds the memory peak:
-    /// shard proving is the block's one parallel step and its peak is one
-    /// shard's forward pass per worker.
+    /// Rayon's worker count for this run (`RAYON_NUM_THREADS`): the cores the
+    /// shards in flight share. What bounds the memory peak is `in_flight`, the
+    /// shards held at once (`docs/spec/streaming.md` §5).
     pub rayon_threads: usize,
 }
 
@@ -143,10 +137,10 @@ pub struct BenchReport {
 
     // --- the proof -------------------------------------------------------
     /// The streaming prover's backpressure bound — its worker count, and the
-    /// most shards it holds at once — or `None` for the archived path, which
-    /// nothing runs any more. When it is set, the phases below are the two
-    /// passes' wall clocks and the executor's time inside them, and the printed
-    /// table says so ([`Phases`]).
+    /// most shards it holds at once — or `None` for the archived path, which no
+    /// proving run takes. When it is set, the phases below are the two passes'
+    /// wall clocks and the executor's time inside them, and the printed table
+    /// says so ([`Phases`]).
     pub in_flight: Option<usize>,
     /// Shards per family, by family name, in statement order.
     pub shards: Vec<(String, u32)>,
@@ -159,11 +153,11 @@ pub struct BenchReport {
 
     // --- timing ----------------------------------------------------------
     /// `ProverSetup::new`: registry compilation, the setup MSMs, the key check.
-    /// Outside every archive phase, and outside `proving_ms`.
+    /// Outside both passes, and outside `proving_ms`.
     pub setup_ms: f64,
-    /// The streaming prover's clocks, under the five names this report has
-    /// always had: the two passes' wall clocks as `commit_ms` and `gkr_ms`, and
-    /// the executor's time inside them as `execution_ms` ([`Phases`]).
+    /// The streaming prover's clocks, under the report's five names: the two
+    /// passes' wall clocks as `commit_ms` and `gkr_ms`, and the executor's time
+    /// inside them as `execution_ms` ([`Phases`]).
     pub phases: Phases,
     /// The whole of `host::prove`: the executor, every phase, and the work
     /// between them.
@@ -443,18 +437,16 @@ fn sysctl(name: &str) -> Option<String> {
 
 /// Peak resident set, where the platform reports one without `unsafe`.
 ///
-/// **This is the repository's standing note on measuring RSS**, and the one
-/// place it is written down. Linux's `/proc/self/status` carries `VmHWM`, the
-/// high-water mark, in plain text, so on Linux this function is the whole
-/// measurement. macOS has no equivalent short of a `libc` call or re-running
-/// the whole job under `/usr/bin/time -l`, and master anti-goal 4 bans the
-/// `unsafe` the first would need — so on macOS this is `None` and says so.
+/// Linux's `/proc/self/status` carries `VmHWM`, the high-water mark, in plain
+/// text, so on Linux this function is the whole measurement. macOS has no
+/// equivalent short of a `libc` call or re-running the whole job under
+/// `/usr/bin/time -l`, and the workspace writes no `unsafe`, which the first
+/// would need — so on macOS this is `None` and says so.
 ///
 /// `/usr/bin/time -l` (`-v` on Linux) is this repository's **ground truth** for
-/// peak RSS, and it is what every handoff note's memory figure was taken with.
-/// Nothing in the prover models or estimates the number: reading it in-process
-/// is either this file's `VmHWM` or it is `unsafe`, and an estimate that is not
-/// the measurement is worse than wrapping the run.
+/// peak RSS. Nothing in the prover models or estimates the number: reading it
+/// in-process is either this file's `VmHWM` or it is `unsafe`, and an estimate
+/// that is not the measurement is worse than wrapping the run.
 pub fn peak_rss() -> (Option<u64>, String) {
     match field_of("/proc/self/status", "VmHWM") {
         // `VmHWM:  41234 kB`
@@ -473,7 +465,7 @@ pub fn peak_rss() -> (Option<u64>, String) {
             None,
             format!(
                 "not measured: {} has no /proc/self/status, and reading peak RSS in-process \
-                 otherwise needs unsafe, which master anti-goal 4 bans. Wrap the run in \
+                 otherwise needs unsafe, which this workspace does not write. Wrap the run in \
                  /usr/bin/time -l, this repository's ground truth for peak RSS \
                  (`tools/bench/src/report.rs`'s `peak_rss`)",
                 std::env::consts::OS

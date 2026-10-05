@@ -5,14 +5,14 @@
 //! sumcheck verifier holds a digest and a proof — 4 coefficients per round plus
 //! one eval per gate input — and never sees a row. That is the comparison: the
 //! work is `O(2^n)` on one side and `O(n)` on the other, and this routine says
-//! what the constants make of it at the size S04 proves over.
+//! what the constants make of it at `2^22` rows.
 //!
 //! Two things stay outside both timed regions, and both are named in the
 //! output. Proving and the witness digest are the prover's cost and the
 //! commitment's, not the verifier's. And discharging the claim
 //! `verify_zerocheck` returns — opening `final_evals` against a commitment — is
-//! the Mercury PCS's job and does not exist yet, so the sumcheck number here is
-//! a floor, not the finished verifier's cost.
+//! a Mercury opening's job and is not measured here, so the sumcheck number is
+//! a floor, not a whole verifier's cost.
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -25,10 +25,10 @@ use transcript::Transcript;
 use crate::square::Square;
 use crate::timing::{ms, Best, REPS};
 
-/// Four times the rows S04 acceptance 1 proves over. The separation this
+/// Four times the rows `zerocheck-prove` proves over. The separation this
 /// routine measures is `O(2^n)` against `O(n)`, so it is worth reading at a
-/// size the acceptance does not have to pay for: every doubling of `n` doubles
-/// the naive verifier's work and adds one round to the sumcheck verifier's.
+/// large size: every doubling of `n` doubles the naive verifier's work and adds
+/// one round to the sumcheck verifier's.
 /// The price is setup: the digest is tens of seconds at this size, which is
 /// the reason routines are individually selectable.
 const VARS: usize = 22;
@@ -60,9 +60,9 @@ fn sumcheck_verify(inst: &Square, digest: Fr, proof: &SumcheckProof) -> bool {
 /// The transcript half of `sumcheck_verify` with the arithmetic removed: the
 /// same messages in the same order, and nothing else.
 ///
-/// This is a second copy of the frozen transcript script, and a copy drifts —
-/// so the caller checks it against the real verifier's sponge and refuses to
-/// report a number if the two have come apart.
+/// This is a second copy of the zerocheck's transcript script, and a copy
+/// drifts — so the caller checks it against the real verifier's sponge and
+/// refuses to report a number if the two have come apart.
 fn transcript_only(proof: &SumcheckProof, digest: Fr) -> Transcript {
     let mut t = Transcript::new();
     sumcheck::absorb_witness_digest(&mut t, digest);
@@ -198,8 +198,8 @@ pub fn run() {
         println!("  error next to the sponge it drives, so the permutation, not the");
         println!("  protocol, is what caps the ratio in the table above.");
     } else {
-        println!("\n  transcript share: not reported — the replay in this file no longer");
-        println!("  matches the verifier's message schedule. Fix it or delete it.");
+        println!("\n  transcript share: not reported — the replay in this file does not");
+        println!("  match the verifier's message schedule. Fix it or delete it.");
     }
 
     println!("\n  outside both measurements, and not the verifier's work:");
@@ -211,8 +211,8 @@ pub fn run() {
         "    witness_digest                     {:>10.1} ms",
         ms(digest_time)
     );
-    println!("  outside the sumcheck measurement, and not yet implemented:");
-    println!("    opening final_evals against a commitment (Mercury PCS). Until that");
-    println!("    lands the sumcheck figure is a floor, and the naive verifier is the");
-    println!("    only one of the two that is complete.");
+    println!("  outside the sumcheck measurement:");
+    println!("    opening final_evals against a commitment (a Mercury opening), so");
+    println!("    the sumcheck figure is a floor, and the naive verifier is the only");
+    println!("    one of the two that is complete.");
 }

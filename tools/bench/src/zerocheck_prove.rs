@@ -1,4 +1,4 @@
-//! S04 acceptance 9: prove wall-clock and peak polynomial memory at 2^20.
+//! Zerocheck prove wall-clock and peak polynomial memory at 2^20.
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -6,7 +6,7 @@ use std::time::Instant;
 use crate::square::Square;
 use crate::timing::{ms, Best, REPS};
 
-/// The rows acceptance 1 proves over.
+/// The rows the zerocheck proves over, in variables.
 const VARS: usize = 20;
 
 /// The bytes a polynomial's table occupies, by width. Vec capacity equals
@@ -23,7 +23,8 @@ fn table_bytes(backing: &poly::PolyBacking) -> usize {
 
 /// Peak live polynomial bytes inside `prove_zerocheck`, computed from the
 /// tables the algorithm holds. It is not an allocator measurement: reading peak
-/// RSS on every platform needs either a dependency or `unsafe`, and both are banned.
+/// RSS on every platform needs either a dependency or `unsafe`, and this
+/// workspace takes neither.
 ///
 /// The model: `eq` is a full `Fr` table for the whole proof; `bind` truncates a
 /// column's length without releasing its capacity, so from its first bind each

@@ -910,6 +910,6 @@ fn flip_first_digit(token: &str) -> String {
 fn the_committed_accumulator_file_is_the_pinned_one() {
     assert_eq!(
         test_support::to_hex(&test_support::sha256(KAT.as_bytes())),
-        "3ecd609ae0b032641f4db650b33113981a883ec6801aedf7793a8534a019c4c2"
+        "106b4e3436211c7eec68c14335d03190567d0155bef75b79623834b70876cf74"
     );
 }

@@ -1,11 +1,11 @@
-//! A guest ELF in, the frozen `ProgramImage` artifact out, plus a report of
-//! that artifact a person can read.
+//! A guest ELF in, the `ProgramImage` artifact out, plus a report of that
+//! artifact a person can read.
 //!
 //! # What the artifact is
 //!
-//! Exactly the wire form S10 froze: `postcard` over `entry`, `segments`,
-//! `slot_base` and `slots` in declaration order, with **no header, no magic
-//! and no framing of this tool's own**. A later stage reads one back with
+//! Exactly the image's wire form (`docs/spec/program.md` §3): `postcard` over
+//! `entry`, `segments`, `slot_base` and `slots` in declaration order, with **no
+//! header, no magic and no framing of this tool's own**. Reading one back,
 //!
 //! ```no_run
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -14,10 +14,9 @@
 //! # Ok(()) }
 //! ```
 //!
-//! and gets the value `loader::load_elf` gives for the same ELF, because that
-//! is what was written. Inventing a container here would have made the file a
-//! second format to freeze, and the point of the exercise is that there is
-//! only one.
+//! gives the value `loader::load_elf` gives for the same ELF, because that is
+//! what was written. A container of this tool's own would make the file a
+//! second format, and there is only one.
 //!
 //! # Why the report is rendered from the artifact and not from the image
 //!
@@ -40,7 +39,7 @@ pub mod tables;
 
 /// One dump: the artifact, the report of it, and the image both describe.
 pub struct Dump {
-    /// The frozen wire form. This is the file to keep.
+    /// The wire form. This is the file to keep.
     pub artifact: Vec<u8>,
     /// The report of that artifact, ready to write or print.
     pub report: String,
@@ -77,7 +76,7 @@ pub fn dump(elf: &[u8], source_label: &str, artifact_name: &str) -> Result<Dump,
     })
 }
 
-/// The frozen wire form: `postcard` over the image.
+/// The wire form: `postcard` over the image.
 ///
 /// `postcard` is taken with no features, so there is no `to_allocvec`; the
 /// buffer is a heap `Vec` sized from the image and `to_slice` writes into it.
@@ -139,17 +138,18 @@ fn header(out: &mut String, artifact: &[u8], elf: &[u8], source_label: &str, art
          \n\
          The artifact IS that wire form -- `postcard` over `entry`, `segments`,\n\
          `slot_base` and `slots` in declaration order, with no header and no\n\
-         framing of its own. A later stage reads it back with\n\
+         framing of its own. Read it back with\n\
          \n\
          \x20   let bytes = std::fs::read({artifact_name:?})?;\n\
          \x20   let image: loader::ProgramImage = postcard::from_bytes(&bytes)?;\n\
          \n\
-         and gets the value `load_elf` gives for the same ELF.\n\
+         and get the value `load_elf` gives for the same ELF.\n\
          \n\
          The sha256 above pins these bytes so a rebuild can be compared against\n\
-         them. It is **not** program identity: that is S11's, computed over the\n\
-         decoded per-family tables and the `VmConfig`, and it is a different\n\
-         value in a different field.\n\
+         them. It is **not** program identity: that is computed over the\n\
+         decoded per-family tables, the `VmConfig`, the entry pc and the image\n\
+         (docs/spec/program.md section 8), and it is a different value in a\n\
+         different field.\n\
          \n\
          Symbol names below come from the ELF's own symbol table. They make the\n\
          listing navigable and are NOT part of the artifact -- nothing downstream\n\
