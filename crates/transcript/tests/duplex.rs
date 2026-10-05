@@ -26,7 +26,7 @@ fn outputs(cases: &[Case], name: &str) -> Vec<Fr> {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 3: every committed case replays byte-exact.
+// Every committed case replays byte-exact.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -71,7 +71,7 @@ fn every_committed_case_replays() {
     }
 }
 
-/// The frozen kind of every tag, mirroring `constants::transcript_tags`.
+/// The kind of every tag, mirroring `constants::transcript_tags`.
 const TAG_KINDS: [(&str, &str); 7] = [
     ("PROTOCOL_SUITE", "scalars"),
     ("PUBLIC_INPUTS", "bytes"),
@@ -101,7 +101,7 @@ fn check_tag_kinds(cases: &[Case]) -> Result<(), String> {
             };
             if documented(tag) != Some(used_as) {
                 return Err(format!(
-                    "case {} uses tag {tag} as {used_as}, against the frozen table",
+                    "case {} uses tag {tag} as {used_as}, against the tag table",
                     c.name
                 ));
             }
@@ -162,14 +162,14 @@ fn a_tag_used_in_two_kinds_is_caught() {
     );
 }
 
-/// Acceptance 4: absorb-length framing keeps one zero apart from two.
+/// Absorb-length framing keeps one zero apart from two.
 #[test]
 fn case_d_differs_from_case_e() {
     let cases = load();
     assert_ne!(outputs(&cases, "D")[0], outputs(&cases, "E")[0]);
 }
 
-/// Acceptance 5: after one absorb, the first challenge is `state[1]` and the
+/// After one absorb, the first challenge is `state[1]` and the
 /// second is `state[0]` — challenges leave the rate from the end.
 #[test]
 fn samples_leave_the_rate_from_the_end() {
@@ -185,7 +185,7 @@ fn samples_leave_the_rate_from_the_end() {
     assert_eq!(got[1], state[0]);
 }
 
-/// Acceptance 6: observing invalidates buffered output, so sampling between two
+/// Observing invalidates buffered output, so sampling between two
 /// absorbs is not the same as absorbing both and then sampling twice.
 #[test]
 fn observing_after_sampling_invalidates_the_output() {
@@ -200,7 +200,7 @@ fn observing_after_sampling_invalidates_the_output() {
     assert_ne!(split[1], together[1]);
 }
 
-/// Acceptance 7: a third sample with nothing absorbed since permutes again,
+/// A third sample with nothing absorbed since permutes again,
 /// rather than handing back a stale lane.
 #[test]
 fn repeated_squeezing_permutes_again() {
@@ -226,7 +226,7 @@ fn repeated_squeezing_permutes_again() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 8: the typed layer separates tags and frames messages.
+// The typed layer separates tags and frames messages.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -273,7 +273,7 @@ fn typed_layer_is_the_documented_framing() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 9: the byte encoding.
+// The byte encoding.
 // ---------------------------------------------------------------------------
 
 /// The committed cases cover empty, 1, 30, 31, 32, 62 and 100 bytes — both
@@ -455,7 +455,7 @@ fn tag_table_is_well_formed() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 11 and friends: negative controls.
+// Negative controls.
 // ---------------------------------------------------------------------------
 
 /// Replay a case file from text, so a corrupted copy can be fed in.
@@ -466,7 +466,7 @@ fn replay_all(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Acceptance 11: one flipped bit in case C's committed vector fails the replay.
+/// One flipped bit in case C's committed vector fails the replay.
 #[test]
 fn a_flipped_bit_in_case_c_fails() {
     let text = read_vectors(CASES_PATH);

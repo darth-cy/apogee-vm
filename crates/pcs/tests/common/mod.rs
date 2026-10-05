@@ -16,8 +16,8 @@
 //!
 //! It is built by writing the archive of `docs/spec/srs.md` §4 and loading it
 //! through `Srs::load`, which is the only way to get an `Srs` from points and
-//! keeps every point going through `crates/curve`'s validating decoder. No
-//! constructor was added to `crates/srs` for the sake of a test.
+//! keeps every point going through `crates/curve`'s validating decoder.
+//! `crates/srs` has no constructor for a test's sake.
 
 #![allow(dead_code)]
 
@@ -150,11 +150,11 @@ pub fn records(text: &str) -> Vec<Vec<String>> {
 // ---------------------------------------------------------------------------
 //
 // Everything below rebuilds what `crates/pcs` derives, from the definitions in
-// `docs/spec/mercury.md` and `docs/spec/mercury.md` §6 rather than from the
-// crate. Two files read it: `accumulator.rs`, which replays the schedule to
-// recover the challenges, and `edge_cases.rs`, which reads forced ones out of a
-// fixture. Naive on purpose — schoolbook multiplication, Lagrange written out,
-// `eq` from its product form — so that agreeing with the crate means something.
+// `docs/spec/mercury.md` rather than from the crate. Two files read it:
+// `accumulator.rs`, which replays the schedule to recover the challenges, and
+// `edge_cases.rs`, which reads forced ones out of a fixture. Naive on purpose —
+// schoolbook multiplication, Lagrange written out, `eq` from its product form —
+// so that agreeing with the crate means something.
 
 use constants::transcript_tags as tags;
 use curve::G1Affine;
@@ -269,7 +269,7 @@ pub fn deferred_entries(
     let z_inv = c.z.inverse().expect("z is nonzero");
     let (h_alpha, d_z) = derived(u, v, p, c);
 
-    // The BDFG20 batch of §6, in its frozen order g, h, S, D.
+    // The BDFG20 batch of `docs/spec/mercury.md` §3.3, in its order g, h, S, D.
     let complements = [
         vanishing(&[c.alpha]),
         vec![Fr::ONE],
@@ -328,7 +328,7 @@ pub fn deferred_entries(
 /// recover every challenge it draws.
 ///
 /// `prefix` is whatever the transcript absorbed before the opening: nothing for
-/// a single verification, §11's preamble for a batch.
+/// a single verification, §5's preamble for a batch.
 pub fn replay_schedule(
     cm: &MercuryCommitment,
     u: &[Fr],

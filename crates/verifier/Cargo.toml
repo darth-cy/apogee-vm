@@ -15,7 +15,7 @@ srs.workspace = true
 verifier-core.workspace = true
 
 [dev-dependencies]
-# `tests/cli.rs` proves the S16 statement to have files to verify, through
+# `tests/cli.rs` proves the add/sub statement to have files to verify, through
 # `crates/prover/tests/common`.
 constants.workspace = true
 # The loader's unit test builds a key over the registry's circuits.

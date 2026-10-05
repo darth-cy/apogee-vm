@@ -1,5 +1,5 @@
-//! Acceptance 10: snapshot and restore reproduce the challenge stream exactly,
-//! and the snapshot survives a byte round trip.
+//! Snapshot and restore reproduce the challenge stream exactly, and the
+//! snapshot survives a byte round trip.
 
 mod common;
 
@@ -33,7 +33,7 @@ fn decode(bytes: &[u8]) -> Result<TranscriptSnapshot, postcard::Error> {
     postcard::from_bytes(bytes)
 }
 
-/// Acceptance 10: snapshot at operation 10 of a 20-operation mixed script,
+/// Snapshot at operation 10 of a 20-operation mixed script,
 /// restore into a fresh transcript, and the remaining 10 operations agree —
 /// both with the original transcript and with the committed reference values.
 #[test]

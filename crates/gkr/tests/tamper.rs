@@ -1,6 +1,6 @@
-//! What `verify` rejects: the tamper twin (acceptance 2), the cancellation
-//! control (acceptance 3), a forged output table, a wrong child pair, a lying
-//! row-wise final eval, every malformed shape and every missing slot — each as
+//! What `verify` rejects: the tamper twin, the cancellation control, a forged
+//! output table, a wrong child pair, a lying row-wise final eval, every
+//! malformed shape and every missing slot — each as
 //! a returned error, never a panic — and what the self-check names.
 
 mod common;
@@ -34,7 +34,7 @@ fn bump(values: &LayerValues, layer: usize, column: usize, row: usize) -> LayerV
     out
 }
 
-/// Acceptance 2, first half: one inner-layer value flipped after the forward
+/// The tamper twin, first half: one inner-layer value flipped after the forward
 /// pass. The proof is honest over the flipped values, the outputs are the
 /// honest ones, and the transition that reads the flipped column rejects.
 #[test]
@@ -88,15 +88,15 @@ fn the_self_check_names_a_broken_producing_gate() {
     );
 }
 
-/// Acceptance 2, second half: `e` is read by the enforcing gate
+/// The tamper twin, second half: `e` is read by the enforcing gate
 /// `(e − a)·s = 0` and by nothing else. Flipping it on an active row, with the
 /// digest, the forward pass and the proof all honest over the flipped base,
 /// breaks the gate — the self-check names it — and `verify` rejects at the
 /// transition carrying the enforcing claim.
 ///
-/// Both halves fail as `LayerInconsistency`, at different layers: the
-/// repository owner's decision, because a verifier cannot tell a wrong
-/// descending claim from a violated enforcing gate inside one batched sum.
+/// Both halves fail as `LayerInconsistency`, at different layers, because a
+/// verifier cannot tell a wrong descending claim from a violated enforcing
+/// gate inside one batched sum.
 #[test]
 fn a_flipped_enforcing_only_cell_is_rejected_at_the_enforcing_layer() {
     let artifact = toy();
@@ -130,10 +130,10 @@ fn a_flipped_enforcing_only_cell_is_rejected_at_the_enforcing_layer() {
     assert_eq!(result, Err(GkrError::LayerInconsistency { layer: 0 }));
 }
 
-/// Acceptance 3: a base violating the enforcing gate by `+v` on one row and
-/// `−v` on another. Its bare sum over the cube is exactly zero — a verifier
-/// summing `G(y)` unweighted would accept — while its eq-weighted sum at a
-/// random point is not, and `verify` rejects.
+/// The cancellation control: a base violating the enforcing gate by `+v` on
+/// one row and `−v` on another. Its bare sum over the cube is exactly zero — a
+/// verifier summing `G(y)` unweighted would accept — while its eq-weighted sum
+/// at a random point is not, and `verify` rejects.
 #[test]
 fn a_cancelling_violation_is_rejected() {
     let artifact = toy();
@@ -300,8 +300,8 @@ fn a_lying_row_wise_final_eval_is_rejected_at_its_transition() {
     }
 }
 
-/// Every malformed shape is an error before the transcript is touched, in the
-/// frozen order: challenges, then outputs, then the proof.
+/// Every malformed shape is an error before the transcript is touched, in
+/// order: challenges, then outputs, then the proof.
 #[test]
 fn malformed_shapes_are_errors_in_order() {
     let artifact = toy();

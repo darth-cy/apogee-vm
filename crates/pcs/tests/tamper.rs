@@ -1,4 +1,4 @@
-//! Acceptance 4, 5 and 6: every twin of an honest proof is rejected.
+//! Every twin of an honest proof is rejected.
 //!
 //! Three kinds of tampering, and they fail for three different reasons.
 //! A **witness** twin is an honest proof of a different polynomial, so it fails
@@ -64,7 +64,7 @@ impl Instance {
     }
 }
 
-/// Acceptance 4: flip one evaluation of `f`, open honestly, and check the proof
+/// Flip one evaluation of `f`, open honestly, and check the proof
 /// against the **original** commitment.
 ///
 /// The prover is not cheating — it runs the protocol correctly on the witness
@@ -96,7 +96,7 @@ fn a_flipped_evaluation_fails_against_the_original_commitment() {
     }
 }
 
-/// Acceptance 5: perturb each of the 14 proof fields on its own.
+/// Perturb each of the 14 proof fields on its own.
 ///
 /// A `G1` field is moved by adding the generator, which lands on a different
 /// valid point of the subgroup; an `Fr` field by adding one. Every one of the
@@ -141,7 +141,7 @@ fn every_proof_field_is_load_bearing() {
     assert_eq!(count, 14, "the sweep must cover every field of the proof");
 }
 
-/// Must-be-exact 8: a proof point off the curve or outside the subgroup is
+/// A proof point off the curve or outside the subgroup is
 /// refused before it reaches the pairing, and the error names the field.
 #[test]
 fn an_invalid_proof_point_is_refused_by_name() {
@@ -181,7 +181,7 @@ fn an_invalid_proof_point_is_refused_by_name() {
     );
 }
 
-/// Acceptance 6: `v + 1`, a point differing in one coordinate, and the two
+/// `v + 1`, a point differing in one coordinate, and the two
 /// halves of `u` swapped.
 ///
 /// The last is the order-convention negative control. `u1` is the **first**

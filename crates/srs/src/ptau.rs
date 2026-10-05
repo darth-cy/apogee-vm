@@ -217,7 +217,7 @@ impl Phase1 {
         })?;
 
         let mut omega = Fr::from_hex(constants::FR_TWO_ADIC_ROOT_OF_UNITY)
-            .expect("the frozen two-adic root is a canonical hex literal");
+            .expect("the two-adic root is a canonical hex literal");
         for _ in power..constants::FR_TWO_ADICITY {
             omega = omega.square();
         }
@@ -358,12 +358,12 @@ fn canonicalize(src: &[u8], dst: &mut [u8], r_inv: &Fq) -> Option<()> {
     Some(())
 }
 
-/// Decode a G1 point, then hand it to S05's validating `from_bytes`.
+/// Decode a G1 point, then hand it to the curve's validating `from_bytes`.
 ///
 /// Re-encoding into the canonical form rather than building the struct
-/// directly is what makes "S05 `from_bytes` validation semantics apply to
-/// every point" literally true: there is one decoder, and this is a translator
-/// in front of it.
+/// directly is what makes "`from_bytes` validation applies to every point"
+/// literally true: there is one decoder, and this is a translator in front of
+/// it.
 fn g1_from_montgomery(bytes: &[u8], r_inv: &Fq) -> Option<G1Affine> {
     let mut canonical = [0u8; 64];
     for (src, dst) in bytes.chunks_exact(32).zip(canonical.chunks_exact_mut(32)) {

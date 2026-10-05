@@ -35,7 +35,7 @@ pub fn blob(i: u32) -> [u8; 64] {
     p
 }
 
-/// S-IO's three window families, which are in **every** `VmConfig`
+/// The public and advice window families, which are in **every** `VmConfig`
 /// (`docs/spec/public-values.md` §4), at the heights the window rules require.
 pub fn window_families(height: u32) -> Vec<(u32, u32)> {
     vec![
@@ -99,9 +99,9 @@ pub fn vk() -> VerifyingKey {
     }
 }
 
-/// `vk`'s shape with S17's family beside add/sub: its decoded table's seven
-/// setup commitments in identity, which with the key's generic table are its
-/// ten setup columns.
+/// `vk`'s shape with `JUMP_BRANCH_SLT` beside add/sub: its decoded table's
+/// seven setup commitments in identity, which with the key's generic table are
+/// its ten setup columns.
 pub fn jbs_vk() -> VerifyingKey {
     let config = VmConfig {
         families: {
@@ -149,21 +149,21 @@ pub fn jbs_vk() -> VerifyingKey {
 /// `vk`'s shape with the `KECCAK_F` delegation family beside add/sub, and the one
 /// key fixture whose circuits carry the `XOR8` channel.
 ///
-/// **It exists for the channel's three virtual table addresses.** Since S26d a
+/// **It exists for the channel's three virtual table addresses.** A
 /// `ChannelSpec`'s table may name `V[xor8_a]`, `V[xor8_b]` or `V[xor8_out]`, and
 /// `types.rs`' private `write_address`/`read_address` carry their own copy of the
 /// `VirtualKind` wire tags — a second table beside `constraints::wire`'s. If the
 /// two ever disagreed, **no verifying key for a program that hashes could load**,
 /// and every other key fixture here would still round-trip: add/sub's channels
 /// name `V[range19]`, `V[range16]` and setup columns, and the window families
-/// name none at all. This one is the only fast-gate reading of the new arms.
+/// name none at all. This one is the only fast-gate reading of those arms.
 ///
 /// The family has **no setup column**, so its slot in `setup_commitments` is
 /// empty, and it is at `2^16` — the **floor** `family_circuit` gives it, and
-/// deliberately not its default, which is `2^18` since S26d. This key is
-/// synthetic: it spells its own heights, computes its own identity and SRS
-/// digests from them, and reads `DEFAULT_HEIGHTS` nowhere, so the cheapest legal
-/// height is the right one here and `2^16` is not a stale literal.
+/// deliberately not its default, `2^18`. This key is synthetic: it spells its
+/// own heights, computes its own identity and SRS digests from them, and reads
+/// `DEFAULT_HEIGHTS` nowhere, so the cheapest legal height is the right one
+/// here and `2^16` is not a stale literal.
 pub fn keccak_vk() -> VerifyingKey {
     let config = VmConfig {
         families: {
@@ -208,7 +208,8 @@ pub fn keccak_vk() -> VerifyingKey {
 /// that run.
 pub fn jbs_statement() -> PublicInputs {
     let mut s = statement();
-    // One add/sub, one jump, one init, no zero window, then S-IO's three.
+    // One add/sub, one jump, one init, no zero window, then the public pair
+    // and advice.
     s.shard_counts = vec![1, 1, 1, 0, 1, 1, 0];
     // Statement order is INIT, ZERO, then ascending, so the jump family's
     // lists go before the two public ones this pushes back on at the end.
@@ -235,17 +236,16 @@ pub fn finals(status: u32) -> BoundaryFinals {
 
 /// One `INIT_TEARDOWN` shard and one `ADD_SUB_LUI_AUIPC` shard, in statement
 /// order, with memory commitments of the right widths: 2 for a window
-/// family's frame, and 27 for add/sub's — `1 + 5w` at `w = 5` queries, since
-/// deleting the transfer cycle left `arg1`, `arg2` and `ram` unreachable in
-/// this family, and one more since S23, `deleg_space`, which carries the
-/// requested delegation type's tag into the mirror's leaf.
+/// family's frame, and 27 for add/sub's — `1 + 5w` at `w = 5` queries, and one
+/// more, `deleg_space`, which carries the requested delegation type's tag into
+/// the mirror's leaf.
 pub fn statement() -> PublicInputs {
     PublicInputs {
         input: vec![1, 2, 3],
         output: vec![],
         exit_status: 42,
-        // One init shard, no zero window, one add/sub shard, then S-IO's
-        // three: one public input, one journal, no advice window.
+        // One init shard, no zero window, one add/sub shard, then the window
+        // families: one public input, one journal, no advice window.
         shard_counts: vec![1, 1, 0, 1, 1, 0],
         windows: vec![],
         boundary: finals(42),
@@ -272,9 +272,8 @@ pub fn statement() -> PublicInputs {
 /// The witness count is the frame's `w + 3 = 8` plus the family's own, which
 /// carries one delegation-request selector per registered type and so moves
 /// with every delegation family the repository registers
-/// (`docs/spec/delegation.md` §3). It was the literal 33, with a doc comment
-/// saying it would move — and when S26c registered two families it did, which
-/// made an honest shell the wrong shape and turned
+/// (`docs/spec/delegation.md` §3). A literal would go stale with the next
+/// family registered, make an honest shell the wrong shape and turn
 /// `a_proof_shaped_wrong_is_refused_as_malformed` into a test that refused
 /// every case for the *witness* reason whatever it had perturbed. Deriving it
 /// is what makes that test about the case it names.

@@ -1,30 +1,26 @@
 //! The host SDK: a guest ELF and its inputs in, a `BlockProof` out, and the
 //! witness recorder that produces a real Ethereum block's `BlockWitness`.
 //!
-//! `prompts/00-master.md`'s projected workspace layout froze this crate's name
-//! and its charter — *"host SDK: prove/verify API, input building, witness
-//! recorder"* — and S25 fills it in.
-//!
 //! # What is here, and what is not
 //!
 //! [`prove`] and [`verify`] are **convenience wrappers and nothing more**.
 //! `prover::prove_block_streaming` and `verifier::verify_block` remain the
-//! protocol entry points and every test still calls them; what these two save a
+//! protocol entry points and every test calls them; what these two save a
 //! caller is the preamble that every end-to-end path in this repository writes
-//! out by hand. Master rule 6's verifier signature discipline holds exactly:
-//! [`verify`] takes `(&VerifyingKey, &BlockProof)` and reads the statement out
-//! of the proof, which is what `verifier::verify_block`'s own callers already
-//! do. It adds nothing to the verifier's inputs — there is no witness, no
-//! trace, no prover state, and no second copy of the statement to disagree with
-//! the first.
+//! out by hand. The verifier's `(key, proof, public inputs)` signature holds
+//! exactly: [`verify`] takes `(&VerifyingKey, &BlockProof)` and reads the
+//! statement out of the proof, which is what `verifier::verify_block`'s own
+//! callers already do. It adds nothing to the verifier's inputs — there is no
+//! witness, no trace, no prover state, and no second copy of the statement to
+//! disagree with the first.
 //!
-//! # **Streaming is the only proving path** (S-STREAM)
+//! # **Streaming is the only proving path**
 //!
 //! [`prove`] calls `prover::prove_block_streaming` and nothing else. The
-//! archived path — `prover::prove_block` over a `TraceArchive` — still compiles
-//! and is still what `checker`'s column-fill suites and the tamper harness
-//! build their columns from, but **nothing proves through it**, here or
-//! anywhere (`docs/spec/streaming.md` §1). Two consequences a caller sees:
+//! archived path — `prover::prove_block` over a `TraceArchive` — compiles and
+//! is what `checker`'s column-fill suites and the tamper harness build their
+//! columns from, but **nothing proves through it**, here or anywhere
+//! (`docs/spec/streaming.md` §6). Two consequences a caller sees:
 //!
 //! - `max_in_flight` is an argument. It is the backpressure that bounds the
 //!   peak — the prover's worker count, each worker holding one shard at a
@@ -32,13 +28,11 @@
 //! - **There is no archive to return**, so there are no per-phase section
 //!   clocks either. [`Proven::report`] carries the streaming run's own clocks
 //!   instead: one wall clock per pass, and the executor's time inside each.
-//!   Since S-PIPELINE the guest is stepped by whichever worker needs the next
-//!   shard while the others commit or prove theirs, so the executor's time
-//!   overlaps the rest and is not a slice of the wall. A reader comparing one
-//!   against a pre-S-STREAM archived number, or a pre-S-PIPELINE streamed one,
-//!   is comparing two different quantities.
+//!   The guest is stepped by whichever worker needs the next shard while the
+//!   others commit or prove theirs, so the executor's time overlaps the rest
+//!   and is not a slice of the wall.
 //!
-//! The guest's execution is no longer timed separately here. It does not need
+//! The guest's execution is not timed separately here. It does not need
 //! to be: `StreamingReport`'s `pass1_execute_ns` and `pass2_execute_ns` are
 //! measured inside the prover, around the executor itself, which is a tighter
 //! interval than this function could take.
@@ -141,12 +135,12 @@ pub fn prove(setup: &ProverSetup, io: &GuestIo, max_in_flight: usize) -> Result<
     let started = Instant::now();
     let (block, report) = prover::prove_block_streaming(setup, io, max_in_flight)
         .map_err(|e| format!("the block does not prove: {e:?}"))?;
-    // The statement is where the execution's own facts live now: there is no
+    // The statement is where the execution's own facts live: there is no
     // `Execution` to read them off, and these are the values the proof binds
     // rather than a second reading of them.
     // `x10`'s final value, which the statement carries as a `u32` and the
-    // executor reported as an `i32`: the same 32 bits, and `exit(-1)` has to
-    // read back as `-1` here as it did before.
+    // executor reports as an `i32`: the same 32 bits, so `exit(-1)` reads back
+    // as `-1` here.
     let exit_code = block.statement().exit_status as i32;
     let journal = block.statement().output.clone();
     Ok(Proven {
@@ -161,7 +155,7 @@ pub fn prove(setup: &ProverSetup, io: &GuestIo, max_in_flight: usize) -> Result<
 
 /// `verifier::verify_block`, with the statement read out of the proof.
 ///
-/// The one verification path, unchanged: this is a two-line call into
+/// The one block verification path: this is a two-line call into
 /// `verifier::verify_block(vk, block, block.statement())`, which is what every
 /// caller of that function in this repository already writes. It exists so that
 /// a host-side caller cannot accidentally pass a statement that is not the

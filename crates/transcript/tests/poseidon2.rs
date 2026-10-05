@@ -13,7 +13,7 @@ use transcript::poseidon2_permute;
 const PERM_PATH: &str = "tests/vectors/poseidon2_perm.txt";
 const PERM_SHA256: &str = "905e08088b1b9e1bfe985e1447f2f373d66b3e97ce1750714d39940de65e1fee";
 
-/// The stage's known-answer input.
+/// The known-answer input.
 const KAT_INPUT: [u64; 3] = [0, 1, 2];
 
 /// The committed file opens with the `[0,1,2]` known-answer vector and seven
@@ -92,7 +92,7 @@ fn flip_a_bit(text: &str, pick: impl Fn(&str) -> bool, field: usize) -> String {
 // Tests
 // ---------------------------------------------------------------------------
 
-/// Acceptance 1: the `[0, 1, 2]` known-answer vector, byte-exact from the file.
+/// The `[0, 1, 2]` known-answer vector, byte-exact from the file.
 #[test]
 fn permutation_kat() {
     let text = read_vectors(PERM_PATH);
@@ -110,7 +110,7 @@ fn permutation_kat() {
     assert_eq!(state, kat.output);
 }
 
-/// Acceptance 2: every committed reference vector, with at least 100 of them.
+/// Every committed reference vector, with at least 100 of them.
 #[test]
 fn permutation_matches_every_reference_vector() {
     let text = read_vectors(PERM_PATH);
@@ -119,7 +119,7 @@ fn permutation_matches_every_reference_vector() {
     let random = checked - STRUCTURED_PREFIX;
     assert!(
         random >= 100,
-        "the stage asks for at least 100 random-input vectors, found {random}"
+        "at least 100 random-input vectors are required, found {random}"
     );
 }
 

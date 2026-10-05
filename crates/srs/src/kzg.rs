@@ -73,8 +73,7 @@ pub fn kzg_open(srs: &Srs, coeffs: &[Fr], z: Fr) -> Result<(Fr, G1Affine), SrsEr
 /// carries.
 ///
 /// This reads only the three points [`crate::SrsVerifier`] holds. It takes the
-/// whole `Srs` because S07 pins the signature that way, not because it needs
-/// one.
+/// whole `Srs`, as `kzg_commit` and `kzg_open` do, not because it needs one.
 pub fn kzg_verify(srs: &Srs, cm: &G1Affine, z: Fr, v: Fr, w: &G1Affine) -> bool {
     let g1_gen = srs.g1()[0];
     let lhs = G1Projective::from(*cm)

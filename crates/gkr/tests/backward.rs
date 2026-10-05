@@ -1,14 +1,13 @@
-//! The backward pass over the committed toy circuit: the honest run
-//! (acceptance 1), its proof shape (must-be-exact 5), and base claims that
-//! check against the base.
+//! The backward pass over the committed toy circuit: the honest run, its proof
+//! shape, and base claims that check against the base.
 
 mod common;
 
 use common::{discharge, honest, toy, toy_base, toy_cache_free, toy_columns};
 use gkr::self_check;
 
-/// Acceptance 1: forward, self-check, prove and verify the toy, and hold every
-/// returned base claim to a direct evaluation of the column it names.
+/// Forward, self-check, prove and verify the toy, and hold every returned base
+/// claim to a direct evaluation of the column it names.
 #[test]
 fn an_honest_toy_run_verifies_and_its_base_claims_discharge() {
     for artifact in [toy(), toy_cache_free()] {

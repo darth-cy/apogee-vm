@@ -3,17 +3,18 @@
 //! A Mercury verification ends in one pairing relation `e(A, [1]_2) =
 //! e(B, [x]_2)`, and both `A` and `B` are small multi-scalar multiplications of
 //! points the verifier already holds against scalars it has just derived
-//! (`docs/spec/mercury.md` §4 and §4). **Deferring** a verification means
+//! (`docs/spec/mercury.md` §4). **Deferring** a verification means
 //! emitting those terms instead of running the pairings: twelve
 //! [`AccumulatorEntry`] items, each a `(side, scalar, point)` triple, whose
 //! weighted sums are `A` and `B`.
 //!
-//! A downstream verifier concatenates entry lists and does nothing else with
-//! them. [`discharge`] is where they are finally spent: one RLC weight per
-//! deferred check, one MSM per side, one two-pairing check.
+//! Entry lists concatenate, each keeping its groups, and [`discharge`] spends
+//! one: one RLC weight per deferred check, one MSM per side, one two-pairing
+//! check. The recursion tree folds the same terms over field cells instead
+//! (`docs/spec/mercury.md` §6.2).
 //!
-//! `docs/spec/mercury.md` §6 is normative for everything in this module — the
-//! entry order, the word layout, the digest and the discharge equation.
+//! `docs/spec/mercury.md` §6 specifies everything in this module — the entry
+//! order, the word layout, the digest and the discharge equation.
 
 use constants::transcript_tags as tags;
 use curve::msm::msm;
@@ -31,8 +32,8 @@ use crate::{infinity_sentinel, PcsError};
 
 /// One term of one deferred pairing relation: `scalar * point`, on `side`.
 ///
-/// **Frozen forever**, in this field order, which is also the word order of
-/// `docs/spec/mercury.md` §6.1. A list of these is the whole accumulator;
+/// Its field order is also the word order of `docs/spec/mercury.md` §6.1. A
+/// list of these is the whole accumulator;
 /// there is no header, no length prefix and no other kind of entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AccumulatorEntry {
@@ -134,14 +135,14 @@ pub fn accumulator_from_words(
 /// ```
 ///
 /// `nu` is drawn from a sponge seeded with the digest of these very words,
-/// because the frozen signature takes no transcript: a discharge must be a
+/// because the signature takes no transcript: a discharge must be a
 /// deterministic function of the entries and nothing else. The weight is what
 /// keeps the checks separate — a concatenation summed with weight `1` each is
 /// satisfied by two relations whose errors cancel.
 ///
 /// Every entry's point is validated here, on the curve and in the order-`r`
-/// subgroup. `docs/spec/mercury.md` §6.3 is normative for why that obligation
-/// lands here and nowhere else.
+/// subgroup. `docs/spec/mercury.md` §6.3 says why that obligation lands here
+/// and nowhere else.
 pub fn discharge(
     vsrs: &SrsVerifier,
     entries: &[AccumulatorEntry],
@@ -166,8 +167,7 @@ pub fn discharge(
 ///
 /// The one place a deferred relation is executed. [`discharge`] reaches it with
 /// the powers of the merge challenge; [`crate::verify`] and
-/// [`crate::batch_verify`] reach it with a single group and the weight `1`,
-/// which is the same computation their S08 predecessor did by hand.
+/// [`crate::batch_verify`] reach it with a single group and the weight `1`.
 pub(crate) fn check_pairings(
     vsrs: &SrsVerifier,
     entries: &[AccumulatorEntry],
@@ -226,9 +226,9 @@ pub(crate) fn check_pairings(
 /// Every entry's point is on the curve and in the order-`r` subgroup.
 ///
 /// An entry's point is a **claim**: transcript and digest absorption bind the
-/// limbs a party wrote down (`docs/spec/transcript.md` §4), an entry built in
-/// memory has been through no decoder, and the in-VM replay does no curve
-/// arithmetic at all. `docs/spec/mercury.md` §6.3 is the rule; this is it.
+/// limbs a party wrote down (`docs/spec/transcript.md` §4), and an entry built
+/// in memory has been through no decoder. `docs/spec/mercury.md` §6.3 is the
+/// rule; this is it.
 ///
 /// On G1 the subgroup check *is* the curve check — the cofactor is 1 — and both
 /// are called anyway so this call site reads like every other one in the crate.
@@ -286,7 +286,7 @@ fn small_usize(x: Fr) -> Option<usize> {
 /// The point four accumulator limbs name, or an error.
 ///
 /// The exact inverse of `transcript::g1_limbs`: four sentinels are infinity, four
-/// 128-bit halves reassemble into the 64-byte affine encoding S05 froze, and
+/// 128-bit halves reassemble into the curve's 64-byte affine encoding, and
 /// everything else is malformed. `curve::G1Affine::from_bytes` then validates
 /// canonicity, the curve equation and subgroup membership.
 fn g1_from_limbs(limbs: &[Fr; 4]) -> Result<G1Affine, PcsError> {

@@ -1,14 +1,14 @@
-//! Acceptance 8, 9 and 10: deferral, the accumulator, and discharge.
+//! Deferral, the accumulator, and discharge.
 //!
 //! Three claims, checked three ways.
 //!
 //! * **The twelve entries are the two pairing relations.** Their scalars are
 //!   rebuilt here from `docs/spec/mercury.md` §3.3 and §4, out of a second
 //!   transcription of the transcript schedule and a second, naive univariate
-//!   arithmetic — no crate internals. Since S09 this is what pins the merge
-//!   challenge's *use*: `rho` is literally the scalar of entry 11, so an
-//!   implementation that squeezed it and then merged with a constant is now
-//!   visible to a black-box test, which it was not in S08.
+//!   arithmetic — no crate internals. This is what pins the merge challenge's
+//!   *use*: `rho` is literally the scalar of entry 11, so an implementation
+//!   that squeezed it and then merged with a constant is visible to a
+//!   black-box test.
 //! * **Deferral changes no verdict.** Over honest and tampered proofs alike,
 //!   `verify` and `verify_deferred` + `discharge` agree, and so do the batch
 //!   variants.
@@ -184,7 +184,7 @@ fn a_batch_defers_the_same_twelve_entries() {
         "k does not change the count"
     );
 
-    // `cm*` and `v*`, rebuilt from section 11's preamble.
+    // `cm*` and `v*`, rebuilt from `docs/spec/mercury.md` §5's preamble.
     let points: Vec<G1Affine> = cms.iter().map(|c| c.0).collect();
     let mut probe = Transcript::new();
     append_g1_list(&mut probe, tags::COMMITMENT, &points);
@@ -225,10 +225,10 @@ fn a_batch_defers_the_same_twelve_entries() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 8 — deferred equivalence
+// Deferred equivalence
 // ---------------------------------------------------------------------------
 
-/// The S08 tamper sweep, run through both paths: honest, all fourteen proof
+/// `tamper.rs`'s sweep, run through both paths: honest, all fourteen proof
 /// fields, the statement twins, the witness twin and the invalid points. Every
 /// one of them must land in the same class either way.
 #[test]
@@ -331,7 +331,7 @@ fn deferral_changes_no_verdict() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 9 — concatenation and discharge
+// Concatenation and discharge
 // ---------------------------------------------------------------------------
 
 /// Two independent verifications concatenate into one accumulator, and it
@@ -497,8 +497,8 @@ fn the_per_check_weight_separates_the_checks() {
 ///
 /// Where `nu` comes from is a source-level fact, and
 /// `tests/structure.rs::the_merge_challenge_is_derived_from_the_digest` is
-/// where it is held — the same instrument, and for the same reason, S08 used on
-/// the pairing-merge challenge.
+/// where it is held — the same instrument, and for the same reason, as for the
+/// pairing-merge challenge.
 #[test]
 fn a_predictable_merge_challenge_would_be_forgeable() {
     let it = single(0x5009_0108);
@@ -557,8 +557,8 @@ fn a_predictable_merge_challenge_would_be_forgeable() {
     );
 }
 
-/// An empty accumulator discharges successfully — `docs/spec/mercury.md` §6
-/// §6 states it, so it is asserted rather than left to `msm`'s empty case and
+/// An empty accumulator discharges successfully — `docs/spec/mercury.md`
+/// §6.3 states it, so it is asserted rather than left to `msm`'s empty case and
 /// `pairing_check`'s vacuous truth to keep agreeing by accident.
 #[test]
 fn an_empty_accumulator_discharges() {
@@ -569,7 +569,7 @@ fn an_empty_accumulator_discharges() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 10 — the wire form
+// The wire form
 // ---------------------------------------------------------------------------
 
 /// Every entry is six words and 192 bytes, whatever it holds, and the words
@@ -628,7 +628,7 @@ fn the_entry_length_is_constant() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 9 — the committed accumulator
+// The committed accumulator
 // ---------------------------------------------------------------------------
 
 const KAT: &str = include_str!("vectors/accumulator.txt");
@@ -767,7 +767,7 @@ fn parse_kat(text: &str) -> Result<AccumulatorKat, String> {
 }
 
 /// The whole replay, as one fallible routine so a corrupted fixture has
-/// something to fail (master rule 8).
+/// something to fail.
 fn replay_kat(text: &str) -> Result<(), String> {
     let kat = parse_kat(text)?;
     if kat.tau != Fr::from_hex(common::TOY_TAU).expect("the toy tau is canonical") {
@@ -834,7 +834,7 @@ fn replay_kat(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Acceptance 9: the committed accumulator replays word for word, and its
+/// The committed accumulator replays word for word, and its
 /// concatenation discharges.
 #[test]
 fn the_committed_accumulator_replays() {
@@ -852,7 +852,7 @@ fn the_committed_accumulator_replays() {
     assert_eq!(kat.words.len() * 32, 2 * (32 + ENTRIES_PER_CHECK * 192));
 }
 
-/// Master rule 8: the replayer must be able to fail.
+/// The replayer must be able to fail.
 #[test]
 fn a_corrupted_accumulator_fixture_is_rejected() {
     let body: String = KAT

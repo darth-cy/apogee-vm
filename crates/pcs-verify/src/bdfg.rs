@@ -10,17 +10,17 @@
 //! | 2 | `S`        | `{z, 1/z}`       | `X - alpha`            |
 //! | 3 | `D`        | `{z}`            | `(X - 1/z)(X - alpha)` |
 //!
-//! **That order is frozen**: it fixes which power of the batch challenge each
-//! polynomial carries. `docs/spec/mercury.md` §3.3 is normative.
+//! **That order matters**: it fixes which power of the batch challenge each
+//! polynomial carries. `docs/spec/mercury.md` §3.3 specifies it.
 //!
 //! [`items`] is the one definition of the batch, called by the prover and by
 //! the verifier. Everything either side needs beyond it — the quotient, the
 //! linearization, the verifier's per-commitment coefficients — is derived from
 //! what `items` returns, so the two cannot drift.
 //!
-//! Nothing here touches a curve point. The verifier's `G1` accumulation used to
-//! live in this module; since S09 it is a list of `(scalar, point)` accumulator
-//! entries, whose scalars [`crate::scalars`] builds from the same `Item`s.
+//! Nothing here touches a curve point. The verifier's `G1` side is a list of
+//! `(scalar, point)` accumulator entries, whose scalars [`crate::scalars`]
+//! builds from the same `Item`s.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -54,12 +54,12 @@ pub struct Item {
     pub r: Vec<Fr>,
 }
 
-/// `T = {z, 1/z, alpha}`, in the frozen order.
+/// `T = {z, 1/z, alpha}`, in that order.
 pub fn point_set(alpha: Fr, z: Fr, z_inv: Fr) -> [Fr; 3] {
     [z, z_inv, alpha]
 }
 
-/// The batch, in the frozen order `g, h, S, D`.
+/// The batch, in the order `g, h, S, D`.
 ///
 /// The caller must have rejected a degenerate challenge set first: `z`, `1/z`
 /// and `alpha` pairwise distinct. [`uni::interpolate`] panics otherwise, which

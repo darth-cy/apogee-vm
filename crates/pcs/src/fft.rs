@@ -5,10 +5,10 @@
 //! product of degree `2b - 2`, so `2b` is both the size used and the ceiling —
 //! `crates/pcs/tests/structure.rs` asserts no larger transform is reachable.
 //!
-//! Serial on purpose. At the largest supported height, `n = 2^22`, this is a
-//! 4,096-point transform sitting beside two 2^22-point MSMs; parallelising it
-//! would buy nothing and would put a scheduling-dependent code path in the
-//! middle of a proof.
+//! Serial on purpose. At the largest opening, a recursion stack of `n = 2^24`
+//! (`verifier_core::STACK_LOG`), this is an 8,192-point transform sitting
+//! beside two 2^24-point MSMs; parallelising it would buy nothing and would put
+//! a scheduling-dependent code path in the middle of a proof.
 
 use constants::{FR_TWO_ADICITY, FR_TWO_ADIC_ROOT_OF_UNITY};
 use field::Fr;
@@ -47,7 +47,7 @@ impl Domain {
         );
 
         let mut omega = Fr::from_hex(FR_TWO_ADIC_ROOT_OF_UNITY)
-            .expect("the frozen two-adic root is a canonical hex literal");
+            .expect("the two-adic root is a canonical hex literal");
         for _ in k..FR_TWO_ADICITY {
             omega = omega.square();
         }

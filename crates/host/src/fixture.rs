@@ -1,8 +1,8 @@
 //! What a recorded block is on disk, and how it is pinned.
 //!
-//! S25's must-be-exact 4: *"Fixtures are pinned by hash and committed, and CI
-//! never touches RPC. Freshness = a manual refresh command that re-records and
-//! re-pins."* A fixture is therefore three things:
+//! Fixtures are pinned by hash and committed, CI never touches RPC, and
+//! freshness is a manual refresh command that re-records and re-pins. A
+//! fixture is therefore three things:
 //!
 //! | file | what |
 //! | --- | --- |
@@ -12,9 +12,8 @@
 //!
 //! Beside them sits `rpc-cache/`, the content-addressed snapshot of every
 //! JSON-RPC response the recording read. The cache is what makes the
-//! determinism test (acceptance 1) a test rather than a network round trip: a
-//! second recording answers every request from disk and must produce the same
-//! bytes.
+//! determinism test a test rather than a network round trip: a second
+//! recording answers every request from disk and must produce the same bytes.
 //!
 //! # What is committed, and what is not
 //!
@@ -24,9 +23,9 @@
 //! **Only the mini mode is recorded.** The stateless binary reads the spec's
 //! `statelessInputBytes` (`docs/spec/ethereum.md` §4), which this recorder does
 //! not produce: the inputs it is held to are a `tests-zkevm` release's
-//! ([`crate::zkevm`]), and a producer of them for mainnet blocks is the next
-//! stage's. Until then no pin is in [`Mode::Stateless`], and `bench prove
-//! --stateless` proves a stateless input straight from its file instead.
+//! ([`crate::zkevm`]), and nothing here produces them for mainnet blocks. So no
+//! pin is in [`Mode::Stateless`], and `bench prove --stateless` proves a
+//! stateless input straight from its file instead.
 
 use serde::{Deserialize, Serialize};
 
@@ -74,7 +73,7 @@ pub struct Pin {
     pub state_root: String,
     /// The hardfork, as `revm`'s `SpecId` discriminant.
     pub spec_id: u8,
-    /// How many of the block's transactions were recorded: 1 or 2.
+    /// How many of the block's transactions were recorded.
     pub txs_recorded: usize,
     /// How many transactions the block has.
     pub txs_in_block: usize,
@@ -184,8 +183,8 @@ pub fn revm_params() -> program::ProgramParams {
 /// the release image, and the debug image needs `2^22` — four times the rows in
 /// every shard, for a build nothing proves.
 ///
-/// There is no committed ELF for this guest (root `CLAUDE.md`), so building it
-/// is the only way to have it; [`build_guest`] says how.
+/// There is no committed ELF for this guest, so building it is the only way to
+/// have it; [`build_guest`] says how.
 pub fn build_revm_guest(mode: Mode) -> Result<Vec<u8>, String> {
     build_guest("revm-block", mode.binary(), &[])
 }

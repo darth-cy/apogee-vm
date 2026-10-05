@@ -1,6 +1,6 @@
 //! What `reduce_shard` decides before and around a proof,
 //! `docs/spec/proof.md` §2 and §6: the global transcript's messages in
-//! their frozen order, and every `Statement` and `Malformed` refusal — each
+//! their order, and every `Statement` and `Malformed` refusal — each
 //! the class its step names, none a panic. The proofs themselves are
 //! `crates/prover/tests` and `crates/checker/tests/tamper.rs`.
 
@@ -41,7 +41,8 @@ fn the_global_transcript_is_the_frozen_order() {
     let mut want = vec![
         absorb(tags::PROTOCOL_SUITE, 1),
         absorb(tags::SRS_DIGEST, 1),
-        // Six families: add/sub, the two RAM window ones and S-IO's three.
+        // Six families: add/sub, the two RAM window ones, the public pair and
+        // advice.
         absorb(tags::VM_CONFIG, 2 * 6 + 1),
         absorb(tags::SHARD_COUNTS, 6),
         absorb(tags::MEMORY_WINDOWS, 0),
@@ -52,10 +53,10 @@ fn the_global_transcript_is_the_frozen_order() {
         absorb(tags::MEMORY_GROUP, 2),
         absorb(tags::MEMORY_GROUP, 2),
         absorb(tags::COMMITMENT, 4 * 27),
-        // S-IO's three, in the ascending tail like any other family. The
-        // public input window commits three columns and the journal two, and
-        // `ADVICE_WINDOWS` has no shard here, so it is a header and nothing
-        // else — exactly as `ZERO_WINDOWS` is above
+        // The public pair and advice, in the ascending tail like any other
+        // family. The public input window commits three columns and the
+        // journal two, and `ADVICE_WINDOWS` has no shard here, so it is a
+        // header and nothing else — exactly as `ZERO_WINDOWS` is above
         // (`docs/spec/public-values.md` §4).
         absorb(tags::MEMORY_GROUP, 2),
         absorb(tags::COMMITMENT, 4 * 3),
@@ -111,12 +112,12 @@ fn the_global_transcript_is_the_frozen_order() {
     assert_ne!(global_commit(&k, &public).digest, digest);
 }
 
-/// S17: the generic table is bound through the SRS digest, which G2 absorbs
-/// before every challenge of the statement and of every shard seeded from it.
-/// A key with S17's family has S16's schedule exactly, and the statement's
-/// digest moves with each of the table's points and with their order, once
-/// the key's SRS digest is recomputed over them — and a key whose table moved
-/// without it does not load.
+/// The generic table is bound through the SRS digest, which G2 absorbs before
+/// every challenge of the statement and of every shard seeded from it. A key
+/// with `JUMP_BRANCH_SLT`, which reads the table, has the same schedule as one
+/// without it, and the statement's digest moves with each of the table's
+/// points and with their order, once the key's SRS digest is recomputed over
+/// them — and a key whose table moved without it does not load.
 #[test]
 fn the_generic_table_is_bound_through_the_srs_digest() {
     let (key, public) = (jbs_vk(), jbs_statement());
@@ -424,7 +425,7 @@ fn a_statement_the_key_does_not_describe_is_refused_as_statement() {
         p,
         proof.clone(),
     ));
-    // Step 4 since S20: a window is `[start, end)` inside the clock. Which
+    // Step 4: a window is `[start, end)` inside the clock. Which
     // windows a block admits is `check_ts_windows`, which needs every shard.
     let mut q = proof.clone();
     q.ts_window = [5, 4];
@@ -553,9 +554,9 @@ fn garbage_is_refused_and_never_panics() {
 
 /// **Step 10b reads the statement and the key, and no `ShardProof` at all**,
 /// `docs/spec/proof.md` §6: it is `verify_global_memory`, and a block
-/// runs it once however many shards it has. Its own three checks keep S16's
-/// order — the boundary's range, then the exit status, then the product — so
-/// a statement broken two ways answers with the first.
+/// runs it once however many shards it has. Its own three checks run in order
+/// — the boundary's range, then the exit status, then the product — so a
+/// statement broken two ways answers with the first.
 #[test]
 fn the_statement_half_of_the_memory_argument_is_one_check_for_a_statement() {
     let key = vk();
@@ -575,8 +576,8 @@ fn the_statement_half_of_the_memory_argument_is_one_check_for_a_statement() {
         answer(|p| p.exit_status += 1),
         Err(memory("x10's final value is not the exit status"))
     );
-    // Both, and the range refusal is the one returned: 10b's internal order
-    // is S16's step 10, which checked the range first.
+    // Both, and the range refusal is the one returned: 10b checks the range
+    // first.
     assert_eq!(
         answer(|p| {
             p.boundary.pc_ts = 1 << 38;

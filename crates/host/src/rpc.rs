@@ -1,27 +1,23 @@
 //! The minimal Ethereum JSON-RPC client, and the cache that keeps CI off the
 //! network.
 //!
-//! S25's must-be-exact 6 asks for "a minimal JSON-RPC client rather than an
-//! Ethereum SDK", reading its endpoint from `ETH_RPC_URL`, caching responses
-//! content-addressed under the fixture directory, and retrying transport and
-//! 5xx failures five times with exponential backoff before failing hard. This
-//! module is all of that and nothing else: it knows about requests, responses,
-//! retries and files. It knows nothing about blocks, accounts or proofs —
-//! `crate::recorder` does.
+//! A minimal JSON-RPC client rather than an Ethereum SDK: it reads its endpoint
+//! from `ETH_RPC_URL`, caches responses content-addressed under the fixture
+//! directory, and retries transport and 5xx failures five times with
+//! exponential backoff before failing hard. This module is all of that and
+//! nothing else: it knows about requests, responses, retries and files. It
+//! knows nothing about blocks, accounts or proofs — `crate::recorder` does.
 //!
 //! # Why `curl`
 //!
 //! Every mainnet endpoint is TLS-only and this workspace has no HTTP client, no
-//! TLS and no async runtime — master anti-goal 6 makes the allowed runtime
-//! dependency list exhaustive and anti-goal 7 bans `tokio` by name. Hand-rolling
-//! TLS is not what "own the crypto" means; it means the *proving system's*
-//! cryptography. So the JSON-RPC client is ours — request framing, the retry
-//! policy, the cache — and only the HTTPS bytes are `curl`'s, spawned through
-//! `std::process::Command` exactly as this repository already spawns `cargo`,
-//! `llvm-objdump`. `curl` is an undeclared host tool of the
-//! same class as those, and like them it is reachable only from a manual path:
-//! CI never runs this module (owner's decision, recorded in
-//! `docs/handoff/S25-block.md`).
+//! TLS and no async runtime. The cryptography this repository implements itself
+//! is the *proving system's*, and TLS is not part of it. So the JSON-RPC client
+//! is ours — request framing, the retry policy, the cache — and only the HTTPS
+//! bytes are `curl`'s, spawned through `std::process::Command` exactly as this
+//! repository already spawns `cargo`, `llvm-objdump`. `curl` is an undeclared
+//! host tool of the same class as those, and like them it is reachable only
+//! from a manual path: CI never runs this module.
 //!
 //! One caveat worth stating rather than hiding: the endpoint carries an API key
 //! and is passed to `curl` on its command line, so it is visible in `ps` output
@@ -194,10 +190,9 @@ impl Rpc {
                 Err(transport) => last = transport,
             }
             if attempt < ATTEMPTS {
-                // The one sleep in the workspace. Master anti-goal 7 bans
-                // threads, channels and async; `thread::sleep` spawns nothing
-                // and blocks the caller, which is the whole of what a backoff
-                // is. `docs/handoff/S25-block.md` records it.
+                // The one sleep in the workspace. `thread::sleep` spawns no
+                // thread, channel or task and blocks the caller, which is the
+                // whole of what a backoff is.
                 std::thread::sleep(std::time::Duration::from_millis(wait));
                 wait *= 2;
             }

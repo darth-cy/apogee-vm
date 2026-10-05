@@ -46,7 +46,7 @@ pub struct Run {
 /// The leaf program's parameters, which its identity binds: its execution
 /// families at `2^20`, its code being some 50 KB, and its window families at
 /// `2^22`, whose window 0 holds its image — the base program's tapes, 5.6 MB
-/// (the owner's decision: two images, the leaf's at `2^22`).
+/// (two images, the leaf's at `2^22`).
 pub fn leaf_params() -> program::ProgramParams {
     use constants::family;
     let mut params = program::ProgramParams::defaults();

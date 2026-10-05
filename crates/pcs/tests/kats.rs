@@ -1,4 +1,4 @@
-//! Acceptance 8, 9 and 12: the transcript schedule, pinned three ways.
+//! The transcript schedule, pinned three ways.
 //!
 //! * The G1 absorption vectors are an **oracle**: arkworks' points, arkworks'
 //!   limbs. `append_g1` matching them is a statement about this repository's
@@ -35,7 +35,7 @@ fn the_committed_files_are_the_pinned_ones() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 12 — G1 absorption
+// G1 absorption
 // ---------------------------------------------------------------------------
 
 /// A transcript that absorbed `limbs` under `tag` as one typed message.
@@ -94,14 +94,14 @@ fn replay_absorb_kats(text: &str) -> Result<usize, String> {
     Ok(cases)
 }
 
-/// Acceptance 12: every committed case replays byte-exact.
+/// Every committed case replays byte-exact.
 #[test]
 fn every_committed_absorption_replays() {
     let cases = replay_absorb_kats(ABSORB_KATS).expect("the committed absorption cases replay");
     assert!(cases >= 10, "the fixture must not shrink silently");
 }
 
-/// The fixture covers what acceptance 12 names: a real point, the point at
+/// The fixture covers what it must: a real point, the point at
 /// infinity, and a two-point list that is one message of eight limbs.
 #[test]
 fn the_absorption_fixture_covers_what_it_claims() {
@@ -123,7 +123,7 @@ fn the_absorption_fixture_covers_what_it_claims() {
     );
 }
 
-/// Master rule 8: the replayer must be able to fail.
+/// The replayer must be able to fail.
 #[test]
 fn a_corrupted_absorption_fixture_is_rejected() {
     assert!(replay_absorb_kats(ABSORB_KATS).is_ok(), "the control");
@@ -166,7 +166,7 @@ fn flip_first_digit(token: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 9 — the committed proof
+// The committed proof
 // ---------------------------------------------------------------------------
 
 /// The fixture instance, parsed.
@@ -296,13 +296,13 @@ fn replay_proof_kat(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Acceptance 9: the committed proof replays byte for byte.
+/// The committed proof replays byte for byte.
 #[test]
 fn the_committed_proof_replays() {
     replay_proof_kat(PROOF_KAT).expect("the committed proof replays");
 }
 
-/// Master rule 8, again: the replayer must be able to fail.
+/// The proof replayer must be able to fail too.
 #[test]
 fn a_corrupted_proof_fixture_is_rejected() {
     // The header documents the record names, so damage is applied to the body
@@ -348,7 +348,7 @@ fn a_corrupted_proof_fixture_is_rejected() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 8 — transcript binding
+// Transcript binding
 // ---------------------------------------------------------------------------
 
 /// `alpha`, from the prefix of the schedule that precedes it.
@@ -363,7 +363,7 @@ fn alpha_of(cm: &MercuryCommitment, u: &[Fr], v: Fr, h: &G1Affine) -> Fr {
     tr.challenge_scalar(tags::MERCURY_ALPHA)
 }
 
-/// Acceptance 8: opening the same instance twice is byte-identical, and moving
+/// Opening the same instance twice is byte-identical, and moving
 /// any absorbed input moves `alpha`.
 #[test]
 fn the_transcript_binds_the_statement() {
@@ -414,7 +414,8 @@ fn the_transcript_binds_the_statement() {
 }
 
 /// A transcript with history in it still works, and the two sides stay in step
-/// through it: this is how S09 will call `open` and `verify`.
+/// through it: this is how an opening runs inside a batch or a shard
+/// transcript.
 #[test]
 fn a_transcript_with_a_prefix_stays_in_step() {
     let srs = common::toy_srs(6);

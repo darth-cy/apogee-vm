@@ -1,30 +1,29 @@
 //! The structured reference string: snarkjs `.ptau` ingestion, an archive
 //! format for reloading it, and the univariate KZG core Mercury is built on.
 //!
-//! The normative document is `docs/spec/srs.md`. This crate holds three things
-//! and nothing else:
+//! `docs/spec/srs.md` specifies it. This crate holds four things and nothing
+//! else:
 //!
 //! - [`Srs::from_ptau`], the **one** ingestion path — a perpetual-powers-of-tau
-//!   / Hermez `.ptau` container, and no other ceremony format in v1;
+//!   / Hermez `.ptau` container, and no other ceremony format;
 //! - [`Srs::save`] / [`Srs::load`], a flat archive so a prover does not re-read
 //!   a 19 GB ceremony file to get 2^24 points;
-//! - [`kzg`], commit / open / verify over those powers.
+//! - [`kzg`], commit / open / verify over those powers;
+//! - [`Phase1`], a Groth16 setup's first phase, read from the same container.
 //!
 //! # SRS integrity is presumed
 //!
-//! **This crate has no SRS digest.** S07 originally specified a Poseidon2
-//! digest over every point, absorbed in statement binding and re-verified by
-//! [`Srs::load`]; that requirement was dropped, and the SRS handed to this crate
-//! is *assumed* to be the right one. See `docs/spec/srs.md` §3 and the S07
-//! handoff note. Since S16 a statement absorbs a narrower digest,
-//! `verifier_core::srs_digest`, over the verifier points and, since S17, the
+//! **This crate has no SRS digest.** The SRS handed to it is *assumed* to be
+//! the right one; see `docs/spec/srs.md` §3. A statement absorbs a narrower
+//! digest, `verifier_core::srs_digest`, over the verifier points and the
 //! generic table's three commitments; the powers themselves are bound by
 //! nothing but the pairing check.
 //!
 //! What remains is structural, not identifying: every point is validated at
-//! decode time with S05's `from_bytes` (canonical, on-curve, in-subgroup), and
-//! [`Srs::validate`] checks the powers really are consecutive powers of one
-//! `tau` under the two G2 points. Neither tells you *which* SRS you have.
+//! decode time with the curve's `from_bytes` (canonical, on-curve,
+//! in-subgroup), and [`Srs::validate`] checks the powers really are
+//! consecutive powers of one `tau` under the two G2 points. Neither tells you
+//! *which* SRS you have.
 
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
@@ -62,7 +61,7 @@ pub enum SrsError {
     Truncated,
     /// The file does not hold as many powers as were asked for.
     PowerTooLarge { requested: u32, available: u32 },
-    /// A point failed S05's decode: non-canonical coordinate, off-curve, or
+    /// A point failed `from_bytes`: non-canonical coordinate, off-curve, or
     /// outside the order-`r` subgroup. The index is *a* failing point, not
     /// necessarily the first — decoding runs in parallel.
     InvalidPoint { index: usize },
@@ -90,7 +89,7 @@ impl From<std::io::Error> for SrsError {
 /// `[x^0]_1 .. [x^(n-1)]_1` together with `[1]_2` and `[x]_2`.
 ///
 /// The whole thing is prover-side. A verifier gets [`SrsVerifier`], which is
-/// four points' worth of material and cannot commit to anything.
+/// three points' worth of material and cannot commit to anything.
 ///
 /// `PartialEq` is here so `save` / `load` can be stated as a round trip.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,12 +105,12 @@ impl Srs {
     ///
     /// The container is read, never trusted: magic, version, section table,
     /// header field, and every section size are checked against the declared
-    /// power before a point is decoded, and each point then goes through S05's
-    /// `from_bytes`. Nothing here panics on a malformed file.
+    /// power before a point is decoded, and each point then goes through the
+    /// curve's `from_bytes`. Nothing here panics on a malformed file.
     ///
     /// Only sections 1 (header), 2 (tauG1) and 3 (tauG2) are read. A ceremony
     /// file's alpha/beta and Lagrange sections are Groth16's business and are
-    /// skipped, which is why this reads about 2 GB of a 19 GB file.
+    /// skipped, which is why this reads 1 GiB of a 19 GB file at power 24.
     pub fn from_ptau(path: &Path, power: u32) -> Result<Srs, SrsError> {
         ptau::from_ptau(path, power)
     }
@@ -145,8 +144,8 @@ impl Srs {
         // `kzg_verify` over that SRS then accepts an arbitrary opening at an
         // arbitrary value — every pairing it forms is skipped as well.
         //
-        // With the SRS digest dropped, `validate` is the only structural gate
-        // there is, so it does not get to be vacuous.
+        // `validate` is the only check that the powers share one `tau`, so it
+        // does not get to be vacuous.
         if self.g2_tau.infinity || self.g1.iter().any(|p| p.infinity) {
             return Err(SrsError::TauMismatch);
         }
@@ -194,11 +193,10 @@ impl Srs {
 
     /// Read an archive back, validating every point on the way in.
     ///
-    /// With the digest requirement dropped, this decode *is* the integrity
-    /// check: a flipped byte in a coordinate almost always leaves a point off
-    /// the curve, and one that does not still leaves a point unrelated to the
-    /// ceremony, which [`Srs::validate`] catches. Neither notices a whole
-    /// archive swapped for another valid one.
+    /// This decode *is* the integrity check: a flipped byte in a coordinate
+    /// almost always leaves a point off the curve, and one that does not still
+    /// leaves a point unrelated to the ceremony, which [`Srs::validate`]
+    /// catches. Neither notices a whole archive swapped for another valid one.
     pub fn load(path: &Path) -> Result<Srs, SrsError> {
         let file = File::open(path)?;
         let len = file.metadata()?.len();
@@ -275,13 +273,8 @@ impl Srs {
 
 /// The only SRS material a verifier path may require.
 ///
-/// Frozen in S07. A verifier that wants more than these three points is
-/// asking for the prover's SRS, and that is a design error rather than a
-/// missing accessor.
-///
-/// S07 also specified a `digest: [u8; 32]` field here, absorbed in statement
-/// binding. It was dropped with the rest of the SRS hashing; see this crate's
-/// module docs.
+/// A verifier that wants more than these three points is asking for the
+/// prover's SRS, and that is a design error rather than a missing accessor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SrsVerifier {
     pub g1_gen: G1Affine,
@@ -289,7 +282,7 @@ pub struct SrsVerifier {
     pub g2_tau: G2Affine,
 }
 
-/// Canonical little-endian, per master rule 3: the same 64 and 128 byte point
+/// Canonical little-endian: the same 64 and 128 byte point
 /// encodings `curve` writes, concatenated in declaration order.
 ///
 /// Hand-written, so no derive macro enters the build and so deserialisation

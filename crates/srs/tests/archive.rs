@@ -1,9 +1,9 @@
 //! `Srs::save` / `Srs::load`: the round trip, the pinned byte layout, and what
 //! a tampered archive does.
 //!
-//! There is no digest — S07's SRS hashing was dropped, and this crate's module
-//! docs say what that costs. What `load` still refuses is anything that is not
-//! a well-formed archive of valid points.
+//! There is no digest, and this crate's module docs say what that costs. What
+//! `load` refuses is anything that is not a well-formed archive of valid
+//! points.
 
 mod common;
 
@@ -29,7 +29,7 @@ fn ceremony(power: u32) -> Option<Srs> {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 6 — the round trip
+// The round trip
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -77,7 +77,7 @@ fn the_archive_is_byte_stable() {
     );
 }
 
-/// The header is a frozen layout, so read it as bytes rather than trusting
+/// The header is a fixed layout, so read it as bytes rather than trusting
 /// that `load` and `save` agree with each other.
 #[test]
 fn the_header_layout_is_pinned() {
@@ -100,7 +100,7 @@ fn the_header_layout_is_pinned() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 6 — a tampered archive
+// A tampered archive
 // ---------------------------------------------------------------------------
 
 /// Build the power-12 archive, hand the bytes to `edit`, and try to load it.
@@ -241,7 +241,7 @@ fn a_degenerate_srs_is_rejected() {
     let path = common::scratch("degenerate.srs");
     fs::write(&path, &bytes).expect("writing");
 
-    // It decodes: infinity is a valid point, and S05 says so.
+    // It decodes: infinity is a valid point, and the curve's decoder says so.
     let srs = Srs::load(&path).expect("infinity points decode");
     assert!(srs.g2_tau().infinity);
     assert_eq!(srs.validate(), Err(SrsError::TauMismatch));

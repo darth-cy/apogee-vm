@@ -58,10 +58,11 @@ fn a_transition_with_no_rounds_still_runs_its_final_check() {
 /// `opposed_circuit`: `0 = a − b` and `0 = b − a` in one list. With `a ≠ b`
 /// on row 1 their residuals cancel on every row, so a summand giving both
 /// enforcing gates one weight is zero on this base and verifies it; the
-/// distinct weights `λ^{w+0}` and `λ^{w+1}` keep the violation. Acceptance 3's
-/// control is cancellation across rows of one gate; this is cancellation across
-/// gates, which the toy, with one enforcing gate, cannot show. Kills the mutant
-/// that weights every enforcing gate by the first enforcing weight.
+/// distinct weights `λ^{w+0}` and `λ^{w+1}` keep the violation. `tamper.rs`'s
+/// cancellation control is cancellation across rows of one gate; this is
+/// cancellation across gates, which the toy, with one enforcing gate, cannot
+/// show. Kills the mutant that weights every enforcing gate by the first
+/// enforcing weight.
 #[test]
 fn opposed_enforcing_gates_do_not_cancel() {
     let artifact = opposed_circuit();

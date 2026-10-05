@@ -1,12 +1,11 @@
 //! [`WitnessRecorder`]: a real Ethereum block in, a `BlockWitness` out.
 //!
-//! The method is the one S25's core algorithm names. A thin database wrapper
-//! answers revm's reads from a cached JSON-RPC endpoint pinned at the **parent**
-//! block — which is the state the block's transactions begin from — and records
-//! every answer as it goes. The transactions are then executed once, natively,
-//! through the very same [`revm_block::run`] the guest runs; whatever the
-//! wrapper was asked for is, by construction, exactly what the guest will need.
-//! That touch set becomes the witness.
+//! A thin database wrapper answers revm's reads from a cached JSON-RPC endpoint
+//! pinned at the **parent** block — which is the state the block's transactions
+//! begin from — and records every answer as it goes. The transactions are then
+//! executed once, natively, through the very same [`revm_block::run`] the guest
+//! runs; whatever the wrapper was asked for is, by construction, exactly what
+//! the guest will need. That touch set becomes the witness.
 //!
 //! # Why the execution is what discovers the touch set
 //!
@@ -21,8 +20,8 @@
 //!
 //! # Determinism
 //!
-//! Must-be-exact 1: the same `(block, tx range)` produces byte-identical
-//! witness bytes. Three things make that true and none of them is luck.
+//! The same `(block, tx range)` produces byte-identical witness bytes. Three
+//! things make that true and none of them is luck.
 //!
 //! - The touch set lives in [`BTreeMap`]s keyed by address and by slot, so its
 //!   order is the canonical order the witness needs and not a hash map's.
@@ -53,7 +52,7 @@ use revm_block::mpt::EMPTY_TRIE_ROOT;
 /// Which of a block's transactions to record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TxRange {
-    /// The first `n` transactions. S25's mini-block mode, where `n` is two so
+    /// The first `n` transactions: the mini-block mode, where `n` is two so
     /// that inter-transaction state carry is exercised.
     First(usize),
     /// Every transaction in the block.
@@ -85,10 +84,9 @@ pub struct Recording {
 /// The recorder: an RPC-backed `revm::Database` that remembers what it was
 /// asked.
 ///
-/// It is the Database itself rather than a layer over one, which is what the
-/// stage's core algorithm asks for — *"Layer that wrapper once, as an on-disk
-/// cache implementing revm's Database trait."* The on-disk cache is
-/// [`Rpc`]'s, one layer, shared by every method here.
+/// It is the Database itself rather than a layer over one: the wrapper is
+/// layered once, and its on-disk cache is [`Rpc`]'s, one layer, shared by every
+/// method here.
 pub struct WitnessRecorder {
     rpc: Rpc,
     /// The block whose state is read: the parent of the block being executed.
@@ -272,8 +270,7 @@ impl WitnessRecorder {
 /// The recorder's own failures, as a `Database::Error`.
 ///
 /// One variant: everything that goes wrong here is "the chain could not be
-/// asked", and the message says which question. Master anti-goal 8 —
-/// no error-type architecture.
+/// asked", and the message says which question.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecorderError(pub String);
 
@@ -451,11 +448,11 @@ fn execute_recording(
 
 /// The mainnet hardfork a block runs under, by activation block number.
 ///
-/// A table rather than a guess, and it **refuses a block past the last fork it
-/// knows** rather than running it under the newest rules it has heard of. A
-/// recording made under the wrong hardfork is not a recording that fails; it is
-/// one that quietly computes a different block, and the only thing that would
-/// notice is a state root the mini mode does not check.
+/// A table rather than a guess: a block before the merge is refused, and any
+/// other runs under the last fork the table activates at or below its number.
+/// A recording made under the wrong hardfork is not a recording that fails; it
+/// is one that quietly computes a different block, and the only thing that
+/// would notice is a state root the mini mode does not check.
 ///
 /// The activation heights are revm's own, from the doc comments on
 /// `revm::primitives::hardfork::SpecId`, so the table and the `SpecId` it names
@@ -491,8 +488,8 @@ pub fn mainnet_spec(block_number: u64) -> Result<SpecId, String> {
 /// `blob_gasprice` is the one field that is **not** in the header:
 /// `revm_block::BlockEnvWitness::blob_gasprice` is the whole argument, and the
 /// short version is that the price derives from the excess through a fork
-/// parameter revm 42 does not know past Prague, so it is read off a receipt
-/// instead.
+/// parameter revm 43 does not know past Prague, so it is read off
+/// `eth_feeHistory`'s `baseFeePerBlobGas` instead.
 fn block_env(
     header: &Value,
     chain_id: u64,
@@ -520,8 +517,7 @@ fn block_env(
         blob_gasprice,
         // EIP-7843's slot number is not a header field and no JSON-RPC method
         // serves it: it is the beacon chain's slot, which an execution-layer
-        // node does not carry. Zero, as S24's synthetic block has it, until a
-        // workload reads the opcode.
+        // node does not carry. Zero, as the synthetic block has it.
         slot_num: 0,
         block_hashes: Vec::new(),
     })
@@ -653,8 +649,8 @@ fn tx_witness(tx: &Value) -> Result<TxWitness, String> {
 /// for every post-Cancun block, whether or not the block carries a blob
 /// transaction — which a receipt's `blobGasPrice` is **not**: a node reports that
 /// field only on the receipts of type-3 transactions, so a block with none has
-/// no receipt carrying it. That was the second thing this had to learn, and it
-/// matters because the `BLOBBASEFEE` opcode can read the price in any block.
+/// no receipt carrying it. It matters because the `BLOBBASEFEE` opcode can read
+/// the price in any block.
 ///
 /// One call, `blockCount = 1` and `newestBlock = block_number`, so
 /// `baseFeePerBlobGas[0]` is this block's and `oldestBlock` says so.
@@ -680,12 +676,12 @@ fn blob_gasprice(rpc: &mut Rpc, block_number: u64) -> Result<u128, String> {
 
 /// One JSON-RPC authorization-list entry as an [`AuthorizationWitness`].
 ///
-/// The node reports the signature; this VM cannot recover it, so the recorder
-/// recovers it here. `alloy-eip7702`'s own recovery is behind its `k256`
-/// feature, which the guest workspace does not enable, so the recovery is
-/// revm's `secp256k1` precompile path — the same code the EVM itself uses for
-/// `ecrecover`, which is already in this crate's graph through
-/// `revm-precompile`.
+/// The node reports the signature, and the mini binary takes each authority as
+/// recorded rather than recovering it, so the recorder recovers it here.
+/// `alloy-eip7702`'s own recovery is behind its `k256` feature, which the guest
+/// workspace does not enable, so the recovery is revm's `secp256k1` precompile
+/// path — the same code the EVM itself uses for `ecrecover`, which is already
+/// in this crate's graph through `revm-precompile`.
 fn authorization_witness(entry: &Value) -> Result<AuthorizationWitness, String> {
     let chain_id = rpc::word_of(&entry["chainId"], "an authorization chain id")?;
     let address = rpc::address_of(&entry["address"], "an authorization address")?;

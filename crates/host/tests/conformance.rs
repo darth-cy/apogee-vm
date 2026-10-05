@@ -26,8 +26,8 @@
 //! **What CI runs is a subset of it**, `tests/vectors/zkevm-subset.json`, cut
 //! by `cargo run --release -p kat-gen -- zkevm` from the same release: one
 //! case for every rule the validator refuses by, the smallest valid one, every
-//! undecodable one and the cases this stage's fixes were found by. Each is
-//! held to its output bytes and to the rule it names.
+//! undecodable one and regression cases for the validator's subtler rules.
+//! Each is held to its output bytes and to the rule it names.
 
 use host::fixture::{build_revm_guest, Mode};
 use host::zkevm::{self, FIXTURES_VAR, RELEASE_COMMIT};

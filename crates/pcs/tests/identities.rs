@@ -1,11 +1,11 @@
-//! Acceptance 7: every polynomial the protocol builds, rebuilt from its
-//! definition and compared against the proof.
+//! Every polynomial the protocol builds, rebuilt from its definition and
+//! compared against the proof.
 //!
 //! Nothing here calls into the crate's internals. The transcript schedule is
 //! transcribed from `docs/spec/mercury.md` §3.2 a second time, which recovers
 //! every challenge; each of `h`, `q`, `g`, `S`, `D`, `H`, `W` and `W'` is then
 //! built the slow, obvious way — schoolbook multiplication, one Horner division
-//! per column, `eq` from its product definition — and committed with S07's
+//! per column, `eq` from its product definition — and committed with `srs`'s
 //! KZG. A proof whose points match all eight is a proof of the right
 //! polynomials, because two polynomials of degree `< n` collide under `kzg_commit`
 //! with probability `n/|Fr|`.
@@ -429,7 +429,7 @@ fn product_formula(u: &[Fr], x: Fr) -> Fr {
     acc
 }
 
-/// Acceptance 7's differential oracle: at `t = 1` the whole protocol is a naive
+/// The differential oracle: at `t = 1` the whole protocol is a naive
 /// reimplementation away, so every identity is checked against one.
 #[test]
 fn the_whole_protocol_reconstructs_at_t_one() {
@@ -438,7 +438,7 @@ fn the_whole_protocol_reconstructs_at_t_one() {
     }
 }
 
-/// The same reconstruction at every small `t` the stage names.
+/// The same reconstruction at `t = 2` and `t = 3`.
 #[test]
 fn the_whole_protocol_reconstructs_at_small_t() {
     for t in [2usize, 3] {

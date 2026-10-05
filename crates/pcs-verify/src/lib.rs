@@ -2,12 +2,12 @@
 //! The verifier half of Mercury: everything a verification computes that is
 //! not a curve operation.
 //!
-//! `docs/spec/mercury.md` §3.2 to §4 and §5, and `docs/spec/mercury.md` §6.1,
-//! §3 and §5, are normative. `#![no_std]` + `alloc`: the recursion guest links
-//! this crate. `crates/pcs` is the `std` half — commit, open, point validation,
-//! the `cm*` MSM and the pairings — and re-exports everything public here, so a
-//! native verification and a guest's run one definition of the transcript
-//! schedule, the two derived values and the twelve accumulator terms.
+//! `docs/spec/mercury.md` §3.2 to §5, §6.1 and §6.3 specify it. `#![no_std]` +
+//! `alloc`: the recursion guest links this crate. `crates/pcs` is the `std`
+//! half — commit, open, point validation, the `cm*` MSM and the pairings — and
+//! verifies through this crate's functions, so a native verification and a
+//! guest's run one definition of the transcript schedule, the two derived
+//! values and the twelve accumulator terms.
 //!
 //! A point here is its 64-byte encoding, `crates/curve`'s uncompressed affine
 //! form, because that is all the transcript reads (`transcript::g1_limbs`).
@@ -231,8 +231,8 @@ pub fn derive_h_alpha(
 ///
 /// Every deferred relation in this protocol has the shape
 /// `e(A, [1]_2) = e(B, [x]_2)`, so a term is on the `A` side or the `B` side
-/// and there is no third possibility. **Frozen forever**, including the wire
-/// values: `G2One` is `0` and `G2X` is `1`. `pcs` re-exports it.
+/// and there is no third possibility. The wire values are `G2One` = `0` and
+/// `G2X` = `1`. `pcs` re-exports it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PairingSide {
     /// Pairs against `[1]_2` — a term of `A`.
@@ -263,13 +263,13 @@ impl PairingSide {
 }
 
 /// The words one entry occupies: the side tag, the scalar, and the point's four
-/// `Fr` limbs. `6 * 32 = 192` bytes, for every entry, forever.
+/// `Fr` limbs. `6 * 32 = 192` bytes, for every entry.
 pub const ENTRY_WORDS: usize = 6;
 
 /// The entries one deferred Mercury verification emits.
 ///
 /// Ten `G2One` terms — the statement's commitment, the eight proof points in
-/// their frozen field order, and `[1]_1` — and two `G2X` terms. The count does
+/// their field order, and `[1]_1` — and two `G2X` terms. The count does
 /// not depend on `n`, and it does not depend on a batch's `k`, because a batch
 /// derives `cm*` before it reaches the verification core.
 pub const ENTRIES_PER_CHECK: usize = 12;
@@ -303,9 +303,10 @@ pub fn entry_words(side: PairingSide, scalar: Fr, point: &[u8; 64]) -> [Fr; ENTR
 
 /// The accumulator digest: Poseidon2 over the words of the entry list.
 ///
-/// The hash-binding rule, frozen once here and cited by every later stage: a
-/// proof that carries an accumulator binds it by absorbing exactly these words
-/// under `ACCUMULATOR_DIGEST` in a sponge of its own and squeezing once.
+/// The hash-binding rule: exactly these words, absorbed under
+/// `ACCUMULATOR_DIGEST` in a sponge of their own and squeezed once. It covers
+/// the count words, so it binds the grouping, and `pcs::discharge` draws its
+/// merge weight from it.
 ///
 /// The squeeze is a raw `sample`, **not** a `challenge_scalar`, for the reason
 /// `sumcheck::witness_digest`'s is: the tag frames a scalar message, and a
@@ -340,16 +341,16 @@ pub fn batch_preamble(cms: &[[u8; 64]], u: &[Fr], vs: &[Fr], tr: &mut Transcript
     (weights, v_star)
 }
 
-/// One Mercury verification's field side: `docs/spec/mercury.md` §3.2's schedule
-/// over the instance `(cm, u, v)` and a proof given as its eight points'
-/// encodings and its six values, both in field order; §7's challenge rule; the
-/// two derived values; and the BDFG20 batch at `z'`.
+/// One Mercury verification's field side: `docs/spec/mercury.md` §3.2's
+/// schedule over the instance `(cm, u, v)` and a proof given as its eight
+/// points' encodings and its six values, both in field order; §3.4's challenge
+/// rule; the two derived values; and the BDFG20 batch at `z'`.
 ///
 /// Returns the twelve scalars of `docs/spec/mercury.md` §6.1 in entry order.
 /// Entry `i` pairs its scalar with the point [`ENTRY_POINTS`] names, so the
 /// relation the verifier would check is
 /// `e(sum of the G2One terms, [1]_2) = e(sum of the G2X terms, [x]_2)`. The
-/// ten `G2One` scalars sum to `A1 + rho A2` of §8.2 and the two `G2X` scalars
+/// ten `G2One` scalars sum to `A1 + rho A2` of §4 and the two `G2X` scalars
 /// to `B1 + rho B2`.
 pub fn scalars(
     cm: &[u8; 64],
@@ -416,7 +417,7 @@ pub fn scalars(
 
     // Check A is the fold identity at `z`; check B is the BDFG20 batch; `rho`
     // merges them, which is why every check-B term carries it and no check-A
-    // term does. `docs/spec/mercury.md` §4 and §4.
+    // term does. `docs/spec/mercury.md` §4.
     Ok([
         Fr::ONE,
         rho * c[1],
@@ -468,9 +469,8 @@ mod tests {
         assert!(MAX_NUM_VARS < u64::BITS as usize);
     }
 
-    /// Acceptance 5, and `docs/spec/mercury.md` §3.4's `z in F*` rule: a rejected
-    /// squeeze is discarded and the **next** squeeze under the same tag is
-    /// used.
+    /// `docs/spec/mercury.md` §3.4's `z in F*` rule: a rejected squeeze is
+    /// discarded and the **next** squeeze under the same tag is used.
     ///
     /// The rule rejects zero, which a sponge produces with probability about
     /// `2^-254`, so the loop is undrivable as written. Naming the rejected

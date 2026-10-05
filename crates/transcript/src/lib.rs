@@ -13,8 +13,9 @@
 //!   [`Transcript::challenge_scalar`] — which frames every message as
 //!   `tag, length, payload...` over that duplex.
 //!
-//! `#![no_std]`: the recursion guest verifies base proofs on this VM and draws
-//! its randomness through this same API.
+//! `#![no_std]`: guests and the no_std verifier core link it. The recursion
+//! guest replays the same sponge over field cells
+//! (`verifier_core::tape::CellTranscript`).
 
 extern crate alloc;
 
@@ -31,17 +32,17 @@ use field::Fr;
 // `constants` as upstream's hex literals, which documents their provenance.
 // ---------------------------------------------------------------------------
 
-/// One frozen round constant, decoded from its hex literal.
+/// One round constant, decoded from its hex literal.
 ///
 /// `Fr` has no compile-time constructor, so this runs on every call: 80
 /// decodes per permutation, measured at 1.76x on the permutation; no
-/// benchmark on a real workload yet says it matters, so the obvious code
-/// stays. The literals are checked against the reference dump in
-/// `tests/poseidon2.rs`, and a malformed one panics here rather than becoming a
-/// different field element.
+/// benchmark on a real workload says it matters, so the obvious code stays.
+/// The literals are pinned through the permutation by the reference vectors
+/// `tests/poseidon2.rs` replays, and a malformed one panics here rather than
+/// becoming a different field element.
 #[inline]
 fn rc(hex: &str) -> Fr {
-    Fr::from_hex(hex).expect("a frozen round constant is a canonical hex literal")
+    Fr::from_hex(hex).expect("a round constant is a canonical hex literal")
 }
 
 /// `x^5`, the S-box. Three multiplications.
@@ -82,7 +83,7 @@ fn internal_matrix(s: &mut [Fr; 3]) {
 /// function, so the two are one definition.
 ///
 /// Selected by `#[cfg(target_arch = "riscv32")]` alone; there is no cargo
-/// feature here (master anti-goal 1).
+/// feature here.
 #[cfg(target_arch = "riscv32")]
 mod delegated {
     use constants::poseidon2 as p2;
@@ -207,8 +208,8 @@ pub struct Transcript {
     events: Vec<TranscriptEvent>,
 }
 
-// A `Default` impl would be a second name for `new` with no caller, which
-// anti-goal 10 rules out; the lint has nothing to catch here.
+// A `Default` impl would be a second name for `new` with no caller; the lint
+// has nothing to catch here.
 #[allow(clippy::new_without_default)]
 impl Transcript {
     /// A transcript with a zero sponge and empty buffers.
@@ -434,12 +435,12 @@ impl<'de> serde::Deserialize<'de> for TranscriptSnapshot {
 // The public I/O digest.
 // ---------------------------------------------------------------------------
 
-/// The single `Fr` that binds a guest's fd 0 and fd 1 byte streams.
+/// The single `Fr` that binds a statement's public input and public output
+/// byte strings.
 ///
-/// This is the value the statement-binding order absorbs as "public I/O
-/// digest". Frozen at S10; later stages recompute it and never redefine it.
-/// `docs/spec/public-values.md` §5 is normative, and it is the same recipe
-/// the typed layer already runs:
+/// This is the value the global transcript absorbs at G7 as the "public I/O
+/// digest"; the guest never computes it. `docs/spec/public-values.md` §5
+/// specifies it, and it is the same recipe the typed layer already runs:
 ///
 /// ```text
 ///   input tag, input byte length, input limbs,
@@ -448,7 +449,7 @@ impl<'de> serde::Deserialize<'de> for TranscriptSnapshot {
 ///
 /// Each stream is packed 31 bytes at a time into little-endian `Fr` limbs with
 /// the final partial limb zero-extended, which is exactly
-/// [`Transcript::append_bytes`]'s frozen encoding — so this function is two
+/// [`Transcript::append_bytes`]'s encoding — so this function is two
 /// typed messages and one raw squeeze, in a sponge of its own, the way
 /// `sumcheck::witness_digest` and `pcs::accumulator_digest` are built. The
 /// squeeze is a raw [`Transcript::sample`], not a challenge, because a
@@ -478,20 +479,21 @@ pub fn io_digest(public_input: &[u8], public_output: &[u8]) -> Fr {
 // ---------------------------------------------------------------------------
 
 /// A `G1` point's four transcript limbs, from its 64-byte canonical encoding
-/// `x ‖ y`, with no curve arithmetic. `docs/spec/transcript.md` §4 is normative,
-/// and `docs/spec/transcript.md` §4 says why it lives here.
+/// `x ‖ y`, with no curve arithmetic. `docs/spec/transcript.md` §4 specifies
+/// it.
 ///
-/// All-zero bytes are the point at infinity (S05's wire rule), which absorbs
-/// `constants::G1_INFINITY_SENTINEL`, `2^128`, in each of its four lanes.
-/// Anything else is `x[0..16], x[16..32], y[0..16], y[16..32]`, each read as a
-/// little-endian integer below `2^128` — so no real limb is the sentinel, and
-/// the split is a function of the bytes whether or not they encode a point on
-/// the curve. Validating the point is its decoder's job, not the absorber's.
+/// All-zero bytes are the point at infinity (the curve's wire rule), which
+/// absorbs `constants::G1_INFINITY_SENTINEL`, `2^128`, in each of its four
+/// lanes. Anything else is `x[0..16], x[16..32], y[0..16], y[16..32]`, each
+/// read as a little-endian integer below `2^128` — so no real limb is the
+/// sentinel, and the split is a function of the bytes whether or not they
+/// encode a point on the curve. Validating the point is its decoder's job, not
+/// the absorber's.
 /// `pcs::append_g1_list` is this over `G1Affine::to_bytes`.
 pub fn g1_limbs(point: &[u8; 64]) -> [Fr; 4] {
     if point.iter().all(|b| *b == 0) {
         let sentinel = Fr::from_hex(constants::G1_INFINITY_SENTINEL)
-            .expect("the frozen infinity sentinel is a canonical hex literal");
+            .expect("the infinity sentinel is a canonical hex literal");
         return [sentinel; 4];
     }
     let limb = |half: &[u8]| {

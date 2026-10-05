@@ -1,8 +1,8 @@
 //! **revm is the reference stateless guest's revm, crate for crate.**
 //!
-//! The owner's decision for the canonical stateless guest: run exactly the EVM
-//! that `paradigmxyz/stateless` — reth's stateless validator, the reference
-//! guest the zkEVM benchmark compares against — runs, which is the revm set its
+//! The canonical stateless guest runs exactly the EVM that
+//! `paradigmxyz/stateless` — reth's stateless validator, the reference guest
+//! the zkEVM benchmark compares against — runs, which is the revm set its
 //! `Cargo.lock` pins. That set is not "revm 43.0.1": the `revm` crate is a
 //! facade over a dozen sub-crates, and the EVM's semantics live in those —
 //! `revm-handler` 43.0.1 carries the EIP-8037 system-call state-gas reservoir

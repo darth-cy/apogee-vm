@@ -1,4 +1,4 @@
-//! The `Quadratic` shape end to end: the owner's example of a relation no
+//! The `Quadratic` shape end to end: an example of a relation no
 //! other single shape expresses, enforced, beside a producing `Quadratic` whose
 //! column a later gate list reads.
 //!

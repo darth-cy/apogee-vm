@@ -1,5 +1,5 @@
 //! Shard verification: `verifier_core::reduce_shard`, then the shard's one
-//! batched Mercury opening. `docs/spec/proof.md` §6 is normative.
+//! batched Mercury opening. `docs/spec/proof.md` §6 specifies it.
 //!
 //! This crate is the core's thin `std` wrapper and holds nothing else of the
 //! protocol: it decodes the curve points the core carries as bytes, through
@@ -27,10 +27,10 @@ pub use verifier_core::{
     VerifyingKey, OPENING_BYTES, SRS_VERIFIER_BYTES,
 };
 
-/// Verify one shard's proof against its statement: **the one verification
-/// path**. The CLI, every test and the tamper harness call this and nothing
-/// else. `vk` is a key [`load_verifying_key`] loaded, or one the prover built
-/// and checked; its identity is compared with a registered one by the caller.
+/// Verify one shard's proof against its statement: **the one single-shard
+/// verification path**, which the CLI and the tamper harness call for a shard.
+/// `vk` is a key [`load_verifying_key`] loaded, or one the prover built and
+/// checked; its identity is compared with a registered one by the caller.
 ///
 /// A statement is proven when every one of its shards' proofs verifies against
 /// one `public` **and** the statement's memory argument reconciles over the
@@ -48,8 +48,8 @@ pub fn verify_shard(
 }
 
 /// Verify a whole block: **the one block verification path**, and the same
-/// per-shard path [`verify_shard`] runs. `docs/spec/proof.md` §6 is
-/// normative; the checks are, in order:
+/// per-shard path [`verify_shard`] runs. `docs/spec/proof.md` §6 specifies
+/// it; the checks are, in order:
 ///
 /// 1. the block's descriptor is the key's and its statement is `public`;
 /// 2. the statement's own checks and the global transcript, once
@@ -121,8 +121,8 @@ fn spend(vk: &VerifyingKey, proof: &ShardProof, claim: OpeningClaim) -> Result<(
     batch_verify(&vsrs, &cms, &claim.point, &claim.values, &mercury, &mut t).map_err(|_| opening)
 }
 
-/// `g1_gen ‖ g2_gen ‖ g2_tau`, S07's layout, each through its validating
-/// decoder. `None` if any point is not one.
+/// `g1_gen ‖ g2_gen ‖ g2_tau`, `docs/spec/srs.md` §5's layout, each through its
+/// validating decoder. `None` if any point is not one.
 pub fn decode_srs_verifier(bytes: &[u8; SRS_VERIFIER_BYTES]) -> Option<SrsVerifier> {
     Some(SrsVerifier {
         g1_gen: G1Affine::from_bytes(bytes[..64].try_into().expect("64 bytes"))?,
@@ -131,7 +131,8 @@ pub fn decode_srs_verifier(bytes: &[u8; SRS_VERIFIER_BYTES]) -> Option<SrsVerifi
     })
 }
 
-/// S07's layout of `vsrs`, the inverse of [`decode_srs_verifier`].
+/// `docs/spec/srs.md` §5's layout of `vsrs`, the inverse of
+/// [`decode_srs_verifier`].
 pub fn encode_srs_verifier(vsrs: &SrsVerifier) -> [u8; SRS_VERIFIER_BYTES] {
     let mut out = [0u8; SRS_VERIFIER_BYTES];
     out[..64].copy_from_slice(&vsrs.g1_gen.to_bytes());
@@ -167,7 +168,7 @@ pub fn load_verifying_key(bytes: &[u8]) -> Result<VerifyingKey, String> {
 mod tests {
     use super::*;
 
-    /// The core's opening width is S08's proof size.
+    /// The core's opening width is Mercury's proof size.
     #[test]
     fn the_core_holds_an_opening_of_pcs_width() {
         assert_eq!(OPENING_BYTES, pcs::PROOF_BYTES);
@@ -186,7 +187,7 @@ mod tests {
                 (family::JUMP_BRANCH_SLT, 1 << 20),
                 (family::INIT_TEARDOWN, 1 << 16),
                 (family::ZERO_WINDOWS, 1 << 16),
-                // S-IO's three, in every `VmConfig`
+                // The public pair and advice, in every `VmConfig`
                 // (`docs/spec/public-values.md` §4).
                 (family::PUBLIC_INPUT, family::PUBLIC_WINDOW_HEIGHT),
                 (family::PUBLIC_OUTPUT, family::PUBLIC_WINDOW_HEIGHT),
@@ -220,7 +221,7 @@ mod tests {
 
     /// **`verify_block` runs the memory argument's statement half itself, at
     /// check 5, and not inside its per-shard loop** (`docs/spec/proof.md`
-    /// §3). The block below carries one `INIT_TEARDOWN` shard whose proof is a
+    /// §6). The block below carries one `INIT_TEARDOWN` shard whose proof is a
     /// shell — a digest of zero, no commitments, no outputs — so the loop
     /// would refuse it as `Statement` the moment it read it, as the second
     /// assertion shows. The answer is `MemoryArgument` instead, which is only
@@ -250,8 +251,8 @@ mod tests {
             output: vec![],
             exit_status: 0,
             // Positional over the config: no jump shard, the one window-0
-            // shard the window rules require, no zero window, and — since S-IO
-            // — one shard for each public value family and no advice window.
+            // shard the window rules require, no zero window, one shard for
+            // each public value family and no advice window.
             shard_counts: vec![0, 1, 0, 1, 1, 0],
             windows: vec![],
             boundary,

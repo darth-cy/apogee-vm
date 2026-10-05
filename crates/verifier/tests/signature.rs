@@ -1,6 +1,6 @@
-//! S16 acceptance 12 and S20 must-be-exact 2: every verification entry point
-//! takes the verifying key, the proof and the public inputs, and nothing else
-//! — master rule 6. Pinned at compile time: a changed signature does not build.
+//! Every verification entry point takes the verifying key, the proof and the
+//! public inputs, and nothing else. Pinned at compile time: a changed signature
+//! does not build.
 
 use verifier::{
     verify_block, verify_shard, BlockProof, PublicInputs, ShardProof, VerifyError, VerifyingKey,
@@ -9,7 +9,7 @@ use verifier::{
 const _: fn(&VerifyingKey, &ShardProof, &PublicInputs) -> Result<(), VerifyError> = verify_shard;
 const _: fn(&VerifyingKey, &BlockProof, &PublicInputs) -> Result<(), VerifyError> = verify_block;
 
-/// The no_std core's three parts, which both entry points compose (S20). Two
+/// The no_std core's three parts, which both entry points compose. Two
 /// of them are per statement and one is per shard, which is the whole point of
 /// the split: a block runs `derive_global_phase` and `verify_global_memory`
 /// once each, and `verify_shard_local` once a shard.
@@ -35,8 +35,8 @@ const _: fn(
     &PublicInputs,
 ) -> Result<verifier_core::OpeningClaim, VerifyError> = verifier_core::reduce_shard;
 
-/// The SRS verifier's bytes are S07's layout, and every point goes back
-/// through its validating decoder.
+/// The SRS verifier's bytes are `docs/spec/srs.md` §5's layout, and every point
+/// goes back through its validating decoder.
 #[test]
 fn the_srs_verifier_round_trips_through_its_layout() {
     use curve::{G1Affine, G2Affine};

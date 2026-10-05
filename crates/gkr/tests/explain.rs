@@ -2,12 +2,11 @@
 //! failure. `docs/tools.md` §3.
 //!
 //! **This file is why the explainer is compiled unconditionally.** It is called
-//! only from `prover`'s `debug-info` build, and `gkr` may not have a feature of
-//! its own — that would be a second `[features]` table, which master anti-goal 1
-//! still forbids — so the function sits in the default build with no caller in
-//! it. Master anti-goal 1's stated hazard is "a configuration nobody builds is
-//! broken and undiscovered"; this is the file that makes it built and exercised
-//! by `cargo test --workspace`.
+//! only from `prover`'s `debug-info` build, and `gkr` has no feature of its own
+//! — the workspace's one `[features]` table is `prover`'s — so the function
+//! sits in the default build with no caller in it. A configuration nobody
+//! builds is broken and undiscovered; this is the file that makes it built and
+//! exercised by `cargo test --workspace`.
 //!
 //! The two circuits here are the ones `edges.rs` already fails on, so the
 //! failures are real `self_check` failures rather than a fixture invented for
@@ -35,7 +34,7 @@ fn joined(lines: &[String]) -> String {
 ///
 /// `opposed_circuit` enforces `0 = a − b` over two witness columns named `a`
 /// and `b`. With `b[1]` one above `a[1]`, `self_check` reports gate list 0, row
-/// 1, relation `a_eq_b` — and that is everything a reader gets today. The
+/// 1, relation `a_eq_b` — and that is everything a reader gets from it. The
 /// explanation adds the two values, by name, which is the difference between
 /// "something is wrong at row 1" and "`a` is 11 and `b` is 12".
 #[test]

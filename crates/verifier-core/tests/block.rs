@@ -1,6 +1,6 @@
 //! The block types: `docs/spec/proof.md` §1.3, §8 and §9 — the record
 //! layout, the wire forms, the structural rule every decoded block keeps, and
-//! the public-data API S24 and S27 read.
+//! the public-data API.
 //!
 //! Nothing here is proved. `crates/prover/tests/block.rs` is the statement.
 
@@ -23,7 +23,7 @@ fn block() -> BlockProof {
     init.outputs = vec![Fr::ZERO; 2];
     let mut add = shell(&vk, &public);
     add.ts_window = [4, 400];
-    // S-IO's two public value shards, which every statement has
+    // The two public value shards, which every statement has
     // (`docs/spec/public-values.md` §4). Neither is cycle-owning, so each
     // carries the trivial window like the init family's.
     let mut input = shell(&vk, &public);
@@ -39,8 +39,8 @@ fn block() -> BlockProof {
     }
 }
 
-/// The record list is statement order, and each record is §2's layout read off
-/// the statement and the shard's own proof.
+/// The record list is statement order, and each record is §1.3's layout read
+/// off the statement and the shard's own proof.
 #[test]
 fn the_reconciliation_is_the_statement_and_the_proofs() {
     let block = block();
@@ -61,8 +61,8 @@ fn the_reconciliation_is_the_statement_and_the_proofs() {
 }
 
 /// The public-data API: the descriptor, the counts and a family's count, read
-/// through a serialized block and nothing else. That is S24's occupancy path
-/// and S26's.
+/// through a serialized block and nothing else, as an occupancy assertion
+/// reads them.
 #[test]
 fn the_public_data_reads_through_the_wire_form() {
     let bytes = block().to_bytes();
@@ -163,9 +163,8 @@ fn the_block_reader_refuses_everything_it_did_not_write() {
     );
 }
 
-/// `BlockReconciliation`'s own wire form, the one S27's aggregation guest
-/// replays: family, shard index, ts_start, ts_end, the memory commitments in
-/// column order, read root, write root.
+/// `BlockReconciliation`'s own wire form: family, shard index, ts_start,
+/// ts_end, the memory commitments in column order, read root, write root.
 #[test]
 fn the_reconciliation_round_trips_in_its_frozen_layout() {
     let records = block().reconciliation();

@@ -1,7 +1,6 @@
-//! The proof-side types, frozen at S16: `PublicInputs`, `ShardProof`,
-//! `VerifyingKey`, `VerifyError`, and the opening claim the core hands its
-//! wrapper. Their byte layouts are `docs/spec/proof.md` §9, and a key's
-//! load rules §7.2.
+//! The proof-side types: `PublicInputs`, `ShardProof`, `VerifyingKey`,
+//! `VerifyError`, and the opening claim the core hands its wrapper. Their byte
+//! layouts are `docs/spec/proof.md` §9, and a key's load rules §7.2.
 
 use alloc::format;
 use alloc::string::String;
@@ -20,11 +19,12 @@ use transcript::Transcript;
 use crate::statement::{identity_digest, srs_digest, ProgramIdentity, VmConfig};
 use crate::wire::{Read, Reader, Writer};
 
-/// The bytes of one Mercury proof: 8 `G1` points and 6 `Fr`, S08's
+/// The bytes of one Mercury proof: 8 `G1` points and 6 `Fr`,
 /// `pcs::PROOF_BYTES`. The core holds it opaque; `crates/verifier` decodes it.
 pub const OPENING_BYTES: usize = 704;
 
-/// The bytes of an `SrsVerifier`: `g1_gen ‖ g2_gen ‖ g2_tau`, S07's layout.
+/// The bytes of an `SrsVerifier`: `g1_gen ‖ g2_gen ‖ g2_tau`,
+/// `docs/spec/srs.md` §5's layout.
 pub const SRS_VERIFIER_BYTES: usize = 320;
 
 // ---------------------------------------------------------------------------
@@ -78,11 +78,11 @@ impl fmt::Display for VerifyError {
 // PublicInputs
 // ---------------------------------------------------------------------------
 
-/// What a statement is about, `docs/spec/proof.md` §1.1: the streams and
-/// the result the outside world asserts, then the record the prover's global
-/// commit phase fixed — every shard's memory commitments and roots, the
-/// boundary, the counts and the window list. Every shard of a statement is
-/// verified against one `PublicInputs`.
+/// What a statement is about, `docs/spec/proof.md` §1.1: the two public
+/// payloads and the exit status the outside world asserts, then the record the
+/// prover's global commit phase fixed — every shard's memory commitments and
+/// roots, the boundary, the counts and the window list. Every shard of a
+/// statement is verified against one `PublicInputs`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicInputs {
     pub input: Vec<u8>,
@@ -193,7 +193,8 @@ impl PublicInputs {
 pub struct ShardProof {
     pub family: u32,
     pub shard_index: u32,
-    /// `[start, end)`: [`crate::TRIVIAL_TS_WINDOW`] at S16.
+    /// `[start, end)`, the claimed time window: [`crate::TRIVIAL_TS_WINDOW`]
+    /// for a window family (`docs/spec/proof.md` §8).
     pub ts_window: [u64; 2],
     /// The global state digest the prover seeded this shard with.
     pub global_digest: Fr,
@@ -299,7 +300,7 @@ pub struct VerifyingKey {
     /// The packed generic table's commitments, key column first: one set for
     /// every key, the same at every height, which a family that reads the
     /// generic channel opens its last setup columns against. Not in identity;
-    /// the SRS digest covers them (`docs/spec/proof.md` §3, §7; S17).
+    /// the SRS digest covers them (`docs/spec/proof.md` §3, §7).
     pub generic_table: [[u8; 64]; generic_table::WIDTH],
     /// The digest of `srs_verifier` and `generic_table`.
     pub srs_digest: Fr,

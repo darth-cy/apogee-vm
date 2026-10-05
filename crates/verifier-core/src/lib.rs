@@ -1,22 +1,22 @@
 #![no_std]
 //! The verifier core: everything a shard's verification does except its one
 //! Mercury opening. `#![no_std]` + `alloc`, because the recursion guest links
-//! it and re-implementation is forbidden; CI builds it for
+//! it rather than re-implementing it; CI builds it for
 //! `riscv32imac-unknown-none-elf`.
 //!
-//! `docs/spec/proof.md` is normative. The core holds statement binding
+//! `docs/spec/proof.md` specifies it. The core holds statement binding
 //! (the `VmConfig`, its descriptor and window rules, the identity and SRS
 //! digests, the global transcript), the shard transcript's replay, the GKR
 //! claim chain through `gkr-verify`, the LogUp root checks, and the memory
 //! argument's reconciliation; [`reduce_shard`] runs them in order and returns
 //! the opening claim. `crates/verifier` decodes the curve points and runs that
-//! opening through `pcs::batch_verify`, whose field side is `pcs-verify`'s
-//! since S-RECURSION; a curve point is held here as its 64 canonical bytes and
-//! absorbed through `transcript::append_g1_points`.
+//! opening through `pcs::batch_verify`, whose field side is `pcs-verify`'s; a
+//! curve point is held here as its 64 canonical bytes and absorbed through
+//! `transcript::append_g1_points`.
 //!
-//! S-RECURSION added the recursion half (`docs/spec/recursion.md`): the
-//! stacked opening, and [`tape`], [`chain`], [`fold`] and [`node`], which write
-//! a node's verification as coprocessor calls over field cells.
+//! The recursion half (`docs/spec/recursion.md`) is the stacked opening, and
+//! [`tape`], [`chain`], [`fold`] and [`node`], which write a node's
+//! verification as coprocessor calls over field cells.
 
 extern crate alloc;
 
