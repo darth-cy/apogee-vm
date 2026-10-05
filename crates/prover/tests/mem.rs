@@ -1,17 +1,15 @@
-//! S19's acceptance over the real statement: `guests/mem`, proved and verified
-//! shard by shard.
+//! The memory-op statement end to end: `guests/mem`, proved and verified shard
+//! by shard.
 //!
 //! **Every test here is `#[ignore]`d, and runs by name with
 //! `--include-ignored --test-threads=1`**, for `tests/acceptance.rs`' reason:
-//! five execution families' shards are `2^20` rows. Master rule 7: the stage's
-//! PR runs it locally, and `.github/workflows/ci.yml` carries the command under
-//! `# DEFERRED:`. The circuits row by row, the reduced-width splice check and
-//! everything else that needs no proof is `crates/checker/tests/mem_word.rs`,
-//! `mem_subword.rs`, `atomics.rs` and `mem_fill.rs`, in ordinary CI.
+//! five execution families' shards are `2^20` rows, and CI does not run them.
+//! The circuits row by row, the reduced-width splice check and everything else
+//! that needs no proof is `crates/checker/tests/mem_word.rs`, `mem_subword.rs`,
+//! `atomics.rs` and `mem_fill.rs`, in ordinary CI.
 //!
-//! This is also the **first statement whose rows touch RAM**, so it is the
-//! first with a `ZERO_WINDOWS` shard: the guest writes near the top of RAM as
-//! well as inside window 0.
+//! The statement's **rows touch RAM**, so it has a `ZERO_WINDOWS` shard: the
+//! guest writes near the top of RAM as well as inside window 0.
 
 mod common;
 
@@ -33,9 +31,9 @@ const ZERO: u32 = family::ZERO_WINDOWS;
 /// The whole statement, proved by the one proving path.
 fn proved() -> (ProverSetup, TraceArchive, PublicInputs, Vec<ShardProof>) {
     let setup = common::mem_setup();
-    // The archive is still built, and it is **not** proved from: the log's
-    // self-check below reads it, which is a reading of the execution and not
-    // a proving path (`docs/spec/streaming.md` §1).
+    // The archive is built and **not** proved from: the log's self-check below
+    // reads it, which is a reading of the execution and not a proving path
+    // (`docs/spec/streaming.md` §1).
     let archive = common::mem_archive(&setup.program);
     let (public, proofs) = common::streamed_shards(&setup, &common::empty_io());
     (setup, archive, public, proofs)
@@ -60,23 +58,22 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
         + 704
 }
 
-/// Acceptance 1: the guest decodes into the five execution families it runs —
-/// add/sub and jump/branch/slt beside the three S19 proves — and the two RAM
-/// window families; its trace self-checks and exits with the number of checks
-/// it ran, 48; `advance` proves one shard of each, seven of them, the
-/// `ZERO_WINDOWS` one being the first any acceptance statement has had;
-/// `verify_shard` accepts every one against the one statement; and every proof
-/// has its circuit's shape.
+/// The guest decodes into the five execution families it runs — add/sub and
+/// jump/branch/slt beside the three memory-op families — and the window
+/// families; its trace self-checks and exits with the number of checks it ran,
+/// 50; the streaming prover proves one shard of each family that has one, nine
+/// of them, a `ZERO_WINDOWS` shard among them; `verify_shard` accepts every one
+/// against the one statement; and every proof has its circuit's shape.
 ///
-/// The three new families' shapes are pinned twice — as the literals
-/// `docs/spec/circuits.md` §1 states, and as the numbers read off the
-/// registry's circuit — so a change to any of them shows on both sides. What
-/// the trace holds, instruction by instruction, is the three row suites in
-/// `crates/checker/tests` over the same fixture, and the emulator's reading of it is
-/// `crates/emulator/tests/guests.rs`', which checks the exit status and
-/// fd 1 and nothing below that.
+/// The three memory-op families' shapes are pinned twice — as literals and as
+/// the numbers read off the registry's circuit (`docs/spec/circuits.md` §1
+/// tabulates the shapes) — so a change to any of them shows on both sides.
+/// What the trace holds, instruction by instruction, is the three row suites
+/// in `crates/checker/tests` over the same fixture, and the emulator's reading
+/// of it is `crates/emulator/tests/guests.rs`', which checks the exit status
+/// and the journal and nothing below that.
 #[test]
-#[ignore = "five 2^20-row execution shards: one statement's proof is the heaviest in the repository"]
+#[ignore = "five 2^20-row execution shards: one statement's proof needs tens of GB"]
 fn a1_the_guest_proves_and_every_shard_verifies() {
     let (setup, archive, public, proofs) = proved();
     let config = &setup.program.config;
@@ -156,9 +153,8 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     // channel, so it carries three channels and seven setup columns; the other
     // two carry four and name the packed table as their last three.
     let by_family = |f: u32| proofs.iter().find(|p| p.family == f).expect("a shard");
-    // Each length is pinned twice — as the literal `docs/spec/circuits.md` §1 and
-    // `docs/spec/circuits.md` §1 and §1 state, and as the number the
-    // formula above reads off the circuit — so a change to a family shows on both sides.
+    // Each length is pinned twice — as a literal and as the number the formula
+    // above reads off the circuit — so a change to a family shows on both sides.
     let mw = by_family(MW);
     assert_eq!(mw.gkr.layers.len(), 25);
     assert_eq!(mw.gkr.layers[0].rounds.len(), 20);

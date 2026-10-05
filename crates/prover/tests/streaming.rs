@@ -1,25 +1,18 @@
 //! **`max_in_flight` is a resource setting and nothing else.**
 //!
-//! `docs/spec/streaming.md` is normative and this file is what is left of its
-//! acceptance. The streaming prover changes *when* a column exists: pass 1
-//! commits each shard's `M` columns as the shard fills and runs G1–G11 over the
-//! ordered list at the end, pass 2 re-executes and proves each shard as it
-//! fills, holding at most `max_in_flight` of them — since S-PIPELINE, one per
-//! worker. Every commitment, every absorption and every challenge is a
+//! `docs/spec/streaming.md` specifies the streaming prover. It changes *when* a
+//! column exists: pass 1 commits each shard's `M` columns as the shard fills
+//! and runs G1–G11 over the ordered list at the end, pass 2 re-executes and
+//! proves each shard as it fills, holding at most `max_in_flight` of them, one
+//! per worker. Every commitment, every absorption and every challenge is a
 //! function of the statement and the shard's own columns, so the worker count
 //! cannot reach one — and that is the claim here.
 //!
-//! # What this file lost at S-STREAM, and why it is not replaced
+//! # What holds the streamed block
 //!
-//! Until S-STREAM these tests held the streamed block equal to
-//! `prover::prove_block`'s, byte for byte, over the three arms of
-//! `prover::ShardRows`. The archived path is no longer a proving path
-//! (`docs/spec/streaming.md` §1) and a test may not run it, so that comparison
-//! is gone and **nothing replaces it**: the owner's decision, taken with the
-//! loss stated. What is genuinely lost is "two independent constructions
-//! agree" — a change that moved the prover and the verifier together would now
-//! pass. What survives is every other oracle, and between them they are not
-//! weak:
+//! No test runs `prover::prove_block`, so no test holds a whole streamed block
+//! equal to an independently assembled one, and a change that moved the prover
+//! and the verifier together would pass. What holds it is every other oracle:
 //!
 //! - `verify_block` on every statement every proving suite proves, which is a
 //!   self-consistency check over the whole of `docs/spec/proof.md`;
@@ -28,17 +21,17 @@
 //! - `crates/checker/tests/memory.rs`'
 //!   `the_row_reading_and_the_log_reading_of_a_frame_agree`, the two column
 //!   readings compared over eight guests;
-//! - `crates/prover/tests/block.rs`'s `a7`, which rebuilds the global commit
-//!   phase from a `TraceArchive` and asserts its digest is the **streamed**
-//!   block's first shard's — the one surviving place where an archived
-//!   construction and a streamed one are held to the same bytes, and it costs
-//!   no extra proof.
+//! - `crates/prover/tests/block.rs`'s `a7` and
+//!   `the_block_does_not_depend_on_the_thread_count`, which rebuild the global
+//!   commit phase from a `TraceArchive` and hold its digest — and, in the
+//!   second, every shard's proof made from the archive — to the **streamed**
+//!   block's: where an archived construction and a streamed one are held to
+//!   the same bytes.
 //!
-//! The three `ShardRows` arms are each still proved and verified, by the suites
-//! that are about them: `tests/block.rs` and `tests/acceptance.rs` the `Rows`
-//! arm, `tests/keccak.rs` the `Invocations` arm, `tests/public_io.rs` the
-//! `Window` arm. Re-proving them here would be the same mutation set at twice
-//! the cost, which the root `CLAUDE.md`'s test-discipline rule forbids.
+//! The three `ShardRows` arms are each proved and verified by the suites that
+//! are about them: `tests/block.rs` and `tests/acceptance.rs` the `Cycles` arm,
+//! `tests/keccak.rs` the `Invocations` arm, `tests/public_io.rs` the `Window`
+//! arm. Re-proving them here would be the same mutation set at twice the cost.
 //!
 //! Every test here is `#[ignore]`d and proves real statements: run with
 //! `cargo test --release -p prover --test streaming -- --include-ignored
@@ -85,15 +78,15 @@ fn same_at_one_and_eight(label: &str, setup: &ProverSetup, io: &GuestIo) -> Stre
     r8
 }
 
-/// S16's statement: `INIT_TEARDOWN`, one add/sub shard and the two public
-/// windows — the `Rows` arm, and the cheapest real statement there is.
+/// `guests/addsub`'s statement: `INIT_TEARDOWN`, one add/sub shard and the two
+/// public windows — the `Cycles` arm, and the cheapest real statement there is.
 #[test]
-#[ignore = "proves S16's statement twice"]
+#[ignore = "proves the addsub statement twice"]
 fn a1_the_streamed_block_does_not_depend_on_max_in_flight() {
     let r8 = same_at_one_and_eight("addsub", &setup(), &empty_io());
     // Its one add/sub shard is a partial buffer, proved alone at exit, and its
     // three window shards are one batch after it — so the peak is the window
-    // batch, which `peak_in_flight` did not count until S-STREAM's review.
+    // batch, which `peak_in_flight` counts.
     assert_eq!(
         r8.peak_in_flight, 3,
         "addsub: the window families' batch is the largest"

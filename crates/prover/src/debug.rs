@@ -1,9 +1,9 @@
 //! The prover's debug log, behind the `debug-info` cargo feature.
 //!
-//! **This is the workspace's second cargo feature**, and the second and last
-//! exception to master anti-goal 1 (owner's decision, this stage). It exists
-//! for one job: when a deferred prover suite fails — or is killed, or hangs —
-//! say *where*. `docs/tools.md` §3 is the reading guide.
+//! **This is the workspace's one cargo feature**: off by default, enabling no
+//! dependency, changing no proof byte. It exists for one job: when a proving
+//! run fails — or is killed, or hangs — say *where*. `docs/tools.md` §3 is the
+//! reading guide.
 //!
 //! # Why a feature and not an unconditional runtime switch
 //!
@@ -19,12 +19,11 @@
 //! subject is already in scope — `family` and `index` inside `gkr_part`, the
 //! frame words inside `mod_mul` — so there is nothing for a `&mut Recorder`
 //! equivalent to carry, and adding one would put a parameter on twenty
-//! signatures to pass a `u8`. [`level`] reads `APOGEE_DEBUG` on each call and
-//! caches nothing: master anti-goal 7 bans the `OnceLock` that would, and at
-//! the granularity these lines sit at — a phase, a shard, a layer — an
-//! environment lookup is not measurable against a shard's forward pass. No
-//! log site may sit inside a trace-sized loop; §3 of the spec is the rule and
-//! the scans below are how a per-row fact gets reported without one.
+//! signatures to pass a `u8`. [`config`] reads `APOGEE_DEBUG` on each call and
+//! caches nothing: at the granularity these lines sit at — a phase, a shard, a
+//! layer — an environment lookup is not measurable against a shard's forward
+//! pass. No log site sits inside a trace-sized loop; the scans below are how a
+//! per-row fact gets reported without one.
 //!
 //! # The interface
 //!
@@ -260,8 +259,8 @@ pub fn line(text: &str) {
 
 /// A wall clock for the `ms=` fields: four lines, and the only clock the prover
 /// reads. It is not a timing harness — `tools/bench`'s `prove` verb is that,
-/// off the `TraceArchive`'s own phase sections — and these fields say which
-/// shard is slow while it is still running, not what a block cost.
+/// off the prover's `StreamingReport` — and these fields say which shard is
+/// slow while it is still running, not what a block cost.
 #[derive(Clone, Copy, Debug)]
 pub struct Clock(Instant);
 
@@ -327,7 +326,7 @@ fn family_id(name: &str) -> Option<FamilyId> {
 /// `FAMILY#index`: the identity every per-shard line carries.
 ///
 /// Every line below `phase` level names its shard this way, without exception.
-/// The shard region is a `par_iter`, so lines from different shards interleave
+/// Shards are proved in parallel, so lines from different shards interleave
 /// and a line that does not say whose it is says nothing.
 pub fn shard(family: FamilyId, index: u32) -> String {
     format!("{}#{index}", family_name(family))
@@ -439,17 +438,16 @@ pub fn circuit(c: &FamilyCircuit, h: u32) -> String {
 ///
 /// Bare hex in this log is always a field element's canonical little-endian
 /// bytes, which is what the `verifier` CLI takes as its `<identity-hex>`
-/// argument and what every wire form in this repository carries (the root
-/// `CLAUDE.md`'s "One encoding"). So a value this log prints can be pasted into
-/// the CLI, or grepped against a pinned fixture, without reversing anything. The one exception is [`limbs`], which prints an
-/// integer a reader compares against the literature — a modulus, a coordinate —
-/// and marks it `0x` and big-endian for that reason.
+/// argument and what every wire form in this repository carries
+/// (`docs/spec/primitives.md` §1). So a value this log prints can be pasted
+/// into the CLI, or grepped against a pinned fixture, without reversing
+/// anything. The one exception is [`limbs`], which prints an integer a reader
+/// compares against the literature — a modulus, a coordinate — and marks it
+/// `0x` and big-endian for that reason.
 ///
 /// In full, not truncated, for the two values a reader compares against a
 /// **pinned constant** rather than against another run: identity and the SRS
-/// digest. Five pins went stale in S26c and each was found by a test failing
-/// somewhere else; a run that prints both, every time, is how the sixth gets
-/// found by reading one line.
+/// digest. A run that prints both, every time, shows a stale pin in one line.
 pub fn fr_full(x: &Fr) -> String {
     x.to_bytes().iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -531,10 +529,9 @@ pub fn histogram(label: &str, names: &[&str], tally: &[usize]) -> String {
 /// timestamp chain that cannot balance. Printing `max` beside `bits` is how a
 /// reader sees it before the multiset does.
 pub fn range(label: &str, values: &[u64], bits: u32) -> String {
-    // A slice and not an `impl Iterator`: master anti-goal 2 bans `impl Trait`
-    // in a public signature, and the caller's slice is one `u64` per live row
-    // per frame word — 30 kB on an `EC_ADD` shard, which is not worth a
-    // generic.
+    // A slice and not an `impl Iterator`: the caller's slice is one `u64` per
+    // live row per frame word — 30 kB on an `EC_ADD` shard, which is not worth
+    // a generic.
     let (mut lo, mut hi) = (u64::MAX, 0u64);
     for v in values {
         lo = lo.min(*v);
@@ -564,7 +561,7 @@ pub fn range(label: &str, values: &[u64], bits: u32) -> String {
 /// family-specific gate can be read:
 ///
 /// - **how many invocations this shard actually holds**, against its height. A
-///   zero here is the "(a) declared but never invoked" case: the family is in
+///   zero here is the "declared but never invoked" case: the family is in
 ///   the `VmConfig` because the linked binary declared it, its shard is proved
 ///   because the statement counts it, and every row of it is padding. That is
 ///   legal and it is also the first thing to check when a delegation is
@@ -672,7 +669,7 @@ pub fn ec_add_reads(group: usize, v: usize) -> bool {
 /// have the same number of invocations.**
 ///
 /// A row of this family is one third of a complete point addition
-/// (`docs/spec/delegation-circuits.md` §6), so a guest that performed `n` additions on
+/// (`docs/spec/delegation-circuits.md` §7), so a guest that performed `n` additions on
 /// a curve invoked each of that curve's three groups exactly `n` times. Three
 /// counts that differ mean an addition whose thirds did not all reach the
 /// executor — a dropped invocation, a guest that returned early between two

@@ -1,5 +1,5 @@
 //! The **streaming prover**: one execution proved as a block without the whole
-//! trace ever being live. `docs/spec/streaming.md` is normative.
+//! trace ever being live. `docs/spec/streaming.md` specifies it.
 //!
 //! ```text
 //! PASS 1 -- EXECUTE + PRECOMMIT          PASS 2 -- REEXECUTE + PROVE
@@ -12,31 +12,27 @@
 //!   the statement, then G1-G11             the block
 //! ```
 //!
-//! The one thing this changes is **when** a column exists. Every commitment,
-//! every absorption, every challenge and every proof byte is what
-//! [`crate::prove_block`] would have produced over the same execution — by
-//! construction, and no longer by test: the comparison that held the two
-//! blocks byte for byte ran the archived path, and went with it at S-STREAM
-//! (`docs/spec/streaming.md` §6). `crates/prover/tests/block.rs`'s `a7` is
-//! the one place an archived construction and a streamed one still meet.
+//! What differs from the archived path (`docs/spec/streaming.md` §6) is
+//! **when** a column exists. Every commitment, every absorption, every
+//! challenge and every proof byte is what [`crate::prove_block`] produces over
+//! the same execution, by construction; `crates/prover/tests/block.rs` holds the
+//! global commit phase and every shard's proof, rebuilt from an archive, to the
+//! streamed block's bytes.
 //!
-//! What it buys is a peak that does not grow with the shard count.
-//! `prover::statement_inputs` builds every shard's memory columns and
-//! `global_commit_phase` commits them all, so before S26 a block's commit phase
-//! was `O(total shards)` — about 300 MB a shard, measured — which put a
-//! 27.9M-gas Ethereum block at 500-600 GB before a single shard was proved
-//! (`docs/handoff/S25-block.md` §7). Above that, `emulator::trace_run`'s own
-//! output is `O(cycles)`: about 300 bytes a cycle between the memory event log
-//! and the family buffers, so the same block's trace alone is ~520 GB. Neither
-//! survives here: the executor is [`emulator::StreamingRun`], which holds one
-//! partial buffer per family and the last-access tables, and this module holds
-//! at most `max_in_flight` shards at a time.
+//! What it buys is a peak that does not grow with the shard or cycle count.
+//! The archived path holds every shard's memory columns at once
+//! (`prover::statement_inputs`, `global_commit_phase`), about 300 MB a shard,
+//! and `emulator::trace_run`'s output, about 300 bytes a cycle between the
+//! memory event log and the family buffers. Neither exists here: the executor
+//! is [`emulator::StreamingRun`], which holds one partial buffer per family and
+//! the last-access tables, and this module holds at most `max_in_flight` shards
+//! at a time (`docs/spec/streaming.md` §1).
 //!
-//! **The work is pulled, never pushed** (S-PIPELINE, `docs/spec/streaming.md`
-//! §5). There is no producer running ahead of the workers: a worker that has
-//! finished its shard claims the next one, and only then — and only if no shard
-//! the executor already filled is waiting — does it step the guest, under the
-//! pipeline's one lock, until a buffer fills. Everything a shard grows into —
+//! **The work is pulled, never pushed** (`docs/spec/streaming.md` §5). There
+//! is no producer running ahead of the workers: a worker that has finished its
+//! shard claims the next one, and only then — and only if no shard the executor
+//! already filled is waiting — does it step the guest, under the pipeline's one
+//! lock, until a buffer fills. Everything a shard grows into —
 //! its columns, its commitments, its forward pass and its proof — is built by
 //! the worker that claimed it, after it claimed it, so `max_in_flight` bounds
 //! every shard heavier than rows. And no worker waits on another: there is no
@@ -101,10 +97,11 @@ pub struct StreamingReport {
 /// `max_in_flight` is the backpressure: the number of workers, each holding at
 /// most one shard at a time, and therefore what bounds the peak. It is an
 /// argument and not a constant because the caller is the only one that knows
-/// the machine — a shard's base layer plus its forward pass is about 1.5 GB at
-/// `2^20` and rather more for a delegation family. The work inside each shard
-/// runs on rayon's pool, so `RAYON_NUM_THREADS` is the cores the shards share
-/// and `max_in_flight` is how many shards share them. It must be at least 1.
+/// the machine — a `2^20` `SHIFT_BITWISE` shard's forward pass alone is
+/// 8.4 GiB, and a `2^18` `KECCAK_F` shard's 42 GiB (`docs/spec/streaming.md`
+/// §1). The work inside each shard runs on rayon's pool, so
+/// `RAYON_NUM_THREADS` is the cores the shards share and `max_in_flight` is
+/// how many shards share them. It must be at least 1.
 ///
 /// A worker claims a shard **before** anything heavier than its rows exists: it
 /// steps the executor itself, and only when no filled shard is waiting. So the
@@ -159,7 +156,7 @@ type ShardId = (FamilyId, u32);
 /// collected against their `(family, index)` and placed afterwards. A
 /// commitment is an MSM over the SRS and reads no transcript, so when it is
 /// computed cannot matter; the order they are **absorbed** in is the
-/// statement's, and that is the frozen one (`docs/spec/proof.md` §2).
+/// statement's (`docs/spec/proof.md` §2).
 fn pass1(
     setup: &ProverSetup,
     io: &GuestIo,
@@ -308,8 +305,7 @@ fn pass1(
 /// shard, for a chunk a worker claimed and for a window shard alike.
 ///
 /// The fill is one thread and the commitments are rayon's, so while one worker
-/// fills, the others' MSMs have the pool — which is the overlap pass 1 never
-/// had while it committed one shard at a time.
+/// fills, the others' MSMs have the pool.
 fn commit_source(
     setup: &ProverSetup,
     family: FamilyId,
@@ -379,8 +375,8 @@ fn chunk_source<'a>(
 /// the statement's memory commitments — pass 1's — while its polynomial side is
 /// this pass's columns, so a pass that built different columns produces an
 /// opening that **fails verification**. That is a stronger check than a prover
-/// assertion and it costs nothing: the prover checks nothing (S13) and the
-/// verifier checks this already.
+/// assertion and it costs nothing: the prover checks nothing
+/// (`docs/spec/gkr.md` §5.1) and the verifier checks this already.
 fn pass2(
     setup: &ProverSetup,
     io: &GuestIo,
@@ -427,7 +423,7 @@ fn pass2(
     // entries, and what the statement actually carries out of them is the two
     // things below. The window families' teardown *columns* are the residue, and
     // the opening is what catches those — `cm*` is built from pass 1's
-    // commitments (§2).
+    // commitments (`docs/spec/streaming.md` §2).
     assert_eq!(
         done.profile, pass1.profile,
         "streaming: the two passes ran different executions"
@@ -573,12 +569,10 @@ struct Piped<T> {
 /// next shard the moment it has finished its own, and `work` run on every shard
 /// the execution fills.
 ///
-/// This is the repository's one use of threads and of a lock, and master
-/// anti-goal 7 names it as the one exception (`docs/spec/streaming.md` §5;
-/// `crates/prover/tests/one_pipeline.rs` holds every other file to the rule).
-/// What it buys over fork-join is the one thing fork-join cannot say: *start
-/// the next shard when any one finishes*, with fewer shards in flight than the
-/// pool has cores.
+/// These are the prover's only threads and its only lock
+/// (`docs/spec/streaming.md` §5). What they buy over fork-join is the one
+/// thing fork-join cannot say: *start the next shard when any one finishes*,
+/// with fewer shards in flight than the pool has cores.
 ///
 /// Four properties, each a consequence of the structure rather than of a
 /// schedule, which is what makes them hold on every machine:
@@ -587,9 +581,8 @@ struct Piped<T> {
 ///   of them, so at most `workers` shards exist in any form heavier than rows.
 ///   The workers are not rayon threads: rayon's pool runs the work *inside*
 ///   each shard, and a worker blocked on it cannot take a second shard the way
-///   a rayon thread parked in a nested join steals a second task — which is how
-///   the archived path's thread count failed to bound anything
-///   (`docs/handoff/S-BATCH-miniblock-gate.md` §3).
+///   a rayon thread parked in a nested join steals a second task, so a thread
+///   count would bound nothing.
 /// - **Demand.** The executor runs only inside [`Source::claim`], for the
 ///   worker claiming, and only when no shard it filled is waiting; so it never
 ///   runs ahead of the workers, and what waits is at most one shard of rows per
@@ -759,7 +752,7 @@ impl<'a> Source<'a> {
             let stepped = match run.next_shards() {
                 // The guest has exited: every partial buffer is now its
                 // family's last shard. The window families' shards are not
-                // the pipeline's (§3.2).
+                // the pipeline's (`docs/spec/streaming.md` §5).
                 Ok(filled) if filled.is_empty() => {
                     match self.run.take().expect("the executor").finish() {
                         Ok((tail, done)) => {
@@ -862,7 +855,7 @@ mod tests {
     //! work each test does on a shard is a stand-in that costs nothing. What a
     //! shard's proof is does not reach the pipeline, so nothing here needs one —
     //! that the block is the same at any `max_in_flight` is
-    //! `tests/streaming.rs`, deferred.
+    //! `tests/streaming.rs`, `#[ignore]`d.
 
     use std::time::Duration;
 

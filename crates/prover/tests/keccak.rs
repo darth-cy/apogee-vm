@@ -1,17 +1,14 @@
-//! S21's acceptance: one execution with a **delegation shard**, proved as a
-//! block.
+//! One execution with a **delegation shard**, proved as a block.
 //!
-//! `#[ignore]`d and deferred out of CI under master rule 7: the statement is
-//! six `2^20` execution shards, two `2^16` window shards, one **`2^18`** keccak
-//! shard and S-IO's two `2^8` public-value shards, and the keccak shard is what
-//! makes it big — 5,490 inner columns over 262,144 rows, about **60 GB** of
-//! forward pass, which is the largest single shard in this statement
-//! (`docs/spec/delegation.md` §9).
+//! `#[ignore]`d, and CI does not run it: the statement is six `2^20` execution
+//! shards, two `2^16` window shards, one **`2^18`** keccak shard and two `2^12`
+//! public-value shards, and the keccak shard is what makes it big — 5,490
+//! inner columns over 262,144 rows, about **42 GiB** of forward pass, which is
+//! the largest single shard in this statement (`docs/spec/delegation.md` §9,
+//! `docs/spec/streaming.md` §1).
 //!
-//! **Neither number is S21's.** A keccak row was a whole keccak-f[1600]
-//! permutation then — 354,762 inner columns over 256 rows — until S26d made it
-//! one Keccak *round*, so a permutation is 24 consecutive invocations; the
-//! height followed at `2^18`. Run it with
+//! A keccak row is one Keccak *round*, so a permutation is 24 consecutive
+//! invocations (`docs/spec/delegation-circuits.md` §2). Run it with
 //!
 //! ```text
 //! cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1
@@ -20,11 +17,11 @@
 //! The statement is `guests/keccak-test`'s (`tests/common/mod.rs`):
 //! `guest_sdk::keccak256` over the sponge's six shapes, ten permutations in
 //! all. Its `VmConfig` holds `KECCAK_F` because its **image declares it**, not
-//! because any pc claims it — the third presence rule, and the one this stage
-//! adds (`docs/spec/delegation.md` §7).
+//! because any pc claims it — the third presence rule
+//! (`docs/spec/delegation.md` §7).
 //!
-//! `guests/keccak-unused` is the other half of acceptance 8: the same
-//! declaration, zero invocations, zero shards.
+//! `guests/keccak-unused` is the other half: the same declaration, zero
+//! invocations, zero shards.
 
 mod common;
 
@@ -57,9 +54,9 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
         + 704
 }
 
-/// Acceptance 4: the statement proves to a `BlockProof` with one keccak shard,
-/// `verify_block` returns `Ok`, and the read/write roots reconcile across the
-/// CPU shards and the delegation shard together.
+/// The statement proves to a `BlockProof` with one keccak shard, `verify_block`
+/// returns `Ok`, and the read/write roots reconcile across the CPU shards and
+/// the delegation shard together.
 #[test]
 #[ignore]
 fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
@@ -67,9 +64,10 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
     let archive = common::keccak_archive(&setup.program);
 
     // The family set: `KECCAK_F` is in it at the delegation height, after every
-    // family that claims a pc and after the two RAM window families. It is
-    // **not** last since S-IO, whose three families take the highest ids; what
-    // the position says is that a delegation family is not an execution one.
+    // family that claims a pc and after `INIT_TEARDOWN` and `ZERO_WINDOWS`. It
+    // is **not** last: the public-value and advice families take higher ids;
+    // what the position says is that a delegation family is not an execution
+    // one.
     let families: Vec<u32> = setup
         .program
         .config
@@ -107,7 +105,7 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
         .find(|(f, _)| *f == KECCAK)
         .expect("the profile counts every config family")
         .1;
-    // The profile counts **invocations**, which since S26d are rounds: 24 a
+    // The profile counts **invocations**, which are rounds: 24 a
     // permutation, so ten permutations are 240 rows.
     assert_eq!(invocations, common::KECCAK_INVOCATIONS);
     assert_eq!(
@@ -137,7 +135,7 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
     );
 
     // One shard per planned shard, in statement order, with the delegation
-    // family's last.
+    // family's before the public windows'.
     let expected = statement_shards(&setup.program.config, block.shard_counts());
     assert_eq!(block.shards.len(), expected.len());
     assert_eq!(
@@ -147,11 +145,12 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
             (family::PUBLIC_INPUT, 0),
             (family::PUBLIC_OUTPUT, 0)
         ],
-        "the delegation shard, then S-IO's two; this guest has no advice, so          `ADVICE_WINDOWS` proves no shard"
+        "the delegation shard, then the two public windows'; this guest has no advice, \
+         so `ADVICE_WINDOWS` proves no shard"
     );
 
     // Its ts window is the min and max invocation timestamp, not the trivial
-    // one the two window families take.
+    // one the window families take.
     let keccak = block
         .shards
         .iter()
@@ -184,20 +183,10 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
 
     // The delegation shard's proof has its circuit's shape:
     // `docs/spec/proof.md` §9's layout over `keccak::artifact(18)`, which
-    // is `docs/spec/circuits.md` §1's 381,100 bytes.
-    //
-    // **This is the number S26d was for.** S21's shard was 11,880,012 bytes for
-    // 256 permutations — 46,406 a permutation, and five such shards were 97% of
-    // a measured mini-block's proof (`docs/spec/delegation.md` §9). One round
-    // a row at `2^18` is 381,100 bytes for 10,922 permutations, which is 34.9 a
-    // permutation: **1,330 times fewer proof bytes** for the same work, from
-    // 31.2× the shard and 42.7× the permutations in it.
-    //
-    // 381,100 is **derived, not measured**: `proof_bytes` above is a closed form
-    // over the artifact and it reproduces S26d's measured 373,276 at `2^16`
-    // exactly, which is what licenses reading it forwards to `2^18`. The
-    // assertion against `proof_bytes` is the one that matters; the literal is
-    // there so a shape change has to be acknowledged.
+    // is `docs/spec/circuits.md` §1's 381,100 bytes — 10,922 permutations at
+    // 34.9 bytes each (`docs/spec/delegation-circuits.md` §2.4). The assertion
+    // against `proof_bytes` is the one that matters; the literal is there so a
+    // shape change has to be acknowledged.
     let circuit = constraints::family_circuit(KECCAK, common::KECCAK_VARS)
         .expect("the registry has the keccak circuit");
     assert_eq!(
@@ -225,8 +214,8 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
     assert_eq!(verify_block(&setup.vk, &read, read.statement()), Ok(()));
 }
 
-/// Acceptance 8's second half: a guest that **links** the shim and never calls
-/// it declares the family, proves **zero** keccak shards, and verifies.
+/// A guest that **links** the shim and never calls it declares the family,
+/// proves **zero** keccak shards, and verifies.
 ///
 /// Zero-shard skipping needs no code of its own — `plan_shards`' `ceil(0 / h)`
 /// is 0 — and this is what says so end to end, with the family in the config,

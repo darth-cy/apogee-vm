@@ -1,8 +1,7 @@
-//! S20's acceptance: one execution proved as a **block**.
+//! One execution proved as a **block**.
 //!
-//! `#[ignore]`d and deferred out of CI under master rule 7: the statement is
-//! three `2^20` shards and one `2^16` one, and the circuit is what makes it
-//! big. Run it with
+//! `#[ignore]`d, and CI does not run it: the statement holds three `2^20`
+//! shards, and the circuit is what makes it big. Run it with
 //!
 //! ```text
 //! cargo test --release -p prover --test block -- --include-ignored --test-threads=1
@@ -10,12 +9,11 @@
 //!
 //! The statement is `guests/shards`' (`tests/common/mod.rs`): a counted loop
 //! whose `ADD_SUB_LUI_AUIPC` family runs 1,064,970 cycles, so the plan cuts it
-//! into **two shards of one family** — S20's stage gate — with
-//! `JUMP_BRANCH_SLT` in one shard, `INIT_TEARDOWN` in one, and `ZERO_WINDOWS`
-//! in none, because nothing in the guest touches RAM. Since S-IO
-//! `PUBLIC_INPUT` and `PUBLIC_OUTPUT` each prove one shard in every statement
-//! and `ADVICE_WINDOWS` proves none without advice, so the block is **six**
-//! shards: three `2^20`, one `2^16` and two `2^8`.
+//! into **two shards of one family**, with `JUMP_BRANCH_SLT` in one shard,
+//! `INIT_TEARDOWN` in one, and `ZERO_WINDOWS` in none, because nothing in the
+//! guest touches RAM. `PUBLIC_INPUT` and `PUBLIC_OUTPUT` each prove one shard in
+//! every statement and `ADVICE_WINDOWS` proves none without advice, so the
+//! block is **six** shards: three `2^20`, one `2^16` and two `2^12`.
 
 mod common;
 
@@ -37,11 +35,11 @@ const ZERO: u32 = family::ZERO_WINDOWS;
 /// The honest block, and the execution it was proved from.
 ///
 /// The block comes from the one proving path, `prove_block_streaming`. The
-/// archive beside it is **not** proved from and could not be: it is the
-/// execution, held so that the tests below can read its cycle profile and
-/// build one shard's columns for the tamper twin — `statement_inputs` and
-/// `shard_columns` are the per-shard component `checker::TamperHarness` is
-/// built on, and they are path-neutral (`docs/spec/streaming.md` §1).
+/// archive beside it is **not** proved from: it is the execution, held so that
+/// the tests below can read its cycle profile and build one shard's columns
+/// for the tamper twin — `statement_inputs` and `shard_columns` are the
+/// per-shard component `checker::TamperHarness` is built on, and they are
+/// path-neutral (`docs/spec/streaming.md` §6).
 fn proved() -> (ProverSetup, TraceArchive, BlockProof) {
     let setup = common::shards_setup();
     let archive = common::shards_archive(&setup.program);
@@ -49,22 +47,22 @@ fn proved() -> (ProverSetup, TraceArchive, BlockProof) {
     (setup, archive, block)
 }
 
-/// Acceptance 1, 3's positive half, 8 and 9: one execution split across two
-/// shards of one family proves to a `BlockProof` and verifies; the global
-/// challenges are squeezed exactly once, after every commitment; nothing
-/// chains a pc across the shard boundary; a family with zero shards is valid;
-/// and the public data reads through the serialized proof alone.
+/// One execution split across two shards of one family proves to a
+/// `BlockProof` and verifies; the global challenges are squeezed exactly once,
+/// after every commitment; nothing chains a pc across the shard boundary; a
+/// family with zero shards is valid; and the public data reads through the
+/// serialized proof alone.
 #[test]
 #[ignore]
 fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
     let (setup, archive, block) = proved();
 
     // The plan: two shards of ADD_SUB_LUI_AUIPC, one of JUMP_BRANCH_SLT, one
-    // INIT_TEARDOWN, no ZERO_WINDOWS, and S-IO's three families — one shard
-    // each for the two public windows and none for the advice. **Why** there
-    // are two add/sub shards is the occupancy: the guest's add/sub family runs
-    // past its height, and there is no smaller height a cycle-owning family
-    // can have.
+    // INIT_TEARDOWN, no ZERO_WINDOWS, and the public-value and advice families
+    // — one shard each for the two public windows and none for the advice.
+    // **Why** there are two add/sub shards is the occupancy: the guest's
+    // add/sub family runs past its height, and there is no smaller height a
+    // cycle-owning family can have.
     assert_eq!(
         setup.program.config.families,
         vec![
@@ -109,17 +107,17 @@ fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
         "records in statement order"
     );
 
-    // The stage gate.
+    // The two-shard block verifies.
     assert_eq!(verify_block(&setup.vk, &block, block.statement()), Ok(()));
 
-    // Every shard of the block also verifies on the S16 path, which is the
-    // path `verify_block` composes.
+    // Every shard of the block also verifies alone through `verify_shard`,
+    // whose steps `verify_block` composes.
     for shard in block.shard_proofs() {
         assert_eq!(verify_shard(&setup.vk, shard, block.statement()), Ok(()));
     }
 
-    // Acceptance 8: a family in the VmConfig with zero occurrences proves zero
-    // shards, and the count reads 0 through the stable API.
+    // A family in the VmConfig with zero occurrences proves zero shards, and
+    // the count reads 0 through the stable API.
     assert_eq!(block.shard_count(ZERO), 0);
     assert!(
         block
@@ -130,7 +128,7 @@ fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
         "a zero-shard family has no record"
     );
 
-    // Acceptance 9: the public-data contract, through the wire form only.
+    // The public-data contract, through the wire form only.
     let bytes = block.to_bytes();
     let read = BlockProof::from_bytes(&bytes).expect("a block round-trips");
     assert_eq!(read.to_bytes(), bytes, "byte for byte");
@@ -142,8 +140,8 @@ fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
     assert_eq!(read.reconciliation(), block.reconciliation());
     assert_eq!(verify_block(&setup.vk, &read, read.statement()), Ok(()));
 
-    // Acceptance 1's structural schema assertion: **no field of a shard's or a
-    // block's public data is a boundary or successor pc**. These two
+    // The structural schema assertion: **no field of a shard's or a block's
+    // public data is a boundary or successor pc**. These two
     // destructurings are exhaustive, so a field added to either type fails to
     // compile here rather than passing unexamined.
     let ShardProof {
@@ -162,13 +160,12 @@ fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
         shards: _,
     } = block.clone();
 
-    // Acceptance 3's positive half and acceptance 1's challenge assertion: the
-    // global commit phase's tape is the frozen pre-fork order and the
-    // committed fixture, its four memory challenges and its digest are drawn
-    // once each and strictly after every absorb, and no line of it carries a
-    // tag that could chain a pc.
+    // The global commit phase's tape is the pre-fork order of
+    // `docs/spec/proof.md` §2 and the committed fixture, its four memory
+    // challenges and its digest are drawn once each and strictly after every
+    // absorb, and no line of it carries a tag that could chain a pc.
     let tape = checker::check_global_tape(&setup.vk, block.statement())
-        .expect("the phase keeps the frozen pre-fork order");
+        .expect("the phase keeps the pre-fork order");
     let fixture: Vec<String> = include_str!("../../checker/tests/vectors/global_tape.txt")
         .lines()
         .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
@@ -233,8 +230,8 @@ fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
     );
 }
 
-/// Acceptance 4 and 6: every statement-binding twin and the swapped-window
-/// twin is refused, each with the class the check that caught it names.
+/// Every statement-binding twin and the swapped-window twin is refused, each
+/// with the class the check that caught it names.
 #[test]
 #[ignore]
 fn a4_a6_every_block_twin_is_refused() {
@@ -242,7 +239,7 @@ fn a4_a6_every_block_twin_is_refused() {
     let honest = block.statement().clone();
     let statement = |e: &'static str| Err(VerifyError::Statement(e));
 
-    // 4(a) A `PublicInputs` with a one-bit-different public I/O digest. The
+    // (a) A `PublicInputs` with a one-bit-different public I/O digest. The
     // block carries the statement it bound, so the mismatch is caught before
     // anything is replayed.
     let mut flipped = honest.clone();
@@ -255,13 +252,14 @@ fn a4_a6_every_block_twin_is_refused() {
     // and the digest is what has to catch it.
     //
     // **The block's answer is check 5's, not the shard loop's**, and that is
-    // S20's split working: the four memory challenges are drawn from the
-    // statement's own transcript (G10), so re-deriving them from a different
-    // statement makes the honest roots' two products disagree, and
-    // `verify_global_memory` runs before any shard is verified
-    // (`verify_block`'s doc comment). The seed is still named, one level down:
-    // the same proof under the same statement through `verify_shard` is
-    // `Statement`, which is where `tests/acceptance.rs` pins it.
+    // the verifier's split at work (`docs/spec/proof.md` §6): the four memory
+    // challenges are drawn from the statement's own transcript (G10), so
+    // re-deriving them from a different statement makes the honest roots' two
+    // products disagree, and `verify_global_memory` runs before any shard is
+    // verified (`verify_block`'s doc comment). The seed is still named, one
+    // level down: the same proof under the same statement through
+    // `verify_shard` is `Statement`, which is where `tests/acceptance.rs` pins
+    // it.
     let mut twin = block.clone();
     twin.statement = flipped.clone();
     assert_eq!(
@@ -276,7 +274,7 @@ fn a4_a6_every_block_twin_is_refused() {
         "the per-shard path still names the seed"
     );
 
-    // 4(b) Another `ProgramIdentity`. An in-memory edit: such a key would not
+    // (b) Another `ProgramIdentity`. An in-memory edit: such a key would not
     // load (`docs/spec/proof.md` §7.2), and checks 1 to 5 refuse it
     // anyway because G6 absorbs the identity.
     let mut other = setup.vk.clone();
@@ -301,16 +299,16 @@ fn a4_a6_every_block_twin_is_refused() {
         statement("the block's VmConfig is not the key's")
     );
 
-    // 4(c) A descriptor with one family's shard count altered, the lists
+    // (c) A descriptor with one family's shard count altered, the lists
     // padded so the totals still line up: the count is absorbed at G4, so the
     // digest moves, and the shard set the counts describe is no longer the
     // proofs'.
     let mut counted = block.clone();
     counted.statement.shard_counts[1] = 2;
     // Pad with **`JUMP_BRANCH_SLT`'s own** list, at its own position, and not
-    // with the statement's last one: since S-IO that is `PUBLIC_OUTPUT`'s,
-    // whose memory width is a window family's, so step 3 would refuse the
-    // width before reaching the count check this case is about.
+    // with the statement's last one: that is `PUBLIC_OUTPUT`'s, whose memory
+    // width is a window family's, so step 3 would refuse the width before
+    // reaching the count check this case is about.
     let at = block
         .shards
         .iter()
@@ -334,8 +332,8 @@ fn a4_a6_every_block_twin_is_refused() {
         statement("the statement has not one commitment list per shard")
     );
 
-    // Acceptance 6: exchange two shards' claimed windows. The block's window
-    // rule catches it before any shard is verified.
+    // Exchange two shards' claimed windows. The block's window rule catches it
+    // before any shard is verified.
     let mut swapped = block.clone();
     let (a, b) = (swapped.shards[1].ts_window, swapped.shards[2].ts_window);
     swapped.shards[1].ts_window = b;
@@ -355,8 +353,8 @@ fn a4_a6_every_block_twin_is_refused() {
     );
 }
 
-/// Acceptance 5: omit one shard, **as an honest prover would prove the
-/// truncated statement** — its counts, its commitment lists and its roots all
+/// Omit one shard, **as an honest prover would prove the truncated
+/// statement** — its counts, its commitment lists and its roots all
 /// adjusted, its global commit phase rerun, its remaining shards proved
 /// against it. Verification then fails on the global read/write root product,
 /// because the omitted shard's tuples are missing from one side of the
@@ -404,8 +402,8 @@ fn a5_a_block_missing_a_shard_does_not_reconcile() {
     );
 }
 
-/// Acceptance 7: re-prove one shard with ONE corrupted trace cell and
-/// reassemble the block. The cell is in the **second** add/sub shard, so what
+/// Re-prove one shard with ONE corrupted trace cell and reassemble the
+/// block. The cell is in the **second** add/sub shard, so what
 /// the block catches is a defect in a shard the first one says nothing about.
 /// The honest twin passes.
 #[test]
@@ -417,7 +415,7 @@ fn a7_a_corrupted_cell_in_the_second_shard_refuses_the_block() {
     // A witness column is committed inside the shard, after the global phase,
     // so tampering one leaves the statement and the global state exactly where
     // they were. The rerun's digest being the honest proofs' is the assertion
-    // that says so, and it is what lets the twin reuse three honest shards.
+    // that says so, and it is what lets the twin reuse five honest shards.
     let inputs = statement_inputs(&setup, &archive).expect("the statement");
     let mut global = global_commit_phase(&setup.vk, &setup.srs, &inputs);
     assert_eq!(
@@ -469,11 +467,11 @@ fn a7_a_corrupted_cell_in_the_second_shard_refuses_the_block() {
     assert_eq!(verify_block(&setup.vk, &honest, honest.statement()), Ok(()));
 }
 
-/// Must-be-exact 8: the assembled block is byte-identical for any thread
-/// count. Each shard forks its own transcript from the global state and is
-/// placed by its statement position, so the schedule cannot reach a challenge.
+/// The assembled block is byte-identical for any thread count. Each shard
+/// forks its own transcript from the global state and is placed by its
+/// statement position, so the schedule cannot reach a challenge.
 ///
-/// **Since S-PIPELINE it is asserted where it lives, on one thread.** The
+/// **It is asserted where it lives, on one thread.** The
 /// streaming prover's shards are proved by its own workers, which are not
 /// threads of any pool a caller installs — their rayon work runs on the global
 /// pool — so a one-thread `ThreadPool::install` around `prove_block_streaming`
@@ -526,9 +524,9 @@ fn the_block_does_not_depend_on_the_thread_count() {
     }
 }
 
-/// Acceptance 2: a multi-family block. `guests/mem` touches five execution
-/// families — add/sub, jump/branch/slt and S19's three — and writes near the
-/// top of RAM, so its block also carries a `ZERO_WINDOWS` shard.
+/// A multi-family block. `guests/mem` touches five execution families —
+/// add/sub, jump/branch/slt and the three memory-op families — and writes near
+/// the top of RAM, so its block also carries a `ZERO_WINDOWS` shard.
 #[test]
 #[ignore]
 fn a2_a_multi_family_block_proves_and_verifies() {
@@ -554,8 +552,8 @@ fn a2_a_multi_family_block_proves_and_verifies() {
     assert_eq!(block.shard_count(ZERO), 1, "mem writes above window 0");
 
     let records = block.reconciliation().records;
-    // `+ 4`: INIT_TEARDOWN, ZERO_WINDOWS and, since S-IO, PUBLIC_INPUT and
-    // PUBLIC_OUTPUT, each one shard beside the execution families'.
+    // `+ 4`: INIT_TEARDOWN, ZERO_WINDOWS, PUBLIC_INPUT and PUBLIC_OUTPUT,
+    // each one shard beside the execution families'.
     assert_eq!(records.len(), execution.len() + 4);
     for r in &records {
         assert_eq!(

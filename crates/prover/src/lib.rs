@@ -1,20 +1,21 @@
 //! The prover: a program's verifying key, the statement an execution proves,
 //! the global commit phase, and each shard's proof. `docs/spec/proof.md`
-//! is normative.
+//! specifies what it proves, and `docs/spec/streaming.md` how a block is proved.
 //!
 //! ```text
 //! ProverSetup::new        register every family of the program's VmConfig, build its key
+//! prove_block_streaming   one execution as a block, in two passes: how every block is proved
 //! statement_inputs        an archive's shard counts, windows, boundary and memory columns
 //! global_commit_phase     commit every shard's memory columns, run the global transcript
 //! prove_shard             one shard: witness commitments, lookup challenges, GKR, opening
 //! public_inputs           the statement, its roots read from the shards' proofs
-//! advance                 all of it, filling the trace archive's phases, resumable
+//! advance                 all of it over an archive, filling its phase sections, resumable
 //! ```
 //!
 //! The prover checks nothing a verifier does not: a malformed input costs the
-//! honest prover a panic or a proof that fails (S13). What it does check is its
-//! own program: a trace S16 cannot prove, a family no circuit proves, is
-//! refused by name before any work.
+//! honest prover a panic or a proof that fails (`docs/spec/gkr.md` §5.1). What
+//! it does check is its own program: a trace this prover cannot prove, a family
+//! no circuit proves, is refused by name before any work.
 
 /// Emit one debug-log line, in a build with the `debug-info` feature.
 ///
@@ -144,13 +145,13 @@ pub struct Program {
 }
 
 /// One family as a statement registers it: its id and height from the
-/// `VmConfig`, its circuit from `constraints::family_circuit`, and the fill
-/// that routes its trace buffer into the circuit's columns.
+/// `VmConfig`, its circuit from `VmConfig::circuit` — the base or the recursion
+/// format's registry — and the fill that routes its trace buffer into the
+/// circuit's columns.
 ///
-/// **The family-registration surface**, `docs/spec/circuits.md` §1: a later
-/// family adds a circuit to `constraints::family_circuit` and a fill to
-/// [`family_fill`], and nothing in `global_commit_phase`, `prove_shard` or the
-/// verifier changes.
+/// **The family-registration surface**, `docs/spec/circuits.md` §1 and §2: a
+/// family is a circuit in the registry and a fill in [`family_fill`], and adding
+/// one changes nothing in `global_commit_phase`, `prove_shard` or the verifier.
 #[derive(Clone, Debug)]
 pub struct FamilyRegistration {
     pub family: FamilyId,
@@ -159,8 +160,8 @@ pub struct FamilyRegistration {
     pub fill: Fill,
 }
 
-/// Every family of `config`, registered in its order, or the first one S16
-/// cannot prove.
+/// Every family of `config`, registered in its order, or the first one with no
+/// circuit at its height or no fill.
 pub fn register(config: &VmConfig) -> Result<Vec<FamilyRegistration>, ProverError> {
     config
         .families
@@ -215,7 +216,7 @@ impl ProverSetup {
             // same pair exactly when `outputs.len() == 2 + 2·channels`, and
             // nothing central asserts it — `reduce.rs` only checks the length
             // against the artifact's and `check_discharge` only needs `>=`. Every
-            // registered circuit satisfies it today, and each family's own test
+            // registered circuit satisfies it, and each family's own test
             // is what pins it (`constraints::ec_add`'s `outputs.len() == 4`,
             // `sha256`'s `== 6`). A family whose top layer grew one more output
             // would have the discharge validating one pair and the verifier
@@ -228,7 +229,7 @@ impl ProverSetup {
                     "apogee setup    {} OUTPUT-LAYOUT-BREAK outputs={} want={want} \
                      (2 memory roots + 2 per channel): reduce_shard step 9 and \
                      constraints::lookup::channel_cones index from opposite ends and \
-                     no longer agree",
+                     disagree",
                     debug::family_name(f.family),
                     f.circuit.artifact.outputs.len()
                 );
@@ -315,7 +316,8 @@ pub struct GlobalCommitState {
 /// The shard counts of an execution: one per config family, in its order —
 /// exactly one for `INIT_TEARDOWN`, one per touched window above 0 for
 /// `ZERO_WINDOWS`, one each for the two public value families, one per advice
-/// window the host supplied, and `ceil(cycles / height)` for every other.
+/// window the host supplied, the field windows through the highest cell
+/// touched, and the plan's `ceil(rows / height)` for every other.
 pub(crate) fn shard_counts(
     config: &VmConfig,
     profile: &trace::CycleProfile,
@@ -348,11 +350,11 @@ pub(crate) fn shard_counts(
         .collect()
 }
 
-/// The RAM window shard `(family, index)` covers: 0 for `INIT_TEARDOWN`,
+/// The window shard `(family, index)` covers: 0 for `INIT_TEARDOWN`,
 /// `windows[index]` for `ZERO_WINDOWS`, the two constants for the public value
 /// families, the `index`-th window from the advice origin up for
-/// `ADVICE_WINDOWS`, and 0 (unused) for every other family. `height` is the
-/// family's own.
+/// `ADVICE_WINDOWS`, `index` for `FIELD_WINDOWS`, and 0 (unused) for every
+/// other family. `height` is the family's own.
 pub(crate) fn window_of(family: FamilyId, index: u32, windows: &[u32], height: u32) -> u32 {
     match family {
         family::ZERO_WINDOWS => windows[index as usize],
@@ -485,10 +487,10 @@ pub fn global_commit_phase(
     inputs: &StatementInputs,
 ) -> GlobalCommitState {
     // **The phase's bulk, and it is sequential.** One MSM per column of every
-    // shard, ~300 MB a shard, in the one `map` below — and until this line
-    // existed the phase's only output was the `done` line further down, which by
-    // definition never prints on a run that dies or hangs inside it. A block
-    // that looks stuck before any shard is proved is stuck here.
+    // shard, ~300 MB a shard, in the one `map` below — and the `done` line
+    // further down never prints on a run that dies or hangs inside it, so this
+    // line opens the phase. A block that looks stuck before any shard is proved
+    // is stuck here.
     //
     // It is **one line bracketing the phase**, not a tick per shard. A tick
     // needs the shard's position, and the position is only wanted by the tick:
@@ -652,9 +654,8 @@ fn shard_source<'a>(
 /// [`shard_columns`] is the whole committed set and counts the channels'
 /// multiplicities on top of the fill. **The statement commits `M` and nothing
 /// else**, and `build_multiplicities` is about 99% of what `shard_columns`
-/// costs — 880 ms against 16 ms for the fill, on one `2^20` shard — so
-/// counting them here only to drop them was a third of every block's column
-/// building and a tenth of its wall clock. `crates/prover/CLAUDE.md`.
+/// costs — 880 ms against 16 ms for the fill, on one `2^20` shard — so this
+/// does not count them.
 ///
 /// A multiplicity is a **witness** column by construction
 /// (`constraints::lookup` asserts it at every channel), so nothing this drops
@@ -720,8 +721,8 @@ pub(crate) fn shard_columns_of(
 /// The low 64 bits of a field element's canonical encoding. The cycle column
 /// holds cycle numbers, so an honest column's entries are far below `2^64`;
 /// a tampered one is read as its low bits rather than refused, because the
-/// prover checks nothing (S13) and a wrong window is a proof the verifier
-/// refuses.
+/// prover checks nothing (`docs/spec/gkr.md` §5.1) and a wrong window is a
+/// proof the verifier refuses.
 fn low64(v: Fr) -> u64 {
     let b = v.to_bytes();
     u64::from_le_bytes(b[..8].try_into().expect("8 bytes"))
@@ -736,7 +737,7 @@ fn low64(v: Fr) -> u64 {
 /// is live in every shard a plan cuts, and padding rows carry cycle 0, so the
 /// maximum is the last live row's. The honest prover's window is
 /// therefore the one its committed rows say; nothing in the circuit holds it
-/// there (§4.1).
+/// there (`docs/spec/proof.md` §8).
 ///
 /// For a **delegation** family it is the same expression over the same column,
 /// and means something else: the shard's rows are invocations, each stamped
@@ -746,7 +747,7 @@ fn low64(v: Fr) -> u64 {
 /// invocations interleave with the cycles that request them and two delegation
 /// shards are consecutive invocations, not consecutive times.
 ///
-/// For a family whose rows are words rather than cycles — the two RAM window
+/// For a family whose rows are words rather than cycles — the window
 /// families — it is [`TRIVIAL_TS_WINDOW`]: such a family owns no part of the
 /// execution's time at all, and there is no column to read one off.
 fn ts_window(family: FamilyId, base: &BaseLayer) -> [u64; 2] {
@@ -798,7 +799,7 @@ impl ProvingContext<'_> {
         let reg = self.setup.registration(family);
         let artifact = &reg.circuit.artifact;
         // The begin line, before any work, and **the one line the whole log is
-        // built around**: the shard region is a `par_iter`, so a run that is
+        // built around**: shards are proved concurrently, so a run that is
         // killed, OOMs or hangs leaves its last `begin` without a `done`, and
         // that pair names the shard that died. `docs/tools.md` §3.
         dlog!(
@@ -990,10 +991,10 @@ impl ProvingContext<'_> {
         shard: ShardGkr,
         base: &BaseLayer,
     ) -> (ShardProof, Vec<TranscriptEvent>) {
-        // **The block's second peak, and it was dark.** This clones every
-        // committed column at full height — 1,420 of them for `EC_ADD` — and
-        // then runs `batch_open`'s MSM, inside the opening region's `par_iter`.
-        // An OOM kill here named nothing at all before this pair existed.
+        // **The block's second peak.** This clones every committed column at
+        // full height — 1,420 of them for `EC_ADD` — and then runs
+        // `batch_open`'s MSM, so the `open begin`/`open done` pair is what names
+        // a shard an OOM kill takes here.
         #[cfg(feature = "debug-info")]
         let clock = debug::Clock::start();
         let ShardGkr {
@@ -1139,7 +1140,7 @@ fn replay_point(
 }
 
 /// Prove shard `(family, shard_idx)` of the statement `ctx` committed, from
-/// the archived execution: the frozen per-shard entry point. Only shard-local
+/// the archived execution: the per-shard entry point. Only shard-local
 /// steps; the global phase is `global_commit_phase`, whose state `ctx` holds.
 pub fn prove_shard(
     ctx: &ProvingContext,

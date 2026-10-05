@@ -1,36 +1,31 @@
-//! S24's acceptance 6, 7 and 8: the revm block proved, verified and tampered.
+//! The revm block proved, verified and tampered.
 //!
-//! `#[ignore]`d and deferred out of CI under master rule 7: the statement is
-//! seven `2^20` execution shards, two `2^20` RAM window shards, one `2^18`
-//! keccak shard and S-IO's three — two `2^8` public value shards and one
-//! `2^20` advice window — over a `--release` guest this suite builds from
-//! source. Run it with
+//! `#[ignore]`d, and CI does not run it: the statement is seven `2^20`
+//! execution shards, two `2^20` RAM window shards, one `2^18` keccak shard and
+//! the public-value and advice families' three — two `2^12` public value shards
+//! and one `2^20` advice window — over a `--release` guest this suite builds
+//! from source. Run it with
 //!
 //! ```text
 //! cargo test --release -p prover --test revm -- --include-ignored --test-threads=1
 //! ```
 //!
-//! # What is proved, and what changed at S-IO
+//! # What is proved
 //!
-//! The binary is `guests/revm-block`'s **own** one, and since S-IO that is the
-//! whole program: its `BlockWitness` arrives in the **advice** region and its
-//! output commitment leaves in the **journal**, both ordinary loads and stores
-//! (`docs/spec/public-values.md`). It issues no ecall but `EXIT`.
-//!
-//! S24 could not prove that program. `read` and `write` are not provable
-//! ecalls, so it proved a second binary with the witness baked into `.rodata`
-//! — which identity commits, and which therefore moved the identity with every
-//! block — and published `keccak256` of the commitment in `x24..x31`, where the
-//! register boundary carries it. Both of those stopgaps are gone:
+//! The binary is `guests/revm-block`'s **own** one, and that is the whole
+//! program: its `BlockWitness` arrives in the **advice** region and its output
+//! commitment leaves in the **journal**, both ordinary loads and stores
+//! (`docs/spec/public-values.md`). Its only ecalls are `EXIT` and delegation
+//! requests. So:
 //!
 //! - the **witness** is advice, so one identity serves every block;
 //! - the **output** is the journal, so the statement carries the commitment's
 //!   bytes and not a digest of them.
 //!
-//! What binds the witness is no longer identity but the guest: the commitment
-//! is checked by the guest itself, so a witness describing
-//! a different block publishes a different journal rather than the same one
-//! (`docs/spec/public-values.md` §6).
+//! What binds the witness is the guest, not identity: the commitment is checked
+//! by the guest itself, so a witness describing a different block publishes a
+//! different journal rather than the same one (`docs/spec/public-values.md`
+//! §6).
 
 mod common;
 
@@ -54,24 +49,21 @@ const ZERO: u32 = family::ZERO_WINDOWS;
 /// `guests/revm-block` exits 0 with its output commitment in the journal.
 const REVM_RESULT: u32 = 0;
 
-/// The binary proved here: the guest itself. It is the only one — the
-/// `revm-block-stdio` companion went with the POSIX surface it wrapped.
+/// The binary proved here: the guest itself.
 const REVM_BIN: &str = "revm-block";
 
-/// S24's heights: every family but the delegation one at `2^20`, with
-/// `revm-block`'s own span ceiling.
+/// The revm block's heights: every family but the delegation ones at `2^20`,
+/// with `revm-block`'s own span ceiling.
 ///
-/// Unlike every other statement here this one takes `2^20` for the two window
+/// Unlike every other statement here this one takes `2^20` for the RAM window
 /// families too, and it has to: its image ends at `0x1c48d4`, past the
 /// `4 * 2^16` bytes a `2^16` window 0 covers.
 fn revm_params() -> ProgramParams {
     let mut heights = [revm_block::TRACE_HEIGHT_RELEASE; family::COUNT as usize];
-    // **Derived, never listed.** Naming three of the six delegation families
-    // left `MOD_MUL`, `SHA256_COMP` and `EC_ADD` at `2^20`, where `EC_ADD`'s
-    // 8,708 row-wise columns are a 292 GB forward pass — latent only while this
-    // block invokes neither.
-    // `crates/host/tests/prove.rs` and `crates/emulator/tests/revm.rs` both
-    // already derive it; this is S26c §5's "derive over document" applied here.
+    // **Derived, not listed.** A delegation family a list left out would sit
+    // at `2^20`, where `EC_ADD`'s 8,708 row-wise columns are a 292 GB forward
+    // pass. `crates/host/tests/prove.rs` and `crates/emulator/tests/revm.rs`
+    // derive it the same way.
     for (f, h) in heights.iter_mut().enumerate() {
         if program::delegation_ecall(f as u32).is_some() {
             *h = family::DEFAULT_HEIGHTS[f];
@@ -84,7 +76,7 @@ fn revm_params() -> ProgramParams {
     }
 }
 
-/// S24's program, built from source at `--release`.
+/// The revm program, built from source at `--release`.
 ///
 /// **Always `--release`, whatever `APOGEE_GUEST_PROFILE` says**: the
 /// statement's heights are pinned to the release image, which fits `2^20`,
@@ -105,13 +97,12 @@ fn revm_program() -> Program {
 
 /// The guest's run: no public input, and the committed witness as **advice**.
 ///
-/// **No archive.** This is the heaviest statement in the repository — a
-/// 30M-cycle execution, whose trace alone is hundreds of megabytes — and
-/// since S-STREAM nothing proves from one. `prove_block_streaming` executes
-/// the guest itself, twice, holding one partial buffer per family and proving
-/// at most `common::IN_FLIGHT` shards at once (`docs/spec/streaming.md`). What the
-/// archive used to be read for here was the shard plan, and the block's own
-/// `shard_counts` is that same plan after the fact.
+/// **No archive.** This is the heaviest statement these suites prove — a
+/// 30M-cycle execution, whose trace alone is hundreds of megabytes.
+/// `prove_block_streaming` executes the guest itself, twice, holding one
+/// partial buffer per family and proving at most `common::IN_FLIGHT` shards at
+/// once (`docs/spec/streaming.md`), and the block's own `shard_counts` is the
+/// shard plan after the fact.
 fn revm_io() -> emulator::GuestIo {
     emulator::GuestIo {
         input: Vec::new(),
@@ -206,17 +197,16 @@ fn host_output() -> Vec<u8> {
     revm_block::run(&witness).expect("the block executes on the host")
 }
 
-/// Acceptance 1: two clean builds of the guest give one `ProgramIdentity`.
+/// Two clean builds of the guest give one `ProgramIdentity`.
 ///
 /// Identity is what a verifier takes from a channel the prover does not
 /// control — so a build that is not reproducible is a program nobody can name.
-/// Since S-IO it binds the program and nothing else: the witness is advice, so
-/// one identity serves every block, which is the whole point of the change.
-/// Two builds into two fresh target directories, each preprocessed and
-/// committed on its own, and the two digests compared.
+/// It binds the program and nothing else: the witness is advice, so one
+/// identity serves every block. Two builds into two fresh target directories,
+/// each preprocessed and committed on its own, and the two digests compared.
 ///
 /// Over the **toy SRS**, deliberately. Identity is a digest over commitments
-/// to the program's own columns, and what acceptance 1 asks about is the
+/// to the program's own columns, and what this asks about is the
 /// *build*: that the same source twice gives the same program. Any structurally
 /// valid SRS answers that, and taking the toy one means this runs on a machine
 /// with no 19 GB ceremony file. `crates/program/tests/identity.rs` is where a
@@ -254,28 +244,28 @@ fn a1_two_clean_builds_give_one_identity() {
     );
 }
 
-/// Acceptance 6 and 8: the block proves, every shard verifies, the keccak
-/// family has a shard, and the digest the guest published is the digest of
-/// what the same program computes on the host.
+/// The block proves, every shard verifies, the keccak family has a shard, and
+/// the journal the guest published is the output commitment the same program
+/// computes on the host.
 #[test]
 #[ignore]
 fn a6_the_revm_block_proves_and_verifies() {
     let setup = revm_setup();
     let block = common::streamed(&setup, &revm_io());
-    // The exit status the archive used to assert, now read off the statement
-    // the proof binds.
+    // The exit status, read off the statement the proof binds.
     assert_eq!(block.statement().exit_status, REVM_RESULT);
 
-    // Acceptance 2, restated on the statement the proof is about: the family set
-    // is derived, and this image declares **two** delegation families — S21's
-    // `KECCAK_F`, through `alloy-primitives`' `native-keccak`, and S26's
-    // `MOD_MUL`, through `guests/vendor/k256`'s patched field multiply. S23's two
-    // are not here: nothing in this image does `Fr` arithmetic.
+    // The family set is derived, and this image declares four delegation
+    // families: `KECCAK_F`, through `alloy-primitives`' `native-keccak`;
+    // `MOD_MUL`, through `guests/vendor/k256`'s patched field multiply; and
+    // `SHA256_COMP` and `EC_ADD`, below. `POSEIDON2` and `FR_ARITH` are not
+    // here: nothing in this image does `Fr` arithmetic.
     //
-    // `MOD_MUL`'s id is 15, above S-IO's three window families, so it sorts
-    // **last** where `KECCAK_F` at 9 sorts before them. The config is one
-    // ascending list and where a family lands in it is a fact about ids alone
-    // (`crates/program/tests/delegation.rs` says the same in both directions).
+    // `MOD_MUL`, `SHA256_COMP` and `EC_ADD`, ids 15 to 17, sort after the
+    // public-value and advice families, ids 12 to 14, where `KECCAK_F` at 9
+    // sorts before them. The config is one ascending list and where a family
+    // lands in it is a fact about ids alone (`crates/program/tests/delegation.rs`
+    // says the same in both directions).
     let families: Vec<u32> = setup
         .program
         .config
@@ -287,7 +277,7 @@ fn a6_the_revm_block_proves_and_verifies() {
     // The declared set is read straight out of the linked image: four
     // consecutive `.rodata` records, `APOGDEL1` then the number —
     // `0x0507` `KECCAK_F`, `0x0504` `MOD_MUL`, `0x0508` `SHA256_COMP` and
-    // `0x0506` `EC_ADD`. The last two arrived at S26c through the vendored
+    // `0x0506` `EC_ADD`. The last two come from the vendored
     // `revm-precompile`'s *default* `Crypto` bodies and `k256`'s patched
     // `ProjectivePoint`, and neither is invoked by this synthetic block — its
     // senders are pre-recovered and it calls no `0x02`/`0x06`/`0x07` — so both
@@ -302,7 +292,8 @@ fn a6_the_revm_block_proves_and_verifies() {
             family::SHA256_COMP,
             family::EC_ADD
         ],
-        "S-IO's three sort after KECCAK_F, then S26's MOD_MUL and S26c's two"
+        "the public-value and advice families sort after KECCAK_F, then MOD_MUL, \
+         SHA256_COMP and EC_ADD"
     );
     assert!(!families.contains(&family::POSEIDON2));
     assert!(!families.contains(&family::FR_ARITH));
@@ -312,9 +303,9 @@ fn a6_the_revm_block_proves_and_verifies() {
     );
 
     let shards = |f: u32| shard_count(&setup, &block, f);
-    // Acceptance 8: the delegation family has at least one shard on the honest
-    // run. A revm block hashes — contract code, the log list, the post-state
-    // summary — so a zero here would mean the shim was never reached and the
+    // The keccak family has at least one shard on the honest run. A revm
+    // block hashes — contract code, the log list, the post-state summary — so
+    // a zero here would mean the shim was never reached and the
     // `native-keccak` hook had silently fallen back to `alloy-primitives`'
     // own Keccak.
     assert!(shards(KECCAK) >= 1, "the workload delegates keccak");
@@ -335,10 +326,10 @@ fn a6_the_revm_block_proves_and_verifies() {
     );
 
     // The structural counts: one shard per planned shard, in statement order,
-    // with the two window families' overriding the plan's zeroes and the
-    // delegation shard followed by S-IO's three. This is the one statement in
-    // the repository where `ADVICE_WINDOWS` proves a shard, the witness being
-    // advice, so here it is the last shard of all.
+    // with the window families' counts overriding the plan's zeroes and the
+    // delegation shard followed by the public-value and advice families'. The
+    // witness being advice, `ADVICE_WINDOWS` proves a shard here, and it is the
+    // last shard of all.
     let expected = statement_shards(&setup.program.config, block.shard_counts());
     assert_eq!(block.shards.len(), expected.len());
     assert_eq!(
@@ -373,8 +364,7 @@ fn a6_the_revm_block_proves_and_verifies() {
     }
 
     // The public output: the statement's journal is the output commitment the
-    // same program computes on the host, byte for byte — not a digest of it,
-    // which is what S24 had to settle for.
+    // same program computes on the host, byte for byte — not a digest of it.
     assert_eq!(
         block.statement().output,
         host_output(),
@@ -399,7 +389,7 @@ fn a6_the_revm_block_proves_and_verifies() {
     assert_eq!(verify_block(&setup.vk, &read, read.statement()), Ok(()));
 }
 
-/// Acceptance 7: the statement is what the proof is about.
+/// The statement is what the proof is about.
 ///
 /// Three twins, and each one is carried **past `verify_block`'s first two
 /// checks** before it is judged. That is the point of the test and it is easy
@@ -425,12 +415,12 @@ fn a7_a_changed_statement_is_refused() {
     assert_eq!(verify_block(&setup.vk, &block, &honest), Ok(()));
 
     // The guest reads no public input, so the statement's input is empty; its
-    // output is the commitment, which is what `io_digest` now binds to the
+    // output is the commitment, which is what `io_digest` binds to the
     // execution through the journal window (`docs/spec/public-values.md` §5.1).
     assert!(honest.input.is_empty());
     assert_eq!(honest.output, host_output());
 
-    // 7(a) A public I/O digest differing in one byte. First the shape a
+    // (a) A public I/O digest differing in one byte. First the shape a
     // verifier faces — the statement it was given is not the one the block
     // bound — and then the same change pushed into the block too, so that what
     // refuses it is G7's absorption and not a struct comparison.
@@ -459,7 +449,7 @@ fn a7_a_changed_statement_is_refused() {
         "and the per-shard path names the seed"
     );
 
-    // 7(b) A different `ProgramIdentity`, with the key's `VmConfig` left alone
+    // (b) A different `ProgramIdentity`, with the key's `VmConfig` left alone
     // so the descriptor check cannot be what catches it. G6 absorbs the
     // identity, so the challenges move with it.
     let mut other = setup.vk.clone();
@@ -472,8 +462,8 @@ fn a7_a_changed_statement_is_refused() {
         ))
     );
 
-    // 7(c) What the guest published. Since S-IO that is the **journal**, and a
-    // changed journal is a changed statement twice over: `io_digest` absorbs
+    // (c) What the guest published: the **journal**. A changed journal
+    // is a changed statement twice over: `io_digest` absorbs
     // it at G7 before the memory challenges are squeezed, and step 10c holds
     // the journal window's committed teardown column to those same bytes
     // (`docs/spec/public-values.md` §5).
@@ -486,8 +476,8 @@ fn a7_a_changed_statement_is_refused() {
         "a changed journal is refused"
     );
 
-    // A boundary register final moves it too, for the older reason: the
-    // `MEMORY_BOUNDARY` message is absorbed before the squeeze as well.
+    // A boundary register final moves it too: the `MEMORY_BOUNDARY` message is
+    // absorbed before the squeeze as well.
     let mut word = honest.clone();
     word.boundary.reg_values[23] ^= 1;
     let mut reworded = block.clone();
