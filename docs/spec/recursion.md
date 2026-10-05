@@ -329,7 +329,8 @@ to the curve, and checks `e(A, [1]_2) = e(B, [x]_2)`. Its Groth16 key, the cerem
 points and the two identities are set at deployment.
 
 `bench decide <out>` proves under the ceremony's key, checks the proof natively, deploys and
-calls the contract in revm, and writes `decision.constructor` and `decision.calldata`.
+calls the contract in revm, and writes `decision.constructor` and `decision.calldata` — under
+`--dev-key`, `development.*`.
 
 **What a deployment still owes.** A key is as trustworthy as its ceremony: one honest
 contributor a round, which a ceremony run on one machine is not. The circuit depends on the

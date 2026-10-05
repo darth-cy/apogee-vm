@@ -55,6 +55,11 @@ pub fn usage() -> &'static str {
      \x20   the tree's root in a Groth16 proof under that key, checked by the contract"
 }
 
+/// The powers-of-tau ceremony's file.
+fn ptau() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ptau/ppot_0080_24.ptau")
+}
+
 /// The ceremony at `2^24`, the recursion format's stacking height, cached
 /// beside the system's temporary files after the first ingest.
 fn srs() -> Result<srs::Srs, String> {
@@ -62,8 +67,7 @@ fn srs() -> Result<srs::Srs, String> {
     if let Ok(srs) = srs::Srs::load(&cache) {
         return Ok(srs);
     }
-    let ptau =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ptau/ppot_0080_24.ptau");
+    let ptau = ptau();
     let srs = srs::Srs::from_ptau(&ptau, 24).map_err(|e| format!("{}: {e:?}", ptau.display()))?;
     srs.save(&cache)
         .map_err(|e| format!("{}: {e:?}", cache.display()))?;
@@ -512,8 +516,7 @@ pub fn ceremony(args: &[String]) -> Result<(), String> {
     // and what any later state is verified against.
     let first = || {
         with_root(&out, |root, _| {
-            let ptau = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../assets/ptau/ppot_0080_24.ptau");
+            let ptau = ptau();
             let power = host::decider::domain(root)?.trailing_zeros();
             let phase1 = srs::Phase1::from_ptau(&ptau, power)
                 .map_err(|e| format!("{}: {e:?}", ptau.display()))?;
@@ -571,7 +574,8 @@ pub fn ceremony(args: &[String]) -> Result<(), String> {
 /// Groth16 proof (`host::decider`) under the ceremony's key,
 /// `<out>/decider.key` — or, with `--dev-key`, under a development key —
 /// checked natively and by the contract in an EVM. Writes the contract's
-/// constructor arguments and `verify`'s calldata beside the tree, as hex.
+/// constructor arguments and `verify`'s calldata beside the tree, as hex:
+/// `decision.*`, or under a development key `development.*`.
 pub fn decide(args: &[String]) -> Result<(), String> {
     use host::decider;
     let (out, dev) = match args {
@@ -606,9 +610,10 @@ pub fn decide(args: &[String]) -> Result<(), String> {
         let constructor = decider::constructor(&pk.vk, srs, root.identities, &decision);
         let calldata = decider::calldata(&decision, root.io);
         let gas = decider::onchain(&constructor, &calldata)?;
+        let stem = if dev { "development" } else { "decision" };
         for (name, bytes) in [("constructor", &constructor), ("calldata", &calldata)] {
             let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-            std::fs::write(out.join(format!("decision.{name}")), hex).map_err(|e| e.to_string())?;
+            std::fs::write(out.join(format!("{stem}.{name}")), hex).map_err(|e| e.to_string())?;
         }
         println!(
             "the contract verifies it, {} bytes of input and {} of output: {gas} gas, {} bytes \
