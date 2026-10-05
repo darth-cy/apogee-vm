@@ -1,5 +1,5 @@
-//! S16's `ADD_SUB_LUI_AUIPC` circuit (`docs/spec/add-sub.md`), row by
-//! row, in ordinary CI.
+//! The `ADD_SUB_LUI_AUIPC` circuit (`docs/spec/add-sub.md`), row by row, in
+//! ordinary CI.
 //!
 //! No forward pass over `2^20` rows: each row is built by hand from what the
 //! instruction computes — Rust's own `u32` arithmetic, not the circuit's — and
@@ -7,7 +7,7 @@
 //! `violated_lookups`, its row-local scratch computed by `gkr::gate_values`.
 //! Every row kind the family proves satisfies every gate and every range
 //! obligation; every gate refuses a row it exists to refuse, most of them as
-//! the only gate that does; and the rows S16's negative controls are about
+//! the only gate that does; and the rows the negative controls are about
 //! break exactly what those controls say. The proofs of the same rows are
 //! `crates/checker/tests/tamper.rs`'.
 
@@ -33,9 +33,8 @@ const FIXTURE: &str = concat!(
 );
 /// The fixture's digest, which moves whenever a **delegation ecall number** does:
 /// `deleg_{family}_number`'s literal is that number, read from `constants::ecall`,
-/// so this family's bytes are a function of the delegation registry. S26b's
-/// renumbering of `MOD_MUL` moved it and S26d's of `KECCAK_F` moved it again
-/// (`docs/spec/delegation-circuits.md` §5, §2).
+/// so this family's bytes are a function of the delegation registry
+/// (`docs/spec/delegation.md` §3).
 const FIXTURE_SHA256: &str = "a6113128738235d972ff4c074f875ea43c2bd0290e516957e9f891496cae38c7";
 
 fn artifact() -> CircuitArtifact {
@@ -347,8 +346,8 @@ fn honest_rows() -> Vec<(&'static str, Row)> {
             "exit 42",
             honest(Instr::new(kind::SYSTEM, 0, 0, 0, 0), 93, 42, 42),
         ),
-        // S21's row kind: `a7` is the keccak family's number, `a0` the frame
-        // base — word-aligned and inside the RAM window, as every frame
+        // A delegation request: `a7` is the keccak family's number, `a0` the
+        // frame base — word-aligned and inside the RAM window, as every frame
         // pointer is (`docs/spec/delegation.md` §4) — and `a0` is written 0.
         (
             "keccak delegation request",
@@ -391,8 +390,8 @@ fn names(list: &[&str]) -> Vec<String> {
 
 /// The committed fixture is the constructor at the family's default height,
 /// and the circuit keeps every rule both enforcement points hold it to: the
-/// laws, the padding contract and its product-tree clause, S14's memory rules,
-/// and S15's discharge rule — by `constraints` and, sharing no code, by this
+/// laws, the padding contract and its product-tree clause, the memory rules,
+/// and the discharge rule — by `constraints` and, sharing no code, by this
 /// crate.
 #[test]
 fn the_circuit_is_the_fixture_and_keeps_every_rule() {
@@ -420,7 +419,7 @@ fn the_circuit_is_the_fixture_and_keeps_every_rule() {
 }
 
 /// The layout is `docs/spec/add-sub.md` §1's, and the gates, lookups and
-/// channels are §8.2's and §8.3's, by name and in order.
+/// channels are §2's and §3's, by name and in order.
 #[test]
 fn the_layout_and_the_gates_are_the_specs() {
     let a = artifact();
@@ -589,12 +588,9 @@ fn the_layout_and_the_gates_are_the_specs() {
         "every new obligation is the row's"
     );
 
-    // 30, three lower than S26's 33: the frame lost `arg1`, `arg2` and `ram`
-    // with the `read`/`write` ecalls, so three `*_gap_hi` witness columns went
-    // with them and every later column moved down. The `is_deleg_*` selectors
-    // are witness columns before these — one per registered delegation type,
-    // which is `docs/spec/delegation.md` §3's append rule paid once each — so
-    // S26c's two moved the multiplicities from 30 to 32.
+    // The `is_deleg_*` selectors are witness columns before these, one per
+    // registered delegation type (`docs/spec/delegation.md` §3), so each type
+    // moves the multiplicities up by one.
     let mult = |i: u32| PolyAddress::Witness(32 + i);
     assert_eq!(
         add_sub::channels(),
@@ -617,18 +613,17 @@ fn the_layout_and_the_gates_are_the_specs() {
         ]
     );
     // The frame's product-tree leaves, then one fraction tree per channel:
-    // 16 + 32 + 16 + 4. The frame is **five** queries since the `read`/`write`
-    // ecalls went — it was eight from S21 until then, and the width was 100 —
-    // so its leaves are five plus three literal-1 pads a side, 16 over the two
-    // sides; its ten timestamp obligations pad to sixteen pairs, 32 slots.
+    // 16 + 32 + 16 + 4. The frame is **five** queries, so its leaves are five
+    // plus three literal-1 pads a side, 16 over the two sides; its ten
+    // timestamp obligations pad to sixteen pairs, 32 slots.
     assert_eq!(a.layers[0].width, 68);
     assert_eq!(a.outputs.len(), 2 + 2 * 3);
 }
 
 /// The registry: this family at 20 variables and up, the two window families
 /// at any menu height, each the constructor it names; and no execution circuit
-/// at all below the timestamp channel's width — since S19 that guard covers
-/// every one of the seven, so a key naming a menu height of `2^16` or `2^18`
+/// at all below the timestamp channel's width — that guard covers every one
+/// of the seven, so a key naming a menu height of `2^16` or `2^18`
 /// gets `None` and not a panic. Each family's own circuit is its own suite's.
 #[test]
 fn the_registry_holds_the_three_families_s16_proves() {
@@ -676,7 +671,7 @@ fn the_registry_holds_the_three_families_s16_proves() {
 /// Every row kind the family proves — each sum with and without its carry,
 /// each difference with and without its borrow, `rd = x0` computing a nonzero
 /// value it discards, an `x0` operand, a two-byte instruction, a fence, the
-/// exit, S21's **delegation request**, and the all-zero padding row —
+/// exit, a **delegation request**, and the all-zero padding row —
 /// satisfies every gate and every range obligation.
 #[test]
 fn every_row_kind_satisfies_every_gate_and_every_bound() {
@@ -696,9 +691,10 @@ fn every_row_kind_satisfies_every_gate_and_every_bound() {
     assert_ne!(get("add to x0, carrying", "rd_selected"), Fr::ZERO);
     assert_eq!(get("c.add, two bytes", "decoded_next_pc"), f(0x1_0012));
     assert_eq!(get("exit 42", "pc_write_value"), Fr::ONE);
-    // S21's row: an ecall that is not an exit. It carries both flags, makes
-    // the mirror query at the `a0` it read, writes 0 into `a0`, and falls
-    // through rather than halting (`docs/spec/delegation.md` §2, §5.1).
+    // The delegation request: an ecall that is not an exit. It carries both
+    // flags, makes the mirror query at the `a0` it read, writes 0 into `a0`,
+    // and falls through rather than halting
+    // (`docs/spec/delegation.md` §2, §5.1).
     let d = |col: &str| get("keccak delegation request", col);
     assert_eq!(d("is_ecall"), Fr::ONE);
     assert_eq!(d("is_deleg_9"), Fr::ONE);
@@ -805,16 +801,14 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     r.query("rs2", CYCLE, 2, 0, 0, 0);
     cases.push(("an addi reading rs2", r, vec!["rs2_mask_rule"]));
     // An exit reading `a1` or `a2`, and any row of this family storing a word,
-    // were three cases here. All three are **unrepresentable** now: `arg1`,
-    // `arg2` and `ram` left the frame with the `read`/`write` ecalls, so there
-    // is no column for the forgery to live in and no `mask == 0` gate left to
-    // refuse it. A query that cannot be expressed is a stronger refusal than a
-    // gate that refuses it.
+    // are **unrepresentable**: the frame has no `arg1`, `arg2` or `ram` query,
+    // so there is no column for the forgery to live in. A query that cannot be
+    // expressed is a stronger refusal than a gate that refuses it.
     let mut r = row("fence");
     r.query("rd", CYCLE, 3, 0, 0, 0);
     r.set("rd_is_zero", Fr::ONE);
     cases.push(("a fence writing x0", r, vec!["rd_mask_rule"]));
-    // S14's control C8, first forgery: a padding row's rd query rewriting x10.
+    // A padding row's rd query rewriting x10.
     let mut r = Row::default();
     r.query("rd", CYCLE, 3, 10, 42, 42);
     r.set("rd_inv", f(10).inverse().unwrap())
@@ -841,7 +835,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         r,
         vec!["rs1_mask_rule", "rd_mask_rule"],
     ));
-    // Its second: a live row's rd write masked off.
+    // A live row's rd write masked off.
     let mut r = row("add, not carrying");
     r.drop_query("rd");
     r.set("rd_inv", Fr::ZERO).set("rd_selected", Fr::ZERO);
@@ -888,7 +882,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     let next = r.get("pc_write_value") + f(4);
     r.set("pc_write_value", next);
     cases.push(("an add jumping four ahead", r, vec!["next_pc_rule"]));
-    // S14's truncation target: a row that is not the exit writing HALT_PC.
+    // The truncation target: a row that is not the exit writing HALT_PC.
     let mut r = row("add, carrying");
     r.set("pc_write_value", Fr::ONE).set("next_pc_hi", Fr::ZERO);
     cases.push(("an add writing HALT_PC", r, vec!["next_pc_rule"]));
@@ -896,15 +890,16 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     r.set("pc_write_value", f(0x1_0014)).set("next_pc_hi", f(1));
     cases.push(("the exit falling through", r, vec!["next_pc_rule"]));
 
-    // S21's eight gates, and the three S16 gates it amended
-    // (`docs/spec/delegation.md` §5.2). Each case is one cell of the honest
+    // The delegation gates, and the three exit gates whose factor is
+    // `is_ecall - Σ is_deleg_t` (`docs/spec/add-sub.md` §2,
+    // `docs/spec/delegation.md` §5.2). Each case is one cell of the honest
     // delegation row, or of the honest exit row, moved.
     let deleg = || row("keccak delegation request");
     // The flag without the ecall it must accompany.
     let mut r = row("add, carrying");
     r.set("is_deleg_9", Fr::ONE);
     // A type selector without the `is_ecall` it must accompany makes the
-    // amended gates' factor `is_ecall - Σ is_deleg_t` equal -1, so all of them
+    // exit gates' factor `is_ecall - Σ is_deleg_t` equal -1, so all of them
     // fire too: that is the price of subtracting rather than gating, and
     // `deleg_9_is_an_ecall` is what makes the factor 0 or 1 on any row that
     // passes. `deleg_space_rule` fires because the row names a type and its
@@ -922,11 +917,11 @@ fn each_gate_is_the_one_that_refuses_its_row() {
             "next_pc_rule",
         ],
     ));
-    // A delegation whose a7 is another number: 130 and 131 partition the
-    // ecalls this family proves, so a7 = 93 with the flag set breaks 131, and
-    // so does any number no delegation type declares. The number is read from
-    // `constants::ecall` and never spelled: S26b renumbered `MOD_MUL` and S26d
-    // renumbered `KECCAK_F`, and this row followed both without an edit.
+    // A delegation whose a7 is another number: `ecall_is_exit` and
+    // `deleg_9_number` partition the ecalls this family proves, so a7 = 93 with
+    // the flag set breaks `deleg_9_number`, and so does any number no
+    // delegation type declares. The number is read from `constants::ecall` and
+    // never spelled, so a renumbering needs no edit here.
     let mut r = deleg();
     r.set("rs1_read_value", f(93)).set("rs1_write_value", f(93));
     cases.push((
@@ -942,9 +937,9 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         r,
         vec!["deleg_9_number"],
     ));
-    // An exit row that claims the delegation flag is no longer held to 93 by
-    // 130 — but 131 asks a7 for `PRECOMPILE_KECCAK_F`, and 138 for the mirror
-    // query.
+    // An exit row that claims the delegation flag is not held to 93 by
+    // `ecall_is_exit` — but `deleg_9_number` asks a7 for `PRECOMPILE_KECCAK_F`,
+    // and `deleg_mask_rule` for the mirror query.
     let mut r = row("exit 42");
     r.set("is_deleg_9", Fr::ONE);
     cases.push((
@@ -1012,7 +1007,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         r,
         vec!["deleg_space_rule"],
     ));
-    // And the amended pc rule: a delegation row that halts.
+    // And the pc rule: a delegation row that halts.
     let mut r = deleg();
     r.set("pc_write_value", Fr::ONE).set("next_pc_hi", Fr::ZERO);
     cases.push(("a delegation row halting", r, vec!["next_pc_rule"]));
@@ -1037,10 +1032,10 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     }
 }
 
-/// Every gate named in §8.2 is the lone or first refusal of at least one case
-/// above, or one of the booleanity gates this test breaks — all nine of them:
-/// nothing §8.2 adds is there without a row that needs it. The frame's own
-/// booleanity gates are S14's, not §8.2's.
+/// Every gate `docs/spec/add-sub.md` §2 names is the lone or first refusal of
+/// at least one case above, or one of the booleanity gates this test breaks:
+/// nothing §2 adds is there without a row that needs it. The frame's own
+/// booleanity gates are `docs/spec/memory.md` §2.4's.
 #[test]
 fn every_booleanity_gate_refuses_a_value_of_two() {
     let a = artifact();
@@ -1074,17 +1069,17 @@ fn every_booleanity_gate_refuses_a_value_of_two() {
 }
 
 // ---------------------------------------------------------------------------
-// S16's negative controls, row by row
+// The negative controls, row by row
 // ---------------------------------------------------------------------------
 
-/// Acceptance 7, as rows. An unreduced sum — wrap 0 and `rd` holding the whole
-/// `a + b ≥ 2^32` — breaks no gate and only the range channel sees it, on an
-/// add, an addi and a sub alike; a wrap of 2 is refused by its booleanity; a
+/// The soundness floor, as rows. An unreduced sum — wrap 0 and `rd` holding the
+/// whole `a + b ≥ 2^32` — breaks no gate and only the range channel sees it, on
+/// an add, an addi and a sub alike; a wrap of 2 is refused by its booleanity; a
 /// `next_pc` outside 32 bits, reached through a wrap of 1, breaks no gate and
 /// only the range channel sees it, through its low halfword or, with the high
-/// one solved in the field, through the high one; an
-/// all-zero mask breaks no gate and no range, so the decoder channel's domain
-/// is the only thing left to refuse it, which `tests/tamper.rs` proves.
+/// one solved in the field, through the high one; an all-zero mask breaks no
+/// gate and no range, so the decoder channel's domain is the only thing left to
+/// refuse it, which `tests/tamper.rs` proves.
 #[test]
 fn the_negative_controls_break_what_they_say_they_break() {
     let a = artifact();

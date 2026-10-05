@@ -1,6 +1,7 @@
-//! The tamper-twin harness, S16: re-prove a statement with a witness or a
+//! The tamper-twin harness: re-prove a statement with a witness or a
 //! boundary changed, as an honest prover would prove the changed witness, and
-//! verify one shard of it through `verifier::verify_shard`.
+//! verify one shard of it through `verifier::verify_shard`, or the whole block
+//! through `verifier::verify_block`.
 //!
 //! "As an honest prover would" is the whole method. A tampered cell is written
 //! into the columns the honest fill produced; each channel's multiplicities are
@@ -137,12 +138,12 @@ impl<'a> TamperHarness<'a> {
     /// Prove the statement again with `tamper` applied and verify the whole
     /// **block**: the verdict of `verifier::verify_block`.
     ///
-    /// S20's additive hook, and what a linkage twin needs that [`run`] cannot
-    /// give it. `run` verifies one shard, so a tamper whose only symptom is
-    /// the cross-shard read/write root product — one delegation invocation
-    /// dropped, say — reaches no check there: step 10b is the statement's, not
-    /// a shard's (`docs/spec/proof.md` §6). A block reads every shard's
-    /// roots against the boundary at once, which is where such a tamper lands.
+    /// What a linkage twin needs that [`run`] cannot give it. `run` verifies
+    /// one shard, so a tamper whose only symptom is the cross-shard read/write
+    /// root product — one delegation invocation dropped, say — reaches no check
+    /// there: step 10b is the statement's, not a shard's (`docs/spec/proof.md`
+    /// §6). A block reads every shard's roots against the boundary at once,
+    /// which is where such a tamper lands.
     ///
     /// [`run`]: TamperHarness::run
     pub fn run_block(&self, tamper: &Tamper) -> Result<(), VerifyError> {
@@ -224,13 +225,12 @@ impl<'a> TamperHarness<'a> {
 /// What one delegation family's anchor twins need to know: which shards, which
 /// rows, and the columns the three request-side zeroings sit on.
 ///
-/// Frozen at S21 for every delegation family (`docs/spec/delegation.md` §5.2);
-/// a later family fills it with its own addresses and calls
-/// [`assert_anchor_twins_refused`]. Nothing here is keccak's: the anchor is one
-/// mechanism, and a family that wrote its own would be a family whose pairing
-/// nobody had argued. S23's two families fill it unchanged, which is the
-/// evidence that it is general — and told their request rows apart from each
-/// other's by the frame's `deleg_space` column.
+/// One shape for every delegation family (`docs/spec/delegation.md` §5.2): a
+/// family fills it with its own addresses and calls
+/// [`assert_anchor_twins_refused`]. Nothing here is one family's: the anchor is
+/// one mechanism, and a family with an anchor of its own would have a pairing
+/// nobody had argued. The families' request rows are told apart by the frame's
+/// `deleg_space` column.
 #[derive(Clone, Copy, Debug)]
 pub struct AnchorTwins {
     /// The family that owns ecall cycles, and the shard holding the requests.
@@ -259,7 +259,7 @@ pub struct AnchorTwins {
     pub anchor_value: PolyAddress,
 }
 
-/// The four anchor twins and their control (S21 must-be-exact 3).
+/// The anchor twins and their control.
 ///
 /// **Each twin is run at the level that names what refuses it**, and the two
 /// levels answer differently on purpose. `verify_block` runs
@@ -268,7 +268,7 @@ pub struct AnchorTwins {
 /// the multiset is `MemoryArgument` whatever else is also wrong;
 /// `verify_shard`'s order puts `Constraint` first, so at shard level the same
 /// witness names the gate. A twin that asserted `Constraint` at block level
-/// would be asserting something false — and did, until this run.
+/// would be asserting something false.
 ///
 /// 1. **A request with no invocation**, at block level. The invocation's row is
 ///    switched off, so its answer tuple is not written and the request's read
@@ -278,21 +278,18 @@ pub struct AnchorTwins {
 ///    orphaned request's mirror chained onto another request's write, the way
 ///    it would chain if the timestamp zeroing were not there. Still
 ///    `MemoryArgument` — and *why* is the point. Switching an invocation off
-///    drops its 50 RAM frame accesses with it, so the word at `base + 4j` loses
-///    a write that the next invocation's `read_ts` still names. Repairing the
-///    anchor does not repair that, and repairing *that* means re-pointing the
-///    next invocation's 50 reads, re-deriving its 1,600 state bits and
-///    re-running the permutation — which is proving the execution, not eliding
-///    it. So in this family the chain cannot be mounted by editing cells at
-///    all, and the multiset is what says so.
+///    drops its RAM frame accesses with it, so the word at `base + 4j` loses a
+///    write that the next access to it still names as its `read_ts`. Repairing
+///    the anchor does not repair that, and repairing *that* means re-pointing
+///    those reads and re-deriving everything computed from them — which is
+///    proving the execution, not eliding it. So the chain cannot be mounted by
+///    editing cells at all, and the multiset is what says so.
 /// 3. **Each zeroing alone**, all three, at **shard** level so the gate is the
 ///    first failure and not the multiset: a request that writes a register, one
 ///    whose mirror read is stamped, and one whose mirror read carries a value,
 ///    each `Constraint`. This is the direct evidence that the gates are
 ///    load-bearing: they make the pairing 1:1 **locally**, without leaning on
-///    the RAM side of twin 2. The third is the one an earlier rebuild dropped
-///    while restoring the other two, because the headline defect named only the
-///    timestamp.
+///    the RAM side of twin 2.
 ///
 /// The control is the pair the zeroings leave free — the mirror's write value
 /// and the invocation's teardown value, moved **together** — which must still

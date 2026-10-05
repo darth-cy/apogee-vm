@@ -1,19 +1,19 @@
 //! The transcript-tape validator: the global commit phase's absorb sequence,
-//! rendered, and the frozen pre-fork order it must be.
+//! rendered, and the pre-fork order it must be.
 //!
-//! [`tape`] turns a `Transcript`'s event log into one line per message. The
-//! log records a message's **tag and payload length**, never its values
+//! [`tape`] turns a `Transcript`'s event log into one line per message. The log
+//! records a message's **tag and payload length**, never its values
 //! (`crates/transcript`), so a tape is a statement about the *script* a
-//! transcript ran, which is exactly what the frozen order is about.
+//! transcript ran, which is exactly what the order is about.
 //!
 //! [`expected_global_tape`] writes that order out from the statement's shape
 //! alone — the family count, the shard counts, the window list, each shard's
 //! commitment-list length — **sharing no code with
 //! `verifier_core::global_commit`**, which is the point: the laws are enforced
-//! twice by independent code (master rule 8), and so is this order. It does call
-//! `statement_shards`, the public helper that defines a statement's *shard* order;
-//! the *absorb* order — the group order of G8 and every message's position and
-//! length — is written out here.
+//! twice by independent code, and so is this order. It does call
+//! `statement_shards`, the public helper that defines a statement's *shard*
+//! order; the *absorb* order — the group order of G8 and every message's
+//! position and length — is written out here.
 //!
 //! [`check_global_tape`] runs the real phase and diffs the two, naming the
 //! first line that differs.
@@ -58,13 +58,13 @@ pub fn global_tape(vk: &VerifyingKey, statement: &PublicInputs) -> Vec<String> {
     tape(global.transcript.event_log())
 }
 
-/// The tape the frozen pre-fork order requires, written from the statement's
+/// The tape the pre-fork order requires, written from the statement's
 /// shape: G1 to G11 of `docs/spec/proof.md` §2.
 ///
 /// | # | line |
 /// | --- | --- |
 /// | G1 | `absorb PROTOCOL_SUITE 1` — the suite tag, the version its payload |
-/// | G2 | `absorb SRS_DIGEST 1` — which covers the packed generic table (S17) |
+/// | G2 | `absorb SRS_DIGEST 1` — which covers the packed generic table |
 /// | G3 | `absorb VM_CONFIG 2k+1` — `k` family ids, `k` heights, the bytecode ceiling |
 /// | G4 | `absorb SHARD_COUNTS k` — one per family, a detached-in-this-run family's 0 included |
 /// | G5 | `absorb MEMORY_WINDOWS w` — `ZERO_WINDOWS`' window ids |
@@ -124,7 +124,7 @@ fn group_order(vk: &VerifyingKey) -> Vec<u32> {
 }
 
 /// The global commit phase's tape, or the first line at which it leaves the
-/// frozen order.
+/// pre-fork order.
 ///
 /// This does **not** check the values absorbed — the event log carries none —
 /// so it is a check on the script, not on the statement. What binds the values
@@ -139,7 +139,7 @@ pub fn check_global_tape(
     for (i, (got, want)) in actual.iter().zip(&expected).enumerate() {
         if got != want {
             return Err(format!(
-                "the global commit phase's tape leaves the frozen pre-fork order at line \
+                "the global commit phase's tape leaves the pre-fork order at line \
                  {}: `{got}`, where the order has `{want}`",
                 i + 1
             ));
@@ -147,7 +147,7 @@ pub fn check_global_tape(
     }
     if actual.len() != expected.len() {
         return Err(format!(
-            "the global commit phase's tape is {} lines, where the frozen pre-fork order \
+            "the global commit phase's tape is {} lines, where the pre-fork order \
              has {}",
             actual.len(),
             expected.len()

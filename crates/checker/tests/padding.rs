@@ -67,11 +67,11 @@ fn a_padding_row_of_the_wrong_length_is_rejected() {
 }
 
 /// The product-tree clause, pinned on the toy as it is: `Err`, naming `abm`.
-/// The toy predates the clause and does not keep it. Its padding row is all
-/// zero, so `abm = a·b·masked_m = 0`, and `fingerprint3 = (γ·a + row)·c + 3` is
-/// 3 whatever the row — no mask reaches `fingerprint3` at all, so no padding
-/// row could make it 1. The first column its halving list reads, `L{2}[0]`, is
-/// the one named.
+/// The toy does not keep the clause. Its padding row is all zero, so
+/// `abm = a·b·masked_m = 0`, and `fingerprint3 = (γ·a + row)·c + 3` is 3
+/// whatever the row — no mask reaches `fingerprint3` at all, so no padding row
+/// could make it 1. The first column its halving list reads, `L{2}[0]`, is the
+/// one named.
 #[test]
 fn the_toy_does_not_keep_the_product_tree_clause() {
     for (label, a) in toys() {

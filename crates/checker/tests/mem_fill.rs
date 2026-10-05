@@ -1,7 +1,7 @@
-//! S19's three families' fills over `guests/mem`'s real trace: every live row,
-//! two padding rows after it and the shard's last row, evaluated through
-//! `checker::violated_relations` and `violated_lookups`, with every channel's
-//! multiplicities counted over the filled columns.
+//! The three memory-op families' fills over `guests/mem`'s real trace: every
+//! live row, two padding rows after it and the shard's last row, evaluated
+//! through `checker::violated_relations` and `violated_lookups`, with every
+//! channel's multiplicities counted over the filled columns.
 //!
 //! This runs in ordinary CI and is the cheapest end-to-end signal the three
 //! families get: it holds the circuits to the fills, the fills to the emulator's
@@ -215,9 +215,9 @@ fn at(columns: &[(PolyAddress, MultilinearPoly)], address: PolyAddress, row: usi
         .get(row)
 }
 
-/// Acceptance 1's in-CI half for `MEM_WORD`: the fill of the guest's shard
-/// satisfies every gate and every bound on every live row, on the two padding
-/// rows after them and on the shard's last row.
+/// `MEM_WORD`: the fill of the guest's shard satisfies every gate and every
+/// bound on every live row, on the two padding rows after them and on the
+/// shard's last row.
 ///
 /// It also holds the guest to reaching the one addressing shape the rest of it
 /// does not: a **negative displacement**, whose effective address wraps past

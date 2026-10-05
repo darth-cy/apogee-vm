@@ -1,17 +1,14 @@
-//! S16's, S17's, S18's and S19's tamper twins, through `TamperHarness`: one
-//! statement — `guests/addsub`, S17's `guests/control`, S18's `guests/alu` or
-//! S19's `guests/mem` —
-//! proved honestly once per test, then proved again with one tamper as an
-//! honest prover would prove the tampered witness, and one shard verified
-//! through `verify_shard`. Each twin asserts the class of the check that
+//! Tamper twins through `TamperHarness`: one statement — `guests/addsub`,
+//! `guests/control`, or a delegation family's guest — proved honestly once per
+//! test, then proved again with one tamper as an honest prover would prove the
+//! tampered witness, and one shard verified through `verify_shard`, or the
+//! block through `verify_block`. Each twin asserts the class of the check that
 //! refuses it (`docs/spec/proof.md` §6).
 //!
 //! **`#[ignore]`d, and run by name with `--include-ignored --test-threads=1`**:
 //! the add/sub shard is `2^20` rows and a statement's proof peaks at 8.6 GB —
 //! 9.3 GB with the honest statement the harness holds beside a re-proof — and
-//! `control`'s has two execution shards of that height, 11.3 GB. S18's `alu`
-//! has four, and S19's `mem` five beside `INIT_TEARDOWN` and a `ZERO_WINDOWS`
-//! shard — seven in all — which puts the file's peak at S19's statement.
+//! `control`'s has two execution shards of that height, 11.3 GB.
 //! The rows these tampers edit are `crates/checker/tests/add_sub.rs`'s, which
 //! runs in ordinary CI.
 //!
@@ -19,21 +16,6 @@
 //! `add t2, t0, t1` (carrying), row 5 `add t3, t1, t1`, row 8 `add x0, t0, t1`
 //! (carrying, discarded), row 27 `addi a7, x0, 93`, row 28 the exit. Everything
 //! from row 29 up is padding.
-//!
-//! S18 adds `guests/alu`, whose statement has four execution shards of `2^20`
-//! rows — add/sub, jump/branch/slt, shift/bitwise and mul/div. Its twins name
-//! no row number: the shift and mul/div rows are found by their committed kind
-//! bit and by the very cell the twin corrupts, so a guest that grows a check
-//! keeps the test honest. The rows themselves, instruction by instruction, are
-//! `crates/checker/tests/shift_bitwise.rs`' and `crates/checker/tests/
-//! mul_div.rs`', which run in ordinary CI.
-//!
-//! S19 adds `guests/mem`, whose statement is **the largest in the file**: five
-//! execution shards of `2^20` rows — those two, plus `MEM_WORD`, `MEM_SUBWORD`
-//! and `ATOMICS` — beside `INIT_TEARDOWN` and the first `ZERO_WINDOWS` shard
-//! any acceptance statement has had. Its twins find their rows the same way,
-//! and the rows are `crates/checker/tests/mem_word.rs`', `mem_subword.rs`' and
-//! `atomics.rs`', in ordinary CI.
 
 #[path = "../../prover/tests/common/mod.rs"]
 mod common;
@@ -58,10 +40,9 @@ use verifier::VerifyError;
 /// `ADD_SUB_LUI_AUIPC`'s frame width, and the **slot** of each query this file
 /// touches — a position in `frame_queries(ADD)`, never a query id.
 ///
-/// S21 appended `deleg`, so the width is 8 and `rd`'s slot is still 6; a query
-/// inserted rather than appended would move every one of these silently, which
-/// is what `the_slot_constants_are_the_frames` below exists to catch. It runs
-/// in ordinary CI, unlike every proof test in this file.
+/// A query inserted into the frame would move every one of these silently,
+/// which is what `the_slot_constants_are_the_frames` below exists to catch. It
+/// runs in ordinary CI, unlike every proof test in this file.
 const WIDTH: usize = 5;
 const PC: usize = 0;
 const RS1: usize = 1;
@@ -69,7 +50,7 @@ const RS2: usize = 2;
 const RD: usize = 3;
 const DELEG: usize = 4;
 
-/// The slot constants above against the frozen frame, and the witness columns
+/// The slot constants above against the frame, and the witness columns
 /// they index against the circuit's own names. No proof, so this is the one
 /// test in this file CI runs.
 #[test]
@@ -133,9 +114,9 @@ fn tamper(cells: Vec<Cell>) -> Tamper {
 /// instruction, which no row reads or writes.
 const IMAGE_ROW: usize = 1 << 14;
 
-/// Acceptance 2, 3 and 4 — the stage gate, three distinct classes on screen:
-/// a semantics cell, `Constraint`; a memory event's value and its timestamp,
-/// `MemoryArgument`; a lookup multiplicity, `Lookup`.
+/// Three distinct classes on screen: a semantics cell, `Constraint`; a memory
+/// event's value and its timestamp, `MemoryArgument`; a lookup multiplicity,
+/// `Lookup`.
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
 fn a2_a3_a4_a_semantics_a_memory_and_a_multiplicity_cell_fail_in_three_classes() {
@@ -143,8 +124,8 @@ fn a2_a3_a4_a_semantics_a_memory_and_a_multiplicity_cell_fail_in_three_classes()
     let archive = common::archive(&setup.program);
     let h = TamperHarness::new(&setup, &archive);
 
-    // 2. The carrying add's wrap bit, cleared; and the non-carrying add's
-    //    computed value moved.
+    // A semantics cell: the carrying add's wrap bit, cleared; and the
+    // non-carrying add's computed value moved.
     assert_eq!(h.cell(ADD, 0, WRAP, 4), Fr::ONE);
     h.assert_rejects(
         &tamper(vec![cell(ADD, WRAP, 4, Fr::ZERO)]),
@@ -158,9 +139,9 @@ fn a2_a3_a4_a_semantics_a_memory_and_a_multiplicity_cell_fail_in_three_classes()
         CONSTRAINT,
     );
 
-    // 3. A teardown value no gate reads, and a pc read's timestamp one lower —
-    //    its gap chunk still in range and its multiplicity recounted — both
-    //    pinned by the multiset alone.
+    // A memory event: a teardown value no gate reads, and a pc read's
+    // timestamp one lower — its gap chunk still in range and its multiplicity
+    // recounted — both pinned by the multiset alone.
     let word = h.cell(INIT, 0, PolyAddress::Memory(1), IMAGE_ROW);
     h.assert_rejects(
         &tamper(vec![cell(
@@ -180,7 +161,7 @@ fn a2_a3_a4_a_semantics_a_memory_and_a_multiplicity_cell_fail_in_three_classes()
         MEMORY,
     );
 
-    // 4. One multiplicity cell, in the range channel and in the decoder's.
+    // A multiplicity: one cell, in the range channel and in the decoder's.
     let m = h.cell(ADD, 0, MULTIPLICITIES[1], 0);
     h.assert_rejects(
         &tamper(vec![cell(ADD, MULTIPLICITIES[1], 0, m + Fr::ONE)]),
@@ -197,10 +178,10 @@ fn a2_a3_a4_a_semantics_a_memory_and_a_multiplicity_cell_fail_in_three_classes()
     );
 }
 
-/// Acceptance 7, the soundness floor. An unreduced sum is refused by the range
-/// channel; a wrap of 2 by its booleanity; an all-zero family mask by the
-/// decoder channel's domain, every gate and range still holding; a `next_pc`
-/// outside 32 bits by the range channel.
+/// The soundness floor. An unreduced sum is refused by the range channel; a
+/// wrap of 2 by its booleanity; an all-zero family mask by the decoder
+/// channel's domain, every gate and range still holding; a `next_pc` outside 32
+/// bits by the range channel.
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
 fn a7_the_soundness_floor_refuses_each_of_its_controls() {
@@ -270,11 +251,10 @@ fn a7_the_soundness_floor_refuses_each_of_its_controls() {
     );
 }
 
-/// Acceptance 11, the harness's negative control: cells nothing reads — a
-/// padding row's gap chunk, whose obligation its mask switches off, and a
-/// padding row's `rd_inv`, which multiplies an address of 0 — change and the
-/// statement still verifies. The harness tells a harmless edit from a harmful
-/// one.
+/// The harness's negative control: cells nothing reads — a padding row's gap
+/// chunk, whose obligation its mask switches off, and a padding row's `rd_inv`,
+/// which multiplies an address of 0 — change and the statement still verifies.
+/// The harness tells a harmless edit from a harmful one.
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
 fn a11_a_cell_nothing_reads_still_verifies() {
@@ -290,11 +270,10 @@ fn a11_a_cell_nothing_reads_still_verifies() {
     h.assert_verifies(&tamper(vec![cell(ADD, gap_hi(PC), 100, f(5))]), (INIT, 0));
 }
 
-/// Acceptance 13, as the owner remapped it: the committed result is the exit
-/// status, `x10`'s final value, and the teardown is what binds final values.
-/// A RAM teardown value or timestamp changed, and `x10`'s final value changed
-/// while the public exit status stays honest, are each refused as
-/// `MemoryArgument` — on both shards.
+/// The committed result is the exit status, `x10`'s final value, and the
+/// teardown is what binds final values. A RAM teardown value or timestamp
+/// changed, and `x10`'s final value changed while the public exit status stays
+/// honest, are each refused as `MemoryArgument` — on both shards.
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
 fn a13_the_teardown_binds_the_final_values() {
@@ -351,12 +330,12 @@ fn a13_the_teardown_binds_the_final_values() {
     h.assert_rejects(&result, (INIT, 0), MEMORY);
 }
 
-/// The tamper targets S14 left to S16, `docs/spec/memory.md` §2.1 and §5, and
-/// the image column's opening, §6.2: each refused.
+/// The frame's and the halting rule's tamper targets, `docs/spec/memory.md`
+/// §2.1 and §5, and the image column's opening, §6.2: each refused.
 ///
-/// - control C8's three forgeries: a padding row's `rd` query rewriting `x10`
-///   after the exit, a live row's `rd` write masked off, and the exit row
-///   given a store — each `Constraint`;
+/// - a padding row's `rd` query rewriting `x10` after the exit, and a live
+///   row's `rd` write masked off — each `Constraint`; the exit row given a
+///   store has no column to live in;
 /// - the exit rewriting its status — `Constraint`;
 /// - a row that is not the exit writing `HALT_PC`, the truncation target —
 ///   `Constraint`;
@@ -371,7 +350,7 @@ fn the_targets_s14_left_to_s16_are_refused() {
     let h = TamperHarness::new(&setup, &archive);
     let sel = rd_selected(WIDTH);
 
-    // C8, first: a padding row, cycle 30, rewriting x10 from 42 to 43.
+    // A padding row, cycle 30, rewriting x10 from 42 to 43.
     let (public, _) = h.honest();
     let x10_ts = public.boundary.reg_ts[10];
     let mut forgery = vec![
@@ -394,7 +373,7 @@ fn the_targets_s14_left_to_s16_are_refused() {
     h.assert_rejects(&c8, (ADD, 0), CONSTRAINT);
     forgery.clear();
 
-    // C8, second: row 5's rd write masked off.
+    // Row 5's rd write masked off.
     for field in [
         FIELD_MASK,
         FIELD_ADDR,
@@ -408,12 +387,10 @@ fn the_targets_s14_left_to_s16_are_refused() {
     forgery.push(cell(ADD, gap_hi(RD), 5, Fr::ZERO));
     h.assert_rejects(&tamper(forgery), (ADD, 0), CONSTRAINT);
 
-    // C8's third forgery — the exit row storing 7 into the top stack word,
-    // never written before — is **unrepresentable** and so is not tried. It
-    // wrote through the frame's `ram` query, which the family lost with the
-    // `read`/`write` ecalls: no instruction routed here touches memory, and
-    // the transfer rows that once brought a RAM query with them are gone. A
-    // forgery with no column to live in is a stronger refusal than a gate.
+    // The exit row storing 7 into the top stack word, never written before, is
+    // **unrepresentable** and so is not tried: the frame has no `ram` query,
+    // no instruction routed here touching memory. A forgery with no column to
+    // live in is a stronger refusal than a gate.
 
     // The exit rewriting a0.
     h.assert_rejects(
@@ -458,7 +435,7 @@ fn small(v: Fr) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// S17: the jump/branch/slt family, over `guests/control`
+// The jump/branch/slt family, over `guests/control`
 // ---------------------------------------------------------------------------
 
 /// `control`'s frame: pc, rs1, rs2, rd at slots 0 to 3.
@@ -492,9 +469,9 @@ fn jbs_cell(address: PolyAddress, row: usize, value: Fr) -> Cell {
     cell(JBS, address, row, value)
 }
 
-/// S17 acceptance 7, and the generic channel's two bindings. The honest,
-/// branch-heavy statement verifies (the harness asserts it); then, each
-/// refused in its class:
+/// The comparison, the pc, and the generic channel's two bindings. The honest,
+/// branch-heavy statement verifies (the harness asserts it); then, each refused
+/// in its class:
 ///
 /// - one corrupted `lt` cell, from `BLT(1, 0x80000000)`, which is not taken:
 ///   the comparison and the branch form refuse it, `Constraint`;
@@ -643,32 +620,28 @@ fn jalr_moved(r: usize, v: u64, next: u64) -> Vec<Cell> {
 }
 
 // ---------------------------------------------------------------------------
-// S18: the shift/bitwise and mul/div families, over `guests/alu`
+// `KECCAK_F`'s cells, and the anchor's linkage
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// S21: the delegation circuit's cells, and the anchor's linkage
-// ---------------------------------------------------------------------------
-
-/// S21 acceptance 5 and 6, over `guests/keccak-test`: eleven shards — six
-/// execution families at `2^20`, the two windows, S-IO's two public-value ones,
-/// and the `KECCAK_F` delegation shard, at `2^16` since S26d.
+/// Over `guests/keccak-test`: eleven shards — six execution families at `2^20`,
+/// the two RAM windows, the two public-value windows, and the `KECCAK_F`
+/// delegation shard at `2^18`.
 ///
-/// **5**, the circuit cell: four cells of the delegation witness, each corrupted
+/// **The circuit cells**: four cells of the delegation witness, each corrupted
 /// alone, each refused by the gate that reads it — `Constraint` — with the
-/// honest twin passing and the structural counts on screen beside them. The
-/// cells are S26d's: a state **byte**, a written word, a **round selector** and
-/// a **rotated byte**, the last two being the relations one round a row
-/// introduced. There is no state-bit twin because there is no state bit; and
-/// there is no gap twin because there is no `gap_w{j}` gate — the frame's gap is
-/// four `RANGE16` obligations now, refused in the `Lookup` class, which
+/// honest twin passing and the structural counts on screen beside them: a
+/// state **byte**, a written word, a **round selector** and a **rotated
+/// byte**. There is no state-bit twin because there is no state bit; and
+/// there is no gap twin because there is no `gap_w{j}` gate — the frame's gap
+/// is four `RANGE16` obligations, refused in the `Lookup` class, which
 /// `MOD_MUL`'s and `EC_ADD`'s one-row suites already read natively.
 ///
-/// **6**, the linkage: the three anchor twins of `docs/spec/delegation.md`
-/// §5.2, run through the family-parameterized helper every later family invokes by
-/// name. They are the block's, not one shard's: a dropped invocation's only
-/// symptom is the cross-shard root product, and that check reads the statement
-/// rather than a proof (`docs/spec/proof.md` §6).
+/// **The linkage**: the anchor twins of `docs/spec/delegation.md` §5.2, run
+/// through the family-parameterized helper
+/// `checker::assert_anchor_twins_refused`. They are the block's, not one
+/// shard's: a dropped invocation's only symptom is the cross-shard root
+/// product, and that check reads the statement rather than a proof
+/// (`docs/spec/proof.md` §6).
 #[test]
 #[ignore]
 fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
@@ -682,12 +655,12 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
     let h = TamperHarness::new(&setup, &archive);
 
     // The structural counts. Eleven shards — six `2^20` execution ones, the two
-    // `2^16` windows, one `2^16` delegation shard and S-IO's two `2^8` public
+    // `2^16` RAM windows, one `2^18` delegation shard and the two `2^12` public
     // value ones — and the delegation circuit's width: 208 memory columns
     // (`cycle`, `live`, `base`, `anchor_value` and four a frame word, the frame
-    // being 51 words since S26d) and 1,556 witness ones, not one of them a bit.
-    // The delegation shard is no longer the last: S-IO's families take the
-    // highest ids, and the statement's tail is ascending.
+    // being 51 words) and 1,556 witness ones, not one of them a bit. The
+    // delegation shard is not the last: the public value families take higher
+    // ids, and the statement's tail is ascending.
     let (public, proofs) = h.honest();
     let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
     assert_eq!(shards.len(), 11, "eleven shards: {shards:?}");
@@ -707,9 +680,9 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
     );
     assert_eq!(a.trace_vars, common::KECCAK_VARS);
 
-    // Acceptance 5. The invocation rows are the guest's 240 — ten permutations
-    // of 24 rounds — in order; the twins take the first, found by its mask
-    // rather than by its number.
+    // The circuit cells. The invocation rows are the guest's 240 — ten
+    // permutations of 24 rounds — in order; the twins take the first, found by
+    // its mask rather than by its number.
     let columns = shard_columns(&setup, &archive, KEC, 0, &public.windows)
         .expect("the delegation shard's columns");
     let at = |address: PolyAddress, row: usize| {
@@ -758,12 +731,11 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
         (KEC, 0),
         CONSTRAINT,
     );
-    // A round selector moved: this is the cell S26d introduced, and the one a
-    // prover would reach for. A row claiming a round other than the frame's
-    // would XOR the wrong constant into lane (0,0) — and `round_rule` refuses
-    // it, because the frame's word 0 is pinned to the selector's own weighted
-    // sum. Clearing the claimed round leaves the sum at 0 and the word at its
-    // value.
+    // A round selector moved: the cell a prover would reach for. A row claiming
+    // a round other than the frame's would XOR the wrong constant into lane
+    // (0,0) — and `round_rule` refuses it, because the frame's word 0 is pinned
+    // to the selector's own weighted sum. Clearing the claimed round leaves the
+    // sum at 0 and the word at its value.
     let claimed = (0..k::ROUNDS)
         .find(|r| at(kec::round_sel(*r), live_row) == Fr::ONE)
         .expect("a live row claims a round");
@@ -816,7 +788,7 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
         CONSTRAINT,
     );
 
-    // Acceptance 6. The requesting rows are the add/sub family's delegation
+    // The linkage. The requesting rows are the add/sub family's delegation
     // ecalls, found by the mirror query's own mask.
     let alu = shard_columns(&setup, &archive, ADD, 0, &public.windows).expect("the add/sub shard");
     let alu_at = |address: PolyAddress, row: usize| {
@@ -879,12 +851,12 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
 }
 
 // ---------------------------------------------------------------------------
-// S23 acceptances 5 and 6: the two recursion delegations' witness and anchor
+// `POSEIDON2` and `FR_ARITH`: their witnesses and their anchors
 // ---------------------------------------------------------------------------
 
-/// Acceptance 5: a corrupted cell in each new family's witness is refused, the
-/// honest twin passes, and the structural counts hold. Acceptance 6: the
-/// anchor's twins, per family, through the frozen helper.
+/// A corrupted cell in each family's witness is refused, the honest twin
+/// passes, and the structural counts hold; and the anchor's twins, per family,
+/// through the shared helper.
 ///
 /// `#[ignore]`d for the reason every twin in this file is: it proves
 /// `guests/recursion-ops`' block once honestly and again per twin.
@@ -899,10 +871,10 @@ fn s23_a5_a6_the_recursion_witnesses_and_anchors_are_pinned() {
     let archive = common::recursion_archive(&setup.program);
     let h = TamperHarness::new(&setup, &archive);
 
-    // The structural counts: a shard of each new family, in id order after
-    // every execution shard, each its circuit's width. They are **not** last
-    // since S-IO, whose two public value families take higher ids and prove one
-    // shard each; `ADVICE_WINDOWS` proves none, this guest having no advice.
+    // The structural counts: a shard of each family, in id order after every
+    // execution shard, each its circuit's width. They are **not** last: the
+    // two public value families take higher ids and prove one shard each;
+    // `ADVICE_WINDOWS` proves none, this guest having no advice.
     let (public, proofs) = h.honest();
     let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
     assert_eq!(
@@ -988,7 +960,7 @@ fn s23_a5_a6_the_recursion_witnesses_and_anchors_are_pinned() {
         (P2, 0),
         CONSTRAINT,
     );
-    // An input lane word alone: the permutation's output no longer matches.
+    // An input lane word alone: the permutation's output does not match.
     let in_word = p2_at(p2_c::word(0, p2_c::WORD_READ_VALUE), p2_live);
     h.assert_rejects(
         &tamper(vec![cell_of(
@@ -1050,7 +1022,7 @@ fn s23_a5_a6_the_recursion_witnesses_and_anchors_are_pinned() {
         (FA, 0),
     );
 
-    // --- The anchor, per family, through the frozen helper. Nothing here is
+    // --- The anchor, per family, through the shared helper. Nothing here is
     // either family's: the anchor is one mechanism.
     let alu = shard_columns(&setup, &archive, ADD, 0, &public.windows).expect("the add/sub shard");
     let alu_at = |address: PolyAddress, row: usize| {
@@ -1126,17 +1098,18 @@ fn s23_a5_a6_the_recursion_witnesses_and_anchors_are_pinned() {
 }
 
 // ---------------------------------------------------------------------------
-// S26: the `MOD_MUL` witness and its anchor
+// The `MOD_MUL` witness and its anchor
 // ---------------------------------------------------------------------------
 
-/// The fourth delegation family's twins, over `guests/mod-mul-ops`.
+/// `MOD_MUL`'s twins, over `guests/mod-mul-ops`.
 ///
-/// Two things are new here and neither is the anchor. **The quotient is a column
-/// no execution recorded**: `fill::mod_mul_witness` derives it, so a twin that
-/// moves it is a twin on the *prover's own* arithmetic and the fifteen limb
-/// equations are what refuse it. And **the modulus is a column**, so a twin that
-/// moves a modulus word moves the statement the row proves — which is refused by
-/// `writes_back_w{j}`, the gate that says the call did not rewrite its caller's
+/// Two things are particular to this family and neither is the anchor. **The
+/// quotient is a column no execution recorded**: `fill::mod_mul_witness`
+/// derives it, so a twin that moves it is a twin on the *prover's own*
+/// arithmetic and the fifteen limb equations are what refuse it. And **the
+/// modulus is a frame word's choice**, word 0 selecting it, so a twin that
+/// moves that word moves the statement the row proves — which is refused by
+/// `writes_back_w0`, the gate that says the call did not rewrite its caller's
 /// operands.
 ///
 /// `#[ignore]`d for the reason every twin in this file is: it proves
@@ -1152,23 +1125,18 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
     let archive = common::mod_mul_archive(&setup.program);
     let h = TamperHarness::new(&setup, &archive);
 
-    // The structural counts. `MOD_MUL`'s id is 15, above S-IO's three window
-    // families, so its shards sort after them — which `KECCAK_F`'s were until
-    // S-IO and S23's two are not. **`EC_ADD` sorts last, not `MOD_MUL`**: S26c
-    // gave `guests/mod-mul-ops` the projective `k256` patch too, so its image
-    // declares both, and id 17 is above 15.
+    // The structural counts. `MOD_MUL`'s id is 15, above the three value-window
+    // families, so its shards sort after them. **`EC_ADD` sorts last, not
+    // `MOD_MUL`**: `guests/mod-mul-ops` reaches the projective `k256` patch
+    // too, so its image declares both, and id 17 is above 15.
     let (public, proofs) = h.honest();
     let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
     let (last_family, _) = *shards.last().expect("a statement has shards");
     assert_eq!(last_family, EA, "EC_ADD sorts last: {shards:?}");
     let mm_shards = shards.iter().filter(|(f, _)| *f == MM).count();
-    // **One shard since S26c, and that is better coverage than the six it was.**
-    // The fixture kept `2^8` so this family would be multi-shard, because at
-    // that height the *last* shard was the only place a padding row appeared.
-    // `RANGE16` closed that option — the circuit does not exist below `2^16` —
-    // and made it unnecessary in the same move: `guests/mod-mul-ops`' 1,443
-    // invocations in a 65,536-row shard leave it 98% padding, so the live row
-    // and the padding row this test needs are both in shard 0.
+    // **One shard**: `guests/mod-mul-ops`' 1,443 invocations in a 65,536-row
+    // shard leave it 98% padding, so the live row and the padding row this
+    // test needs are both in shard 0.
     assert_eq!(mm_shards, 1, "one 2^16 shard holds the fixture: {shards:?}");
 
     let a = &setup.vk.circuit(MM).expect("a MOD_MUL circuit").artifact;
@@ -1208,14 +1176,13 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
         .find(|r| pad_at(mm_c::LIVE, *r) == Fr::ZERO)
         .expect("a padding row in the last shard");
 
-    // Since S26c this family range-checks through `RANGE16` rather than
-    // decomposing into bits, so a value and its bound travel together as the
-    // value and its **halfword**: shifting both by `2^16` and `1` leaves the
-    // derived low half exactly where it was, so both obligations still hold and
-    // what refuses the twin is a limb equation — the gate that says the
-    // multiplication was performed. The direction is chosen from the observed
-    // halfword so the twin cannot accidentally leave `[0, 2^16)` and be refused
-    // as a lookup instead.
+    // This family range-checks through `RANGE16` rather than decomposing into
+    // bits, so a value and its bound travel together as the value and its
+    // **halfword**: shifting both by `2^16` and `1` leaves the derived low half
+    // exactly where it was, so both obligations still hold and what refuses the
+    // twin is a limb equation — the gate that says the multiplication was
+    // performed. The direction is chosen from the observed halfword so the twin
+    // cannot accidentally leave `[0, 2^16)` and be refused as a lookup instead.
     let shift_with_halfword = |value: PolyAddress, hi: PolyAddress| -> Vec<Cell> {
         let (v, high) = (at(value, live), at(hi, live));
         let up = high == Fr::ZERO;
@@ -1259,7 +1226,7 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
     // --- The selector word the call rewrote. The read side is what the
     // frame's tuples carry, so moving the **write** side alone is refused by
     // `writes_back_w0` and by nothing in the multiset. Word 0 is the modulus
-    // selector since S26b, so this is also what stops an invocation reporting
+    // selector, so this is also what stops an invocation reporting
     // a field it was not asked for.
     let sel_write = mm_c::word(mm::SELECTOR_WORD, mm_c::WORD_WRITE_VALUE);
     h.assert_rejects(
@@ -1290,8 +1257,8 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
         (MM, pad_shard),
     );
 
-    // --- The anchor, through the frozen helper. Nothing here is this family's:
-    // the anchor is one mechanism, and this is its fourth caller.
+    // --- The anchor, through the shared helper. Nothing here is this family's:
+    // the anchor is one mechanism.
     let alu = shard_columns(&setup, &archive, ADD, 0, &public.windows).expect("the add/sub shard");
     let alu_at = |address: PolyAddress, row: usize| {
         alu.iter()

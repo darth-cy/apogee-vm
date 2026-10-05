@@ -1,12 +1,12 @@
 //! The standalone checkers, over a committed `CircuitArtifact` file or over a
 //! verifying key and a statement.
 //!
-//!     cargo run -p checker -- laws <artifact>      # Laws 1-4 and the lookup rules, §4.2
-//!     cargo run -p checker -- padding <artifact>   # the padding contract, §4.3
+//!     cargo run -p checker -- laws <artifact>      # Laws 1-4 and the lookup rules, gkr.md §4.2
+//!     cargo run -p checker -- padding <artifact>   # the padding contract, gkr.md §4.3
 //!     cargo run -p checker -- dump <artifact>      # the readable page
 //!     cargo run -p checker -- tape <verifying-key> <public-inputs>
 //!                                                  # the global commit phase's absorb
-//!                                                  # sequence, diffed against the frozen
+//!                                                  # sequence, diffed against the
 //!                                                  # pre-fork order
 //!
 //! Exit 0 when the check holds (or the dump or the tape is printed), 1 with the
@@ -52,7 +52,7 @@ fn artifact(command: &str, path: &str) {
 }
 
 /// The transcript tape: the global commit phase over this key and this
-/// statement, diffed against the frozen pre-fork order and printed.
+/// statement, diffed against the pre-fork order and printed.
 fn tape(key: &str, public: &str) {
     let vk = match verifier::load_verifying_key(&read(key)) {
         Ok(vk) => vk,

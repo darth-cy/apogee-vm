@@ -1,17 +1,16 @@
-//! S15's acceptance, over the combined toy: all four LogUp channels beside
-//! S14's memory gates, filled from `fib`'s real trace and decoded table.
+//! The LogUp channels over the combined toy: all four beside the memory gates,
+//! filled from `fib`'s real trace and decoded table.
 //!
-//! **Every test here is `#[ignore]`d, and CI runs the file by name with
-//! `--include-ignored --test-threads=1`.** `--include-ignored`, not
-//! `--ignored`, for the reason `.github/workflows/ci.yml` gives of the
-//! step: the latter runs *only* ignored tests, so a case added here without the
-//! attribute would be filtered out of the one step meant to run it. Not for
-//! want of an environment: the timestamp
-//! channel's table is `[0, 2^19)`, a table of `2^n` rows holds at most `2^n`
-//! values, and a Mercury opening needs an even variable count, so the smallest
-//! circuit that carries a gap obligation is `2^20` rows
-//! (`docs/spec/lookup.md` §3). One forward pass over it holds 144,703,478
-//! inner cells — 4.63 GB as `Fr` — and two at once would not fit a CI runner.
+//! **Every test here is `#[ignore]`d, and the file runs by name, outside CI,
+//! with `--include-ignored --test-threads=1`.** `--include-ignored`, not
+//! `--ignored`: the latter runs *only* ignored tests, so a case added here
+//! without the attribute would be filtered out of the one run meant for it. Not
+//! for want of an environment: the timestamp channel's table is `[0, 2^19)`, a
+//! table of `2^n` rows holds at most `2^n` values, and a Mercury opening needs
+//! an even variable count, so the smallest circuit that carries a gap
+//! obligation is `2^20` rows (`docs/spec/lookup.md` §3). One forward pass over
+//! it holds 144,703,478 inner cells — 4.63 GB as `Fr` — and two at once would
+//! not fit a CI runner.
 //!
 //! What the toy holds is `tools/kat-gen/src/lookup.rs`'s header. Everything
 //! about the artifact that does not need a forward pass — the laws, the
@@ -284,10 +283,10 @@ fn toy() -> Toy {
     let counted = build_multiplicities(&artifact, &columns, &specs).expect("the toy's tuples");
     columns.extend(counted);
 
-    // The shard's own transcript, in S16's order: every committed column's
-    // commitment absorbed, then `g` and `β` drawn under one challenge tag. The
-    // memory slots are the global argument's and come from a sponge of their
-    // own, as S14's harness draws them.
+    // The shard's own transcript, in a shard proof's order: every committed
+    // column's commitment absorbed, then `g` and `β` drawn under one challenge
+    // tag. The memory slots are the global argument's and come from a sponge
+    // of their own, as `common::memory_challenges` draws them.
     let base = BaseLayer::new(columns);
     let mut t = Transcript::new();
     absorb_commitments(&mut t, &artifact, &base);
@@ -298,7 +297,7 @@ fn toy() -> Toy {
 
     Toy {
         shard: Shard {
-            label: "the S15 toy over fib".to_string(),
+            label: "the combined toy over fib".to_string(),
             family: None,
             artifact,
             base,
@@ -311,8 +310,8 @@ fn toy() -> Toy {
 }
 
 /// Every committed column's Mercury commitment, absorbed as a `COMMITMENT`
-/// message of four `Fr` limbs — the base binding S16 uses, and the one a shard's
-/// local challenges must follow (`docs/spec/lookup.md` §2).
+/// message of four `Fr` limbs — the base binding a shard proof uses, and the
+/// one a shard's local challenges must follow (`docs/spec/lookup.md` §2).
 fn absorb_commitments(t: &mut Transcript, a: &CircuitArtifact, base: &BaseLayer) {
     let srs = toy_srs(a.trace_vars);
     for address in a.committed() {
@@ -377,15 +376,14 @@ fn every_channel_holds(toy: &Toy, values: &LayerValues) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 1: the honest toy
+// The honest toy
 // ---------------------------------------------------------------------------
 
-/// Acceptance 1. The combined toy over fib's real trace and decoded table:
-/// every law, the padding contract and both discharge cross-checks pass; no
-/// row violates a range obligation; the forward pass self-checks; every
-/// channel's root is reproduced natively, holds, and is `(0, nonzero)`; the
-/// memory roots are still the products they were; and the whole circuit proves
-/// and verifies.
+/// The combined toy over fib's real trace and decoded table: every law, the
+/// padding contract and both discharge cross-checks pass; no row violates a
+/// range obligation; the forward pass self-checks; every channel's root is
+/// reproduced natively, holds, and is `(0, nonzero)`; the memory roots are
+/// still the products they were; and the whole circuit proves and verifies.
 #[test]
 #[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
 fn the_combined_toy_proves_and_every_channel_holds() {
@@ -434,13 +432,13 @@ fn the_combined_toy_proves_and_every_channel_holds() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 2: the range-check tamper twin, the stage gate
+// The range-check tamper twin
 // ---------------------------------------------------------------------------
 
-/// Acceptance 2, the stage gate. One value moved out of `[0, 2^16)` — `word_hi`
-/// on a live row set to `2^16` — with the multiplicity column adjusted to
-/// rebalance the count it broke. The honest twin passes; the forged one fails
-/// **verification**, not merely the native evaluator.
+/// One value moved out of `[0, 2^16)` — `word_hi` on a live row set to `2^16` —
+/// with the multiplicity column adjusted to rebalance the count it broke. The
+/// honest twin passes; the forged one fails **verification**, not merely the
+/// native evaluator.
 ///
 /// Two forgeries, and the second is the interesting one. The prover first
 /// recounts its own multiplicities over the tampered witness, which cannot even
@@ -448,8 +446,8 @@ fn the_combined_toy_proves_and_every_channel_holds() {
 /// would — choose a multiplicity cell **after** `g`, solving
 /// `δ = (num/den)·(T_0 + g)` — and the channel balances, every check accepts it,
 /// and the proof verifies. What forbids that is the order of
-/// `docs/spec/lookup.md` §2 and nothing in the circuit, which is why acceptance
-/// 3 is a test and not a remark.
+/// `docs/spec/lookup.md` §2 and nothing in the circuit, which is why that order
+/// is a test (`crates/verifier-core/tests/reduce.rs`) and not a remark.
 #[test]
 #[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
 fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
@@ -515,13 +513,14 @@ fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
         "a forged output claim, refused at the top transition"
     );
 
-    // The other half of the item: a multiplicity chosen **after** `g`
-    // rebalances the channel outright. A multiplicity is a field vector, so a
-    // prover who knew `g` could add `δ = (num/den)·(T_0 + g)` at table row 0 and
-    // drive the channel's numerator to 0. What forbids it is the order of
+    // The other half: a multiplicity chosen **after** `g` rebalances the
+    // channel outright. A multiplicity is a field vector, so a prover who knew
+    // `g` could add `δ = (num/den)·(T_0 + g)` at table row 0 and drive the
+    // channel's numerator to 0. What forbids it is the order of
     // `docs/spec/lookup.md` §2 — every multiplicity commitment absorbed before
     // `g` is drawn — and nothing in the circuit;
-    // `the_lookup_challenges_follow_every_commitment` is that order.
+    // `a_shard_transcript_starts_with_its_seed_its_window_and_its_commitments`
+    // in `crates/verifier-core/tests/reduce.rs` is that order.
     let g = toy
         .shard
         .challenges
@@ -554,12 +553,12 @@ fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 3: the shard-local challenges follow every commitment
+// A toy SRS, for the commitments the shard-local challenges follow
 // ---------------------------------------------------------------------------
 
 /// An SRS of `2^power` powers of a `tau` written down here, built the way
 /// `crates/pcs`' suite builds one: real, structurally valid and completely
-/// insecure. Only `commit` is used — an opening is S16's.
+/// insecure. Only `commit` is used; nothing here opens.
 fn toy_srs(power: u32) -> srs::Srs {
     use curve::{G1Projective, G2Affine};
     use rayon::prelude::*;
@@ -604,23 +603,22 @@ fn toy_srs(power: u32) -> srs::Srs {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 4: S14's future read, now through the timestamp channel
+// A future read, through the timestamp channel
 // ---------------------------------------------------------------------------
 
-/// Acceptance 4. S14's acceptance 4 attack, rerun here: two `rs1` queries that
-/// read the same value at the same register, with their read timestamps
-/// swapped. The read tuples are a permutation of themselves, so the memory
-/// multiset still balances, and no gate is broken — `rs1_writes_back` sees the
-/// same values — so at S14 only the native evaluator saw it. Now the later of
-/// the two reads a timestamp after its own write, its gap is negative, and the
-/// timestamp channel refuses it: the tuple is a value `[0, 2^19)` does not
-/// hold, the multiplicities cannot even be recounted over it, and the channel's
-/// root is not `(0, nonzero)`.
+/// A future read: two `rs1` queries that read the same value at the same
+/// register, with their read timestamps swapped. The read tuples are a
+/// permutation of themselves, so the memory multiset still balances, and no
+/// gate is broken — `rs1_writes_back` sees the same values — so neither the
+/// multiset nor a gate sees it. The later of the two reads a timestamp after
+/// its own write, its gap is negative, and the timestamp channel refuses it:
+/// the tuple is a value `[0, 2^19)` does not hold, the multiplicities cannot
+/// even be recounted over it, and the channel's root is not `(0, nonzero)`.
 ///
-/// S14 swapped two reads of `x0`, which is the case where the values match by
-/// construction. `JUMP_BRANCH_SLT` makes no `rs1` query on `x0` in fib — a
-/// `jal` reads no source register at all — so the pair is found by its
-/// property instead of by its register.
+/// Two reads of `x0` are the case where the values match by construction, but
+/// `JUMP_BRANCH_SLT` makes no `rs1` query on `x0` in fib — a `jal` reads no
+/// source register at all — so the pair is found by its property instead of by
+/// its register.
 #[test]
 #[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
 fn s14s_future_read_now_fails_the_timestamp_channel() {
@@ -702,10 +700,10 @@ fn s14s_future_read_now_fails_the_timestamp_channel() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 6: the gated keys
+// The gated keys
 // ---------------------------------------------------------------------------
 
-/// Acceptance 6, all three cases of the gated-key convention.
+/// All three cases of the gated-key convention.
 ///
 /// 1. A row whose flag is 0 contributes exactly the neutral entry whatever its
 ///    key columns hold: garbage written into `and_a`, `and_b` and `and_c` on
@@ -789,12 +787,12 @@ fn the_gated_key_convention_holds_in_all_three_cases() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 7: the decoder
+// The decoder
 // ---------------------------------------------------------------------------
 
-/// Acceptance 7. Honest cycle rows bind to `DecodedTables`, which acceptance 1
-/// shows. Here: one decoded output moved, and a packed mask outside the table's
-/// domain — the all-zero mask included — each refused by the decoder channel.
+/// Honest cycle rows bind to `DecodedTables`, which the honest toy shows. Here:
+/// one decoded output moved, and a packed mask outside the table's domain — the
+/// all-zero mask included — each refused by the decoder channel.
 ///
 /// The mask is moved together with the bits that recompose it, so the
 /// booleanity and recomposition gates still hold and the lookup is the only
@@ -848,12 +846,12 @@ fn a_moved_decoded_output_and_an_illegal_mask_each_fail_the_decoder_channel() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 8: a multiplicity-only tamper
+// A multiplicity-only tamper
 // ---------------------------------------------------------------------------
 
-/// Acceptance 8. Honest values with one multiplicity cell changed: the witness
-/// is untouched, every gate holds, the recount names the column and the row, and
-/// the channel's root is no longer `(0, nonzero)`.
+/// Honest values with one multiplicity cell changed: the witness is untouched,
+/// every gate holds, the recount names the column and the row, and the
+/// channel's root is not `(0, nonzero)`.
 #[test]
 #[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
 fn one_changed_multiplicity_cell_fails_its_channel() {
@@ -884,10 +882,6 @@ fn one_changed_multiplicity_cell_fails_its_channel() {
     assert!(!channel_holds(roots[generic]));
     assert_eq!(check_channel_roots(&roots, &sums), Ok(()));
 }
-
-// ---------------------------------------------------------------------------
-// Acceptance 12: booleanity of the extracted bits
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // The shared tamper helpers

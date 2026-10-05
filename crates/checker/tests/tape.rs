@@ -1,7 +1,7 @@
-//! The transcript-tape validator, S20: the global commit phase's absorb
-//! sequence against the frozen pre-fork order of `docs/spec/proof.md`
-//! §2, the committed tape of S20's two-shard statement, and the negative
-//! control — a fork that swaps two absorptions.
+//! The transcript-tape validator: the global commit phase's absorb sequence
+//! against the pre-fork order of `docs/spec/proof.md` §2, the committed tape of
+//! the two-shard statement, and the negative control — a fork that swaps two
+//! absorptions.
 //!
 //! The statement here is built **shape only**, with stand-in points: a tape
 //! carries tags and payload lengths, never values. It is the same shape
@@ -23,9 +23,9 @@ use verifier_core::{
 
 const POINT: [u8; 64] = [0; 64];
 
-/// S20's two-shard statement's shape: add/sub in two shards, jump/branch/slt
-/// in one, `INIT_TEARDOWN` in one, `ZERO_WINDOWS` in none — and, since S-IO,
-/// the two public value families in one each and `ADVICE_WINDOWS` in none
+/// The two-shard statement's shape: add/sub in two shards, jump/branch/slt in
+/// one, `INIT_TEARDOWN` in one, `ZERO_WINDOWS` in none, the two public value
+/// families in one each and `ADVICE_WINDOWS` in none
 /// (`docs/spec/public-values.md` §4).
 fn key_and_statement() -> (VerifyingKey, PublicInputs) {
     let config = VmConfig {
@@ -114,13 +114,13 @@ fn fixture() -> Vec<String> {
         .collect()
 }
 
-/// Acceptance 3: the global commit phase's tape is the frozen pre-fork order,
-/// item for item, and it is the committed fixture.
+/// The global commit phase's tape is the pre-fork order, item for item, and it
+/// is the committed fixture.
 #[test]
 fn the_global_tape_is_the_frozen_order_and_the_committed_fixture() {
     let (vk, statement) = key_and_statement();
-    let lines = checker::check_global_tape(&vk, &statement)
-        .expect("the phase keeps the frozen pre-fork order");
+    let lines =
+        checker::check_global_tape(&vk, &statement).expect("the phase keeps the pre-fork order");
     assert_eq!(lines, fixture(), "the tape is the committed fixture");
     // The order, spelled out here a third time, so a change to both the phase
     // and the checker's expectation still has to face this list.
@@ -149,7 +149,7 @@ fn the_global_tape_is_the_frozen_order_and_the_committed_fixture() {
     );
     // G8: a group header per config family, a family with no shards included,
     // then one commitment message per shard, four limbs to a point. Seven
-    // families since S-IO, two of which run no shard here.
+    // families, two of which run no shard here.
     assert_eq!(
         lines
             .iter()
@@ -209,7 +209,7 @@ fn the_expected_tape_follows_the_statement_shape() {
 }
 
 /// The negative control: a fork of the global commit phase that swaps two
-/// absorptions. Its tape is not the frozen order, its memory challenges and
+/// absorptions. Its tape is not the pre-fork order, its memory challenges and
 /// its digest all differ, and a proof carrying its digest is refused as
 /// `Statement`.
 ///
@@ -228,7 +228,7 @@ fn swapped_global_commit(vk: &VerifyingKey, statement: &PublicInputs) -> Transcr
         &statement.shard_counts,
         &statement.windows,
     );
-    // The swap: G7 then G6, where the frozen order is G6 then G7.
+    // The swap: G7 then G6, where the order is G6 then G7.
     let io = io_digest(&statement.input, &statement.output);
     t.append_bytes(tags::PUBLIC_INPUTS, &io.to_bytes());
     t.append_scalar(tags::PROGRAM_IDENTITY, vk.identity.0);

@@ -1,5 +1,4 @@
-//! Acceptance 9: each committed toy artifact against an independent
-//! description of the toy.
+//! Each committed toy artifact against an independent description of the toy.
 //!
 //! `toy_constants` and `reference` are written from the toy's prose description
 //! (the header of `tools/kat-gen/src/gkr.rs`, restated in `tests/common/mod.rs`)

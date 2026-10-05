@@ -1,5 +1,4 @@
-//! S18's `MUL_DIV` circuit (`docs/spec/mul-div.md`), row by row, in ordinary
-//! CI.
+//! The `MUL_DIV` circuit (`docs/spec/mul-div.md`), row by row, in ordinary CI.
 //!
 //! No forward pass over `2^20` rows: each row is built by hand from what the
 //! instruction computes — Rust's own `u32`, `i32` and `i128` arithmetic, not
@@ -7,7 +6,7 @@
 //! and `violated_lookups`, its row-local scratch computed by
 //! `gkr::gate_values`. The two table channels, which `violated_lookups` does
 //! not read, are held here to the tables themselves. The proofs of the same
-//! rows are `crates/prover/tests/alu.rs`' and `crates/checker/tests/tamper.rs`'.
+//! rows are `crates/prover/tests/alu.rs`'.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -587,8 +586,8 @@ fn the_registry_holds_the_family() {
     assert_eq!(at_19.artifact, mul_div::artifact(19));
 }
 
-/// The layout is `docs/spec/mul-div.md` §2's, the gates §4's and the lookups
-/// §4.7's, by name and in order: 21 memory columns, 54 witness, 9 setup, two
+/// The layout is `docs/spec/mul-div.md` §2's, the gates and the lookups §4's,
+/// by name and in order: 21 memory columns, 54 witness, 9 setup, two
 /// range tables, 54 enforcing gates, 27 obligations over four channels, and a
 /// circuit 26 transitions deep at `2^20`.
 #[test]
@@ -926,8 +925,8 @@ const QUADRANTS: [(u32, u32); 4] = [
 ];
 
 /// The catalogue of honest rows: every kind over every sign quadrant, the
-/// multiply and division edge cases S18's acceptance 3 and 4 name, `rd = x0`,
-/// and the all-zero padding row.
+/// named multiply and division edge cases, `rd = x0`, and the all-zero padding
+/// row.
 fn honest_rows() -> Vec<(String, Row)> {
     let mut out: Vec<(String, Row)> = Vec::new();
 
@@ -940,7 +939,7 @@ fn honest_rows() -> Vec<(String, Row)> {
         }
     }
 
-    // Acceptance 3's named cases, and acceptance 4's.
+    // The named multiply and division cases.
     for (bit, a, b) in [
         (kind::MUL, 0x8000_0000, 0x8000_0000),
         (kind::MULH, 0x8000_0000, 0x8000_0000),
@@ -1121,9 +1120,9 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     r.query("rd", 3, 0, 0, 0);
     r.set("rd_is_zero", Fr::ONE);
     cases.push(("a padding row writing x0", r, vec!["rd_mask_rule"]));
-    // S14's control C8 on this frame: a padding row rewriting x10 after the
-    // program has exited. Its pc mask is 0, so the mask rule's `m_pc` factor
-    // is what refuses the write, and the decoded address and value with it.
+    // A padding row rewriting x10 after the program has exited. Its pc mask is
+    // 0, so the mask rule's `m_pc` factor is what refuses the write, and the
+    // decoded address and value with it.
     let mut r = Row::default();
     r.query("rd", 3, 10, 42, 43);
     r.set("rd_inv", f(10).inverse().expect("nonzero"))
@@ -1410,7 +1409,7 @@ fn every_booleanity_gate_refuses_a_value_of_two() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 5: the division encoding, exhaustively at a reduced width
+// The division encoding, exhaustively at a reduced width
 // ---------------------------------------------------------------------------
 
 /// The reduced word the exhaustive check runs at. Four bits: 256 operand
@@ -1445,10 +1444,10 @@ fn truncated(signed_op: bool, a: i128, b: i128, bits: u32) -> (i128, i128) {
     ((x / y).rem_euclid(word), (x % y).rem_euclid(word))
 }
 
-/// **Acceptance 5.** At a four-bit word, for every `(dividend, divisor)` pair
-/// and each of `DIV`, `DIVU`, `REM` and `REMU`, the constraint set determines
-/// the division witness up to exactly one freedom, and what survives is the
-/// ISA's answer.
+/// **The division encoding.** At a four-bit word, for every
+/// `(dividend, divisor)` pair and each of `DIV`, `DIVU`, `REM` and `REMU`, the
+/// constraint set determines the division witness up to exactly one freedom,
+/// and what survives is the ISA's answer.
 ///
 /// The method. The gates evaluated are
 /// `constraints::mul_div::arithmetic_gates(4)` themselves, through
@@ -1722,7 +1721,7 @@ fn the_division_encoding_admits_exactly_one_witness_at_a_reduced_width() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 4, as rows
+// The division's pins, as rows
 // ---------------------------------------------------------------------------
 
 /// The value of the relation `name`'s gate on `r`, through the kernel. Every
@@ -1934,8 +1933,9 @@ fn alu() -> (prover::Program, trace::TraceArchive) {
         params.heights[f as usize] = 1 << VARS;
     }
     let (tables, config) = program::decode_program(&image, &params).expect("the image decodes");
-    // Only the families S18 proves: an instruction of any other family would
-    // put a family in the config that no circuit proves.
+    // Only these four execution families: an instruction of any other would
+    // put that family in the config at `2^16`, a height no execution circuit
+    // has.
     let families: Vec<u32> = config.families.iter().map(|(f, _)| *f).collect();
     assert_eq!(
         families,
@@ -2015,7 +2015,7 @@ fn ran(program: &prover::Program, archive: &trace::TraceArchive) -> Vec<Ran> {
         .collect()
 }
 
-/// S18's acceptance 1, 3, 4 and 9 read from the trace a proof is about: every
+/// The family's coverage, read from the trace a proof is about: every
 /// one of the eight instructions runs; every row writes what RV32M defines,
 /// computed here from the ISA's table and not from the circuit; `div` and
 /// `rem` run in all four sign quadrants; all four divisions by zero run, and
@@ -2074,7 +2074,7 @@ fn the_guest_runs_the_acceptance_matrix() {
             r.bit == bit && r.rs1 == 0x8000_0000 && r.rs2 == u32::MAX
         });
     }
-    // The multiply corners acceptance 3 names.
+    // The multiply corners.
     for bit in [MUL, MULH] {
         has(&format!("{}(-2^31, -2^31)", mnemonic(bit)), &|r: &Ran| {
             r.bit == bit && r.rs1 == 0x8000_0000 && r.rs2 == 0x8000_0000

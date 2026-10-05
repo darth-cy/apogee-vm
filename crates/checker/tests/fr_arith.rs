@@ -4,9 +4,9 @@
 //! frame, the anchor's two tuples, the three operations, and the canonicity of
 //! every value that crosses the frame. The arithmetic itself is checked the
 //! only way a circuit can be — by running its forward pass over a witness
-//! built from **host `field::Fr`** and asserting the circuit accepts it. That
-//! is acceptance 1: if the circuit computed anything but what `Fr` computes,
-//! an honest witness would fail its own gates.
+//! built from **host `field::Fr`** and asserting the circuit accepts it. So if
+//! the circuit computed anything but what `Fr` computes, an honest witness
+//! would fail its own gates.
 //!
 //! Every negative control corrupts one cell of an otherwise honest witness and
 //! names the relation that must catch it.
@@ -359,8 +359,8 @@ fn the_circuit_keeps_every_rule() {
 // The arithmetic is `field::Fr`'s
 // ---------------------------------------------------------------------------
 
-/// Acceptance 1. An honest witness built from host `Fr` satisfies every gate,
-/// for add, mul, inverse, `inverse(0)`, and a round trip `a·inverse(a) = 1`.
+/// An honest witness built from host `Fr` satisfies every gate, for add, mul,
+/// inverse, `inverse(0)`, and a round trip `a·inverse(a) = 1`.
 #[test]
 fn the_forward_pass_is_field_fr() {
     let a = fr_arith::artifact(VARS);
@@ -491,8 +491,8 @@ fn a_forged_inverse_is_refused() {
     assert_eq!(refusal(&a, columns), "inv_is_an_inverse");
 }
 
-/// The gate the prompt's constraint set leaves out: at `a = 0` the witnessed
-/// inverse is otherwise free, and "inverse(0) = 0" would be prose.
+/// `inverse_of_zero_is_zero`: without it, at `a = 0` the witnessed inverse is
+/// free, and "inverse(0) = 0" would be prose.
 #[test]
 fn a_free_inverse_at_zero_is_refused() {
     let a = fr_arith::artifact(VARS);
@@ -507,7 +507,7 @@ fn a_free_inverse_at_zero_is_refused() {
     assert_eq!(refusal(&a, columns), "inverse_of_zero_is_zero");
 }
 
-/// Acceptance 7: a row claiming two operations at once.
+/// A row claiming two operations at once.
 ///
 /// The forgery is chosen so that no *other* gate catches it first, which is
 /// what makes this a test of `one_op_a_live_row` rather than of the opcode.
@@ -531,7 +531,7 @@ fn a_row_claiming_two_operations_is_refused() {
     assert_eq!(refusal(&a, columns), "one_op_a_live_row");
 }
 
-/// Acceptance 3: a frame operand at or above the modulus has no witness.
+/// A frame operand at or above the modulus has no witness.
 #[test]
 fn a_non_canonical_operand_is_refused() {
     let a = fr_arith::artifact(VARS);

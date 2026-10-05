@@ -72,7 +72,7 @@ fn forwarded(a: &CircuitArtifact, seed: u64) -> LayerValues {
 
 type Constructor = fn(u32) -> CircuitArtifact;
 
-/// The widest frame, `ADD_SUB_LUI_AUIPC`'s seven queries: 8 leaves a side.
+/// A padded frame, `ADD_SUB_LUI_AUIPC`'s five queries: 8 leaves a side.
 fn alu_frame(trace_vars: u32) -> CircuitArtifact {
     family_frame_artifact(family::ADD_SUB_LUI_AUIPC, trace_vars)
 }
@@ -84,7 +84,7 @@ fn reg_frame(trace_vars: u32) -> CircuitArtifact {
 
 /// Each artifact at `trace_vars` 4 beside the layer its first halving list
 /// reads: layer 1 for a window, whose two leaves it halves at once; layer 4 for
-/// a seven-query frame, whose 16 leaves take three row-wise lists; and layer 3
+/// a five-query frame, whose 16 leaves take three row-wise lists; and layer 3
 /// for a four-query frame, whose 8 leaves take two. The two frame widths are
 /// here so the hook is held to a depth it cannot have hardcoded.
 const HALVING_INPUTS: [(&str, Constructor, usize); 3] = [
@@ -214,21 +214,21 @@ fn the_memory_artifacts_keep_the_laws_and_the_padding_contract() {
 // An honest statement over a committed guest
 // ---------------------------------------------------------------------------
 
-/// S14 acceptance 1, the honest statement of a committed guest: every shard's
-/// forward pass keeps every gate, and its roots are what `memory_roots`
-/// recomputes; every artifact keeps the checker's laws and padding contract,
-/// and each frame the product-tree clause; the witness-row evaluator,
-/// `violated_relations`, reports nothing on every row of every window and on
-/// every live row and the first padding row of every frame, and the lookup
-/// evaluator nothing on any row; the window list keeps the verifier's rules;
-/// the roots reconcile with the boundary `build_boundary_finals` fills at the
-/// image's entry pc; and every window shard proves and verifies, and the frames
-/// when `prove_frames` says so. Fails on any gate, relation or obligation a
-/// builder's honest column breaks, and on any imbalance between the builders.
+/// The honest statement of a committed guest: every shard's forward pass keeps
+/// every gate, and its roots are what `memory_roots` recomputes; every artifact
+/// keeps the checker's laws and padding contract, and each frame the
+/// product-tree clause; the witness-row evaluator, `violated_relations`,
+/// reports nothing on every row of every window and on every live row and the
+/// first padding row of every frame, and the lookup evaluator nothing on any
+/// row; the window list keeps the verifier's rules; the roots reconcile with
+/// the boundary `build_boundary_finals` fills at the image's entry pc; and
+/// every window shard proves and verifies, and the frames when `prove_frames`
+/// says so. Fails on any gate, relation or obligation a builder's honest column
+/// breaks, and on any imbalance between the builders.
 ///
 /// The execution side is one frame per family that ran, each under that
 /// family's `frame_queries`: a single frame cannot hold cycles of two families,
-/// since an ecall row needs `arg1` and `arg2` and a load row needs `load`.
+/// since an ecall row needs `deleg` and a load row needs `load`.
 fn honest_statement(name: &str, input: u32, prove_frames: bool) {
     let t = traced(name, input);
     let memory = memory_challenges();
@@ -372,13 +372,12 @@ fn a_frame_per_family_in_any_order_reconciles() {
 
 /// **The frame builders' two readings agree, on every family of every guest.**
 ///
-/// `trace::build_memory_columns` and `trace::build_frame_witness` read a shard's
-/// **rows**, because that is all a streaming prover ever holds
+/// `trace::build_memory_columns` and `trace::build_frame_witness` read a
+/// shard's **rows**, because that is all a streaming prover ever holds
 /// (`docs/spec/streaming.md` §3); `checker::memory_columns_from_log` and
-/// `checker::frame_witness_from_log` read the **memory event log**, which is
-/// what those two read before the streaming stage. The two share no code, and
-/// this is the check that they are one table computed twice: every column, every
-/// row, over real executions.
+/// `checker::frame_witness_from_log` read the **memory event log**. The two
+/// share no code, and this is the check that they are one table computed twice:
+/// every column, every row, over real executions.
 ///
 /// It is the whole safety net under "a shard's columns are its execution's
 /// memory queries". The row-based reading has to rebuild each row's events —
@@ -387,10 +386,10 @@ fn a_frame_per_family_in_any_order_reconciles() {
 /// (`trace::Row::delegation_space`) — and any of those got wrong is a column
 /// that differs here.
 ///
-/// `keccak-test` and `recursion-ops` are in the list for exactly that last one:
-/// they are the committed guests that make delegation calls, so their add/sub
-/// family carries live `deleg` queries and a `deleg_space` column with three
-/// different tags in it.
+/// `keccak-test`, `recursion-ops` and `mod-mul-ops` are in the list for
+/// exactly that last one: they make delegation calls, so their add/sub family
+/// carries live `deleg` queries and a `deleg_space` column, with five different
+/// tags between them.
 #[test]
 fn the_row_reading_and_the_log_reading_of_a_frame_agree() {
     let mut checked = (0, 0);
@@ -399,9 +398,9 @@ fn the_row_reading_and_the_log_reading_of_a_frame_agree() {
         ("heap", 40, 0, HEIGHT),
         ("keccak-test", 0, 6, HEIGHT),
         ("recursion-ops", 0, 9, HEIGHT),
-        // S26's fixture, at `2^18` for the reason `deleg_space_tags` gives: its
-        // `.text` reaches pc `0x2161a`. It is the third guest here that makes
-        // delegation calls, and the only one that makes S26's.
+        // At `2^18`, for the reason `common::traced_exiting_at` gives: its
+        // `.text` reaches pc `0x45be6`. It is the third guest here that makes
+        // delegation calls, and the only one that calls `MOD_MUL` and `EC_ADD`.
         ("mod-mul-ops", 0, 28, 1 << 18),
         ("mem", 0, 50, HEIGHT),
         ("alu", 0, 96, HEIGHT),
@@ -467,19 +466,19 @@ fn the_row_reading_and_the_log_reading_of_a_frame_agree() {
 /// The `deleg_space` column is the thing the row reading recovers from `a7`
 /// rather than from an event's own address space, so it gets its own check:
 /// every live `deleg` query names the requested family's tag and no other row
-/// does, and between the three guests all four tags appear.
+/// does, and between the three guests five tags appear.
 ///
-/// `keccak-test` is S21's fixture and requests `KECCAK_F` alone;
-/// `recursion-ops` is S23's and requests `POSEIDON2` and `FR_ARITH` through
-/// ordinary `Fr` arithmetic; `mod-mul-ops` is S26's and requests `MOD_MUL`, both
-/// by name and through `guests/vendor/k256`'s patched field multiply. No
-/// committed guest requests all four, which is why this takes three.
+/// `keccak-test` requests `KECCAK_F` alone; `recursion-ops` requests
+/// `POSEIDON2` and `FR_ARITH` through ordinary `Fr` arithmetic; `mod-mul-ops`
+/// requests `MOD_MUL`, both by name and through `guests/vendor/k256`'s patched
+/// field multiply, and `EC_ADD` through its patched `ProjectivePoint`. No
+/// committed guest requests all five, which is why this takes three.
 #[test]
 fn the_delegation_space_column_is_the_requested_family() {
     let seen: Vec<u64> = [
         ("keccak-test", 6, HEIGHT),
         ("recursion-ops", 9, HEIGHT),
-        // `2^18`: its `.text` reaches pc `0x2161a` and a table's row `i` is pc `2i`.
+        // `2^18`: its `.text` reaches pc `0x45be6` and a table's row `i` is pc `2i`.
         ("mod-mul-ops", 28, 1 << 18),
     ]
     .into_iter()
@@ -497,9 +496,9 @@ fn the_delegation_space_column_is_the_requested_family() {
             constants::address_space::DELEGATION_MOD_MUL as u64,
             constants::address_space::DELEGATION_EC_ADD as u64,
         ],
-        "the three guests request five delegation spaces: S26's four, and EC_ADD \
-         since S26c patched `guests/vendor/k256`'s `ProjectivePoint`, which \
-         `mod-mul-ops`' group arithmetic reaches without naming a shim"
+        "the three guests request five delegation spaces, EC_ADD through \
+         `guests/vendor/k256`'s patched `ProjectivePoint`, which `mod-mul-ops`' \
+         group arithmetic reaches without naming a shim"
     );
 }
 

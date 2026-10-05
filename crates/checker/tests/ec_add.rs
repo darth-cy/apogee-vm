@@ -39,8 +39,8 @@
 //! all six families and already proved refused at block level over four of
 //! them in `tests/tamper.rs` — including `MOD_MUL`, which also carries a lookup
 //! channel, so even that combination is not new. A fifth replay would be the
-//! same mutation set at another re-proof in the slowest deferred suite, which
-//! the root `CLAUDE.md`'s test rule exists to refuse.
+//! same mutation set at the cost of another re-proof in the slowest suite: cost
+//! without information.
 
 use constants::ec_add as f;
 use constants::{challenge_slot, guest_memory, memory as mem};
@@ -1026,8 +1026,8 @@ fn the_circuit_keeps_every_rule() {
 
 #[test]
 fn it_is_the_one_delegation_family_with_a_channel() {
-    // `docs/spec/delegation.md` §9's amendment, as an assertion: this family
-    // and `MOD_MUL` carry `RANGE16` at `2^16`, and the other four carry none.
+    // `docs/spec/delegation.md` §9's table, as an assertion: this family
+    // carries `RANGE16` alone, and its floor is that table's `2^16`.
     let channels = c::channels();
     assert_eq!(channels.len(), 1);
     assert_eq!(
@@ -1398,8 +1398,7 @@ fn a_padding_row_holds_and_a_live_one_next_to_it_does_too() {
 #[test]
 fn a_height_moves_only_the_halving_layers() {
     // A delegation family's height adds one halving list per variable and
-    // changes no gate (`docs/spec/delegation.md` §9), which is what made
-    // `MOD_MUL`'s raise a re-pin and not a redesign.
+    // changes no gate (`docs/spec/delegation.md` §9).
     let lo = c::artifact(VARS);
     let hi = c::artifact(VARS + 2);
     let d = (hi.trace_vars - lo.trace_vars) as usize;

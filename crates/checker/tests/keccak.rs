@@ -5,7 +5,7 @@
 //! transformations and the two frame-pointer checks that must be in the emitted
 //! artifact rather than in a comment.
 //!
-//! **There is no forward pass here, and since S26d there cannot be.** This
+//! **There is no forward pass here, and there cannot be.** This
 //! family carries the `RANGE16` and `XOR8` channels, whose tables each need
 //! sixteen variables, so its circuit cannot be built at the reduced height a
 //! whole-shard forward pass would need — `family_circuit` returns `None` below
@@ -533,8 +533,8 @@ fn base(k: u32) -> u32 {
 
 /// The 26 live invocations: **one whole permutation**, round 0 through 23, each
 /// reading the state the one before it wrote and all at one frame base — which
-/// is the S26d shape, the chain being the frame's own RAM history — then two
-/// corners.
+/// is the family's shape, the chain being the frame's own RAM history — then
+/// two corners.
 ///
 /// The corners are the two states whose byte masks are degenerate: the all-zero
 /// state, whose every intermediate is 0 until iota puts the round constant into
@@ -634,12 +634,12 @@ fn the_shape_is_the_manifests() {
             + 1 + 2 * k::STATE_WORDS
             // rho and pi: one gate a byte of the state
             + k::LANES * 8,
-        "the enforcing gates are the manifest's"
+        "the enforcing gates are the spec's"
     );
     assert_eq!(enforcing, 385);
 
-    // Four outputs before S26d, six now: the two memory roots and a `(num, den)`
-    // pair per channel, in `channels()` order.
+    // Six outputs: the two memory roots and a `(num, den)` pair per channel, in
+    // `channels()` order.
     assert_eq!(a.outputs.len(), 6);
     // One gate list, ten row-wise reductions — the XOR8 tree's depth — and one
     // halving list a variable.
@@ -650,9 +650,8 @@ fn the_shape_is_the_manifests() {
 ///
 /// A height is `trace_vars`: it adds one halving list per variable, carrying one
 /// node per output, and it changes no gate and no obligation. `2^16` is this
-/// family's only admissible height — `family_circuit` refuses less and the menu's
-/// next entry is four times the cost — but the artifact is data and builds at
-/// either, so the property is checkable.
+/// family's floor — `family_circuit` refuses less — and `2^18` its height, and
+/// the artifact builds at both, so the property is checkable.
 #[test]
 fn a_height_moves_only_the_halving_layers() {
     let (low, high) = (keccak::artifact(16), keccak::artifact(18));
@@ -670,7 +669,7 @@ fn a_height_moves_only_the_halving_layers() {
     );
 }
 
-/// The one height, and both channels' floors.
+/// The family's floor, and both channels'.
 #[test]
 fn the_channels_set_the_family_floor() {
     use constants::family::KECCAK_F as KEC;
@@ -705,7 +704,7 @@ fn the_round_is_the_executors() {
     }
 }
 
-/// **Acceptance: the circuit computes one Keccak round, on every round.**
+/// **The circuit computes one Keccak round, on every round.**
 ///
 /// The witness is built from `u64` arithmetic in this file and from nothing the
 /// prover or the executor owns. If the circuit stated any other relation — a
@@ -954,10 +953,10 @@ fn a_misaligned_base_is_refused() {
 /// anywhere reads `parity`, `c_mask`, `theta_d` or `chi_and`, so a wrong value
 /// breaks no relation and is refused by the obligation that names it.
 ///
-/// That is the statement of S26d's architecture in one test: the round **is** its
-/// obligations, and the gates only tie those to the frame. The cells here are one
-/// per stage, so a stage whose obligation was dropped or misrouted shows up as a
-/// corruption nothing catches.
+/// That is the statement of this family's architecture in one test: the round
+/// **is** its obligations, and the gates only tie those to the frame. The cells
+/// here are one per stage, so a stage whose obligation was dropped or misrouted
+/// shows up as a corruption nothing catches.
 #[test]
 fn a_round_stage_no_gate_reads_is_refused_by_the_channel_alone() {
     let a = keccak::artifact(VARS);
@@ -1041,8 +1040,8 @@ fn a_changed_iota_byte_is_refused() {
     assert!(xor8_refusal(&a, &broken).contains(&"iota_out_b0_xor".to_string()));
 }
 
-/// A gap chunk is refused by `RANGE16` **alone**: since S26d this family
-/// range-checks rather than decomposing, so there is no `gap_w{j}` gate and the
+/// A gap chunk is refused by `RANGE16` **alone**: this family range-checks
+/// rather than decomposing, so there is no `gap_w{j}` gate and the
 /// obligations are the bound and the decomposition at once.
 #[test]
 fn a_changed_gap_chunk_is_refused_by_the_channel_alone() {

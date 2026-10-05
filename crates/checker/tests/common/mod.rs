@@ -71,8 +71,8 @@ pub fn toys() -> [(&'static str, CircuitArtifact); 2] {
 }
 
 /// `x − x·x = 0` on gate list 0, named `<name>_is_boolean`, as a gate and as
-/// its relation. Since S15 a lookup's selector must carry one
-/// (`docs/spec/lookup.md` §2), so a toy a test selects on needs it.
+/// its relation. A lookup's selector must carry one (`docs/spec/lookup.md` §2),
+/// so a toy a test selects on needs it.
 pub fn add_booleanity(a: &mut CircuitArtifact, x: PolyAddress, name: &str) {
     let gate = GateDef::Quadratic {
         constant: lit(0),
@@ -244,7 +244,7 @@ pub const FAMILY_NAMES: [&str; 7] = [
 use transcript::Transcript;
 
 /// Every family's height: the init families' `h`, and tall enough for every
-/// instruction table of every committed guest but `mod-mul-ops`.
+/// instruction table of every committed guest but `mod-mul-ops` and `ec-ops`.
 pub const HEIGHT: u32 = 1 << 16;
 
 /// The guests, each on the input `crates/emulator/tests/common` runs it on:
@@ -286,8 +286,8 @@ pub fn traced_exiting(name: &str, input: u32, status: i32) -> Traced {
 /// [`traced_exiting`] at a height of the caller's choosing.
 ///
 /// A decoded table's row `i` is pc `2i`, so a guest whose `.text` outgrows
-/// `2·HEIGHT` needs a taller one: `guests/mod-mul-ops` reaches pc `0x452c6` and
-/// takes `2^18`. It is the only committed guest that needs one.
+/// `2·HEIGHT` needs a taller one: `guests/mod-mul-ops` reaches pc `0x45be6` and
+/// takes `2^18`. It and `guests/ec-ops` are the committed guests that need one.
 pub fn traced_exiting_at(name: &str, input: u32, status: i32, height: u32) -> Traced {
     let path = format!(
         "{}/../loader/tests/vectors/{name}.elf",
@@ -323,7 +323,7 @@ pub fn traced_exiting_at(name: &str, input: u32, status: i32, height: u32) -> Tr
     }
 }
 
-/// Slots 1–4, drawn from a fresh transcript that binds nothing. S16's global
+/// Slots 1–4, drawn from a fresh transcript that binds nothing. The global
 /// transcript owns the real schedule — the statement, every memory column's
 /// commitment and the boundary absorbed before the squeeze
 /// (`docs/spec/memory.md` §6.1). Here they are only values no trace was chosen
@@ -389,8 +389,8 @@ pub fn frame_shard(
 
 /// Each execution family that ran, with the cycles its frame proves:
 /// `t.traces.families` in order, the families that never ran dropped. One
-/// frame cannot hold two families' cycles — an ecall row needs `arg1` and
-/// `arg2`, a load row needs `load` — so a statement's execution side is one
+/// frame cannot hold two families' cycles — an ecall row needs `deleg`, a
+/// load row needs `load` — so a statement's execution side is one
 /// frame per family, each under its own query list.
 pub fn frame_plan(t: &Traced) -> Vec<(u32, Vec<u64>)> {
     let ran = t.traces.families.iter().filter(|f| !f.is_empty());
@@ -621,8 +621,8 @@ pub fn witness_row(a: &CircuitArtifact, values: &LayerValues, row: usize) -> Wit
 }
 
 /// Prove `values` and verify the proof, each on a fresh transcript bound to
-/// the committed columns' witness digest as S13's harness binds a base, then
-/// discharge every base claim against its column.
+/// the committed columns' witness digest as `crates/gkr`'s test harness binds a
+/// base, then discharge every base claim against its column.
 pub fn prove_and_verify(shard: &Shard, values: &LayerValues) -> Result<(), GkrError> {
     let digest = witness_digest(&committed(shard));
     let bound = || {

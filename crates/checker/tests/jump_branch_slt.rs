@@ -1,5 +1,5 @@
-//! S17's `JUMP_BRANCH_SLT` circuit (`docs/spec/jump-branch-slt.md`), row by
-//! row, in ordinary CI.
+//! The `JUMP_BRANCH_SLT` circuit (`docs/spec/jump-branch-slt.md`), row by row,
+//! in ordinary CI.
 //!
 //! No forward pass over `2^20` rows: each row is built by hand from what the
 //! instruction computes — Rust's own `u32` and `i32` arithmetic, not the
@@ -11,12 +11,12 @@
 //! columns the row carries. The proofs of the same rows are
 //! `crates/prover/tests/control.rs`' and `crates/checker/tests/tamper.rs`'.
 //!
-//! Acceptance 2 (the comparison, exhaustively at a reduced width and pinned at
-//! full width), 4 (the SLTI defect), 8 (padding) and 9 (the legal masks) are
-//! here in full; 3 and 5 as rows and in the guest's trace, whose proof is
-//! `crates/prover/tests/control.rs`'; 6 as the honest prover's refusal to count
-//! the decoder channel over a jump into the middle of an instruction, whose
-//! proof is the tamper file's; and 7's forged `lt` as rows.
+//! The comparison (exhaustively at a reduced width and pinned at full width),
+//! the SLTI defect, padding and the legal masks are here in full; the control
+//! flow and `rd = x0` as rows and in the guest's trace, whose proof is
+//! `crates/prover/tests/control.rs`'; a jump into the middle of an instruction
+//! as the honest prover's refusal to count the decoder channel over it; and
+//! the forged `lt` as rows.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -488,8 +488,8 @@ fn expression(a: &CircuitArtifact, committed: &[Fr], gate: &constraints::GateDef
 /// (`docs/spec/lookup.md` §4) — is neither the `ZeroEntry` nor an entry of the
 /// packed table, and a decoder lookup whose gated tuple — `s·(e_j + 1) − 1` —
 /// is neither the table row the row carries in its own `S` columns nor the
-/// `MINUS_ONE` padding row, which every decoded table holds (S11's height
-/// rule).
+/// `MINUS_ONE` padding row, which every decoded table holds
+/// (`docs/spec/program.md` §5).
 fn violated_tables(a: &CircuitArtifact, r: &Row) -> Vec<String> {
     let committed = r.committed(a);
     let layout = a.committed();
@@ -576,8 +576,8 @@ fn none() -> Vec<String> {
 
 /// The committed fixture is the constructor at the family's default height,
 /// and the circuit keeps every rule both enforcement points hold it to: the
-/// laws, the padding contract and its product-tree clause, S14's memory rules,
-/// and S15's discharge rule — by `constraints` and, sharing no code, by this
+/// laws, the padding contract and its product-tree clause, the memory rules,
+/// and the discharge rule — by `constraints` and, sharing no code, by this
 /// crate.
 #[test]
 fn the_circuit_is_the_fixture_and_keeps_every_rule() {
@@ -855,9 +855,8 @@ fn the_registry_holds_the_family() {
     assert_eq!(family_circuit(family::JUMP_BRANCH_SLT, 18), None);
     let at_19 = family_circuit(family::JUMP_BRANCH_SLT, 19).expect("the family at 2^19");
     assert_eq!(at_19.artifact, jump_branch_slt::artifact(19));
-    // Since S19 every execution family is registered, each in its own suite;
-    // what is still `None` for all of them is a height below the timestamp
-    // channel's width.
+    // Every execution family is registered, each in its own suite; what is
+    // `None` for all of them is a height below the timestamp channel's width.
     for id in [family::MEM_WORD, family::MEM_SUBWORD, family::ATOMICS] {
         assert!(family_circuit(id, VARS).is_some(), "family {id}");
         assert_eq!(family_circuit(id, 18), None, "family {id} at 18");
@@ -873,7 +872,7 @@ fn the_registry_holds_the_family() {
 /// mixed signs, each branch taken and not taken — backward too, and to its own
 /// fall-through — each jump forward, backward and to `x0`, a `jalr` whose sum
 /// wraps and one whose bit 0 it drops, the compressed forms, `rd = x0` for all
-/// four comparisons (acceptance 5), and the all-zero padding row.
+/// four comparisons, and the all-zero padding row.
 #[test]
 fn every_row_kind_satisfies_every_gate_and_every_bound() {
     let a = artifact();
@@ -948,10 +947,10 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         r,
         vec!["rd_write_masked", "rd_mask_rule"],
     ));
-    // S14's control C8 on this family: a padding row rewriting x10, and one
-    // whose free kind bits claim jal to make the write look owed — every
-    // other gate then holds, its pc and immediate being 0, so the mask rule's
-    // m_pc factor is the one thing that refuses it.
+    // A padding row rewriting x10, and one whose free kind bits claim jal to
+    // make the write look owed — every other gate then holds, its pc and
+    // immediate being 0, so the mask rule's m_pc factor is the one thing that
+    // refuses it.
     let mut r = Row::default();
     r.query("rd", 3, 10, 42, 43);
     r.set("rd_inv", f(10).inverse().unwrap())
@@ -1011,8 +1010,8 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         .set("cmp_gap", f(lhs.wrapping_sub(2046) as u64))
         .set("eq_inv", (f(lhs as u64) - f(2046)).inverse().unwrap());
     cases.push(("an slti comparing against imm − 1", r, vec!["cmp_rhs_rule"]));
-    // The pitfall the prompt names: a branch comparing rs1 against rs2 plus
-    // its displacement, every value computed from that operand refreshed.
+    // The pitfall: a branch comparing rs1 against rs2 plus its displacement,
+    // every value computed from that operand refreshed.
     let mut r = row("beq not taken");
     let rhs = 1 + 8;
     let gap = INT_MIN.wrapping_sub(rhs);
@@ -1115,7 +1114,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         r,
         vec!["jalr_drop_boolean"],
     ));
-    // S14's truncation target: a row of this family writing HALT_PC.
+    // The truncation target: a row of this family writing HALT_PC.
     let mut r = row("bne not taken");
     r.set("pc_write_value", Fr::ONE).set("next_pc_hi", Fr::ZERO);
     cases.push(("a branch writing HALT_PC", r, vec!["next_pc_rule"]));
@@ -1170,7 +1169,7 @@ fn every_booleanity_gate_refuses_a_value_of_two() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 2: the comparison
+// The comparison
 // ---------------------------------------------------------------------------
 
 /// A comparison over plain columns, for evaluating the gadget's equation
@@ -1211,11 +1210,11 @@ fn equation_at(gate: &constraints::GateDef, c: &Comparison, cells: [(PolyAddress
     eval_gate(gate, &values, &ExternalChallenges::new())
 }
 
-/// Acceptance 2, exhaustively: at a 6-bit word, for every operand pair, signed
-/// and unsigned, exactly one `(lt, gap)` with `lt` boolean and `gap` in the
-/// word satisfies `constraints::gadgets::comparison_equation` — and its `lt` is
-/// the ordering Rust computes — in every sign quadrant; and each `lt` has a
-/// field solution outside the word, so the range bound on `gap` is what
+/// The comparison, exhaustively: at a 6-bit word, for every operand pair,
+/// signed and unsigned, exactly one `(lt, gap)` with `lt` boolean and `gap` in
+/// the word satisfies `constraints::gadgets::comparison_equation` — and its
+/// `lt` is the ordering Rust computes — in every sign quadrant; and each `lt`
+/// has a field solution outside the word, so the range bound on `gap` is what
 /// leaves one.
 #[test]
 fn exactly_one_lt_and_gap_satisfy_the_comparison_at_a_reduced_width() {
@@ -1285,7 +1284,7 @@ fn exactly_one_lt_and_gap_satisfy_the_comparison_at_a_reduced_width() {
     assert_eq!(quadrants, want);
 }
 
-/// Acceptance 2 at full width: `BLT(0x80000000, 1)` is taken,
+/// The comparison at full width: `BLT(0x80000000, 1)` is taken,
 /// `BGE(1, 0x80000000)` is taken, `BLTU(0x80000000, 1)` is not, and a
 /// mixed-sign `slt` answers 1 — each an honest row that holds, and each with
 /// its answer flipped refused: through the equation when the gap is left, and
@@ -1349,15 +1348,15 @@ fn the_pinned_full_width_comparisons_answer_correctly() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 4: the SLTI defect
+// The SLTI defect
 // ---------------------------------------------------------------------------
 
-/// Acceptance 4. `slti x5, x6, -1` with `x6 = 5` answers 0, and `sltiu`
-/// answers 1; with `x6 = -5`, both answer 1. The retired table read SLTI's
-/// sign from `rs2`'s high halfword alone — 0, `rs2` being absent — and so
-/// compared `5` against `0xffffffff` unsigned and answered 1. That reading
-/// satisfies every gate here: only the `U16GetSign` lookup refuses its sign,
-/// and the `cmp_rhs` range pair refuses its halfword.
+/// `slti x5, x6, -1` with `x6 = 5` answers 0, and `sltiu` answers 1; with
+/// `x6 = -5`, both answer 1. The defect reads SLTI's sign from `rs2`'s high
+/// halfword alone — 0, `rs2` being absent — and so compares `5` against
+/// `0xffffffff` unsigned and answers 1. That reading satisfies every gate here:
+/// only the `U16GetSign` lookup refuses its sign, and the `cmp_rhs` range pair
+/// refuses its halfword.
 #[test]
 fn the_slti_defect_has_no_analogue() {
     let a = artifact();
@@ -1429,7 +1428,7 @@ fn each_table_lookup_is_the_one_that_refuses_its_row() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 3 as rows: the pc, the halting sentinel and the decoder's domain
+// The pc, the halting sentinel and the decoder's domain, as rows
 // ---------------------------------------------------------------------------
 
 /// The halting sentinel. A `jalr` with `rs1 + imm = 2^32 + 1` jumps to 0 with
@@ -1489,10 +1488,9 @@ fn only_the_evenness_obligation_refuses_a_jalr_that_fakes_an_exit() {
     );
 }
 
-/// The decoder table's domain on this family — S15's and S16's control: an
-/// all-zero mask on a live row breaks no gate and no range, its `rd` query
-/// and every operand dropped to match, so the decoder channel is the only
-/// thing that refuses it.
+/// The decoder table's domain on this family: an all-zero mask on a live row
+/// breaks no gate and no range, its `rd` query and every operand dropped to
+/// match, so the decoder channel is the only thing that refuses it.
 #[test]
 fn an_all_zero_mask_is_refused_by_the_decoder_domain_alone() {
     let a = artifact();
@@ -1511,14 +1509,14 @@ fn an_all_zero_mask_is_refused_by_the_decoder_domain_alone() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 8: padding
+// Padding
 // ---------------------------------------------------------------------------
 
-/// Acceptance 8. The canonical padding row — all zero — passes every
-/// validator (`the_circuit_is_the_fixture_and_keeps_every_rule`) and every
-/// gate; and a mask-zero row advances the pc to its claimed fall-through
-/// rather than to 0: any `seq` with `next_pc = seq` holds, and `next_pc = 0`
-/// beside a nonzero `seq` is refused.
+/// The canonical padding row — all zero — passes every validator
+/// (`the_circuit_is_the_fixture_and_keeps_every_rule`) and every gate; and a
+/// mask-zero row advances the pc to its claimed fall-through rather than to 0:
+/// any `seq` with `next_pc = seq` holds, and `next_pc = 0` beside a nonzero
+/// `seq` is refused.
 #[test]
 fn a_padding_row_advances_the_pc() {
     let a = artifact();
@@ -1546,10 +1544,10 @@ fn a_padding_row_advances_the_pc() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 9: the legal masks
+// The legal masks
 // ---------------------------------------------------------------------------
 
-/// Acceptance 9. The legal masks are exactly the family's instructions, each
+/// The legal masks are exactly the family's instructions, each
 /// with `rd = x0` and without where its form has an `rd`: every one routed by
 /// `program::row_kind` to this family gives one of `LEGAL_MASKS`, all twelve
 /// are reached, and nothing else is. A mask set with an extra or a missing
@@ -1665,7 +1663,7 @@ fn the_legal_masks_are_the_instruction_list() {
 }
 
 // ---------------------------------------------------------------------------
-// The guest: acceptance 1, 3, 4 and 5 in its trace, the fill, and 6
+// The guest: its trace, the fill, and a jump into an instruction
 // ---------------------------------------------------------------------------
 
 /// `guests/control`, decoded with both of its execution families at `2^20`
@@ -1684,8 +1682,8 @@ fn control() -> (prover::Program, trace::TraceArchive) {
     (program, archive)
 }
 
-/// `image` decoded with both of S17's execution families at `height` and
-/// every other family at `2^16`, and traced into an archive; and the exit
+/// `image` decoded with add/sub and this family at `height` and every other
+/// family at `2^16`, and traced into an archive; and the exit
 /// status.
 fn traced(image: loader::ProgramImage, height: u32) -> (prover::Program, trace::TraceArchive, i32) {
     let mut params = program::ProgramParams::defaults();
@@ -1693,8 +1691,9 @@ fn traced(image: loader::ProgramImage, height: u32) -> (prover::Program, trace::
     params.heights[family::ADD_SUB_LUI_AUIPC as usize] = height;
     params.heights[family::JUMP_BRANCH_SLT as usize] = height;
     let (tables, config) = program::decode_program(&image, &params).expect("the image decodes");
-    // Only the families S17 proves: an instruction of any other family
-    // would put a family in the config that no circuit proves.
+    // Only add/sub and this family: an instruction of any other family would
+    // put that family in the config at `2^16`, a height no execution circuit
+    // has.
     let families: Vec<u32> = config.families.iter().map(|(f, _)| *f).collect();
     assert_eq!(
         families,
@@ -1779,17 +1778,17 @@ fn ran(program: &prover::Program, archive: &trace::TraceArchive) -> Vec<Ran> {
         .collect()
 }
 
-/// Acceptance 1's coverage and acceptance 3, 4 and 5, read from the trace a
-/// proof is about (`crates/prover/tests/control.rs` proves it): every one of
-/// the twelve instructions runs; the pinned comparisons answer as the ISA
-/// says; branches are taken and not taken, forward and — at −16, closing a
-/// loop — backward; `jal` links the fall-through and lands at `pc + imm`,
-/// backwards too, and in its compressed form links `pc + 2`; the `jalr` whose
-/// `rs1` is its `rd`, with a negative immediate and bit 0 of the sum set,
-/// lands on the sum with bit 0 cleared and writes the link; `slti` and
-/// `sltiu` write `x5` against −1 for a positive and a negative `rs1`; and
-/// `jal`, `slt`, `sltu`, `slti` and `sltiu` each run with `rd = x0`, whose
-/// every read in the whole trace is 0.
+/// The instruction coverage, the control flow, the SLTI defect and `rd = x0`,
+/// read from the trace a proof is about (`crates/prover/tests/control.rs`
+/// proves it): every one of the twelve instructions runs; the pinned
+/// comparisons answer as the ISA says; branches are taken and not taken,
+/// forward and — at −16, closing a loop — backward; `jal` links the
+/// fall-through and lands at `pc + imm`, backwards too, and in its compressed
+/// form links `pc + 2`; the `jalr` whose `rs1` is its `rd`, with a negative
+/// immediate and bit 0 of the sum set, lands on the sum with bit 0 cleared and
+/// writes the link; `slti` and `sltiu` write `x5` against −1 for a positive and
+/// a negative `rs1`; and `jal`, `slt`, `sltu`, `slti` and `sltiu` each run with
+/// `rd = x0`, whose every read in the whole trace is 0.
 #[test]
 fn the_guest_runs_the_acceptance_matrix() {
     use kind::*;
@@ -1844,7 +1843,7 @@ fn the_guest_runs_the_acceptance_matrix() {
         "mixed-sign slt answering 0"
     );
 
-    // Acceptance 3: the control-flow matrix.
+    // The control-flow matrix.
     assert!(
         rows.iter()
             .any(|r| { branch(r.bit) && (r.imm as i32) > 4 && r.next_pc == r.pc + r.imm }),
@@ -1941,7 +1940,7 @@ fn the_guest_runs_the_acceptance_matrix() {
     let table = program.tables.family(family::JUMP_BRANCH_SLT).unwrap();
     assert_eq!(table.get(2, j.pc as usize / 2), Some(j.rd), "rs1 is rd");
 
-    // Acceptance 4: x5 against -1.
+    // The SLTI defect: x5 against -1.
     let minus_one = u32::MAX;
     for (bit, rs1, answer) in [
         (SLTI, 5, 0),
@@ -1962,7 +1961,7 @@ fn the_guest_runs_the_acceptance_matrix() {
         );
     }
 
-    // Acceptance 5: rd = x0, each comparison's operands making it compute 1
+    // rd = x0, each comparison's operands making it compute 1
     // — 0 < 1 — so the x0 rule masks a nonzero value, and x0 still reads 0.
     assert!(
         rows.iter()
@@ -2001,13 +2000,12 @@ fn the_guest_runs_the_acceptance_matrix() {
     }
 }
 
-/// Acceptance 6, the honest prover's half, in ordinary CI. `control`'s `jalr
-/// t2, -2(t2)` re-run on an `rs1` two higher lands two bytes into the 32-bit
-/// `sltiu` it jumps to — a pc whose row is `MINUS_ONE` in every family's table
-/// — and the next row is moved there with it, every gate still holding. The
-/// decoder channel cannot be counted over that shard, and the refusal names
-/// the channel; the honest columns count. The proof the harness makes anyway is
-/// refused as `Lookup { DECODER }` (`crates/checker/tests/tamper.rs`).
+/// A jump into the middle of an instruction, the honest prover's half, in
+/// ordinary CI. `control`'s `jalr t2, -2(t2)` re-run on an `rs1` two higher
+/// lands two bytes into the 32-bit `sltiu` it jumps to — a pc whose row is
+/// `MINUS_ONE` in every family's table — and the next row is moved there with
+/// it, every gate still holding. The decoder channel cannot be counted over
+/// that shard, and the refusal names the channel; the honest columns count.
 #[test]
 fn a_jump_to_a_pc_holding_no_instruction_cannot_be_counted() {
     let (program, archive) = control();

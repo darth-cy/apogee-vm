@@ -1,4 +1,4 @@
-//! Acceptance 10, the dump: the page names the header, every committed column
+//! The dump: the page names the header, every committed column
 //! and virtual table, every layer, every relation, every address the toy uses
 //! and the gate catalogue, and prints exactly one line per gate shape, the
 //! cached entry, a scratch-bijection line and an output-map line. And the
