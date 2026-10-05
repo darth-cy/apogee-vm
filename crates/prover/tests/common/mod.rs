@@ -69,14 +69,14 @@ pub const KECCAK_RESULT: u32 = 6;
 pub const KECCAK_PERMUTATIONS: u64 = 10;
 
 /// How many `KECCAK_F` **invocations** that is. Since S26d one invocation is one
-/// round, so a permutation is 24 of them (`docs/spec/delegation.md` §6).
+/// round, so a permutation is 24 of them (`docs/spec/delegation-circuits.md` §2).
 pub const KECCAK_INVOCATIONS: u64 = KECCAK_PERMUTATIONS * constants::keccak::ROUNDS as u64;
 
 /// The delegation family's height. `RANGE16`'s table and `XOR8`'s each need 16
 /// variables, so `constraints::family_circuit` returns `None` below `2^16` — but
 /// 16 is the **floor and not the choice**: the family is at `2^18`, one menu
 /// entry up and four times the cost a shard, so that a stateless block's keccak
-/// load is fewer, fatter shards (`docs/spec/delegation.md` §6.5, §9.2).
+/// load is fewer, fatter shards (`docs/spec/delegation-circuits.md` §2, `docs/spec/delegation.md` §9).
 ///
 /// This must equal `constants::family::DEFAULT_HEIGHTS[KECCAK_F]`'s exponent:
 /// `crates/prover/tests/revm.rs` derives its delegation heights from that array
@@ -86,7 +86,7 @@ pub const KECCAK_VARS: u32 = 18;
 
 /// `SHA256_COMP`'s height since S26e, for [`KECCAK_VARS`]' reason: its two
 /// channels put its floor at 16 and `2^18` is the choice above it, a
-/// compression being 16 rows (`docs/spec/delegation.md` §15). This must equal
+/// compression being 16 rows (`docs/spec/delegation-circuits.md` §6). This must equal
 /// `constants::family::DEFAULT_HEIGHTS[SHA256_COMP]`'s exponent.
 pub const SHA256_VARS: u32 = 18;
 
@@ -103,13 +103,13 @@ pub const RECURSION_UNUSED_RESULT: u32 = 11;
 pub const MOD_MUL_RESULT: u32 = 28;
 
 /// S21's and S23's delegation heights. **Not `MOD_MUL`'s**, which is `2^16`
-/// (`constants::family::DEFAULT_HEIGHTS`, `docs/spec/delegation.md` §9.1).
+/// (`constants::family::DEFAULT_HEIGHTS`, `docs/spec/delegation.md` §9).
 pub const DELEGATION_VARS: u32 = 8;
 
 /// The height the two **channel-carrying** delegation families are proved at
 /// here, and the only one they have: `RANGE16`'s table needs sixteen variables,
 /// so `constraints::family_circuit` returns `None` below `2^16`
-/// (`docs/spec/delegation.md` §10.3).
+/// (`docs/spec/delegation.md` §9).
 ///
 /// **This was `MOD_MUL_FIXTURE_VARS = 8` until S26c**, chosen so the fixture
 /// would be multi-shard: at `2^8` this family's 1,443 invocations are six
@@ -428,7 +428,7 @@ pub fn mod_mul_archive(program: &Program) -> TraceArchive {
 /// by name and through `guest_sdk::sha256`'s block loop.
 ///
 /// `SHA256_COMP` is at [`SHA256_VARS`], its default since S26e made one row four
-/// rounds (`docs/spec/delegation.md` §15). Its window families need `2^18` for
+/// rounds (`docs/spec/delegation-circuits.md` §6). Its window families need `2^18` for
 /// `mod_mul_program`'s reason.
 pub fn sha256_program() -> Program {
     let mut heights = [1 << 18; family::COUNT as usize];

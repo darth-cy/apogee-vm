@@ -162,7 +162,7 @@ pub fn journal_file(stem: &str) -> String {
 /// each keeps its own entry in `constants::family::DEFAULT_HEIGHTS` — `2^8` for
 /// `POSEIDON2` and `FR_ARITH`, `2^16` for `MOD_MUL` and `EC_ADD` and `2^18` for
 /// `KECCAK_F` and `SHA256_COMP`, all read here and never spelled
-/// (`docs/spec/delegation.md` §9.2).
+/// (`docs/spec/delegation.md` §9).
 pub fn revm_params() -> program::ProgramParams {
     let mut heights = [revm_block::TRACE_HEIGHT_RELEASE; constants::family::COUNT as usize];
     for (f, h) in heights.iter_mut().enumerate() {

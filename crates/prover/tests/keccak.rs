@@ -6,7 +6,7 @@
 //! shard and S-IO's two `2^8` public-value shards, and the keccak shard is what
 //! makes it big — 5,490 inner columns over 262,144 rows, about **60 GB** of
 //! forward pass, which is the largest single shard in this statement
-//! (`docs/spec/delegation.md` §9.2).
+//! (`docs/spec/delegation.md` §9).
 //!
 //! **Neither number is S21's.** A keccak row was a whole keccak-f[1600]
 //! permutation then — 354,762 inner columns over 256 rows — until S26d made it
@@ -37,7 +37,7 @@ const KECCAK: u32 = family::KECCAK_F;
 const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
 const INIT: u32 = family::INIT_TEARDOWN;
 
-/// `docs/spec/shard-proof.md` §9's length formula over a circuit's own shape —
+/// `docs/spec/shard-proof.md` §8's length formula over a circuit's own shape —
 /// `crates/prover/tests/mem.rs`' `proof_bytes`, restated here so a shard of a
 /// family with no channel is measured by the same rule as one with three.
 fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
@@ -183,12 +183,12 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
     );
 
     // The delegation shard's proof has its circuit's shape:
-    // `docs/spec/shard-proof.md` §9's layout over `keccak::artifact(18)`, which
-    // is `docs/spec/constraint-manifest.md` §1.2's 381,100 bytes.
+    // `docs/spec/shard-proof.md` §8's layout over `keccak::artifact(18)`, which
+    // is `docs/spec/circuits.md` §1's 381,100 bytes.
     //
     // **This is the number S26d was for.** S21's shard was 11,880,012 bytes for
     // 256 permutations — 46,406 a permutation, and five such shards were 97% of
-    // a measured mini-block's proof (`docs/spec/delegation.md` §9.1). One round
+    // a measured mini-block's proof (`docs/spec/delegation.md` §9). One round
     // a row at `2^18` is 381,100 bytes for 10,922 permutations, which is 34.9 a
     // permutation: **1,330 times fewer proof bytes** for the same work, from
     // 31.2× the shard and 42.7× the permutations in it.

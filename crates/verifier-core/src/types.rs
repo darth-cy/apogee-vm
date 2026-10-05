@@ -1,6 +1,6 @@
 //! The proof-side types, frozen at S16: `PublicInputs`, `ShardProof`,
 //! `VerifyingKey`, `VerifyError`, and the opening claim the core hands its
-//! wrapper. Their byte layouts are `docs/spec/shard-proof.md` §9, and a key's
+//! wrapper. Their byte layouts are `docs/spec/shard-proof.md` §8, and a key's
 //! load rules §7.2.
 
 use alloc::format;
@@ -186,7 +186,7 @@ impl PublicInputs {
 // ShardProof
 // ---------------------------------------------------------------------------
 
-/// One shard's proof, `docs/spec/shard-proof.md` §4 and §9. Its lengths are
+/// One shard's proof, `docs/spec/shard-proof.md` §4 and §8. Its lengths are
 /// fixed by the key's circuit for `family`, and it holds exactly one Mercury
 /// proof. No accumulator entries: a base verification pairs inside `pcs`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -248,7 +248,7 @@ impl ShardProof {
 }
 
 /// A `GkrProof` on the wire: per transition, its rounds then its claims,
-/// `docs/spec/shard-proof.md` §9.
+/// `docs/spec/shard-proof.md` §8.
 pub fn write_gkr(w: &mut Writer, gkr: &GkrProof) {
     w.count(gkr.layers.len());
     for layer in &gkr.layers {

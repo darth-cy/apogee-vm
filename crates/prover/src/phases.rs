@@ -1,4 +1,4 @@
-//! The prover's phase snapshots and resume, `docs/spec/shard-proof.md` §10:
+//! The prover's phase snapshots and resume, `docs/spec/streaming.md` §6:
 //! the S12 trace archive's four later sections, their schemas, and `advance`,
 //! which fills them in order and reads back whatever an imported archive
 //! already holds.

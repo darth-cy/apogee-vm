@@ -1,6 +1,6 @@
 //! The Ethereum field-multiplication circuit, gate by gate.
 //!
-//! `docs/spec/delegation.md` §14 is what this suite restates: the 25-word
+//! `docs/spec/delegation-circuits.md` §5 is what this suite restates: the 25-word
 //! frame, the four-way modulus selector, the anchor's two tuples, the
 //! schoolbook identity `a·b = q·m + out` with `a`, `b` and `out` all below
 //! `m`, and the 32-bit bound on every limb that crosses the frame.
@@ -11,7 +11,7 @@
 //! `crates/checker/tests/add_sub.rs` does.
 //!
 //! **There is no forward pass here, and since S26c there cannot be.** This
-//! family carries the `RANGE16` channel (`docs/spec/delegation.md` §10.3),
+//! family carries the `RANGE16` channel (`docs/spec/delegation.md` §9),
 //! whose table needs sixteen variables, so its circuit cannot be built at the
 //! reduced height a whole-shard forward pass would need — `family_circuit`
 //! returns `None` below `2^16`. Evaluating one row of the real `2^16` circuit
@@ -993,7 +993,7 @@ fn a_modulus_limb_that_is_not_the_selected_literal_is_refused() {
     assert_eq!(refusal(&a, bad), "m_limb3_rule");
 }
 
-/// The shape `docs/spec/constraint-manifest.md` §18 accounts for, at the family's
+/// The shape `docs/spec/delegation-circuits.md` §5 accounts for, at the family's
 /// **own** height — not `VARS`, which the rest of this file shrinks to eight rows
 /// so a forward pass fits an ordinary test.
 ///
@@ -1014,7 +1014,7 @@ fn the_shape_is_the_manifests() {
     assert_eq!(a.witness.len(), mod_mul::WITNESS_COLUMNS, "W");
     assert!(a.setup.is_empty(), "no setup column");
     // Since S26c: one virtual table, one channel, and the obligations that
-    // replaced 3,143 bit columns (`docs/spec/delegation.md` §10.3).
+    // replaced 3,143 bit columns (`docs/spec/delegation.md` §9).
     assert_eq!(a.virtuals.len(), 1, "V[range16]");
     assert_eq!(mod_mul::channels().len(), 1, "one channel, RANGE16");
     assert_eq!(a.lookups.len(), 274, "obligations");
@@ -1064,7 +1064,7 @@ fn the_shape_is_the_manifests() {
 /// What a height does and does not move — the property the manifest's repeated
 /// rows exist to show.
 ///
-/// A family's row in `docs/spec/constraint-manifest.md` §1.2 appears once per
+/// A family's row in `docs/spec/circuits.md` §1 appears once per
 /// height the repository builds, and across two such rows `committed`,
 /// `enforcing` and `lookups` are **identical**. A height is `trace_vars`, and
 /// the only thing it changes is how many halving lists sit above the row-wise

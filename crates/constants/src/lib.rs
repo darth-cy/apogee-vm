@@ -1000,7 +1000,7 @@ pub mod lookup_channel {
     ///
     /// `constants::family::KECCAK_F` is its one consumer: a Keccak round is
     /// 1,020 obligations on it and no bit anywhere
-    /// (`docs/spec/delegation.md` §6).
+    /// (`docs/spec/delegation-circuits.md` §2).
     pub const XOR8: u32 = 4;
 
     /// How many channels this table defines.
@@ -1121,11 +1121,11 @@ pub mod family {
     /// The Poseidon2 **delegation** family (S23): one width-3 permutation a
     /// row, invoked by the [`ecall::PRECOMPILE_POSEIDON2`] ecall. The circuit
     /// is `transcript::poseidon2_permute`, gate for gate
-    /// (`docs/spec/delegation.md` §12).
+    /// (`docs/spec/delegation-circuits.md` §3).
     pub const POSEIDON2: u32 = 10;
     /// The Fr-arithmetic **delegation** family (S23): one `Fr` add, multiply
     /// or inverse a row, invoked by the [`ecall::PRECOMPILE_FR_ARITH`] ecall
-    /// (`docs/spec/delegation.md` §13).
+    /// (`docs/spec/delegation-circuits.md` §4).
     pub const FR_ARITH: u32 = 11;
     /// The **public input** window (S-IO): the verifier-known input of the
     /// statement, at [`guest_memory::PUBLIC_INPUT_ORIGIN`]. Claims no pc,
@@ -1157,7 +1157,7 @@ pub mod family {
     /// The **Ethereum field multiplication** delegation family (S26,
     /// specialized at S26b): one `out = a * b mod m` a row over 32-bit limbs,
     /// invoked by the [`ecall::PRECOMPILE_MOD_MUL`] ecall and never decoded
-    /// (`docs/spec/delegation.md` §14).
+    /// (`docs/spec/delegation-circuits.md` §5).
     ///
     /// The modulus is **one of four**, named by a selector word in the frame
     /// and supplied by the circuit as a literal:
@@ -1358,7 +1358,7 @@ pub mod family {
     /// decision — a `2^8` shard's proof does not shrink with its height, so a
     /// family's height is what decides how many shards a block's invocations
     /// take, and `MOD_MUL` at `2^8` cost a measured block 1,048 shards against
-    /// 5 at `2^16` (`docs/spec/delegation.md` §9 and §9.1).
+    /// 5 at `2^16` (`docs/spec/delegation.md` §9 and §9).
     ///
     /// [`KECCAK_F`] is the case that shows the trade is about **width**, not
     /// rows. At S21 one row was a whole permutation — 354,762 inner columns,
@@ -1370,7 +1370,7 @@ pub mod family {
     /// the **floor** its two channels imply; `2^18` is the choice above it,
     /// because a shard's proof barely grows with its height — 381,100 bytes
     /// against 373,276 — so the fatter shard is the cheaper one for a
-    /// keccak-heavy block (`docs/spec/delegation.md` §6.0, §9.2).
+    /// keccak-heavy block (`docs/spec/delegation-circuits.md` §2, `docs/spec/delegation.md` §9).
     pub const DEFAULT_HEIGHTS: [u32; COUNT as usize] = [
         1 << 22, // ADD_SUB_LUI_AUIPC
         1 << 22, // JUMP_BRANCH_SLT
@@ -1687,7 +1687,7 @@ pub mod ecall {
     /// One `Fr` add, multiply or inverse over a 25-word frame, `a0` = the
     /// frame base pointer, read and written in place. A **delegation** call
     /// (S23); `constants::family::FR_ARITH` is the family that proves it and
-    /// `docs/spec/delegation.md` §13 the frame table.
+    /// `docs/spec/delegation-circuits.md` §4 the frame table.
     ///
     /// The operands cross the frame in `field::Fr`'s **in-memory**
     /// representation — the four Montgomery limbs, little-endian, which is a
@@ -1715,7 +1715,7 @@ pub mod ecall {
     /// One **Ethereum field multiplication** over a 25-word frame, `a0` = the
     /// frame base pointer, read and written in place. A **delegation** call
     /// (S26, specialized at S26b); `constants::family::MOD_MUL` is the family
-    /// that proves it and `docs/spec/delegation.md` §14 the frame table.
+    /// that proves it and `docs/spec/delegation-circuits.md` §5 the frame table.
     ///
     /// Frame word 0 is the modulus selector, one of
     /// [`super::mod_mul::CODES`]; the two operands and the result follow it as
@@ -1741,7 +1741,7 @@ pub mod ecall {
     /// **Four rounds** of SHA-256's compression over a 25-word frame, `a0` =
     /// the frame base pointer, read and written in place. A **delegation**
     /// call (S26c, re-shaped at S26e); `constants::family::SHA256_COMP` is the
-    /// family that proves it and `docs/spec/delegation.md` §15 the frame table.
+    /// family that proves it and `docs/spec/delegation-circuits.md` §6 the frame table.
     ///
     /// Frame word 0 is the round group `r` in `0..16`, words 1..9 the working
     /// variables and words 9..25 the schedule window `W_{4r}..W_{4r+15}`. The
@@ -1758,7 +1758,7 @@ pub mod ecall {
     /// One **third of an elliptic-curve point addition** over a 97-word frame,
     /// `a0` = the frame base pointer, read and written in place. A
     /// **delegation** call (S26c); `constants::family::EC_ADD` is the family
-    /// that proves it and `docs/spec/delegation.md` §16 the frame table.
+    /// that proves it and `docs/spec/delegation-circuits.md` §7 the frame table.
     ///
     /// Frame word 0 selects the curve **and** the group of three reductions
     /// this invocation performs, one of [`super::ec_add::CODES`]; the two
@@ -1774,7 +1774,7 @@ pub mod ecall {
     /// the round and whose remaining 50 words are the 1,600-bit state, `a0` =
     /// the frame base pointer, read and written in place. A **delegation** call (S21, re-shaped at S26d);
     /// `constants::family::KECCAK_F` is the family that proves it and
-    /// `docs/spec/delegation.md` §6 the frame table.
+    /// `docs/spec/delegation-circuits.md` §2 the frame table.
     ///
     /// **A whole permutation is 24 of these calls**, exactly as a complete
     /// point addition is three `EC_ADD` calls: the frame is ordinary RAM, so
@@ -2120,7 +2120,7 @@ pub mod keccak {
     /// **A whole permutation is 24 invocations, not one** (S26d). One round is
     /// one delegation row, the 24 rows of a permutation are glued by the frame
     /// being ordinary RAM, and the guest's own proven loop supplies the round.
-    /// `docs/spec/delegation.md` §6.
+    /// `docs/spec/delegation-circuits.md` §2.
     pub const ROUND_WORD: usize = 0;
 
     /// The frame's first state word, one past [`ROUND_WORD`].
@@ -2145,7 +2145,7 @@ pub mod keccak {
     /// eight, and a LogUp fraction tree is padded to a power of two: the four
     /// extra obligations would double the tree and cost 4,096 more inner
     /// columns — another **34.4 GB** a shard at `2^18`, on the family that
-    /// already sets a block's peak (`docs/spec/delegation.md` §6.5).
+    /// already sets a block's peak (`docs/spec/delegation-circuits.md` §2).
     pub const IOTA_BYTES: [usize; 4] = [0, 1, 3, 7];
 
     /// Every byte position [`IOTA_BYTES`] omits is zero in every round
@@ -2257,7 +2257,7 @@ pub mod poseidon2 {
 ///
 /// One invocation is one operation, and one operation is one trace row: the
 /// contraction the recursion guest is sized against is `ops/row = 1`
-/// (`docs/spec/delegation.md` §13).
+/// (`docs/spec/delegation-circuits.md` §4).
 ///
 /// The three operands cross the frame in `field::Fr`'s **in-memory**
 /// representation — the four Montgomery limbs written little-endian, which is
@@ -2510,7 +2510,7 @@ pub mod fq_op {
 
 /// The Ethereum field-multiplication delegation's frame, its four moduli and
 /// its bounds. Frozen at S26, **specialized at S26b**.
-/// `docs/spec/delegation.md` §14.
+/// `docs/spec/delegation-circuits.md` §5.
 ///
 /// **One operation, and the modulus is a selector.** The family computes
 /// `out = a * b mod m` and nothing else, over one of **four fixed moduli** a
@@ -2540,7 +2540,7 @@ pub mod fq_op {
 /// After the last call the frame's state words are the working variables after
 /// round 63, which the caller adds to the chaining state it kept.
 ///
-/// `docs/spec/delegation.md` §15 is the frame table. FIPS 180-4 is the
+/// `docs/spec/delegation-circuits.md` §6 is the frame table. FIPS 180-4 is the
 /// algorithm, and `crates/constants/tests/sha256.rs` **re-derives** both tables
 /// from their generators — the fractional parts of the square roots of the first
 /// eight primes and the cube roots of the first sixty-four — in exact integer
@@ -2676,7 +2676,7 @@ pub mod sha256 {
 /// guest branches on nothing and the circuit has no degenerate row.
 ///
 /// **Three invocations make one addition**, and the frame is the scratch they
-/// pass intermediates through (`docs/spec/delegation.md` §16). The alternative
+/// pass intermediates through (`docs/spec/delegation-circuits.md` §7). The alternative
 /// — nine reductions on one row — is 19,316 committed columns and 28.9 GiB of
 /// peak a shard; three rows of three reductions is a computed 20.5 GB a shard at
 /// `2^16` — above an execution shard's ~11 GB, and second now only to

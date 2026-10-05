@@ -3,7 +3,7 @@
 //! delegation request per registered delegation type
 //! (`docs/spec/delegation.md` §5).
 //!
-//! `docs/spec/shard-proof.md` §8 is normative: the columns, the gates, the
+//! `docs/spec/add-sub.md` is normative: the columns, the gates, the
 //! lookups and the argument. This file is that section as data, assembled by
 //! S15's `memory::frame_with_channels_artifact` beside S14's frame.
 //!

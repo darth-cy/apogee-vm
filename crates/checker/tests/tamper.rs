@@ -809,7 +809,7 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
     // which are 0. Setting lane 1's byte 3 asks word 3 to be 2^24 and
     // `input_w3` refuses it. The distinction matters: a reviewer reading "every
     // gate is gated on live" would expect this cell to be free, and it is not
-    // (`docs/spec/constraint-manifest.md` §12.5, §12.10).
+    // (`docs/spec/delegation-circuits.md` §2, §2).
     h.assert_rejects(
         &tamper(vec![keccak_cell(kec::state_in(1, 3), padding_row, Fr::ONE)]),
         (KEC, 0),

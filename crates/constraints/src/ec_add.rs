@@ -2,7 +2,7 @@
 //! addition a row, invoked by the `ecall::PRECOMPILE_EC_ADD` ecall and never
 //! decoded.
 //!
-//! `docs/spec/delegation.md` §16 is normative.
+//! `docs/spec/delegation-circuits.md` §7 is normative.
 //!
 //! # The formula, and why it is projective
 //!
@@ -644,7 +644,7 @@ fn helper_gates() -> Vec<(String, GateDef)> {
 /// and the identity holds over the integers just as well. A frame value's
 /// `< m` is what bounds the honest quotient below nine limbs, so that every
 /// frame the circuit accepts is one an honest prover can fill — `docs/spec/
-/// delegation.md` §14.3's lesson, applied to twelve values instead of two.
+/// delegation-circuits.md` §5's lesson, applied to twelve values instead of two.
 fn chain_gates() -> Vec<(String, GateDef)> {
     let mut out: Vec<(String, GateDef)> = Vec::new();
     for (v, (name, _, groups)) in VALUES.into_iter().enumerate() {
@@ -996,7 +996,7 @@ fn scaled_columns() -> Vec<(PolyAddress, PolyAddress)> {
 }
 
 /// The family's lookup channels: `RANGE16`, and it is the first a delegation
-/// family has ever carried (`docs/spec/delegation.md` §10.3).
+/// family has ever carried (`docs/spec/delegation.md` §9).
 pub fn channels() -> Vec<ChannelSpec> {
     vec![ChannelSpec {
         channel: lookup_channel::RANGE16,

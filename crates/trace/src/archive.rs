@@ -193,7 +193,7 @@ impl TraceArchive {
 
     /// Fill a later phase with its content and its wall-clock timing — how a
     /// prover phase exports its snapshot (S16; the schemas are
-    /// `docs/spec/shard-proof.md` §10). Refuses post-execution, which the
+    /// `docs/spec/streaming.md` §6). Refuses post-execution, which the
     /// constructor fills, a phase already filled, and a phase whose
     /// predecessor is empty: the filled phases stay a prefix, which is the rule
     /// [`TraceArchive::import`] reads by.

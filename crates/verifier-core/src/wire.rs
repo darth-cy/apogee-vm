@@ -1,4 +1,4 @@
-//! The byte layouts of `docs/spec/shard-proof.md` §9: little-endian integers,
+//! The byte layouts of `docs/spec/shard-proof.md` §8: little-endian integers,
 //! canonical `Fr`s, opaque 64-byte `G1`s, `u32`-length-prefixed byte strings
 //! and lists.
 //!

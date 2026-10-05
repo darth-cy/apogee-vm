@@ -1,7 +1,7 @@
 //! The `MOD_MUL` family's circuit: one Ethereum field multiplication a row,
 //! invoked by the `ecall::PRECOMPILE_MOD_MUL` ecall and never decoded.
 //!
-//! `docs/spec/delegation.md` §14 is normative. One invocation is one row and
+//! `docs/spec/delegation-circuits.md` §5 is normative. One invocation is one row and
 //! one row is one operation — `ops/row = 1`, as every delegation family has it
 //! — so the family needs no batch, no populated count and no no-op selector: a
 //! row is live or it is padding.
@@ -682,7 +682,7 @@ fn witness_names() -> Vec<String> {
 ///
 /// The counts are what a fill writes and what `crates/checker` reads, so a
 /// layout change that moved one silently would be a fill writing into the wrong
-/// column. `docs/spec/constraint-manifest.md` §18 is the same account by name.
+/// column. `docs/spec/delegation-circuits.md` §5 is the same account by name.
 fn check_shape(artifact: &CircuitArtifact) {
     assert_eq!(
         artifact.memory.len(),

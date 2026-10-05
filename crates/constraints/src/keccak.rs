@@ -1,7 +1,7 @@
 //! The `KECCAK_F` delegation family's circuit: **one Keccak round a row**, over
 //! the 51-word frame a delegation request handed over.
 //!
-//! `docs/spec/delegation.md` §6 is normative: the frame, the anchor, the three
+//! `docs/spec/delegation-circuits.md` §2 is normative: the frame, the anchor, the three
 //! request-side zeroings, the five transformations and the two frame checks.
 //! This file is that document as data.
 //!
@@ -12,7 +12,7 @@
 //! All 24 rounds and all 1,600 bits coexisted horizontally, so the row could
 //! only be afforded at `2^8` — 256 permutations a shard — and five such shards
 //! were **97%** of a measured mini-block's proof bytes
-//! (`docs/spec/delegation.md` §9.1).
+//! (`docs/spec/delegation.md` §9).
 //!
 //! This is the other trade. One row is one round, a permutation is 24
 //! consecutive invocations, and what glues them is the same thing that glues
@@ -929,7 +929,7 @@ pub fn check_shape(a: &CircuitArtifact) {
     // The number this circuit's cost turns on: 1,020 fractions plus the
     // table's is 1,021, and a fraction tree is padded to a power of two, so
     // 1,024 leaves. Four more obligations would double the tree and cost 4,096
-    // inner columns (`docs/spec/delegation.md` §6.5).
+    // inner columns (`docs/spec/delegation-circuits.md` §2).
     assert_eq!(xor8, 1_020, "keccak: the round's obligations");
     assert!(
         (xor8 + 1).next_power_of_two() == 1_024,

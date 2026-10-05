@@ -17,7 +17,7 @@
 //! only *that* something moved, and the counts beside it say what.
 //!
 //! Each height is the family's own default, and **the six do not share one**
-//! (`docs/spec/delegation.md` §9.1). A delegation family's rows are
+//! (`docs/spec/delegation.md` §9). A delegation family's rows are
 //! invocations, not halfwords, so its ceiling is the width of one row's
 //! circuit — and those widths differ by orders of magnitude. `FR_ARITH` is 142
 //! inner columns a row at `2^8`; `KECCAK_F` is 5,490 at `2^18`; `MOD_MUL` is

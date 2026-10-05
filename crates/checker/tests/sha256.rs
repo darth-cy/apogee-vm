@@ -1,6 +1,6 @@
 //! The SHA-256 four-round circuit, gate by gate and obligation by obligation.
 //!
-//! `docs/spec/delegation.md` §15 is what this suite restates: the 25-word
+//! `docs/spec/delegation-circuits.md` §6 is what this suite restates: the 25-word
 //! frame, the anchor's two tuples, the one-hot round-group selector, four rounds
 //! over two sequences, four derived schedule words, and the window that carries
 //! the schedule from one call to the next.
@@ -649,7 +649,7 @@ fn the_circuit_keeps_every_rule() {
         .expect("every obligation is discharged exactly once, in its own channel");
 }
 
-/// The shape `docs/spec/constraint-manifest.md` §19 accounts for.
+/// The shape `docs/spec/delegation-circuits.md` §6 accounts for.
 #[test]
 fn the_shape_is_the_manifests() {
     let a = sha256::artifact(VARS);

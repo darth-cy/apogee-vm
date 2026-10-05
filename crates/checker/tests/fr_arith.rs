@@ -1,6 +1,6 @@
 //! The Fr-arithmetic delegation circuit, gate by gate.
 //!
-//! `docs/spec/delegation.md` §13 is what this suite restates: the 25-word
+//! `docs/spec/delegation-circuits.md` §4 is what this suite restates: the 25-word
 //! frame, the anchor's two tuples, the three operations, and the canonicity of
 //! every value that crosses the frame. The arithmetic itself is checked the
 //! only way a circuit can be — by running its forward pass over a witness

@@ -1,7 +1,7 @@
 //! The `SHA256_COMP` family's circuit: **four SHA-256 rounds a row**, over the
 //! 25-word frame a delegation request handed over.
 //!
-//! `docs/spec/delegation.md` §15 is normative. S26c's row was a whole
+//! `docs/spec/delegation-circuits.md` §6 is normative. S26c's row was a whole
 //! compression — every frame word and all 64 rounds' working variables as bits,
 //! 16,688 inner columns — which pinned the family at `2^8`, 256 compressions a
 //! shard, and made 32 shards two thirds of a real block's proof once the

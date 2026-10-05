@@ -122,7 +122,7 @@ fn identities() {
 
 /// The packed generic table's three commitments over the ceremony — what every
 /// verifying key carries and its SRS digest covers
-/// (`docs/spec/jump-branch-slt.md` §6) — after checking that the table over
+/// (`docs/spec/lookup.md` §9) — after checking that the table over
 /// each menu height it fits commits to the same three points, which is what
 /// lets one set serve every height.
 fn generic_table(srs: &Srs) {

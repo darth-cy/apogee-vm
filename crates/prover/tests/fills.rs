@@ -243,7 +243,7 @@ fn the_sha256_fill_covers_its_circuit_exactly() {
 ///
 /// **Why a sample and not a forward pass.** `MOD_MUL` and `EC_ADD` carry the
 /// `RANGE16` channel and both take that channel's `2^16` floor as their height
-/// (`docs/spec/delegation.md` §10.3), and `gkr::forward` over one is 4.6 GB and
+/// (`docs/spec/delegation.md` §9), and `gkr::forward` over one is 4.6 GB and
 /// 18.3 GB respectively — deferred-suite figures, in a suite whose whole point
 /// is to be fast. A relation is **row-local**, so evaluating rows is the same
 /// statement per row at a few megabytes.

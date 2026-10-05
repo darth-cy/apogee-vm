@@ -36,7 +36,7 @@
 //! # Input, advice and the journal
 //!
 //! Unused. The guest reads nothing and commits nothing: `EXIT` is still the
-//! only provable ecall (`docs/spec/shard-proof.md` §8.4).
+//! only provable ecall (`docs/spec/add-sub.md` §4).
 //!
 //! # The result
 //!

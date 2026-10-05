@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# The fixture for the `EC_ADD` delegation (`docs/spec/delegation.md` §16).
+# The fixture for the `EC_ADD` delegation (`docs/spec/delegation-circuits.md` §7).
 #
 # Three dependencies and three kinds of check. `guest-sdk` is the shim, called
 # by name over frames this guest writes itself, once per curve: that is the

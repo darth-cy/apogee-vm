@@ -1,7 +1,7 @@
 //! The `POSEIDON2` family's circuit: one width-3 Poseidon2 permutation a row,
 //! invoked by the `ecall::PRECOMPILE_POSEIDON2` ecall and never decoded.
 //!
-//! `docs/spec/delegation.md` §12 is normative. The permutation is
+//! `docs/spec/delegation-circuits.md` §3 is normative. The permutation is
 //! `transcript::poseidon2_permute` — the same 4 + 56 + 4 rounds, the same
 //! `x^5` S-box, the same two matrices and the *same* round constants, read
 //! from `constants::POSEIDON2_RC3_*` with no second copy anywhere.

@@ -81,7 +81,7 @@ impl FamilyCircuit {
     /// Whether the circuit reads the generic channel, and so names the packed
     /// generic table as its last `constants::generic_table::WIDTH` setup
     /// columns, which a shard opens against the verifying key's generic-table
-    /// commitments (`docs/spec/jump-branch-slt.md` §6).
+    /// commitments (`docs/spec/lookup.md` §9).
     pub fn reads_generic_table(&self) -> bool {
         self.channels
             .iter()
@@ -92,7 +92,7 @@ impl FamilyCircuit {
 /// The circuit that proves `family` over `2^trace_vars` rows, or `None` for a
 /// family no stage has built yet, or a height it cannot be built at.
 ///
-/// **The one registry of circuits**, `docs/spec/shard-proof.md` §11: a
+/// **The one registry of circuits**, `docs/spec/circuits.md` §1: a
 /// verifying key's circuits must be byte for byte what this returns, and a
 /// later family is added here, with one constructor, and nowhere in the
 /// verifier.
@@ -112,7 +112,7 @@ impl FamilyCircuit {
 /// `SHA256_COMP` take.
 ///
 /// `EC_ADD` is the first delegation family to carry a channel at all
-/// (`docs/spec/delegation.md` §10.3, which amends §9): RANGE16 at 16 bits, so
+/// (`docs/spec/delegation.md` §9, which amends §9): RANGE16 at 16 bits, so
 /// its floor is `2^16`, which is also its `DEFAULT_HEIGHTS` entry. `KECCAK_F`
 /// has carried `RANGE16` and `XOR8` since S26d, so its floor is `2^16` too —
 /// and a floor is not a height: its `DEFAULT_HEIGHTS` entry is `2^18`, chosen
@@ -164,7 +164,7 @@ fn circuit(recursion: bool, family: u32, trace_vars: u32) -> Option<FamilyCircui
             // column: holds it to the statement's `input`, or to nothing at all.
             f::PUBLIC_INPUT | f::ADVICE_WINDOWS => (memory::value_window_artifact, Vec::new()),
             // The delegation families. Their heights differ by three orders of
-            // magnitude because their rows do (`docs/spec/delegation.md` §9.2);
+            // magnitude because their rows do (`docs/spec/delegation.md` §9);
             // what each one may take is the floor below, and for the three
             // that carry no channel that floor is 0.
             f::KECCAK_F => (keccak::artifact, keccak::channels()),

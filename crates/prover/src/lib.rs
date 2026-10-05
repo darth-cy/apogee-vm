@@ -147,7 +147,7 @@ pub struct Program {
 /// `VmConfig`, its circuit from `constraints::family_circuit`, and the fill
 /// that routes its trace buffer into the circuit's columns.
 ///
-/// **The family-registration surface**, `docs/spec/shard-proof.md` §11: a later
+/// **The family-registration surface**, `docs/spec/circuits.md` §1: a later
 /// family adds a circuit to `constraints::family_circuit` and a fill to
 /// [`family_fill`], and nothing in `global_commit_phase`, `prove_shard` or the
 /// verifier changes.
@@ -766,7 +766,7 @@ fn ts_window(family: FamilyId, base: &BaseLayer) -> [u64; 2] {
 }
 
 /// A shard after its GKR proof: what the opening needs, and the live shard
-/// transcript. `docs/spec/shard-proof.md` §10's `PostGkr` entry.
+/// transcript. `docs/spec/streaming.md` §6's `PostGkr` entry.
 pub(crate) struct ShardGkr {
     pub(crate) family: FamilyId,
     pub(crate) index: u32,

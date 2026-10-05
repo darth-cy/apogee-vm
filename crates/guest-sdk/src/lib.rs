@@ -291,7 +291,7 @@ const EXIT_PANIC: i32 = 101;
 /// `state` is three canonical little-endian `Fr` elements, 32 bytes each, in
 /// lane order, permuted in place. S10 froze this signature and S23 gave the
 /// number a circuit; the call is now a **delegation**
-/// (`docs/spec/delegation.md` §12), so an executor that has the circuit
+/// (`docs/spec/delegation-circuits.md` §3), so an executor that has the circuit
 /// answers 0 and one that does not answers `-ENOSYS`.
 ///
 /// Returns `false` on exactly `-ENOSYS`, and a caller must have a software
@@ -556,7 +556,7 @@ pub mod recursion {
 
     /// The Fr-arithmetic delegation's 100-byte frame: the operation code, then
     /// `a`, `b` and the result, each 32 bytes of `Fr`'s in-memory
-    /// representation (`docs/spec/delegation.md` §13).
+    /// representation (`docs/spec/delegation-circuits.md` §4).
     #[repr(C, align(4))]
     pub struct FrArithFrame(pub [u8; fr_arith::FRAME_BYTES]);
 
@@ -571,7 +571,7 @@ pub mod recursion {
 
     /// The Ethereum field multiplication delegation's 100-byte frame: the
     /// modulus selector, then `a`, `b` and the result, each eight
-    /// little-endian 32-bit limbs (`docs/spec/delegation.md` §14).
+    /// little-endian 32-bit limbs (`docs/spec/delegation-circuits.md` §5).
     ///
     /// **Limbs and not bytes**, because every caller already holds its values as
     /// 32-bit limbs and a byte frame would cost a pack and an unpack per call —
@@ -644,7 +644,7 @@ pub mod recursion {
 
     /// The SHA-256 delegation's 100-byte frame: the round group, the eight
     /// working variables, then the sixteen-word schedule window
-    /// (`docs/spec/delegation.md` §15).
+    /// (`docs/spec/delegation-circuits.md` §6).
     ///
     /// **Words and not bytes**, for [`ModMulFrame`]'s reason: the caller has
     /// already decoded the block into `u32`s, so a byte frame would cost a pack
@@ -656,7 +656,7 @@ pub mod recursion {
     /// The elliptic-curve addition delegation's 388-byte frame: the selector,
     /// the two input points in homogeneous projective coordinates, and the six
     /// intermediates the three invocations pass between them
-    /// (`docs/spec/delegation.md` §16).
+    /// (`docs/spec/delegation-circuits.md` §7).
     #[repr(C, align(4))]
     pub struct EcAddFrame(pub [u32; ec::FRAME_WORDS]);
 
@@ -853,7 +853,7 @@ pub mod recursion {
     ///
     /// The frame is transformed in place, so nothing is copied between calls
     /// and the chain a proof reads is the frame's own RAM history
-    /// (`docs/spec/delegation.md` §15).
+    /// (`docs/spec/delegation-circuits.md` §6).
     pub fn sha256_comp(frame: &mut Sha256Frame) -> bool {
         frame.0[sha::GROUP_WORD] = 0;
         if !sha256_rounds(frame) {
@@ -1023,8 +1023,9 @@ struct Frame {
     state: [u8; keccak::STATE_BYTES],
 }
 
-/// The frame rules of `docs/spec/delegation.md` §4 and §6 as type-level
-/// assertions: word-aligned, and laid out as the frame table says.
+/// The frame rules of `docs/spec/delegation.md` §4 and the frame table of
+/// `docs/spec/delegation-circuits.md` §2 as type-level assertions:
+/// word-aligned, and laid out as the table says.
 const _: () = assert!(core::mem::align_of::<Frame>() >= 4);
 const _: () = assert!(core::mem::size_of::<Frame>() == keccak::FRAME_BYTES);
 const _: () = assert!(keccak::ROUND_WORD == 0 && keccak::STATE_WORD == 1);
@@ -1102,7 +1103,7 @@ fn keccak_f_software(lanes: &mut [u64; keccak::LANES]) {
 ///
 /// The 24 calls transform the frame **in place**, so nothing is copied between
 /// them and the chain the proof reads is the frame's own RAM history
-/// (`docs/spec/delegation.md` §6.4). Only the **first** call may answer
+/// (`docs/spec/delegation-circuits.md` §2). Only the **first** call may answer
 /// `-ENOSYS`, which is an executor with no keccak circuit at all; one answering
 /// it halfway through a permutation is a broken executor, and skipping a round
 /// silently would be worse than exiting.

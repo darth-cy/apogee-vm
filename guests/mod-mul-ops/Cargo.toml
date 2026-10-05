@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# The fixture for the `MOD_MUL` delegation (`docs/spec/delegation.md` §14),
+# The fixture for the `MOD_MUL` delegation (`docs/spec/delegation-circuits.md` §5),
 # S26's and specialized at S26b.
 #
 # Three dependencies and four kinds of check. `guest-sdk` is the shim, called

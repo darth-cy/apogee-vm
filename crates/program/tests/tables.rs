@@ -196,7 +196,7 @@ fn every_table_is_exactly_its_config_height() {
         // and not `2^8`: one keccak row is one round, so `RANGE16`'s table and
         // `XOR8`'s each need sixteen variables — that is the **floor**, and the
         // family is at `2^18`, two rungs above it, so that a stateless block's
-        // keccak load is fewer, fatter shards (`docs/spec/delegation.md` §6.5,
+        // keccak load is fewer, fatter shards (`docs/spec/delegation-circuits.md` §2,
         // §9.2).
         let alu = tables.family(family::ADD_SUB_LUI_AUIPC).unwrap();
         assert_eq!(alu.height, 1 << 22, "{name}");

@@ -1,4 +1,4 @@
-//! The core's wire forms, `docs/spec/shard-proof.md` §9, and a key's load
+//! The core's wire forms, `docs/spec/shard-proof.md` §8, and a key's load
 //! rules, §7.2: every value round-trips byte for byte, and every refusal is an
 //! `Err` naming what it refused — never a panic.
 
@@ -69,7 +69,7 @@ fn the_layouts_are_the_specs() {
     assert_eq!(&b[24..56], &proof.global_digest.to_bytes());
     // The count is `shell`'s witness commitment list, which is
     // `ADD_SUB_LUI_AUIPC`'s width and grows by one `is_deleg_t` selector per
-    // registered delegation family (`docs/spec/delegation.md` §10). **Derived,
+    // registered delegation family (`docs/spec/delegation.md` §3). **Derived,
     // because this test is about the layout and not the width**: it was the
     // literal 33 and S26c's two families made it 35. What pins the width itself
     // is `crates/checker/tests/add_sub.rs`' column list, which names every
@@ -311,7 +311,7 @@ fn the_readers_refuse_rather_than_panic() {
 /// `constraints::wire`'s. Every other key fixture here names only `V[range19]`,
 /// `V[range16]` and setup columns, so a wrong arm for tags 4, 5 or 6 would pass
 /// every one of them and make a verifying key for any program that hashes
-/// unloadable (`docs/spec/lookup.md` §14, `docs/spec/delegation.md` §6).
+/// unloadable (`docs/spec/lookup.md` §14, `docs/spec/delegation-circuits.md` §2).
 #[test]
 fn a_key_carrying_the_xor8_channel_round_trips() {
     let key = common::keccak_vk();

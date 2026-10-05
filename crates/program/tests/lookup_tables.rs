@@ -168,7 +168,7 @@ fn the_three_tables_key_ranges_are_disjoint_and_miss_zero() {
 /// The packed table's commitments — what every verifying key carries and its
 /// SRS digest covers — pinned under the ceremony `identity.txt` is over: a
 /// trusted value anyone holding the ceremony can recompute
-/// (`docs/spec/jump-branch-slt.md` §6). In CI: the file names the same
+/// (`docs/spec/lookup.md` §9). In CI: the file names the same
 /// ceremony and holds three 64-byte points.
 #[test]
 fn the_generic_table_commitments_are_pinned_over_the_ceremony() {

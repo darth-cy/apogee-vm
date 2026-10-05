@@ -7,7 +7,7 @@
 //!
 //! Each family's `artifact` constructor is the only definition of its circuit;
 //! this group writes their bytes, and CI regenerates and diffs them. It is not
-//! an oracle: what each file holds is `docs/spec/shard-proof.md` §8,
+//! an oracle: what each file holds is `docs/spec/add-sub.md`,
 //! `docs/spec/jump-branch-slt.md`, `docs/spec/shift-bitwise.md`,
 //! `docs/spec/mul-div.md` and `docs/spec/memory-ops.md`, and the matching suite
 //! in `crates/checker/tests` holds the gates to those documents one by one.

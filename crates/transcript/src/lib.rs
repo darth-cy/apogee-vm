@@ -75,7 +75,7 @@ fn internal_matrix(s: &mut [Fr; 3]) {
 
 /// The guest-target backend: the permutation, delegated.
 ///
-/// `docs/spec/delegation.md` §12. One ecall over a 24-word frame against 240
+/// `docs/spec/delegation-circuits.md` §3. One ecall over a 24-word frame against 240
 /// Montgomery multiplies and 80 constant decodes in software, and the circuit
 /// that proves it is this function's own rounds. An executor without the
 /// circuit answers `-ENOSYS` and the software path below runs — which is this

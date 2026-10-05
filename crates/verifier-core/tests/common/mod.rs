@@ -272,7 +272,7 @@ pub fn statement() -> PublicInputs {
 /// The witness count is the frame's `w + 3 = 8` plus the family's own, which
 /// carries one delegation-request selector per registered type and so moves
 /// with every delegation family the repository registers
-/// (`docs/spec/delegation.md` §10). It was the literal 33, with a doc comment
+/// (`docs/spec/delegation.md` §3). It was the literal 33, with a doc comment
 /// saying it would move — and when S26c registered two families it did, which
 /// made an honest shell the wrong shape and turned
 /// `a_proof_shaped_wrong_is_refused_as_malformed` into a test that refused

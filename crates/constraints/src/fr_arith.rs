@@ -1,7 +1,7 @@
 //! The `FR_ARITH` family's circuit: one `Fr` add, multiply or inverse a row,
 //! invoked by the `ecall::PRECOMPILE_FR_ARITH` ecall and never decoded.
 //!
-//! `docs/spec/delegation.md` §13 is normative. One invocation is one row and
+//! `docs/spec/delegation-circuits.md` §4 is normative. One invocation is one row and
 //! one row is one operation — `ops/row = 1`, which is the cost model the
 //! recursion guest's contraction is sized against — so the family needs no
 //! batch, no populated count and no no-op selector: a row is live or it is

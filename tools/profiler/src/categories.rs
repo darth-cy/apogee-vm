@@ -294,7 +294,7 @@ pub const CANDIDATES: [Candidate; 5] = [
         entries: &["sha256_run", "ripemd160_run", "compress256"],
         // One 64-byte block in, eight words of state — which since S26c is
         // `constants::sha256::FRAME_WORDS` exactly, this category's SHA-256 half
-        // being delegated (`docs/spec/delegation.md` §15). What is left is
+        // being delegated (`docs/spec/delegation-circuits.md` §6). What is left is
         // RIPEMD-160, which shares the category and nothing else: it is
         // little-endian where SHA-256 is big-endian, five words of state where
         // SHA-256 has eight, and a different round function, so one frame does

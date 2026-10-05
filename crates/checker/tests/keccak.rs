@@ -1,6 +1,6 @@
 //! The keccak-f[1600] round circuit, gate by gate and obligation by obligation.
 //!
-//! `docs/spec/delegation.md` §6 is what this suite restates: the 51-word frame,
+//! `docs/spec/delegation-circuits.md` §2 is what this suite restates: the 51-word frame,
 //! the anchor's two tuples, the one-hot round selector, the five
 //! transformations and the two frame-pointer checks that must be in the emitted
 //! artifact rather than in a comment.
@@ -27,7 +27,7 @@
 //!   and it is the only thing in the fast gate that says the 1,020 obligations
 //!   of a row are the right 1,020: nine tenths of this circuit is in them.
 //!
-//! The round this file computes is written from `docs/spec/delegation.md` §6.2
+//! The round this file computes is written from `docs/spec/delegation-circuits.md` §2
 //! in `u64` primitives and shares no line with `crates/prover`'s fill or
 //! `crates/emulator`'s executor, so a circuit stating anything but a Keccak
 //! round would reject an honest witness. [`the_round_is_the_executors`] closes
@@ -80,7 +80,7 @@ struct Invocation {
 /// One round's intermediates, computed here from `u64` primitives and from
 /// nothing this repository's prover or executor owns.
 ///
-/// `docs/spec/delegation.md` §6.2 in nine stages: theta's parity chain, its
+/// `docs/spec/delegation-circuits.md` §2 in nine stages: theta's parity chain, its
 /// masked copy, `D`, `A'`, rho's masked copy, `B` after rho and pi, chi's
 /// helper and output, and iota's four bytes.
 struct Round {
@@ -171,7 +171,7 @@ fn column(values: Vec<u64>) -> MultilinearPoly {
 
 /// The honest witness of `live`, padded to [`ROWS`] with zero rows.
 ///
-/// Every cell follows `docs/spec/delegation.md` §6.1: the frame word at
+/// Every cell follows `docs/spec/delegation-circuits.md` §2: the frame word at
 /// `base + 4j` read at the previous cycle's slot 0 and written at this one's,
 /// the round selector, the round constant's four bytes, and the nine byte-wide
 /// stages of the round.
@@ -589,7 +589,7 @@ fn the_circuit_keeps_every_rule() {
         .expect("every obligation is discharged exactly once, in its own channel");
 }
 
-/// The shape `docs/spec/constraint-manifest.md` §12 accounts for.
+/// The shape `docs/spec/delegation-circuits.md` §2 accounts for.
 ///
 /// A digest that moves says only *that* something moved; these numbers say what.
 /// `crates/constraints/tests/vectors/keccak.txt` carries the same counts beside
@@ -607,7 +607,7 @@ fn the_shape_is_the_manifests() {
     // The two channels, and the obligation counts that decide the family's
     // cost: 210 on `RANGE16` — four a frame gap, three a base decomposition —
     // and 1,020 on `XOR8`, three short of the 1,024-leaf fraction tree's
-    // capacity (`docs/spec/delegation.md` §6.5).
+    // capacity (`docs/spec/delegation-circuits.md` §2).
     let count = |channel: u32| a.lookups.iter().filter(|l| l.channel == channel).count();
     assert_eq!(count(constants::lookup_channel::RANGE16), 210);
     assert_eq!(count(constants::lookup_channel::XOR8), 1_020);
@@ -728,7 +728,7 @@ fn an_honest_witness_satisfies_every_gate_and_obligation() {
 ///
 /// This is what the memory multiset proves in a real block, and what makes 24
 /// invocations a keccak-f rather than 24 unrelated rounds
-/// (`docs/spec/delegation.md` §6.4). Here it is a property of the honest set,
+/// (`docs/spec/delegation-circuits.md` §2). Here it is a property of the honest set,
 /// stated so a reader can see the chain the proof relies on.
 #[test]
 fn the_twenty_four_rows_chain_through_the_frame() {
@@ -1177,7 +1177,7 @@ fn the_fill_satisfies_every_gate_and_every_obligation() {
     }
 
     // And the rounds really are 0..24 in order, which is the guest's loop seen
-    // from the prover's side (`docs/spec/delegation.md` §6.4).
+    // from the prover's side (`docs/spec/delegation-circuits.md` §2).
     for row in 0..live {
         let round = row % k::ROUNDS;
         assert_eq!(

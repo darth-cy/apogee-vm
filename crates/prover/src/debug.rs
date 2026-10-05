@@ -484,7 +484,7 @@ pub fn all_zero(column: &poly::MultilinearPoly) -> bool {
 ///
 /// **The delegation log's single most valuable line.** Every delegation frame
 /// value owes an eight-limb borrow chain whose last borrow is 1 exactly when
-/// the value is below the modulus (`docs/spec/delegation.md` §11.3), and a row
+/// the value is below the modulus (`docs/spec/delegation-circuits.md` §1), and a row
 /// that breaks it is provable nowhere: the circuit's gated conclusion fails,
 /// the shard's GKR self-check fails at whatever layer that conclusion sits on,
 /// and the reader gets a layer number. This says which value, on which
@@ -672,7 +672,7 @@ pub fn ec_add_reads(group: usize, v: usize) -> bool {
 /// have the same number of invocations.**
 ///
 /// A row of this family is one third of a complete point addition
-/// (`docs/spec/delegation.md` §15), so a guest that performed `n` additions on
+/// (`docs/spec/delegation-circuits.md` §6), so a guest that performed `n` additions on
 /// a curve invoked each of that curve's three groups exactly `n` times. Three
 /// counts that differ mean an addition whose thirds did not all reach the
 /// executor — a dropped invocation, a guest that returned early between two
