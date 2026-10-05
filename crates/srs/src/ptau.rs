@@ -1,6 +1,6 @@
 //! The snarkjs `.ptau` container, and the archive's point block.
 //!
-//! `docs/spec/srs.md` §2-§4 is the normative description; this is the reader.
+//! `docs/spec/srs.md` §2–§3 specifies what this reads.
 //! Layout, from the format itself:
 //!
 //! ```text

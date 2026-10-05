@@ -31,13 +31,13 @@
 //! Mercury instance: the commitments and the claimed values are absorbed, a
 //! challenge `rho` is squeezed, and `cm* = sum rho^i cm_i` and
 //! `f* = sum rho^i f_i` go through one ordinary opening.
-//! `docs/spec/mercury.md` §11 is normative and carries the lemma.
+//! `docs/spec/mercury.md` §5 is normative and carries the lemma.
 //!
 //! [`verify_deferred`] and [`batch_verify_deferred`] run the identical
 //! verification and, instead of executing the two pairings, emit their terms as
 //! [`AccumulatorEntry`] items. [`discharge`] spends a concatenated list of them
 //! with one MSM per side and one two-pairing check.
-//! `docs/spec/accumulator.md` is normative for that.
+//! `docs/spec/mercury.md` §6 is normative for that.
 //!
 //! # What this crate does not do
 //!
@@ -500,11 +500,11 @@ pub fn open(
 /// its two pairing relations.
 ///
 /// This is the one verification path. It validates the points, then hands the
-/// field side — `docs/spec/mercury.md` §5's schedule, `h(alpha)`, `D(z)`, the
+/// field side — `docs/spec/mercury.md` §3.2's schedule, `h(alpha)`, `D(z)`, the
 /// BDFG20 batch and the merge challenge — to [`pcs_verify::scalars`], which
 /// the recursion guest runs too, and pairs each scalar with its point as
 /// [`ENTRY_POINTS`] says. That is the twelve [`AccumulatorEntry`] items of
-/// `docs/spec/accumulator.md` §2. Its callers either execute them or return
+/// `docs/spec/mercury.md` §6.1. Its callers either execute them or return
 /// them, and that branch is the only thing that separates a native
 /// verification from a deferred one.
 fn accumulate(
@@ -562,7 +562,7 @@ fn accumulate(
 /// One length-delimited message of `4k` limbs for the commitments **as
 /// passed**, then one message of `u` followed by all `k` claimed values, then
 /// the challenge. Nothing may be chosen after `rho` is drawn, which is what the
-/// order of those three steps buys. `docs/spec/mercury.md` §11.
+/// order of those three steps buys. `docs/spec/mercury.md` §5.
 ///
 /// Callers run [`check_batch`] before reaching here, so this only absorbs and
 /// combines. Returns the weights `rho^i`, `cm*` and `v*`.
@@ -645,7 +645,7 @@ pub fn verify_deferred(
 ///
 /// The commitments are absorbed **as passed** and `cm*` is derived from them by
 /// KZG's homomorphism, so a list in a different order, or one commitment short,
-/// is a different statement and fails. `docs/spec/mercury.md` §11.
+/// is a different statement and fails. `docs/spec/mercury.md` §5.
 pub fn batch_verify(
     vsrs: &SrsVerifier,
     cms: &[MercuryCommitment],

@@ -15,7 +15,7 @@
 //! **This crate has no SRS digest.** S07 originally specified a Poseidon2
 //! digest over every point, absorbed in statement binding and re-verified by
 //! [`Srs::load`]; that requirement was dropped, and the SRS handed to this crate
-//! is *assumed* to be the right one. See `docs/spec/srs.md` §4 and the S07
+//! is *assumed* to be the right one. See `docs/spec/srs.md` §3 and the S07
 //! handoff note. Since S16 a statement absorbs a narrower digest,
 //! `verifier_core::srs_digest`, over the verifier points and, since S17, the
 //! generic table's three commitments; the powers themselves are bound by
@@ -176,7 +176,7 @@ impl Srs {
         self.g1.len() - 1
     }
 
-    /// Write the archive described in `docs/spec/srs.md` §5.
+    /// Write the archive described in `docs/spec/srs.md` §4.
     pub fn save(&self, path: &Path) -> Result<(), SrsError> {
         let mut out = BufWriter::with_capacity(ARCHIVE_BUFFER, File::create(path)?);
         out.write_all(ARCHIVE_MAGIC)?;
@@ -351,7 +351,7 @@ impl<'de> serde::Deserialize<'de> for SrsVerifier {
 /// 137 GB section.
 pub(crate) const MAX_POWER: u32 = 30;
 
-/// `docs/spec/srs.md` §5. Changing any of these is an archive-format change.
+/// `docs/spec/srs.md` §4. Changing any of these is an archive-format change.
 const ARCHIVE_MAGIC: &[u8; 8] = b"APOGESRS";
 const ARCHIVE_VERSION: u32 = 1;
 /// magic 8, version 4, power 4, count 8, two G2 points 128 each.

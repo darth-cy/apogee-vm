@@ -22,7 +22,7 @@
 //! It is a few kilobytes.
 //!
 //! **Only the mini mode is recorded.** The stateless binary reads the spec's
-//! `statelessInputBytes` (`docs/spec/stateless.md`), which this recorder does
+//! `statelessInputBytes` (`docs/spec/ethereum.md` §4), which this recorder does
 //! not produce: the inputs it is held to are a `tests-zkevm` release's
 //! ([`crate::zkevm`]), and a producer of them for mainnet blocks is the next
 //! stage's. Until then no pin is in [`Mode::Stateless`], and `bench prove
@@ -38,7 +38,7 @@ pub enum Mode {
     /// block's post-state, because the rest of the block did not run.
     Mini,
     /// The canonical stateless validator: the spec's `statelessInputBytes` in,
-    /// its 43-byte `statelessOutputBytes` out (`docs/spec/stateless.md`).
+    /// its 43-byte `statelessOutputBytes` out (`docs/spec/ethereum.md` §4).
     Stateless,
 }
 
@@ -162,7 +162,7 @@ pub fn journal_file(stem: &str) -> String {
 /// each keeps its own entry in `constants::family::DEFAULT_HEIGHTS` — `2^8` for
 /// `POSEIDON2` and `FR_ARITH`, `2^16` for `MOD_MUL` and `EC_ADD` and `2^18` for
 /// `KECCAK_F` and `SHA256_COMP`, all read here and never spelled
-/// (`docs/spec/delegation.md` §9.2).
+/// (`docs/spec/delegation.md` §9).
 pub fn revm_params() -> program::ProgramParams {
     let mut heights = [revm_block::TRACE_HEIGHT_RELEASE; constants::family::COUNT as usize];
     for (f, h) in heights.iter_mut().enumerate() {

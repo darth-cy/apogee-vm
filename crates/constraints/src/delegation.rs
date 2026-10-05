@@ -806,7 +806,7 @@ pub(crate) fn bound_chunked(
 /// `TIMESTAMP` would be the natural channel and it does not fit — its table
 /// needs 19 variables and a delegation family that carries a channel at all is
 /// at `2^16` or `2^18`, where 19 variables need `2^20`, an execution family's
-/// floor (`docs/spec/delegation.md` §10.3).
+/// floor (`docs/spec/delegation.md` §9).
 pub const GAP_CHUNKS: usize = 2;
 
 /// The frame's own gates for a family that range-checks through `RANGE16`.

@@ -244,7 +244,7 @@ fn a3_a_deleted_account_is_refused() {
 ///
 /// A **balance** is the right cell to move, and a storage slot is not. Every
 /// account the execution touches is in the output commitment's post-state
-/// summary with its balance and nonce verbatim (`docs/spec/revm-block.md`
+/// summary with its balance and nonce verbatim (`docs/spec/ethereum.md`
 /// §2.2), so a one-wei change is always visible. A storage slot is not always:
 /// on this very fixture, one of the thirty-seven recorded slots is read by the
 /// callee and then **overwritten unconditionally**, so its original value

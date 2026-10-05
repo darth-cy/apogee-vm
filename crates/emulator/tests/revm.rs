@@ -70,7 +70,7 @@ fn output_bytes() -> Vec<u8> {
 /// mid-permutation states; `tools/kat-gen/src/revm.rs` filters on the round
 /// word, which is what keeps this fixture 200 bytes a permutation.
 /// The output commitment's `count` per-transaction records, and the offset the
-/// two 32-byte commitments begin at. `docs/spec/revm-block.md` §2.
+/// two 32-byte commitments begin at. `docs/spec/ethereum.md` §3.
 fn tx_records(bytes: &[u8], count: usize) -> (Vec<(u8, u64, Vec<u8>)>, usize) {
     let mut at = 0;
     let mut records = Vec::new();
@@ -395,7 +395,7 @@ fn the_output_commitment_has_the_frozen_shape() {
     assert_eq!(at, bytes.len(), "three sections and nothing after them");
 
     // Pinned, not merely non-zero. These are `keccak256` of the encodings in
-    // `docs/spec/revm-block.md` §2.1 and §2.2, and those encodings are frozen:
+    // `docs/spec/ethereum.md` §3 and §3, and those encodings are frozen:
     // without the literals here, changing one and regenerating the fixture
     // would leave every test in this file green, because every one of them
     // reads the regenerated fixture. A deliberate change edits these two lines
@@ -421,7 +421,7 @@ fn the_output_commitment_has_the_frozen_shape() {
 ///
 /// Built here rather than committed: these are blocks the workload does not
 /// contain, written to pin behaviour the committed fixture cannot reach. The
-/// addresses lead with `0xee` for the reason `docs/spec/revm-block.md` §1.3
+/// addresses lead with `0xee` for the reason `docs/tools.md` §7
 /// gives — every precompile's address is nineteen zero bytes and a label.
 fn synthetic_witness(block_gas_limit: u64, code: Vec<u8>, gas_limits: &[u64]) -> BlockWitness {
     let committed = BlockWitness::decode(&witness_bytes()).expect("the committed witness decodes");

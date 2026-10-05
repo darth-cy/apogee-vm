@@ -563,7 +563,7 @@ fn family_spec() -> FamilySpec {
         quadratic(vec![(lit(1), new)], new_products),
     ));
     // rd takes the old word for every kind but `sc.w`, which writes 0 because
-    // it always succeeds (`docs/spec/memory-ops.md` §6.3).
+    // it always succeeds (`docs/spec/memory-ops.md` §6).
     enforcing.push((
         "rd_value_rule".into(),
         quadratic(
@@ -627,11 +627,11 @@ fn family_spec() -> FamilySpec {
 fn assemble(trace_vars: u32, family_spec: FamilySpec) -> CircuitArtifact {
     // The comparison's four parameters are not derivable from anything else in
     // the artifact, and each wrong choice is a silent, total break of the four
-    // min/max kinds (`docs/spec/memory-ops.md` §6.4), so they are asserted
+    // min/max kinds (`docs/spec/memory-ops.md` §6), so they are asserted
     // here rather than only read. The selector carries a second thing besides:
     // the gadget's `lhs` range pair, under `m_pc`, is the only 32-bit bound on
     // the old word, and so the only bound on `rd_selected`, which is that word
-    // on ten of the eleven kinds (`memory-ops.md` §5.1). Narrowing it to the
+    // on ten of the eleven kinds (`memory-ops.md` §5). Narrowing it to the
     // min/max bits would leave every other kind's `rd` write unbounded.
     let cmp = the_comparison();
     assert_eq!(

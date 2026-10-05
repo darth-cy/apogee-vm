@@ -43,7 +43,7 @@ use trace::{plan_shards, FamilyTraces, MemoryEventLog};
 /// buffers flush. For `recursion-ops` that is still what a real statement gives
 /// it — `POSEIDON2` and `FR_ARITH` default to `2^8` — but for `keccak-test` it is
 /// a choice made **here**: `KECCAK_F` defaults to `2^18` since S26d
-/// (`docs/spec/delegation.md` §9.2), where its 240 rounds are one shard.
+/// (`docs/spec/delegation.md` §9), where its 240 rounds are one shard.
 const GUESTS: [(&str, u32); 13] = [
     ("fib", 16),
     ("heap", 16),

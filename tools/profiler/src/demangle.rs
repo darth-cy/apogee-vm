@@ -23,7 +23,7 @@
 //! Classification never depends on this: a crate and module name appears as a
 //! literal ASCII substring in **both** manglings, so
 //! `crate::categories::classify` would reach the same answer on the raw symbol
-//! (`docs/spec/profiling.md` §3).
+//! (`docs/tools.md` §2.2).
 
 /// `name` as a reader wants it, or `name` itself if it is not mangled.
 pub fn demangle(name: &str) -> String {

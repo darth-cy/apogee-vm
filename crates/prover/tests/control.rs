@@ -34,7 +34,7 @@ fn proved() -> (ProverSetup, TraceArchive, PublicInputs, Vec<ShardProof>) {
     (setup, archive, public, proofs)
 }
 
-/// The byte length a proof of `artifact` has: `docs/spec/shard-proof.md` §9's
+/// The byte length a proof of `artifact` has: `docs/spec/proof.md` §9's
 /// layout, every count read off the circuit.
 fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
     let transitions: usize = (0..a.depth())
@@ -161,7 +161,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     // per registered delegation type, and 42 + **36** since S26 registered a
     // fourth — so identity's seven setup commitments start at 78 rather than 77.
     // This pair moves by one for every delegation family
-    // (`docs/spec/delegation.md` §10) — hence 35 and 62 since S26c registered
+    // (`docs/spec/delegation.md` §3) — hence 35 and 62 since S26c registered
     // `SHA256_COMP` and `EC_ADD`, `constants::delegation::TYPES` now holding six.
     assert_eq!(add.len(), 27 + 35 + 7);
     assert_eq!(&add[62..], &setup.vk.setup_commitments[0][..]);

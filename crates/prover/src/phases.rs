@@ -1,4 +1,4 @@
-//! The prover's phase snapshots and resume, `docs/spec/shard-proof.md` §10:
+//! The prover's phase snapshots and resume, `docs/spec/streaming.md` §6:
 //! the S12 trace archive's four later sections, their schemas, and `advance`,
 //! which fills them in order and reads back whatever an imported archive
 //! already holds.
@@ -231,7 +231,7 @@ pub fn advance(
     // cannot reach a challenge, and the peak is one shard trace per worker.
     // `map` over an indexed parallel iterator collects in order, so the result
     // is statement order whatever the thread count
-    // (`docs/spec/block-proof.md` §5).
+    // (`docs/spec/streaming.md` §5).
     let gkrs = match archive.content(Phase::PostGkr) {
         Some(bytes) => decode_gkrs(bytes).map_err(archive_error(Phase::PostGkr))?,
         None => {
@@ -323,7 +323,7 @@ pub fn advance(
     Ok(())
 }
 
-/// Prove one archived execution as a **block**: `docs/spec/block-proof.md` §5.
+/// Prove one archived execution as a **block**: `docs/spec/streaming.md` §6.
 ///
 /// `plan` is the execution's own shard plan and is checked against the
 /// archive's cycle profile — a plan for another execution is refused rather

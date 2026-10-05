@@ -121,7 +121,7 @@ fn the_only_transform_is_the_one_at_two_b() {
 /// The transcript schedule of one function of `text`, read out of the source
 /// as `(kind, tag)` pairs in order.
 ///
-/// This is `docs/spec/mercury.md` §5's and §11's tables, and the sides must
+/// This is `docs/spec/mercury.md` §3.2's and §11's tables, and the sides must
 /// produce them. Reading tags rather than whole lines keeps the test about the
 /// schedule and not about how a local is spelled.
 fn schedule(text: &str, function: &str) -> Vec<(&'static str, String)> {
@@ -159,7 +159,7 @@ fn schedule(text: &str, function: &str) -> Vec<(&'static str, String)> {
     out
 }
 
-/// `docs/spec/mercury.md` §5, transcribed. Sixteen steps, in this order.
+/// `docs/spec/mercury.md` §3.2, transcribed. Sixteen steps, in this order.
 const SCHEDULE: [(&str, &str); 16] = [
     ("absorb", "MERCURY_INSTANCE"),
     ("absorb", "COMMITMENT"),
@@ -179,7 +179,7 @@ const SCHEDULE: [(&str, &str); 16] = [
     ("squeeze", "PAIRING_MERGE"),
 ];
 
-/// `docs/spec/mercury.md` §11, transcribed. Three steps, before the opening.
+/// `docs/spec/mercury.md` §5, transcribed. Three steps, before the opening.
 const BATCH_SCHEDULE: [(&str, &str); 3] = [
     ("absorb", "COMMITMENT"),
     ("absorb", "EVALUATION_CLAIM"),
@@ -198,7 +198,7 @@ fn both_sides_run_the_frozen_schedule() {
         assert_eq!(
             schedule(text, function),
             expected,
-            "{function} must run docs/spec/mercury.md section 5's schedule"
+            "{function} must run docs/spec/mercury.md §3.2's schedule"
         );
     }
     // And the native core reaches the schedule only through the shared one, so
@@ -241,7 +241,7 @@ fn both_sides_run_the_frozen_batch_schedule() {
     assert_eq!(
         schedule(VERIFY, "batch_preamble"),
         expected,
-        "the batch preamble must run docs/spec/mercury.md section 11's schedule"
+        "the batch preamble must run docs/spec/mercury.md §5's schedule"
     );
     // Said against the source rather than against the constant above: the
     // batching challenge is the LAST thing the preamble takes, so a squeeze
@@ -352,7 +352,7 @@ fn the_merge_challenge_is_squeezed_last_and_spent_once() {
 
 /// Where the per-check merge challenge comes from, read out of the source.
 ///
-/// `docs/spec/accumulator.md` §6 pins `nu` to a sponge seeded with the digest of
+/// `docs/spec/mercury.md` §6.3 pins `nu` to a sponge seeded with the digest of
 /// the accumulator's own words, and the powers of `nu` to the group weights. No
 /// black-box test can see any of that: a `discharge` that hard-codes `nu`, or
 /// digests the wrong grouping, or seeds the sponge with the words instead of

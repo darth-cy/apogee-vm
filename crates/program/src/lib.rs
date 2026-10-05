@@ -655,7 +655,7 @@ fn narrowest(values: Vec<u32>) -> PolyBacking {
 ///
 /// The scan is over the image's **file-backed bytes**, at every byte offset,
 /// in address order. Those bytes are already what program identity binds
-/// through the image column (`docs/spec/memory.md` §6.2), so a declaration
+/// through the image column (`docs/spec/program.md` §8), so a declaration
 /// cannot be altered without moving identity, and no loader change is needed
 /// to carry it: a record is an ordinary run of `.rodata` bytes. The scan is
 /// byte-wise and not word-wise because a `static`'s address is the linker's,
@@ -971,7 +971,7 @@ pub fn image_init_column(image: &ProgramImage, height: u32) -> MultilinearPoly {
 
 /// The program's identity: its [`setup_commitments`], digested with the code
 /// version, the static `VmConfig` and the entry pc by
-/// [`identity_from_commitments`]. `docs/spec/memory.md` §6.2.
+/// [`identity_from_commitments`]. `docs/spec/program.md` §8.
 pub fn program_identity(
     image: &ProgramImage,
     tables: &DecodedTables,
@@ -1062,7 +1062,7 @@ pub fn setup_commitments(
 /// The identity digest over given setup commitments. It needs no SRS: this is
 /// what a verifying-key loader recomputes, and it is
 /// `verifier_core::identity_digest` over the points' canonical encodings,
-/// whose doc is the frozen recipe (`docs/spec/memory.md` §6.2).
+/// whose doc is the recipe (`docs/spec/program.md` §8).
 ///
 /// `commitments` holds one list per family of `config`; anything else is a
 /// caller error and panics.

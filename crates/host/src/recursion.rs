@@ -129,7 +129,7 @@ pub(crate) struct Statement<'a> {
 impl<'a> Statement<'a> {
     /// Shards `shards` of `block`, each verified natively but for its
     /// pairings, for its blob's `cm*`, entry 0 of its deferred check
-    /// (`docs/spec/accumulator.md` §2).
+    /// (`docs/spec/mercury.md` §6.1).
     pub(crate) fn of(
         vk: &VerifyingKey,
         block: &'a BlockProof,

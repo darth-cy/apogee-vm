@@ -1,5 +1,5 @@
 //! Program identity: determinism, the recipe, and sensitivity. Acceptance 8
-//! and 9, and the recipe of `docs/spec/memory.md` §6.2.
+//! and 9, and the recipe of `docs/spec/program.md` §8.
 //!
 //! **Every test here but the last two is `#[ignore]`d.** Identity is Mercury
 //! commitments over the public SRS, which is PSE's 19 GB ceremony file,

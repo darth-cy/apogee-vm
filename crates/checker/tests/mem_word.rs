@@ -1242,7 +1242,7 @@ fn a_word_index_above_2_to_the_30_is_refused() {
 /// at all is the multiset: some earlier write put it there, and that write was
 /// bounded. The gate is what carries the pinning into `rd`, and
 /// `rd_selected`'s own range pair is what keeps every register value in this
-/// VM locally 32-bit (`docs/spec/memory-ops.md` §5.1).
+/// VM locally 32-bit (`docs/spec/memory-ops.md` §5).
 ///
 /// The cell on the other side is the one **no gate reads**: a store's
 /// `ram_read_value`, the word it is about to overwrite. Nothing row-local has

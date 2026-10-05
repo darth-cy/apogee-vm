@@ -616,7 +616,7 @@ fn family_spec() -> FamilySpec {
     ));
     // A halfword access has bit 0 clear. Nothing else gives bit 0 any effect
     // at that width, and without this gate `w·p` reaches 2^40, which is what
-    // the whole write-side bound of §5.2 rests on not happening.
+    // the whole write-side bound of `docs/spec/memory-ops.md` §4.3 rests on not happening.
     enforcing.push((
         "half_aligned".into(),
         quadratic(vec![], form_times(lit(1), &HALVES, BIT0)),

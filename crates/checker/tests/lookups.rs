@@ -1,4 +1,4 @@
-//! The lookup element, `docs/spec/memory.md` §7. `check_laws` holds every
+//! The lookup element, `docs/spec/lookup.md` §1. `check_laws` holds every
 //! lookup to the rules of `docs/spec/gkr.md` §4.2 with code of its own, and
 //! agrees with `CircuitArtifact::validate` on every mutant below: 7 lawful — an
 //! `M`, a `W` and an `S` selector and the `range16` channel among them — and 31

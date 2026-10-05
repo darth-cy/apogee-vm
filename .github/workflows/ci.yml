@@ -52,7 +52,7 @@ jobs:
 
       # The debug log's own suite, plus its unit tests -- which live in
       # `src/debug.rs` and so are compiled by no other job in this file.
-      # `docs/spec/debug-info.md` §0.
+      # `docs/tools.md` §3.
       - name: test the debug-info configuration
         run: |
           cargo test -p prover --features debug-info --test debug_info
@@ -314,7 +314,7 @@ jobs:
       #
       # S26d re-shaped the delegation row from a whole keccak-f[1600] permutation
       # to ONE ROUND, which moved the height from `2^8` to `2^18`
-      # (`docs/spec/delegation.md` §6). The shard's proof falls from 11,880,012
+      # (`docs/spec/delegation-circuits.md` §2). The shard's proof falls from 11,880,012
       # bytes to 373,276 and holds 2,730 permutations instead of 256 -- 339 times
       # fewer proof bytes a permutation -- but its forward pass goes the other
       # way, from 5,478 x 256 to 5,478 x 65,536, about 15 GB. So the peak below

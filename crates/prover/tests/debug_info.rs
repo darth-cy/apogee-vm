@@ -1,4 +1,4 @@
-//! The proving debug log, `docs/spec/debug-info.md`. The whole file is behind
+//! The proving debug log, `docs/tools.md` §3. The whole file is behind
 //! the feature, so a default `cargo test --workspace` compiles none of it; CI
 //! runs it a second time with `--features debug-info`.
 //!
@@ -7,7 +7,7 @@
 //! `--features debug-info --lib` for them. What belongs *here* is the pair of
 //! properties no unit test can reach:
 //!
-//! - the **grep markers** `docs/spec/debug-info.md` §8 tells a reader to search
+//! - the **grep markers** `docs/tools.md` §3 tells a reader to search
 //!   for are the ones the builders actually emit, so the documented recipe keeps
 //!   working when a line is reworded;
 //! - the feature **changes no proof byte**, which is `#[ignore]`d with the rest
@@ -23,7 +23,7 @@ mod common;
 
 /// **The documented greps keep working.**
 ///
-/// `docs/spec/debug-info.md` §8 hands a reader two commands, and they are the
+/// `docs/tools.md` §3 hands a reader two commands, and they are the
 /// whole interface for "what went wrong in this run":
 ///
 /// ```console
@@ -119,7 +119,7 @@ fn a_circuit_inventory_carries_what_a_later_failure_is_read_against() {
 
 /// **Every marker the documented grep looks for exists in the sources.**
 ///
-/// `docs/spec/debug-info.md` §8 and the root `CLAUDE.md` both hand a reader one
+/// `docs/tools.md` §3 and the root `CLAUDE.md` both hand a reader one
 /// `grep -E` alternation, and four of its markers come from `format!` strings in
 /// `src/lib.rs` and `src/fill.rs` rather than from a builder a unit test can
 /// call: a scan's verdict fires only on the failure it is looking for, and no
@@ -153,7 +153,7 @@ fn every_documented_grep_marker_is_in_the_sources() {
     ] {
         assert!(
             sources.contains(marker),
-            "the documented grep in docs/spec/debug-info.md §8 looks for {marker:?} and no \
+            "the documented grep in docs/tools.md §3 looks for {marker:?} and no \
              source emits it any more: either restore the marker or update the recipe in \
              the spec AND the root CLAUDE.md"
         );
@@ -163,7 +163,7 @@ fn every_documented_grep_marker_is_in_the_sources() {
     for marker in ["begin h=", "gkr done", "open begin", "open done"] {
         assert!(
             sources.contains(marker),
-            "the begin/done pairing in docs/spec/debug-info.md §2 counts {marker:?}"
+            "the begin/done pairing in docs/tools.md §3 counts {marker:?}"
         );
     }
 }

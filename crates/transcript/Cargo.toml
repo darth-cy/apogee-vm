@@ -11,7 +11,7 @@ serde.workspace = true
 
 # The guest-target backend, and only there: `poseidon2_permute` routes through
 # `guest_sdk::recursion`'s delegation shim when this crate is compiled for the
-# guest (`docs/spec/delegation.md` §12). A *target* dependency, not a cargo
+# guest (`docs/spec/delegation.md` §10). A *target* dependency, not a cargo
 # feature; see `crates/field/Cargo.toml` for the same edge and the same reason.
 [target.'cfg(target_arch = "riscv32")'.dependencies]
 guest-sdk = { path = "../guest-sdk" }

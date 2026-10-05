@@ -17,7 +17,7 @@
 //! [`crate::prove_block`] would have produced over the same execution — by
 //! construction, and no longer by test: the comparison that held the two
 //! blocks byte for byte ran the archived path, and went with it at S-STREAM
-//! (`docs/spec/streaming.md` §6.3). `crates/prover/tests/block.rs`'s `a7` is
+//! (`docs/spec/streaming.md` §6). `crates/prover/tests/block.rs`'s `a7` is
 //! the one place an archived construction and a streamed one still meet.
 //!
 //! What it buys is a peak that does not grow with the shard count.
@@ -159,7 +159,7 @@ type ShardId = (FamilyId, u32);
 /// collected against their `(family, index)` and placed afterwards. A
 /// commitment is an MSM over the SRS and reads no transcript, so when it is
 /// computed cannot matter; the order they are **absorbed** in is the
-/// statement's, and that is the frozen one (`docs/spec/shard-proof.md` §2).
+/// statement's, and that is the frozen one (`docs/spec/proof.md` §2).
 fn pass1(
     setup: &ProverSetup,
     io: &GuestIo,

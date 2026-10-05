@@ -22,7 +22,7 @@
 //! weak:
 //!
 //! - `verify_block` on every statement every proving suite proves, which is a
-//!   self-consistency check over the whole of `docs/spec/shard-proof.md`;
+//!   self-consistency check over the whole of `docs/spec/proof.md`;
 //! - `crates/emulator/tests/streaming.rs` — the executor's chunks against
 //!   `trace_run`'s buffers, row for row, and its final state against the log's;
 //! - `crates/checker/tests/memory.rs`'
@@ -54,7 +54,7 @@ use prover::{prove_block_streaming, ProverSetup, StreamingReport};
 ///
 /// Shards are placed by their statement position and each proof is a function
 /// of the global state and its own columns, so the schedule cannot reach a
-/// challenge — the same argument `docs/spec/block-proof.md` §5.2 makes about
+/// challenge — the same argument `docs/spec/streaming.md` §5 makes about
 /// the thread count, and the same one that makes `max_in_flight` safe to tune.
 /// `tests/block.rs`'s `the_block_does_not_depend_on_the_thread_count` is the
 /// other half: this one varies the worker count, that one the pool.

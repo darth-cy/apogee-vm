@@ -41,7 +41,7 @@ fn proved() -> (ProverSetup, TraceArchive, PublicInputs, Vec<ShardProof>) {
     (setup, archive, public, proofs)
 }
 
-/// The byte length a proof of `artifact` has: `docs/spec/shard-proof.md` §9's
+/// The byte length a proof of `artifact` has: `docs/spec/proof.md` §9's
 /// layout, every count read off the circuit.
 fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
     let transitions: usize = (0..a.depth())
@@ -69,7 +69,7 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// has its circuit's shape.
 ///
 /// The three new families' shapes are pinned twice — as the literals
-/// `docs/spec/memory-ops.md` §7 states, and as the numbers read off the
+/// `docs/spec/circuits.md` §1 states, and as the numbers read off the
 /// registry's circuit — so a change to any of them shows on both sides. What
 /// the trace holds, instruction by instruction, is the three row suites in
 /// `crates/checker/tests` over the same fixture, and the emulator's reading of it is
@@ -152,12 +152,12 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     }
 
     // The three families' committed widths and channel counts, as
-    // `docs/spec/memory-ops.md` §7 states them: `mem_word` reads no generic
+    // `docs/spec/circuits.md` §1 states them: `mem_word` reads no generic
     // channel, so it carries three channels and seven setup columns; the other
     // two carry four and name the packed table as their last three.
     let by_family = |f: u32| proofs.iter().find(|p| p.family == f).expect("a shard");
-    // Each length is pinned twice — as the literal `docs/spec/memory-ops.md` §7 and
-    // `docs/spec/constraint-manifest.md` §1.2 and §1.3 state, and as the number the
+    // Each length is pinned twice — as the literal `docs/spec/circuits.md` §1 and
+    // `docs/spec/circuits.md` §1 and §1 state, and as the number the
     // formula above reads off the circuit — so a change to a family shows on both sides.
     let mw = by_family(MW);
     assert_eq!(mw.gkr.layers.len(), 25);
@@ -176,7 +176,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     assert_eq!(at.outputs.len(), 2 + 2 * 4);
     assert_eq!(at.to_bytes().len(), 68_468);
 
-    // The generic table's binding (`docs/spec/jump-branch-slt.md` §6): the two
+    // The generic table's binding (`docs/spec/lookup.md` §9): the two
     // families that read the channel open the key's three table commitments
     // after their own identity-committed setup columns; `mem_word`, which
     // reads none, opens identity's list alone.

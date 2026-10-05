@@ -1,5 +1,5 @@
 //! The family fills: how each family's trace buffer becomes its circuit's
-//! committed columns. `docs/spec/shard-proof.md` §8.1 and §11.
+//! committed columns. `docs/spec/add-sub.md` §1 and `docs/spec/circuits.md` §1.
 //!
 //! A fill returns every `M`, `W` and `S` column but the multiplicities, which
 //! the common path counts over the family's channels.
@@ -51,10 +51,10 @@ use crate::Program;
 /// shard's rows**, and which shard — its index, its height, and for a window
 /// family its window.
 ///
-/// The rows are already cut to the shard (`docs/spec/block-proof.md` §5.1), so a
+/// The rows are already cut to the shard (`docs/spec/streaming.md` §4), so a
 /// fill indexes `0..rows.len()` and never the whole execution. That is what lets
 /// one fill serve a slice of an archived execution and a streaming executor's
-/// freshly filled chunk alike (`docs/spec/streaming.md` §2).
+/// freshly filled chunk alike (`docs/spec/streaming.md` §3).
 pub struct ShardSource<'a> {
     pub program: &'a Program,
     /// The public input window's payload, which `PUBLIC_INPUT`'s fill commits
@@ -89,14 +89,14 @@ pub enum ShardRows<'a> {
 impl<'a> ShardSource<'a> {
     /// The source for shard `(family, index)` of an **archived** execution: the
     /// program, the archive's two unbound inputs, and this shard's rows cut out
-    /// of the archive by `docs/spec/block-proof.md` §5.1's rule.
+    /// of the archive by `docs/spec/streaming.md` §4's rule.
     ///
     /// Which arm of [`ShardRows`] a family takes is the three presence rules of
     /// `docs/spec/delegation.md` §1: a delegation family is invoked, a family
     /// that claims pcs owns cycles, and everything else is a window family
     /// whose rows are addresses. A streaming prover builds the same struct from
     /// a chunk it has just filled, which is the whole of what the two paths do
-    /// differently (`docs/spec/streaming.md` §2).
+    /// differently (`docs/spec/streaming.md` §3).
     pub fn archived(
         program: &'a Program,
         archive: &'a TraceArchive,
@@ -216,7 +216,7 @@ fn invocations<'a>(src: &'a ShardSource<'a>, family: FamilyId) -> Result<Invocat
 }
 
 /// Every column the delegation frame itself owns, for a frame of `words`
-/// words: `docs/spec/delegation.md` §4 and §6.1 — the four head columns, four
+/// words: `docs/spec/delegation-circuits.md` §1 and §2.1 — the four head columns, four
 /// per frame word, 38 gap bits a word, and the frame pointer's two
 /// decompositions.
 ///
@@ -538,10 +538,10 @@ fn keccak_row(frames: &FrameSlice, r: usize) -> Result<KeccakRow, String> {
 /// **What it is for is that the 24 counts should be equal.** A permutation is 24
 /// consecutive invocations and a shard holds whole permutations up to its cut, so
 /// a shard whose rounds are not near-uniform has a guest that is not looping 24
-/// times — which is the one failure `docs/spec/delegation.md` §6.4's glue cannot
+/// times — which is the one failure `docs/spec/delegation-circuits.md` §2.3's glue cannot
 /// see, the circuit proving each row honestly whatever the sequence. It is the
 /// analogue of `MOD_MUL`'s modulus histogram and `EC_ADD`'s curve/group one
-/// (`docs/spec/debug-info.md` §5).
+/// (`docs/tools.md` §3).
 ///
 /// A tally and not a verdict: a shard cut mid-permutation leaves the low rounds
 /// one ahead of the high ones, which is legitimate and expected.
@@ -577,7 +577,7 @@ fn keccak_round_log(index: u32, witness: &[KeccakRow]) {
     }
 }
 
-/// A `KECCAK_F` shard, `docs/spec/delegation.md` §6.1: the delegation frame over
+/// A `KECCAK_F` shard, `docs/spec/delegation-circuits.md` §2.1: the delegation frame over
 /// `RANGE16`, the 24 round selectors, the round constant's four bytes, and the
 /// round's nine byte-wide stages.
 ///
@@ -682,7 +682,7 @@ fn keccak_f(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
     Ok(out)
 }
 
-/// A `POSEIDON2` shard, `docs/spec/delegation.md` §12.1: the delegation frame,
+/// A `POSEIDON2` shard, `docs/spec/delegation-circuits.md` §3.1: the delegation frame,
 /// plus the six lane values' word and canonicity bits — three read, three
 /// written.
 fn poseidon2(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
@@ -707,7 +707,7 @@ fn poseidon2(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, S
     }
     // Every lane, in and out: this family's frame is canonical values by
     // design, the circuit being `poseidon2_permute` itself
-    // (`docs/spec/delegation.md` §13.2), so a lane that is not below `p` is a
+    // (`docs/spec/delegation-circuits.md` §3.1), so a lane that is not below `p` is a
     // guest that handed the shim something that is not a field element.
     debug_only!(
         if debug::enabled_for(debug::Level::Detail, family::POSEIDON2) {
@@ -734,7 +734,7 @@ fn poseidon2(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, S
     Ok(out)
 }
 
-/// An `FR_ARITH` shard, `docs/spec/delegation.md` §13.1: the delegation frame,
+/// An `FR_ARITH` shard, `docs/spec/delegation-circuits.md` §4.1: the delegation frame,
 /// the three values' bits, the operation selectors, and the three witnessed
 /// scalars — the product helper, the inverse and the is-zero flag.
 fn fr_arith(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
@@ -841,7 +841,7 @@ struct ModMulRow {
     chains: [([u64; mm::LIMBS], [u64; mm::LIMBS]); 3],
 }
 
-/// A `MOD_MUL` shard, `docs/spec/delegation.md` §14: the delegation frame, the
+/// A `MOD_MUL` shard, `docs/spec/delegation-circuits.md` §5: the delegation frame, the
 /// modulus selector and the limbs it names, the three frame values' word bits
 /// and `< m` chains, the quotient with its limbs and bits, and the fifteen
 /// positions' signed carries.
@@ -1247,7 +1247,7 @@ fn sha256_row(frames: &FrameSlice, r: usize) -> Result<Sha256Row, String> {
     // disagreement is a trace this circuit cannot prove, and naming the word
     // here is better than a `LayerInconsistency` hours into a block. Always
     // made since S26e, where S26c made it only under `debug-info`; the
-    // `DISAGREES` in both messages is `docs/spec/debug-info.md` §8's grep
+    // `DISAGREES` in both messages is `docs/tools.md` §3's grep
     // marker, which `tests/debug_info.rs` holds to being in the sources.
     let write = |j: usize| frames.word(j).write_value[r];
     for j in 0..4 {
@@ -1280,7 +1280,7 @@ fn sha256_row(frames: &FrameSlice, r: usize) -> Result<Sha256Row, String> {
     })
 }
 
-/// A `SHA256_COMP` shard, `docs/spec/delegation.md` §15: the delegation frame
+/// A `SHA256_COMP` shard, `docs/spec/delegation-circuits.md` §6: the delegation frame
 /// over `RANGE16`, the 16 one-hot group selectors, the bytes of the twelve
 /// working variables and eight schedule words the call's XORs read, every
 /// round's and derived word's byte-wide stages, and the high halfwords of the
@@ -2500,7 +2500,7 @@ fn signed(v: i128) -> Fr {
     }
 }
 
-/// An `ADD_SUB_LUI_AUIPC` shard, `docs/spec/shard-proof.md` §8.1: S14's frame
+/// An `ADD_SUB_LUI_AUIPC` shard, `docs/spec/add-sub.md` §1: S14's frame
 /// columns over the shard's cycles, the decoded row each cycle's pc claims, the
 /// kind bits, the system split, the computed `rd` value with its wrap and high
 /// halfword — written over the frame's `rd_selected`, which S14's builder
@@ -2878,7 +2878,7 @@ fn jump_branch_slt(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPol
     Ok(out)
 }
 
-/// A `SHIFT_BITWISE` shard, `docs/spec/shift-bitwise.md` §7: S14's frame
+/// A `SHIFT_BITWISE` shard, `docs/spec/shift-bitwise.md` §2: S14's frame
 /// columns over the shard's cycles; the decoded row each cycle's pc claims and
 /// its kind bits; the two half flags; `rs1`'s halfword and sign and the second
 /// operand's halfword; the truncated shift amount with its powers and the bits
@@ -3090,7 +3090,7 @@ fn shift_bitwise(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)
     Ok(out)
 }
 
-/// A `MUL_DIV` shard, `docs/spec/mul-div.md` §7: S14's frame columns over the
+/// A `MUL_DIV` shard, `docs/spec/mul-div.md` §5.4: S14's frame columns over the
 /// shard's cycles; the decoded row each cycle's pc claims — **five values, not
 /// six**: this family's tuple has no immediate — and its kind bits; the
 /// division flag; both operands' halfwords, top bits and sign adjustments; the
@@ -3364,7 +3364,7 @@ fn frame_columns(
     out
 }
 
-/// A `MEM_WORD` shard, `docs/spec/memory-ops.md` §3.5: S14's frame columns over
+/// A `MEM_WORD` shard, `docs/spec/memory-ops.md` §3: S14's frame columns over
 /// the shard's cycles; the decoded row each cycle's pc claims and its two kind
 /// bits; the effective address split into `4·word_index` with its wrap bit; and
 /// the written `rd` value with its high halfword. The family looks nothing up
@@ -3482,7 +3482,7 @@ fn mem_word(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
     Ok(out)
 }
 
-/// A `MEM_SUBWORD` shard, `docs/spec/memory-ops.md` §4.7: the frame columns;
+/// A `MEM_SUBWORD` shard, `docs/spec/memory-ops.md` §4.3: the frame columns;
 /// the decoded row and its six kind bits; the effective address split into
 /// `4·word_index + 2·bit1 + bit0` with its wrap bit; the splice's derived
 /// constants and its three parts, each with the column its bound scales; the
@@ -3685,7 +3685,7 @@ fn mem_subword(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>,
     Ok(out)
 }
 
-/// An `ATOMICS` shard, `docs/spec/memory-ops.md` §6.7: the frame columns; the
+/// An `ATOMICS` shard, `docs/spec/memory-ops.md` §6: the frame columns; the
 /// decoded row — five columns, this family's tuple having no `imm` — and its
 /// eleven kind bits; the word index, which is `rs1/4` with no offset at all;
 /// `amoadd`'s reduced sum and carry; the bitwise selector with both operands'

@@ -1,6 +1,6 @@
 //! The proof-side types, frozen at S16: `PublicInputs`, `ShardProof`,
 //! `VerifyingKey`, `VerifyError`, and the opening claim the core hands its
-//! wrapper. Their byte layouts are `docs/spec/shard-proof.md` §9, and a key's
+//! wrapper. Their byte layouts are `docs/spec/proof.md` §9, and a key's
 //! load rules §7.2.
 
 use alloc::format;
@@ -31,7 +31,7 @@ pub const SRS_VERIFIER_BYTES: usize = 320;
 // The error classes
 // ---------------------------------------------------------------------------
 
-/// Why a shard proof was refused, `docs/spec/shard-proof.md` §6. The class is
+/// Why a shard proof was refused, `docs/spec/proof.md` §6. The class is
 /// the variant; the payload says which check of it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VerifyError {
@@ -78,7 +78,7 @@ impl fmt::Display for VerifyError {
 // PublicInputs
 // ---------------------------------------------------------------------------
 
-/// What a statement is about, `docs/spec/shard-proof.md` §1.1: the streams and
+/// What a statement is about, `docs/spec/proof.md` §1.1: the streams and
 /// the result the outside world asserts, then the record the prover's global
 /// commit phase fixed — every shard's memory commitments and roots, the
 /// boundary, the counts and the window list. Every shard of a statement is
@@ -186,7 +186,7 @@ impl PublicInputs {
 // ShardProof
 // ---------------------------------------------------------------------------
 
-/// One shard's proof, `docs/spec/shard-proof.md` §4 and §9. Its lengths are
+/// One shard's proof, `docs/spec/proof.md` §4 and §9. Its lengths are
 /// fixed by the key's circuit for `family`, and it holds exactly one Mercury
 /// proof. No accumulator entries: a base verification pairs inside `pcs`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -248,7 +248,7 @@ impl ShardProof {
 }
 
 /// A `GkrProof` on the wire: per transition, its rounds then its claims,
-/// `docs/spec/shard-proof.md` §9.
+/// `docs/spec/proof.md` §9.
 pub fn write_gkr(w: &mut Writer, gkr: &GkrProof) {
     w.count(gkr.layers.len());
     for layer in &gkr.layers {
@@ -285,7 +285,7 @@ pub fn read_gkr(r: &mut Reader) -> Read<GkrProof> {
 // ---------------------------------------------------------------------------
 
 /// Everything `verify_shard` needs beyond a proof and its public inputs,
-/// `docs/spec/shard-proof.md` §7. A key comes from a channel the prover does
+/// `docs/spec/proof.md` §7. A key comes from a channel the prover does
 /// not control, and a verifier compares its `identity` with a registered one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifyingKey {
@@ -299,7 +299,7 @@ pub struct VerifyingKey {
     /// The packed generic table's commitments, key column first: one set for
     /// every key, the same at every height, which a family that reads the
     /// generic channel opens its last setup columns against. Not in identity;
-    /// the SRS digest covers them (`docs/spec/shard-proof.md` §3, §7; S17).
+    /// the SRS digest covers them (`docs/spec/proof.md` §3, §7; S17).
     pub generic_table: [[u8; 64]; generic_table::WIDTH],
     /// The digest of `srs_verifier` and `generic_table`.
     pub srs_digest: Fr,
@@ -457,7 +457,7 @@ impl VerifyingKey {
         })
     }
 
-    /// The load rules of `docs/spec/shard-proof.md` §7.2, everything but the
+    /// The load rules of `docs/spec/proof.md` §7.2, everything but the
     /// curve points. Run once, where a key is built or loaded.
     pub fn check(&self) -> Result<(), String> {
         if VmConfig::from_bytes(&self.config.to_bytes()).as_ref() != Some(&self.config) {
@@ -557,7 +557,7 @@ impl VerifyingKey {
 
 /// What `reduce_shard` leaves for the wrapper: one batched opening of every
 /// committed column of the shard at one point, and the shard transcript to run
-/// it in. `docs/spec/shard-proof.md` §5.1.
+/// it in. `docs/spec/proof.md` §5.
 pub struct OpeningClaim {
     /// Layout order: `M`, `W`, `S`.
     pub commitments: Vec<[u8; 64]>,

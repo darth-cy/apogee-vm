@@ -54,7 +54,7 @@ fn column(mut values: Vec<u64>, height: usize) -> MultilinearPoly {
 /// cycle's pc write, `4·(cycle − 1)`; every other field is in the row. What is
 /// **not** here is a delegation invocation's frame accesses: they ride this
 /// cycle's timestamp but they are the delegation family's own rows, not this
-/// one's (`docs/spec/delegation.md` §4.1), and the frame builders skipped them
+/// one's (`docs/spec/delegation.md` §4), and the frame builders skipped them
 /// when they read the log.
 ///
 /// `crates/trace/src/archive.rs`'s `check_parts` is the same derivation in the

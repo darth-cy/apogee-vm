@@ -173,7 +173,7 @@ pub const TABLE_WIDTH: usize = 6;
 
 /// `S[6..9]`: the packed generic table's columns, key first, after the decoded
 /// table. A verifying key's commitments for them follow identity's
-/// (`docs/spec/shard-proof.md` §7).
+/// (`docs/spec/proof.md` §7).
 pub const GENERIC_TABLE: [PolyAddress; generic_table::WIDTH] = [
     PolyAddress::Setup(TABLE_WIDTH as u32),
     PolyAddress::Setup(TABLE_WIDTH as u32 + 1),
@@ -411,7 +411,7 @@ pub fn arithmetic_gates(word_bits: u32) -> Vec<(String, GateDef)> {
     // gated, and must be — ungated it reads rem = dividend on a multiply row
     // whose rs2 is 0, which no non-negative rem satisfies where the dividend
     // is negative, and `mul t0, t1, x0` with a negative t1 would be
-    // unprovable (`docs/spec/mul-div.md` §4.3).
+    // unprovable (`docs/spec/mul-div.md` §5.2).
     gates.push((
         "division_rule".into(),
         quadratic(

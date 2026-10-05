@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# The fixture for the `SHA256_COMP` delegation (`docs/spec/delegation.md` §15).
+# The fixture for the `SHA256_COMP` delegation (`docs/spec/delegation-circuits.md` §6).
 #
 # Two dependencies and three kinds of check. `guest-sdk` is both the shim,
 # called by name over frames this guest writes itself, and the digest surface

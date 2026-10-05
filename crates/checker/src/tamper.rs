@@ -12,7 +12,7 @@
 //! of the new statement is proved again.
 //! So the proof that reaches the verifier is the best one the tampered witness
 //! has, and the class of the check that refuses it is the class of what the
-//! tamper broke (`docs/spec/shard-proof.md` §6). A tamper that breaks nothing
+//! tamper broke (`docs/spec/proof.md` §6). A tamper that breaks nothing
 //! verifies, and the harness says so.
 
 use std::mem::discriminant;
@@ -141,7 +141,7 @@ impl<'a> TamperHarness<'a> {
     /// give it. `run` verifies one shard, so a tamper whose only symptom is
     /// the cross-shard read/write root product — one delegation invocation
     /// dropped, say — reaches no check there: step 10b is the statement's, not
-    /// a shard's (`docs/spec/block-proof.md` §3). A block reads every shard's
+    /// a shard's (`docs/spec/proof.md` §6). A block reads every shard's
     /// roots against the boundary at once, which is where such a tamper lands.
     ///
     /// [`run`]: TamperHarness::run
@@ -264,7 +264,7 @@ pub struct AnchorTwins {
 /// **Each twin is run at the level that names what refuses it**, and the two
 /// levels answer differently on purpose. `verify_block` runs
 /// `verify_global_memory` **before** any shard's own checks
-/// (`docs/spec/block-proof.md` §3), so at block level a forgery that unbalances
+/// (`docs/spec/proof.md` §6), so at block level a forgery that unbalances
 /// the multiset is `MemoryArgument` whatever else is also wrong;
 /// `verify_shard`'s order puts `Constraint` first, so at shard level the same
 /// witness names the gate. A twin that asserted `Constraint` at block level

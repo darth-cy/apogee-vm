@@ -75,7 +75,7 @@ fn internal_matrix(s: &mut [Fr; 3]) {
 
 /// The guest-target backend: the permutation, delegated.
 ///
-/// `docs/spec/delegation.md` §12. One ecall over a 24-word frame against 240
+/// `docs/spec/delegation.md` §10. One ecall over a 24-word frame against 240
 /// Montgomery multiplies and 80 constant decodes in software, and the circuit
 /// that proves it is this function's own rounds. An executor without the
 /// circuit answers `-ENOSYS` and the software path below runs — which is this
@@ -438,7 +438,7 @@ impl<'de> serde::Deserialize<'de> for TranscriptSnapshot {
 ///
 /// This is the value the statement-binding order absorbs as "public I/O
 /// digest". Frozen at S10; later stages recompute it and never redefine it.
-/// `docs/spec/ecall-abi.md` section 6 is normative, and it is the same recipe
+/// `docs/spec/public-values.md` §5 is normative, and it is the same recipe
 /// the typed layer already runs:
 ///
 /// ```text
@@ -478,8 +478,8 @@ pub fn io_digest(public_input: &[u8], public_output: &[u8]) -> Fr {
 // ---------------------------------------------------------------------------
 
 /// A `G1` point's four transcript limbs, from its 64-byte canonical encoding
-/// `x ‖ y`, with no curve arithmetic. `docs/spec/mercury.md` §4 is normative,
-/// and `docs/spec/shard-proof.md` §2.4 says why it lives here.
+/// `x ‖ y`, with no curve arithmetic. `docs/spec/transcript.md` §4 is normative,
+/// and `docs/spec/transcript.md` §4 says why it lives here.
 ///
 /// All-zero bytes are the point at infinity (S05's wire rule), which absorbs
 /// `constants::G1_INFINITY_SENTINEL`, `2^128`, in each of its four lanes.

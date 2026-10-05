@@ -7,7 +7,7 @@
 //! `check_memory_windows` and the identity digest were S11's and S14's in
 //! `crates/program`, which re-exports or wraps each: they moved here so the
 //! verifier core, which is `#![no_std]`, implements statement binding once, for
-//! the prover and the verifier alike. `docs/spec/shard-proof.md` §1–§4.
+//! the prover and the verifier alike. `docs/spec/proof.md` §1–§4.
 
 use alloc::vec::Vec;
 
@@ -361,7 +361,7 @@ impl ProgramIdentity {
 /// The identity digest over given setup commitments, each a 64-byte canonical
 /// `G1` encoding. It needs no SRS and no curve: this is what a verifying-key
 /// loader recomputes. A fresh typed transcript absorbs, in this frozen order
-/// (`docs/spec/memory.md` §6.2):
+/// (`docs/spec/program.md` §8):
 ///
 /// 1. `PROGRAM_IDENTITY`: `code_version`, one scalar;
 /// 2. `VM_CONFIG`: the family ids, their heights, `bytecode_size_words`;
@@ -394,7 +394,7 @@ pub fn identity_digest(
     ProgramIdentity(tr.sample())
 }
 
-/// The SRS digest, `docs/spec/shard-proof.md` §3: a fresh typed transcript
+/// The SRS digest, `docs/spec/proof.md` §3: a fresh typed transcript
 /// absorbs the 320-byte `SrsVerifier` encoding — `g1_gen ‖ g2_gen ‖ g2_tau`,
 /// S07's layout — as one `SRS_VERIFIER` bytes message, then, since S17, the
 /// packed generic table's three commitments as one `GENERIC_TABLE` message of
@@ -403,8 +403,8 @@ pub fn identity_digest(
 ///
 /// Both are constants of the ceremony — the table's commitments are the same
 /// at every height — so one trusted digest pins the points every pairing reads
-/// and the table every generic lookup reads (`docs/spec/jump-branch-slt.md`
-/// §6).
+/// and the table every generic lookup reads (`docs/spec/proof.md`
+/// §3).
 pub fn srs_digest(
     verifier: &[u8; 320],
     generic_table: &[[u8; 64]; constants::generic_table::WIDTH],
@@ -420,10 +420,10 @@ pub fn srs_digest(
 // ---------------------------------------------------------------------------
 
 /// The time window every shard binds at S16: the whole clock, `[0, 2^38)`.
-/// `docs/spec/shard-proof.md` §4.
+/// `docs/spec/proof.md` §4.
 pub const TRIVIAL_TS_WINDOW: [u64; 2] = [0, 1 << TS_BITS];
 
-/// A statement's shards in statement order, `docs/spec/shard-proof.md` §1.2:
+/// A statement's shards in statement order, `docs/spec/proof.md` §1.2:
 /// `INIT_TEARDOWN`'s, then `ZERO_WINDOWS`', then every other family's,
 /// ascending, each family's shards ascending. `(family, shard index)`.
 ///
@@ -476,7 +476,7 @@ pub struct GlobalTranscript {
     pub digest: Fr,
 }
 
-/// The global transcript, `docs/spec/shard-proof.md` §2, G1 to G11: run
+/// The global transcript, `docs/spec/proof.md` §2, G1 to G11: run
 /// identically by the prover's global commit phase and by the verifier. Every
 /// field of `statement` is absorbed but two: `memory_roots`, computed after the
 /// challenges and bound by each shard's own proof, and `exit_status`, bound only
@@ -539,7 +539,7 @@ pub(crate) fn global_transcript(
     }
 }
 
-/// A shard transcript through its lookup challenges, `docs/spec/shard-proof.md`
+/// A shard transcript through its lookup challenges, `docs/spec/proof.md`
 /// §4, S1 to S4: the seed, the time window, the witness commitments, then `g`
 /// and `β`. Returns the transcript and the two challenges.
 pub fn shard_transcript(
@@ -606,7 +606,7 @@ pub fn shard_window(family: u32, index: u32, windows: &[u32], trace_vars: u32) -
 }
 
 /// The external challenges shard `(family, index)`'s circuit reads,
-/// `docs/spec/shard-proof.md` §4: slots 1 to 4 from `memory`; for a window
+/// `docs/spec/proof.md` §4: slots 1 to 4 from `memory`; for a window
 /// family, the derived slot 5 at [`shard_window`]'s window, over RAM or, for
 /// `FIELD_WINDOWS`, over the field memory; then the LogUp slots from `g`, `β`
 /// and the circuit. Panics as [`shard_window`] does.

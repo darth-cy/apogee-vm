@@ -1,7 +1,7 @@
 //! What a symbol *is*, semantically: the classification rules that turn a
 //! function name into a workload an accelerator could replace.
 //!
-//! `docs/spec/profiling.md` §3 is the design. The rules are an **ordered** list
+//! `docs/tools.md` §2.2 is the design. The rules are an **ordered** list
 //! of substring patterns, first match winning, so the specific ones come before
 //! the general: `revm_interpreter::instructions::system::keccak256` is hashing
 //! and `revm_interpreter::` is interpreter overhead, and the order is what says
@@ -135,7 +135,7 @@ pub const RULES: [(&str, Category); 53] = [
     // --- 256-bit arithmetic ------------------------------------------------
     // The EVM's arithmetic and comparison opcode handlers. `ruint`'s wide
     // integers are mostly inlined INTO these, which is why the opcode handler
-    // is the unit this category counts (`docs/spec/profiling.md` §3.1).
+    // is the unit this category counts (`docs/tools.md` §2.2).
     ("instructions::arithmetic", Category::U256Arith),
     ("instructions::bitwise", Category::U256Arith),
     ("ruint", Category::U256Arith),
@@ -149,7 +149,7 @@ pub const RULES: [(&str, Category); 53] = [
     // --- the block's own setup --------------------------------------------
     // `serde` and `postcard` are here and not under the runtime because in this
     // guest they do exactly one thing: decode the block witness and, for the
-    // canonicity rule, re-encode it (`docs/spec/revm-block.md` §1.1). They must
+    // canonicity rule, re-encode it (`docs/spec/ethereum.md` §2.1). They must
     // also come before the `core::` fallback, which `serde_core::` contains as a
     // substring -- the bug this rule was added to fix.
     ("serde", Category::BlockSetup),
@@ -225,7 +225,7 @@ pub fn classify(path: &str, raw: &str) -> Category {
 ///
 /// `removable = cycles − calls · (4 + 2·frame_words)`: every guest cycle in the
 /// category goes, and what stays is the shim — the frame's stores, the ecall,
-/// and the results' loads (`docs/spec/profiling.md` §4).
+/// and the results' loads (`docs/tools.md` §2.3).
 pub struct Candidate {
     pub category: Category,
     /// Substrings of the demangled path whose **entry** cycle count is a call
@@ -294,7 +294,7 @@ pub const CANDIDATES: [Candidate; 5] = [
         entries: &["sha256_run", "ripemd160_run", "compress256"],
         // One 64-byte block in, eight words of state — which since S26c is
         // `constants::sha256::FRAME_WORDS` exactly, this category's SHA-256 half
-        // being delegated (`docs/spec/delegation.md` §15). What is left is
+        // being delegated (`docs/spec/delegation-circuits.md` §6). What is left is
         // RIPEMD-160, which shares the category and nothing else: it is
         // little-endian where SHA-256 is big-endian, five words of state where
         // SHA-256 has eight, and a different round function, so one frame does

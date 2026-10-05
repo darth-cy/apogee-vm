@@ -69,7 +69,7 @@ pub const MAX_TRACE_VARS: u32 = 30;
 /// A family's circuit as a verifying key conveys it: the artifact **and** the
 /// channel specs that say which output pair is whose root, which columns are a
 /// table and which column counts it — none of which an artifact records
-/// (`docs/spec/lookup.md` §13). `docs/spec/shard-proof.md` §7.
+/// (`docs/spec/lookup.md` §12). `docs/spec/proof.md` §7.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FamilyCircuit {
     pub family: u32,
@@ -81,7 +81,7 @@ impl FamilyCircuit {
     /// Whether the circuit reads the generic channel, and so names the packed
     /// generic table as its last `constants::generic_table::WIDTH` setup
     /// columns, which a shard opens against the verifying key's generic-table
-    /// commitments (`docs/spec/jump-branch-slt.md` §6).
+    /// commitments (`docs/spec/lookup.md` §9).
     pub fn reads_generic_table(&self) -> bool {
         self.channels
             .iter()
@@ -92,7 +92,7 @@ impl FamilyCircuit {
 /// The circuit that proves `family` over `2^trace_vars` rows, or `None` for a
 /// family no stage has built yet, or a height it cannot be built at.
 ///
-/// **The one registry of circuits**, `docs/spec/shard-proof.md` §11: a
+/// **The one registry of circuits**, `docs/spec/circuits.md` §1: a
 /// verifying key's circuits must be byte for byte what this returns, and a
 /// later family is added here, with one constructor, and nowhere in the
 /// verifier.
@@ -112,7 +112,7 @@ impl FamilyCircuit {
 /// `SHA256_COMP` take.
 ///
 /// `EC_ADD` is the first delegation family to carry a channel at all
-/// (`docs/spec/delegation.md` §10.3, which amends §9): RANGE16 at 16 bits, so
+/// (`docs/spec/delegation.md` §9, which amends §9): RANGE16 at 16 bits, so
 /// its floor is `2^16`, which is also its `DEFAULT_HEIGHTS` entry. `KECCAK_F`
 /// has carried `RANGE16` and `XOR8` since S26d, so its floor is `2^16` too —
 /// and a floor is not a height: its `DEFAULT_HEIGHTS` entry is `2^18`, chosen
@@ -164,7 +164,7 @@ fn circuit(recursion: bool, family: u32, trace_vars: u32) -> Option<FamilyCircui
             // column: holds it to the statement's `input`, or to nothing at all.
             f::PUBLIC_INPUT | f::ADVICE_WINDOWS => (memory::value_window_artifact, Vec::new()),
             // The delegation families. Their heights differ by three orders of
-            // magnitude because their rows do (`docs/spec/delegation.md` §9.2);
+            // magnitude because their rows do (`docs/spec/delegation.md` §9);
             // what each one may take is the floor below, and for the three
             // that carry no channel that floor is 0.
             f::KECCAK_F => (keccak::artifact, keccak::channels()),
@@ -236,7 +236,7 @@ pub enum VirtualKind {
     /// row index. `docs/spec/lookup.md` §3.
     Range16,
     /// `V[xor8_a]`: column 0 of the `XOR8` channel's table, the low eight bits
-    /// of the row index. `docs/spec/lookup.md` §14.
+    /// of the row index. `docs/spec/lookup.md` §3.
     Xor8A,
     /// `V[xor8_b]`: column 1 of the `XOR8` table, bits 8 through 15 of the row
     /// index.
@@ -579,7 +579,7 @@ pub struct Relation {
 /// looked up in `channel`, one of `constants::lookup_channel`. Every channel is
 /// a range channel at S14: its tuple is one `Linear` expression with literal
 /// coefficients, which holds when its canonical integer is below
-/// `2^BITS[channel]`. `docs/spec/memory.md` §7; S15 discharges it.
+/// `2^BITS[channel]`. `docs/spec/lookup.md` §1.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LookupExpr {
     pub name: String,

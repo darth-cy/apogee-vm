@@ -608,7 +608,7 @@ fn the_circuit_is_the_fixture_and_keeps_every_rule() {
 }
 
 /// The layout is `docs/spec/jump-branch-slt.md` §2's, and the gates, lookups
-/// and channels are §4's and §5's, by name and in order.
+/// and channels are §4's and §4.1's, by name and in order.
 #[test]
 fn the_layout_and_the_gates_are_the_specs() {
     let a = artifact();

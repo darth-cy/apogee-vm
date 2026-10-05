@@ -59,7 +59,7 @@ fn column(mut values: Vec<u64>, height: usize) -> MultilinearPoly {
 /// every query but the three slot-2 register ones, and those fill in log order.
 /// A **delegation invocation's** frame access belongs to no cycle's row: it
 /// rides the requesting cycle at `constants::delegation::FRAME_DELTA` and is
-/// that family's row (`docs/spec/delegation.md` §4.1), so that one `(space, Δ)`
+/// that family's row (`docs/spec/delegation.md` §4), so that one `(space, Δ)`
 /// pair is skipped by name and every other unmatched event panics.
 fn frame_rows(
     log: &MemoryEventLog,

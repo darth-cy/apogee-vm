@@ -19,7 +19,7 @@
 //!   division by zero and the one signed overflow, `INT_MIN / -1`;
 //! - `cover_a`: all nine AMOs with `aq`/`rl` variants, paired `lr.w`/`sc.w`,
 //!   and one **unpaired** `sc.w`, which this VM succeeds — the conformance
-//!   deviation of `docs/spec/memory-ops.md` §6.6, exercised on purpose;
+//!   deviation of `docs/spec/memory-ops.md` §6, exercised on purpose;
 //! - `cover_rvc`: every executable compressed form (all but `c.ebreak` and
 //!   `c.unimp`, which trap), each instruction of the block executed;
 //! - `cover_ecall`: the `ecall` instruction over the two numbers nothing

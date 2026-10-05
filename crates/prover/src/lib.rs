@@ -1,5 +1,5 @@
 //! The prover: a program's verifying key, the statement an execution proves,
-//! the global commit phase, and each shard's proof. `docs/spec/shard-proof.md`
+//! the global commit phase, and each shard's proof. `docs/spec/proof.md`
 //! is normative.
 //!
 //! ```text
@@ -147,7 +147,7 @@ pub struct Program {
 /// `VmConfig`, its circuit from `constraints::family_circuit`, and the fill
 /// that routes its trace buffer into the circuit's columns.
 ///
-/// **The family-registration surface**, `docs/spec/shard-proof.md` §11: a later
+/// **The family-registration surface**, `docs/spec/circuits.md` §1: a later
 /// family adds a circuit to `constraints::family_circuit` and a fill to
 /// [`family_fill`], and nothing in `global_commit_phase`, `prove_shard` or the
 /// verifier changes.
@@ -194,7 +194,7 @@ impl ProverSetup {
     /// Register every family of `program`'s config and build its verifying
     /// key over `srs`: identity's setup commitments, the generic table's, the
     /// SRS digest over both SRS constants, and every circuit, held to the key's
-    /// own load rules (`docs/spec/shard-proof.md` §7.2) before it is returned.
+    /// own load rules (`docs/spec/proof.md` §7.2) before it is returned.
     /// `srs` holds at least as many powers as the tallest family has rows, and
     /// at least the generic table's `2^18`.
     pub fn new(program: Program, srs: Srs) -> Result<ProverSetup, ProverError> {
@@ -257,7 +257,7 @@ impl ProverSetup {
         // Identity and the SRS digest in full, not truncated: these are the two
         // values a reader compares against a pinned constant rather than
         // against another run, and a stale pin is this repository's most
-        // repeated failure (`docs/spec/debug-info.md` §4).
+        // repeated failure (`docs/tools.md` §3).
         dlog!(
             Phase,
             "apogee setup    key ok families={} entry_pc={:#x} identity={} srs_digest={}",
@@ -476,7 +476,7 @@ pub(crate) fn sigma_of(setup: &ProverSetup, family: FamilyId) -> u32 {
         .stack_vars(&setup.registration(family).circuit.artifact)
 }
 
-/// The global commit phase, `docs/spec/shard-proof.md` §2: every shard's
+/// The global commit phase, `docs/spec/proof.md` §2: every shard's
 /// memory columns committed, then the global transcript over the statement.
 /// Shard-count generic: `inputs` holds any number of shards per family.
 pub fn global_commit_phase(
@@ -496,7 +496,7 @@ pub fn global_commit_phase(
     // clippy rejects whichever spelling the feature-on build does not. Naming
     // every shard and its column count here says the same thing before the work
     // starts, and the `begin`/`done` pair is what localizes a death to the
-    // phase. `docs/spec/debug-info.md` §2.
+    // phase. `docs/tools.md` §3.
     dlog!(
         Phase,
         "apogee commit   begin shards={} columns={} per-shard={}",
@@ -537,7 +537,7 @@ pub fn global_commit_phase(
     global_commit_from_commitments(vk, statement)
 }
 
-/// The global commit phase's **second half**, `docs/spec/shard-proof.md` §2's
+/// The global commit phase's **second half**, `docs/spec/proof.md` §2's
 /// G1-G11, over a statement whose memory commitments the caller already has.
 ///
 /// The first half is committing the columns, which is an MSM per column and
@@ -620,7 +620,7 @@ pub fn shard_columns(
 
 /// What a family's fill reads for shard `(family, index)`: the program, the
 /// execution's two unbound inputs, and **this shard's rows**, cut out of the
-/// archive by `docs/spec/block-proof.md` §5.1's rule.
+/// archive by `docs/spec/streaming.md` §4's rule.
 ///
 /// Which arm of [`ShardRows`] a family takes is the three presence rules of
 /// `docs/spec/delegation.md` §1: a delegation family is invoked, a family that
@@ -727,7 +727,7 @@ fn low64(v: Fr) -> u64 {
     u64::from_le_bytes(b[..8].try_into().expect("8 bytes"))
 }
 
-/// The shard's claimed time window, `docs/spec/block-proof.md` §4.
+/// The shard's claimed time window, `docs/spec/proof.md` §8.
 ///
 /// For a **cycle-owning** family it is read off the shard's own `M[0]` cycle
 /// column: `[4·cycle(row 0), 4·max cycle + 4)`, the timestamps of the row-0 pc
@@ -766,7 +766,7 @@ fn ts_window(family: FamilyId, base: &BaseLayer) -> [u64; 2] {
 }
 
 /// A shard after its GKR proof: what the opening needs, and the live shard
-/// transcript. `docs/spec/shard-proof.md` §10's `PostGkr` entry.
+/// transcript. `docs/spec/streaming.md` §6's `PostGkr` entry.
 pub(crate) struct ShardGkr {
     pub(crate) family: FamilyId,
     pub(crate) index: u32,
@@ -789,7 +789,7 @@ impl ProvingContext<'_> {
             .unwrap_or_else(|| panic!("the statement has no shard ({family}, {index})"))
     }
 
-    /// The shard's steps up to its opening, `docs/spec/shard-proof.md` §4, S1
+    /// The shard's steps up to its opening, `docs/spec/proof.md` §4, S1
     /// to S5: commit the witness columns, seed the transcript, draw the lookup
     /// challenges, run the forward pass and the GKR proof. The base claims'
     /// one point is read back by replaying the schedule over the proof, which
@@ -800,7 +800,7 @@ impl ProvingContext<'_> {
         // The begin line, before any work, and **the one line the whole log is
         // built around**: the shard region is a `par_iter`, so a run that is
         // killed, OOMs or hangs leaves its last `begin` without a `done`, and
-        // that pair names the shard that died. `docs/spec/debug-info.md` §2.
+        // that pair names the shard that died. `docs/tools.md` §3.
         dlog!(
             Phase,
             family = family,
@@ -982,7 +982,7 @@ impl ProvingContext<'_> {
         }
     }
 
-    /// The shard's one batched opening, `docs/spec/shard-proof.md` §5 and §4's
+    /// The shard's one batched opening, `docs/spec/proof.md` §5 and §4's
     /// S6, and its proof. Returns the proof and the shard transcript's event
     /// log.
     pub(crate) fn opening_part(

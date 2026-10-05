@@ -321,7 +321,7 @@ fn family_spec() -> FamilySpec {
     // is a copy, so the frame's own bound on the source is the only one there
     // is — except that `rd_selected` carries a range pair of its own, which is
     // what keeps every register value in this VM locally 32-bit
-    // (`docs/spec/memory-ops.md` §5.1).
+    // (`docs/spec/memory-ops.md` §5).
     enforcing.push((
         "rd_value_rule".into(),
         quadratic(vec![(lit(1), sel)], vec![(neg(1), LW, loaded)]),

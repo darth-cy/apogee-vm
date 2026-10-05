@@ -1,4 +1,4 @@
-//! S16's `ADD_SUB_LUI_AUIPC` circuit (`docs/spec/shard-proof.md` §8), row by
+//! S16's `ADD_SUB_LUI_AUIPC` circuit (`docs/spec/add-sub.md`), row by
 //! row, in ordinary CI.
 //!
 //! No forward pass over `2^20` rows: each row is built by hand from what the
@@ -35,7 +35,7 @@ const FIXTURE: &str = concat!(
 /// `deleg_{family}_number`'s literal is that number, read from `constants::ecall`,
 /// so this family's bytes are a function of the delegation registry. S26b's
 /// renumbering of `MOD_MUL` moved it and S26d's of `KECCAK_F` moved it again
-/// (`docs/spec/delegation.md` §10.2, §10.4).
+/// (`docs/spec/delegation-circuits.md` §5, §2).
 const FIXTURE_SHA256: &str = "a6113128738235d972ff4c074f875ea43c2bd0290e516957e9f891496cae38c7";
 
 fn artifact() -> CircuitArtifact {
@@ -419,7 +419,7 @@ fn the_circuit_is_the_fixture_and_keeps_every_rule() {
     );
 }
 
-/// The layout is `docs/spec/shard-proof.md` §8.1's, and the gates, lookups and
+/// The layout is `docs/spec/add-sub.md` §1's, and the gates, lookups and
 /// channels are §8.2's and §8.3's, by name and in order.
 #[test]
 fn the_layout_and_the_gates_are_the_specs() {
@@ -593,7 +593,7 @@ fn the_layout_and_the_gates_are_the_specs() {
     // with the `read`/`write` ecalls, so three `*_gap_hi` witness columns went
     // with them and every later column moved down. The `is_deleg_*` selectors
     // are witness columns before these — one per registered delegation type,
-    // which is `docs/spec/delegation.md` §10's append rule paid once each — so
+    // which is `docs/spec/delegation.md` §3's append rule paid once each — so
     // S26c's two moved the multiplicities from 30 to 32.
     let mult = |i: u32| PolyAddress::Witness(32 + i);
     assert_eq!(

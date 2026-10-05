@@ -115,7 +115,7 @@ impl AddressSpace {
     /// All three are `address_space::RAM` tuples — what tells a public value,
     /// an advice word and a heap word apart is which family initializes the
     /// address, never a tag a load would have to name
-    /// (`docs/spec/public-values.md` §2).
+    /// (`docs/spec/public-values.md` §4).
     pub fn holds(self, addr: u32) -> bool {
         match self {
             AddressSpace::Reg => addr < 32,
@@ -370,7 +370,7 @@ impl MemoryState {
     ///
     /// Ordinary RAM and not every `Ram` tuple: the two public windows and the
     /// advice region are `Ram` tuples too, and each has a family of its own
-    /// that initializes it (`docs/spec/public-values.md` §2).
+    /// that initializes it (`docs/spec/public-values.md` §4).
     pub fn touched_ram_windows(&self, height: u32) -> Vec<u32> {
         let words = 4 * height as u64;
         let mut out: Vec<u32> = self

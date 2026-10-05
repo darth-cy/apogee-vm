@@ -4,7 +4,7 @@
 //! it and re-implementation is forbidden; CI builds it for
 //! `riscv32imac-unknown-none-elf`.
 //!
-//! `docs/spec/shard-proof.md` is normative. The core holds statement binding
+//! `docs/spec/proof.md` is normative. The core holds statement binding
 //! (the `VmConfig`, its descriptor and window rules, the identity and SRS
 //! digests, the global transcript), the shard transcript's replay, the GKR
 //! claim chain through `gkr-verify`, the LogUp root checks, and the memory

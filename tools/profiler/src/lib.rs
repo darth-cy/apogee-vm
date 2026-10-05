@@ -1,5 +1,5 @@
 //! **The cycle profiler**: where a guest's RV32 cycles go, by function and by
-//! semantic workload. `docs/spec/profiling.md` is the design.
+//! semantic workload. `docs/tools.md` §2 is the design.
 //!
 //! It invokes nothing proving-related. Three inputs — a guest ELF, the bytes it
 //! runs on, and the ELF's own symbol table — and arithmetic. No SRS, no key, no

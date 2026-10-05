@@ -543,7 +543,7 @@ fn the_exit_row_alone_writes_the_halting_sentinel() {
 /// previous cycle's. No guest here delegates, so every event is some row's:
 /// an invocation's frame words are logged too, but they ride the requesting
 /// cycle and live in a `DelegationTrace`, never in a `Row`
-/// (`docs/spec/delegation.md` §4.1).
+/// (`docs/spec/delegation.md` §4).
 #[test]
 fn the_rows_rebuild_the_log_exactly() {
     // Each role's slot, restated from `docs/spec/execution-trace.md` §7 — and,

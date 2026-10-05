@@ -6,7 +6,7 @@ publish.workspace = true
 
 # The thin `std` wrapper over `verifier-core`: `verify_shard`, the one
 # verification path, which ends in `pcs::batch_verify`, and the `verifier`
-# CLI. `docs/spec/shard-proof.md` §6.
+# CLI. `docs/spec/proof.md` §6.
 [dependencies]
 curve.workspace = true
 pcs.workspace = true

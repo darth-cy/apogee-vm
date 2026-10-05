@@ -1,4 +1,4 @@
-//! The block types: `docs/spec/block-proof.md` §2, §4 and §6 — the record
+//! The block types: `docs/spec/proof.md` §1.3, §8 and §9 — the record
 //! layout, the wire forms, the structural rule every decoded block keeps, and
 //! the public-data API S24 and S27 read.
 //!

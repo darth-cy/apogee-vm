@@ -158,7 +158,7 @@ fn the_ranges_are_above_linux_and_disjoint() {
 /// The guest memory map is written down three times. They must agree.
 ///
 /// `link.ld` is what the linker reads, `constants::guest_memory` is what
-/// `crates/loader` enforces, and `docs/spec/ecall-abi.md` section 7 is what a
+/// `crates/loader` enforces, and `docs/spec/ecall-abi.md` §6 is what a
 /// reader believes. A map that can disagree with itself is a map that will.
 #[test]
 fn the_memory_map_agrees_across_its_three_copies() {

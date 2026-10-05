@@ -1,5 +1,5 @@
 //! `reduce_shard`: a shard proof reduced to the one Mercury opening it still
-//! owes, or refused. `docs/spec/shard-proof.md` §6, steps 1 to 11, in order.
+//! owes, or refused. `docs/spec/proof.md` §6, steps 1 to 11, in order.
 //!
 //! Since S20 the steps are split at the fork in three public parts, so a block
 //! pays for everything that depends on the statement alone once instead of
@@ -41,7 +41,7 @@ pub struct GlobalChallenges {
     pub digest: Fr,
 }
 
-/// The statement's checks and the global transcript, `docs/spec/shard-proof.md`
+/// The statement's checks and the global transcript, `docs/spec/proof.md`
 /// §6 steps 1 to 3 and §2: the statement is one `vk` describes, its window
 /// rules hold, its per-shard lists line up, and then G1 to G11 are replayed.
 ///
@@ -122,7 +122,7 @@ pub fn derive_global_phase(
 }
 
 /// One shard against a statement whose global phase is already derived,
-/// `docs/spec/shard-proof.md` §6 steps 4 to 11: its time window, its seeding,
+/// `docs/spec/proof.md` §6 steps 4 to 11: its time window, its seeding,
 /// its shape, its circuit, its channels and the memory argument's **shard
 /// half**, then the opening claim its caller owes.
 ///
@@ -149,7 +149,7 @@ pub fn verify_shard_local(
     // 4. The time window is a window: `[start, end)` inside the clock. Which
     //    windows a *block* admits — ordered and disjoint within a cycle-owning
     //    family — is `crate::check_ts_windows`, which needs every shard and so
-    //    is `verify_block`'s (`docs/spec/block-proof.md` §4).
+    //    is `verify_block`'s (`docs/spec/proof.md` §8).
     let [start, end] = proof.ts_window;
     if start > end || end > 1 << TS_BITS {
         return Err(statement(
@@ -359,7 +359,7 @@ pub fn stack_values(values: &[Fr], memory: usize, witness: usize, r: &[Fr]) -> V
     out
 }
 
-/// The memory argument's **statement half**, `docs/spec/shard-proof.md` §6
+/// The memory argument's **statement half**, `docs/spec/proof.md` §6
 /// step 10b and `docs/spec/memory.md` §4.2: the boundary is in range and names
 /// the exit status, and the read/write root product reconciles over every
 /// shard of every family in the statement, against the boundary's two factors.
@@ -405,7 +405,7 @@ pub fn verify_global_memory(
 }
 
 /// Reduce `proof` to its opening claim, or refuse it with the class of the
-/// first check that fails, `docs/spec/shard-proof.md` §6.
+/// first check that fails, `docs/spec/proof.md` §6.
 ///
 /// The one no_std entry point for a single shard. `verifier::verify_shard` is
 /// this followed by the opening; nothing else verifies a shard. `vk` has

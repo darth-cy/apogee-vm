@@ -4,7 +4,7 @@
 //! checked in-guest against values the same two crates compute on the host.
 //!
 //! It is the fixture for both delegation families
-//! (`docs/spec/delegation.md` §12 and §13). Under `crates/emulator` every `Fr`
+//! (`docs/spec/delegation-circuits.md` §3 and §4). Under `crates/emulator` every `Fr`
 //! multiply, add and inverse becomes an `FR_ARITH` invocation and the
 //! permutation a `POSEIDON2` one; on an executor with no circuit the same
 //! ecalls answer `-ENOSYS` and the software paths inside `field` and

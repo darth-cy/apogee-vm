@@ -9,7 +9,7 @@
 //!
 //! They do, and nothing here reverses anything. Sumcheck round `i` binds
 //! variable `i`, so `claim.point[j]` is variable `j`; `crates/poly` puts
-//! variable `j` at bit `j` of the index; and `docs/spec/mercury.md` §2 splits
+//! variable `j` at bit `j` of the index; and `docs/spec/mercury.md` §1 splits
 //! that index as `i + j*b` with `u1` the **first** `t` coordinates. So the
 //! reduced point is handed to `open` exactly as it comes out, and the value it
 //! returns is both the sumcheck's claimed evaluation and

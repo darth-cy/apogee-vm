@@ -2,7 +2,7 @@
 //! "public I/O digest", frozen at S10.
 //!
 //! The committed vectors come from `tools/transcript-ref`, which transcribes
-//! `docs/spec/ecall-abi.md` section 6 over Plonky3's permutation and never
+//! `docs/spec/public-values.md` §5 over Plonky3's permutation and never
 //! links this crate. The sensitivity properties are asserted directly, because
 //! what they say is "these two inputs differ", and a committed pair only shows
 //! it for one pair.

@@ -118,7 +118,7 @@ pub type Word32 = [u8; 32];
 ///
 /// 725 at S26, which appended `BlockEnvWitness::blob_gasprice`: the synthetic
 /// block sets it to `Some(1)`, which is the `Option` tag plus a one-byte varint
-/// (`docs/spec/revm-block.md` §1.6). 724 since S-STATELESS, which dropped the
+/// (`docs/spec/ethereum.md` §2.2). 724 since S-STATELESS, which dropped the
 /// trailing `stateless: None` tag when the stateless guest took the canonical
 /// SSZ input instead. `cargo run -p kat-gen -- revm` prints the number it
 /// should be.
@@ -205,7 +205,7 @@ pub const TRACE_HEIGHT_DEBUG: u32 = 1 << 22;
 /// and the host agree on it, and the block still "executes". The witness is
 /// where a real one would have to come from, as a
 /// `block_hashes: Vec<(u64, Word32)>` loaded into `CacheDB`'s cache before
-/// execution. `docs/spec/revm-block.md` §1.2 is the standing note;
+/// execution. `docs/spec/ethereum.md` §2.2 is the standing note;
 /// `crates/emulator/tests/revm.rs::blockhash_reads_a_placeholder_today` pins
 /// the current behaviour so the gap cannot close by accident.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -275,9 +275,9 @@ pub struct BlockEnvWitness {
     /// So it is recorded. `blobGasPrice` is on every receipt of every
     /// post-Cancun block, which makes the chain itself the source, and the
     /// guest does no `fake_exponential` at all — worth 2.0% of a mini-block's
-    /// cycles on its own (`docs/spec/profiling.md`). It is **advice like every
+    /// cycles on its own (`docs/tools.md` §2). It is **advice like every
     /// other field here**, bound by the journal the execution publishes
-    /// (`docs/spec/revm-block.md` §1.6). The stateless guest takes no such
+    /// (`docs/spec/ethereum.md` §2.2). The stateless guest takes no such
     /// field: it derives the price from the header's excess under the fork its
     /// schema id names (`src/block.rs`).
     ///
@@ -291,7 +291,7 @@ pub struct BlockEnvWitness {
     /// number, without repeats**.
     ///
     /// S24 had no such field and that was the one *gap* in this type rather
-    /// than a decision (`docs/spec/revm-block.md` §1.2): revm answers
+    /// than a decision (`docs/spec/ethereum.md` §2.2): revm answers
     /// `BLOCKHASH` from its database, S24's database had an empty block-hash
     /// cache, and every lookup fell through to `EmptyDB`, which returns
     /// `keccak256` of the block number's decimal string — a made-up word the
@@ -585,7 +585,7 @@ impl revm::database_interface::DBErrorMarker for DbError {}
 /// It replaces S24's `CacheDB<EmptyDB>`, which had two silent defaults: an
 /// address it had not been given read as a non-existent account, and a
 /// `BLOCKHASH` it had not been given read as `keccak256` of the block number's
-/// decimal string (`docs/spec/revm-block.md` §1.2, the one acknowledged *gap*
+/// decimal string (`docs/spec/ethereum.md` §2.2, the one acknowledged *gap*
 /// in S24's witness). Both are errors here.
 ///
 /// **Non-existence is recorded, not inferred.** An account that does not exist

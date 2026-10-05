@@ -14,7 +14,7 @@ use field::Fr;
 use srs::kzg::{kzg_commit, kzg_verify};
 use srs::{Srs, SrsError};
 
-/// `docs/spec/srs.md` §5. Duplicated here on purpose: a test that reads the
+/// `docs/spec/srs.md` §4. Duplicated here on purpose: a test that reads the
 /// constant out of the crate cannot notice the constant changing.
 const MAGIC: &[u8; 8] = b"APOGESRS";
 const HEADER: usize = 8 + 4 + 4 + 8 + 128 + 128;

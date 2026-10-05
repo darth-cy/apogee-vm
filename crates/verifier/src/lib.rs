@@ -1,5 +1,5 @@
 //! Shard verification: `verifier_core::reduce_shard`, then the shard's one
-//! batched Mercury opening. `docs/spec/shard-proof.md` §6 is normative.
+//! batched Mercury opening. `docs/spec/proof.md` §6 is normative.
 //!
 //! This crate is the core's thin `std` wrapper and holds nothing else of the
 //! protocol: it decodes the curve points the core carries as bytes, through
@@ -48,7 +48,7 @@ pub fn verify_shard(
 }
 
 /// Verify a whole block: **the one block verification path**, and the same
-/// per-shard path [`verify_shard`] runs. `docs/spec/block-proof.md` §3 is
+/// per-shard path [`verify_shard`] runs. `docs/spec/proof.md` §6 is
 /// normative; the checks are, in order:
 ///
 /// 1. the block's descriptor is the key's and its statement is `public`;
@@ -141,7 +141,7 @@ pub fn encode_srs_verifier(vsrs: &SrsVerifier) -> [u8; SRS_VERIFIER_BYTES] {
 }
 
 /// Load a verifying key: `VerifyingKey::from_bytes`, whose load rules are
-/// `docs/spec/shard-proof.md` §7.2, and then every curve point it carries —
+/// `docs/spec/proof.md` §7.2, and then every curve point it carries —
 /// the `SrsVerifier`, every setup commitment and every generic-table
 /// commitment — through its validating decoder. Run once per key.
 pub fn load_verifying_key(bytes: &[u8]) -> Result<VerifyingKey, String> {
@@ -219,7 +219,7 @@ mod tests {
     }
 
     /// **`verify_block` runs the memory argument's statement half itself, at
-    /// check 5, and not inside its per-shard loop** (`docs/spec/block-proof.md`
+    /// check 5, and not inside its per-shard loop** (`docs/spec/proof.md`
     /// §3). The block below carries one `INIT_TEARDOWN` shard whose proof is a
     /// shell — a digest of zero, no commitments, no outputs — so the loop
     /// would refuse it as `Statement` the moment it read it, as the second

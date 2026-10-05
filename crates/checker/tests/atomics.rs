@@ -1860,7 +1860,7 @@ fn a_misaligned_atomic_is_unprovable() {
 /// a guest that branched on it could see a failure there and success here. That
 /// is the conformance deviation and nothing compares it: what would catch it if
 /// it mattered is a guest whose committed output depended on spurious failure,
-/// and compiled code has none (`docs/spec/memory-ops.md` §6.6).
+/// and compiled code has none (`docs/spec/memory-ops.md` §6).
 #[test]
 fn sc_w_always_succeeds() {
     let a = artifact();

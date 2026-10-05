@@ -193,7 +193,7 @@ impl TraceArchive {
 
     /// Fill a later phase with its content and its wall-clock timing — how a
     /// prover phase exports its snapshot (S16; the schemas are
-    /// `docs/spec/shard-proof.md` §10). Refuses post-execution, which the
+    /// `docs/spec/streaming.md` §6). Refuses post-execution, which the
     /// constructor fills, a phase already filled, and a phase whose
     /// predecessor is empty: the filled phases stay a prefix, which is the rule
     /// [`TraceArchive::import`] reads by.
@@ -748,7 +748,7 @@ fn check_parts(
         // An invocation's frame accesses ride the requesting cycle, at slot
         // `FRAME_DELTA`, so they follow the pc query and precede the row's
         // roles — the log is in timestamp order
-        // (`docs/spec/delegation.md` §4.1). The invocation also says which
+        // (`docs/spec/delegation.md` §4). The invocation also says which
         // delegation family the row's mirror query names, which is the row's
         // and not the role's (`trace::Role::space`).
         let mut frame: Vec<MemoryEvent> = Vec::new();

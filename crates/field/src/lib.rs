@@ -313,7 +313,7 @@ impl Fr {
     /// [`to_bytes`]'s — the limbs are always reduced below `p` — but of a
     /// *different* element: of `self · R`, where `R = 2^256 mod p`, rather
     /// than of `self`. It exists for one caller, the Fr-arithmetic delegation
-    /// of `docs/spec/delegation.md` §13, whose frame carries operands in this
+    /// of `docs/spec/delegation-circuits.md` §4.1, whose frame carries operands in this
     /// form precisely so that crossing it costs no Montgomery conversion.
     /// Everything that is not that delegation uses [`to_bytes`].
     ///
@@ -388,7 +388,7 @@ pub fn batch_inverse(xs: &mut [Fr]) {
 
 /// The guest-target backend: `Fr`'s arithmetic, delegated.
 ///
-/// `docs/spec/delegation.md` §13. The frame carries operands in **this**
+/// `docs/spec/delegation-circuits.md` §4.1. The frame carries operands in **this**
 /// representation — the four Montgomery limbs, little-endian, which
 /// [`Fr::to_memory_bytes`] writes — precisely so that crossing it costs no
 /// conversion, and the three operations the circuit proves are the three this

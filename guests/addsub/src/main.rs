@@ -4,7 +4,7 @@
 //! subtractions over the add/sub family's roster — `add`, `sub`, `addi`, `lui`,
 //! `auipc`, and the system kind's `fence` and `ecall` — that exits with its
 //! result word. It is the one program S16 proves end to end
-//! (`docs/spec/shard-proof.md`).
+//! (`docs/spec/proof.md`).
 //!
 //! Everything in its image is an instruction of that family, which is what
 //! lets a proof with one execution family and the two RAM window families

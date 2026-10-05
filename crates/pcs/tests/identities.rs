@@ -2,7 +2,7 @@
 //! definition and compared against the proof.
 //!
 //! Nothing here calls into the crate's internals. The transcript schedule is
-//! transcribed from `docs/spec/mercury.md` §5 a second time, which recovers
+//! transcribed from `docs/spec/mercury.md` §3.2 a second time, which recovers
 //! every challenge; each of `h`, `q`, `g`, `S`, `D`, `H`, `W` and `W'` is then
 //! built the slow, obvious way — schoolbook multiplication, one Horner division
 //! per column, `eq` from its product definition — and committed with S07's

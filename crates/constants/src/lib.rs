@@ -559,7 +559,7 @@ pub const POSEIDON2_RC3_TERMINAL: [[&str; 3]; 4] = [
 ///
 /// Spelled the way every frozen `Fr` literal in this crate is: `0x` plus 64
 /// lowercase big-endian hex digits, read by `field::Fr::from_hex`.
-/// `docs/spec/mercury.md` §4 is normative.
+/// `docs/spec/transcript.md` §4 is normative.
 pub const G1_INFINITY_SENTINEL: &str =
     "0x0000000000000000000000000000000100000000000000000000000000000000";
 
@@ -577,11 +577,11 @@ pub const G1_INFINITY_SENTINEL: &str =
 /// stream rests on each tag naming exactly one kind of message — scalars *or*
 /// bytes *or* a challenge, never two. Each constant below records its kind.
 /// Adding a tag is free; reusing one across kinds is a soundness bug. See
-/// `docs/spec/transcript.md` section 8.
+/// `docs/spec/transcript.md` §5.
 pub mod transcript_tags {
     /// Scalars. The protocol suite and version preamble, `[PROTOCOL_VERSION]`:
     /// the first message of the statement's global transcript
-    /// (`docs/spec/shard-proof.md` §2, G1). The shard transcripts and the
+    /// (`docs/spec/proof.md` §2, G1). The shard transcripts and the
     /// identity, I/O and SRS-digest sponges open with their own tags instead.
     pub const PROTOCOL_SUITE: u64 = 1;
 
@@ -619,7 +619,7 @@ pub mod transcript_tags {
 
     /// Scalars. A Mercury opening's instance size: the single element `n`, the
     /// number of evaluations of the polynomial being opened. Absorbed first,
-    /// before the commitment. `docs/spec/mercury.md` §5.
+    /// before the commitment. `docs/spec/mercury.md` §3.2.
     pub const MERCURY_INSTANCE: u64 = 10;
 
     /// Challenge. Mercury's fold point `alpha`, drawn after `h` is absorbed.
@@ -631,7 +631,7 @@ pub mod transcript_tags {
 
     /// Challenge. Mercury's evaluation point `z`, drawn after `s` and `d` are
     /// absorbed. Resampled under this same tag while it is zero, so `1/z`
-    /// exists; `docs/spec/mercury.md` §7.
+    /// exists; `docs/spec/mercury.md` §3.4.
     pub const MERCURY_Z: u64 = 13;
 
     /// Challenge. The BDFG20 opening-batch challenge, drawn after every
@@ -650,38 +650,38 @@ pub mod transcript_tags {
     /// Challenge. The RLC that batches `k` same-size column commitments opened
     /// at one point into a single Mercury instance. Drawn after every
     /// commitment and every claimed value is absorbed, and never before.
-    /// `docs/spec/mercury.md` section 11.
+    /// `docs/spec/mercury.md` §5.
     pub const MERCURY_BATCH: u64 = 17;
 
     /// Scalars. The words of an accumulator entry list, absorbed by the
     /// separate sponge that produces the accumulator digest. The squeeze that
     /// ends that sponge is a raw `sample`, **not** a `challenge_scalar`, for
     /// the same reason `WITNESS_DIGEST`'s is: a challenge under this tag would
-    /// be one tag in two kinds. `docs/spec/accumulator.md` section 5.
+    /// be one tag in two kinds. `docs/spec/mercury.md` §6.3.
     pub const ACCUMULATOR_DIGEST: u64 = 18;
 
     /// Challenge. The RLC weight a discharge gives each deferred check, drawn
     /// from a sponge seeded with the accumulator digest so that it is a
     /// deterministic function of the entry list and nothing else.
-    /// `docs/spec/accumulator.md` section 6.
+    /// `docs/spec/mercury.md` §6.3.
     pub const ACCUMULATOR_MERGE: u64 = 19;
 
     /// Bytes. The guest's fd 0 stream inside the public I/O digest's own
     /// sponge. Absorbed first, before the output stream, which is what
-    /// domain-separates the two. `docs/spec/ecall-abi.md` section 6.
+    /// domain-separates the two. `docs/spec/public-values.md` §5.
     pub const PUBLIC_INPUT_STREAM: u64 = 20;
 
     /// Bytes. The guest's fd 1 stream inside the public I/O digest's own
     /// sponge, absorbed second. Distinct from [`PUBLIC_INPUT_STREAM`] so that
     /// swapping two unequal streams changes the digest.
-    /// `docs/spec/ecall-abi.md` section 6.
+    /// `docs/spec/public-values.md` §5.
     pub const PUBLIC_OUTPUT_STREAM: u64 = 21;
 
     /// Scalars. The first message of the program-identity sponge: the single
     /// element `code version`. It is what opens that sponge, so the identity
     /// is domain-separated from every other digest in the protocol.
     /// `crates/program/CLAUDE.md`. Since S16 also the global transcript's G6
-    /// message, `[identity]` (`docs/spec/shard-proof.md` §2).
+    /// message, `[identity]` (`docs/spec/proof.md` §2).
     pub const PROGRAM_IDENTITY: u64 = 22;
 
     /// Scalars. The static `VmConfig`: the family ids in ascending order, then
@@ -745,41 +745,41 @@ pub mod transcript_tags {
     pub const LOOKUP_CHALLENGE: u64 = 33;
 
     /// Scalars. The statement's SRS digest, one element, absorbed right after
-    /// the protocol suite message. `docs/spec/shard-proof.md` §2 and §3.
+    /// the protocol suite message. `docs/spec/proof.md` §2 and §3.
     pub const SRS_DIGEST: u64 = 34;
 
     /// Bytes. The 320-byte `SrsVerifier` encoding, inside the SRS digest's own
-    /// sponge, whose raw squeeze is the digest. `docs/spec/shard-proof.md` §3.
+    /// sponge, whose raw squeeze is the digest. `docs/spec/proof.md` §3.
     pub const SRS_VERIFIER: u64 = 35;
 
     /// Scalars. `[family, shard count]`, opening one family's memory-column
     /// group in the global transcript; the group's commitment lists follow it
-    /// under [`COMMITMENT`]. `docs/spec/shard-proof.md` §2.
+    /// under [`COMMITMENT`]. `docs/spec/proof.md` §2.
     pub const MEMORY_GROUP: u64 = 36;
 
     /// Challenge. The global memory challenges `γ_M, α_addr, α_ts, α_val`,
     /// drawn in that order after the boundary scalars. One tag, one kind; the
-    /// four roles are separated by position. `docs/spec/shard-proof.md` §2.
+    /// four roles are separated by position. `docs/spec/proof.md` §2.
     pub const MEMORY_CHALLENGE: u64 = 37;
 
     /// Challenge. The global state digest, drawn once after the memory
     /// challenges; every shard transcript is seeded with it.
-    /// `docs/spec/shard-proof.md` §2.
+    /// `docs/spec/proof.md` §2.
     pub const GLOBAL_STATE_DIGEST: u64 = 38;
 
     /// Scalars. `[global state digest, family, shard index]`, the first message
-    /// of every shard transcript. `docs/spec/shard-proof.md` §4.
+    /// of every shard transcript. `docs/spec/proof.md` §4.
     pub const SHARD_SEED: u64 = 39;
 
     /// Scalars. `[start, end]`, the shard's timestamp window, immediately after
-    /// the seed. `docs/spec/shard-proof.md` §4.
+    /// the seed. `docs/spec/proof.md` §4.
     pub const SHARD_TS_WINDOW: u64 = 40;
 
     /// Scalars. The packed generic table's three commitments the verifying
     /// key carries, each point four limbs, as one twelve-limb message inside
     /// the SRS digest's own sponge, right after [`SRS_VERIFIER`]. Added at
     /// S17, the first stage whose family reads the generic channel.
-    /// `docs/spec/shard-proof.md` §3.
+    /// `docs/spec/proof.md` §3.
     pub const GENERIC_TABLE: u64 = 41;
 
     /// Challenge. One of a recursion-format shard's `σ` stack challenges `r`,
@@ -808,7 +808,7 @@ pub mod transcript_tags {
     /// semantics**, as `challenge_slot::NAMES` is: the number is the tag, and
     /// nothing reads a name to decide anything. `checker::tape` renders a
     /// transcript's absorb sequence with them, which is what makes a tape
-    /// diffable against the frozen order of `docs/spec/shard-proof.md` §2.
+    /// diffable against the frozen order of `docs/spec/proof.md` §2.
     ///
     /// Append here whenever a tag is appended above. This crate keeps its
     /// zero-logic rule: the lookup lives in `checker::tape`.
@@ -984,7 +984,7 @@ pub mod lookup_channel {
 
     /// Table. The byte table `(a, b, a ^ b)`, all 65,536 triples, and the
     /// first table channel whose table is **virtual** rather than committed
-    /// (S26d, `docs/spec/lookup.md` §14).
+    /// (S26d, `docs/spec/lookup.md` §3).
     ///
     /// Its three columns are closed forms of the row index — `a` the low
     /// eight bits, `b` the next eight, `a ^ b` their bitwise XOR, which is
@@ -1000,7 +1000,7 @@ pub mod lookup_channel {
     ///
     /// `constants::family::KECCAK_F` is its one consumer: a Keccak round is
     /// 1,020 obligations on it and no bit anywhere
-    /// (`docs/spec/delegation.md` §6).
+    /// (`docs/spec/delegation-circuits.md` §2).
     pub const XOR8: u32 = 4;
 
     /// How many channels this table defines.
@@ -1121,11 +1121,11 @@ pub mod family {
     /// The Poseidon2 **delegation** family (S23): one width-3 permutation a
     /// row, invoked by the [`ecall::PRECOMPILE_POSEIDON2`] ecall. The circuit
     /// is `transcript::poseidon2_permute`, gate for gate
-    /// (`docs/spec/delegation.md` §12).
+    /// (`docs/spec/delegation-circuits.md` §3).
     pub const POSEIDON2: u32 = 10;
     /// The Fr-arithmetic **delegation** family (S23): one `Fr` add, multiply
     /// or inverse a row, invoked by the [`ecall::PRECOMPILE_FR_ARITH`] ecall
-    /// (`docs/spec/delegation.md` §13).
+    /// (`docs/spec/delegation-circuits.md` §4).
     pub const FR_ARITH: u32 = 11;
     /// The **public input** window (S-IO): the verifier-known input of the
     /// statement, at [`guest_memory::PUBLIC_INPUT_ORIGIN`]. Claims no pc,
@@ -1157,7 +1157,7 @@ pub mod family {
     /// The **Ethereum field multiplication** delegation family (S26,
     /// specialized at S26b): one `out = a * b mod m` a row over 32-bit limbs,
     /// invoked by the [`ecall::PRECOMPILE_MOD_MUL`] ecall and never decoded
-    /// (`docs/spec/delegation.md` §14).
+    /// (`docs/spec/delegation-circuits.md` §5).
     ///
     /// The modulus is **one of four**, named by a selector word in the frame
     /// and supplied by the circuit as a literal:
@@ -1250,7 +1250,7 @@ pub mod family {
     ///
     /// **It was `2^8` until S-STREAM**, which bought 1,020 journal bytes and
     /// a revm mini journal that overflowed above 73 transactions
-    /// (`docs/spec/revm-block.md` §2). 16,380 is what the geometry allows; it
+    /// (`docs/spec/ethereum.md` §3). 16,380 is what the geometry allows; it
     /// is headroom and not a bound, a journal carrying verbatim return data
     /// being unbounded in any window.
     ///
@@ -1274,7 +1274,7 @@ pub mod family {
     /// The seven instruction families own cycles; [`INIT_TEARDOWN`] and
     /// [`ZERO_WINDOWS`] own addresses — a RAM window's rows are words, not
     /// cycles (`docs/spec/memory.md` §3). A block's time-window rules apply to
-    /// cycle-owning families alone (`docs/spec/block-proof.md` §4): only their
+    /// cycle-owning families alone (`docs/spec/proof.md` §8): only their
     /// shards partition an execution in time. A **delegation** family appends
     /// here as `false`: its rows are invocations, its shards carry a min/max
     /// invocation window, and no disjointness is asked of them
@@ -1358,7 +1358,7 @@ pub mod family {
     /// decision — a `2^8` shard's proof does not shrink with its height, so a
     /// family's height is what decides how many shards a block's invocations
     /// take, and `MOD_MUL` at `2^8` cost a measured block 1,048 shards against
-    /// 5 at `2^16` (`docs/spec/delegation.md` §9 and §9.1).
+    /// 5 at `2^16` (`docs/spec/delegation.md` §9 and §9).
     ///
     /// [`KECCAK_F`] is the case that shows the trade is about **width**, not
     /// rows. At S21 one row was a whole permutation — 354,762 inner columns,
@@ -1370,7 +1370,7 @@ pub mod family {
     /// the **floor** its two channels imply; `2^18` is the choice above it,
     /// because a shard's proof barely grows with its height — 381,100 bytes
     /// against 373,276 — so the fatter shard is the cheaper one for a
-    /// keccak-heavy block (`docs/spec/delegation.md` §6.0, §9.2).
+    /// keccak-heavy block (`docs/spec/delegation-circuits.md` §2.4, `docs/spec/delegation.md` §9).
     pub const DEFAULT_HEIGHTS: [u32; COUNT as usize] = [
         1 << 22, // ADD_SUB_LUI_AUIPC
         1 << 22, // JUMP_BRANCH_SLT
@@ -1521,7 +1521,7 @@ pub mod extra_mask {
 /// repository owner's instruction. These are the frozen values.
 ///
 /// The one region a guest has. `crates/guest-sdk/link.ld` states the same two
-/// numbers for the linker, `docs/spec/ecall-abi.md` section 7 states them for a
+/// numbers for the linker, `docs/spec/ecall-abi.md` §6 states them for a
 /// reader, and `crates/constants/tests/ecall_abi.rs` checks all three against
 /// each other — a memory map written down three times is a memory map that can
 /// disagree with itself.
@@ -1687,7 +1687,7 @@ pub mod ecall {
     /// One `Fr` add, multiply or inverse over a 25-word frame, `a0` = the
     /// frame base pointer, read and written in place. A **delegation** call
     /// (S23); `constants::family::FR_ARITH` is the family that proves it and
-    /// `docs/spec/delegation.md` §13 the frame table.
+    /// `docs/spec/delegation-circuits.md` §4 the frame table.
     ///
     /// The operands cross the frame in `field::Fr`'s **in-memory**
     /// representation — the four Montgomery limbs, little-endian, which is a
@@ -1715,7 +1715,7 @@ pub mod ecall {
     /// One **Ethereum field multiplication** over a 25-word frame, `a0` = the
     /// frame base pointer, read and written in place. A **delegation** call
     /// (S26, specialized at S26b); `constants::family::MOD_MUL` is the family
-    /// that proves it and `docs/spec/delegation.md` §14 the frame table.
+    /// that proves it and `docs/spec/delegation-circuits.md` §5 the frame table.
     ///
     /// Frame word 0 is the modulus selector, one of
     /// [`super::mod_mul::CODES`]; the two operands and the result follow it as
@@ -1741,7 +1741,7 @@ pub mod ecall {
     /// **Four rounds** of SHA-256's compression over a 25-word frame, `a0` =
     /// the frame base pointer, read and written in place. A **delegation**
     /// call (S26c, re-shaped at S26e); `constants::family::SHA256_COMP` is the
-    /// family that proves it and `docs/spec/delegation.md` §15 the frame table.
+    /// family that proves it and `docs/spec/delegation-circuits.md` §6 the frame table.
     ///
     /// Frame word 0 is the round group `r` in `0..16`, words 1..9 the working
     /// variables and words 9..25 the schedule window `W_{4r}..W_{4r+15}`. The
@@ -1758,7 +1758,7 @@ pub mod ecall {
     /// One **third of an elliptic-curve point addition** over a 97-word frame,
     /// `a0` = the frame base pointer, read and written in place. A
     /// **delegation** call (S26c); `constants::family::EC_ADD` is the family
-    /// that proves it and `docs/spec/delegation.md` §16 the frame table.
+    /// that proves it and `docs/spec/delegation-circuits.md` §7 the frame table.
     ///
     /// Frame word 0 selects the curve **and** the group of three reductions
     /// this invocation performs, one of [`super::ec_add::CODES`]; the two
@@ -1774,7 +1774,7 @@ pub mod ecall {
     /// the round and whose remaining 50 words are the 1,600-bit state, `a0` =
     /// the frame base pointer, read and written in place. A **delegation** call (S21, re-shaped at S26d);
     /// `constants::family::KECCAK_F` is the family that proves it and
-    /// `docs/spec/delegation.md` §6 the frame table.
+    /// `docs/spec/delegation-circuits.md` §2 the frame table.
     ///
     /// **A whole permutation is 24 of these calls**, exactly as a complete
     /// point addition is three `EC_ADD` calls: the frame is ordinary RAM, so
@@ -2120,7 +2120,7 @@ pub mod keccak {
     /// **A whole permutation is 24 invocations, not one** (S26d). One round is
     /// one delegation row, the 24 rows of a permutation are glued by the frame
     /// being ordinary RAM, and the guest's own proven loop supplies the round.
-    /// `docs/spec/delegation.md` §6.
+    /// `docs/spec/delegation-circuits.md` §2.
     pub const ROUND_WORD: usize = 0;
 
     /// The frame's first state word, one past [`ROUND_WORD`].
@@ -2145,7 +2145,7 @@ pub mod keccak {
     /// eight, and a LogUp fraction tree is padded to a power of two: the four
     /// extra obligations would double the tree and cost 4,096 more inner
     /// columns — another **34.4 GB** a shard at `2^18`, on the family that
-    /// already sets a block's peak (`docs/spec/delegation.md` §6.5).
+    /// already sets a block's peak (`docs/spec/delegation-circuits.md` §2.4).
     pub const IOTA_BYTES: [usize; 4] = [0, 1, 3, 7];
 
     /// Every byte position [`IOTA_BYTES`] omits is zero in every round
@@ -2257,7 +2257,7 @@ pub mod poseidon2 {
 ///
 /// One invocation is one operation, and one operation is one trace row: the
 /// contraction the recursion guest is sized against is `ops/row = 1`
-/// (`docs/spec/delegation.md` §13).
+/// (`docs/spec/delegation-circuits.md` §4).
 ///
 /// The three operands cross the frame in `field::Fr`'s **in-memory**
 /// representation — the four Montgomery limbs written little-endian, which is
@@ -2510,7 +2510,7 @@ pub mod fq_op {
 
 /// The Ethereum field-multiplication delegation's frame, its four moduli and
 /// its bounds. Frozen at S26, **specialized at S26b**.
-/// `docs/spec/delegation.md` §14.
+/// `docs/spec/delegation-circuits.md` §5.
 ///
 /// **One operation, and the modulus is a selector.** The family computes
 /// `out = a * b mod m` and nothing else, over one of **four fixed moduli** a
@@ -2540,7 +2540,7 @@ pub mod fq_op {
 /// After the last call the frame's state words are the working variables after
 /// round 63, which the caller adds to the chaining state it kept.
 ///
-/// `docs/spec/delegation.md` §15 is the frame table. FIPS 180-4 is the
+/// `docs/spec/delegation-circuits.md` §6 is the frame table. FIPS 180-4 is the
 /// algorithm, and `crates/constants/tests/sha256.rs` **re-derives** both tables
 /// from their generators — the fractional parts of the square roots of the first
 /// eight primes and the cube roots of the first sixty-four — in exact integer
@@ -2676,7 +2676,7 @@ pub mod sha256 {
 /// guest branches on nothing and the circuit has no degenerate row.
 ///
 /// **Three invocations make one addition**, and the frame is the scratch they
-/// pass intermediates through (`docs/spec/delegation.md` §16). The alternative
+/// pass intermediates through (`docs/spec/delegation-circuits.md` §7). The alternative
 /// — nine reductions on one row — is 19,316 committed columns and 28.9 GiB of
 /// peak a shard; three rows of three reductions is a computed 20.5 GB a shard at
 /// `2^16` — above an execution shard's ~11 GB, and second now only to

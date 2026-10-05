@@ -11,7 +11,7 @@
 //! | 3 | `D`        | `{z}`            | `(X - 1/z)(X - alpha)` |
 //!
 //! **That order is frozen**: it fixes which power of the batch challenge each
-//! polynomial carries. `docs/spec/mercury.md` §6 is normative.
+//! polynomial carries. `docs/spec/mercury.md` §3.3 is normative.
 //!
 //! [`items`] is the one definition of the batch, called by the prover and by
 //! the verifier. Everything either side needs beyond it — the quotient, the

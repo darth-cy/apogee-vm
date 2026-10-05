@@ -10,7 +10,7 @@ serde.workspace = true
 
 # The guest-target backend, and only there: `Fr`'s add, multiply and inverse
 # route through `guest_sdk::recursion`'s delegation shims when this crate is
-# compiled for the guest (`docs/spec/delegation.md` §13). A *target*
+# compiled for the guest (`docs/spec/delegation.md` §10). A *target*
 # dependency, not a cargo feature — the workspace still has one build
 # configuration, and a host build never resolves this edge. The direction is
 # forced: `guest-sdk` may not depend on `field`, or cargo refuses the cycle.

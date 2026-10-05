@@ -1355,7 +1355,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
 
 /// `DIV(−7, 2)` carrying the **floored** answer, `q = −4` and `rem = 1`,
 /// rather than the truncated `q = −3` and `rem = −1`: the row a bare division
-/// identity cannot tell from the honest one (`docs/spec/mul-div.md` §4.4).
+/// identity cannot tell from the honest one (`docs/spec/mul-div.md` §5.2).
 fn floored_minus_seven_over_two() -> Row {
     forged_division(
         Instr::new(kind::DIV),

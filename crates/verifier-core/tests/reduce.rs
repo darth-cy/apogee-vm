@@ -1,5 +1,5 @@
 //! What `reduce_shard` decides before and around a proof,
-//! `docs/spec/shard-proof.md` §2 and §6: the global transcript's messages in
+//! `docs/spec/proof.md` §2 and §6: the global transcript's messages in
 //! their frozen order, and every `Statement` and `Malformed` refusal — each
 //! the class its step names, none a panic. The proofs themselves are
 //! `crates/prover/tests` and `crates/checker/tests/tamper.rs`.
@@ -552,7 +552,7 @@ fn garbage_is_refused_and_never_panics() {
 }
 
 /// **Step 10b reads the statement and the key, and no `ShardProof` at all**,
-/// `docs/spec/shard-proof.md` §6: it is `verify_global_memory`, and a block
+/// `docs/spec/proof.md` §6: it is `verify_global_memory`, and a block
 /// runs it once however many shards it has. Its own three checks keep S16's
 /// order — the boundary's range, then the exit status, then the product — so
 /// a statement broken two ways answers with the first.

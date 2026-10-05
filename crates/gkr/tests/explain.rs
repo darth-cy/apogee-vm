@@ -1,5 +1,5 @@
 //! `gkr::explain_self_check`, the failure-time post-mortem of a `self_check`
-//! failure. `docs/spec/debug-info.md` §5.
+//! failure. `docs/tools.md` §3.
 //!
 //! **This file is why the explainer is compiled unconditionally.** It is called
 //! only from `prover`'s `debug-info` build, and `gkr` may not have a feature of

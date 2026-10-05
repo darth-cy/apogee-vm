@@ -143,7 +143,7 @@ pub const TABLE_WIDTH: usize = 7;
 
 /// `S[7..10]`: the packed generic table's columns, key first, after the
 /// decoded table. A verifying key's commitments for them follow identity's
-/// (`docs/spec/shard-proof.md` §7).
+/// (`docs/spec/proof.md` §7).
 pub const GENERIC_TABLE: [PolyAddress; generic_table::WIDTH] = [
     PolyAddress::Setup(TABLE_WIDTH as u32),
     PolyAddress::Setup(TABLE_WIDTH as u32 + 1),

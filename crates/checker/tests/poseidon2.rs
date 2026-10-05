@@ -1,6 +1,6 @@
 //! The Poseidon2 delegation circuit, round by round.
 //!
-//! `docs/spec/delegation.md` §12 is what this suite restates: the 24-word
+//! `docs/spec/delegation-circuits.md` §3 is what this suite restates: the 24-word
 //! frame, the anchor's two tuples, the three sub-layers a round takes, and the
 //! canonicity of every lane that crosses the frame. The permutation itself is
 //! checked the only way a circuit can be — by running its forward pass over a

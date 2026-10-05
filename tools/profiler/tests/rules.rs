@@ -1,7 +1,7 @@
 //! The classification rules, held to what they are meant to say.
 //!
 //! The rules are an **ordered** list and the order is the semantics
-//! (`docs/spec/profiling.md` §3), so the failure mode is a rule that a specific
+//! (`docs/tools.md` §2.2), so the failure mode is a rule that a specific
 //! one should have beaten and does not. Every case here is a real symbol from
 //! `guests/revm-block`, or a shape the guest's own source has; two of them are
 //! bugs a profile of the pinned mini-block exposed, kept as regressions.

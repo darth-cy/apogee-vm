@@ -222,7 +222,7 @@ pub fn virtual_at_row(kind: VirtualKind, row: usize) -> Fr {
         // The `XOR8` table's three columns: the row index's low byte, its next
         // byte, and their XOR. At a height of `2^16` rows or more the table is
         // exactly the 65,536 triples `(a, b, a ^ b)`, each once per `2^16`
-        // rows (`docs/spec/lookup.md` §14).
+        // rows (`docs/spec/lookup.md` §3).
         VirtualKind::Xor8A => Fr::from_u64((row as u64) & 0xff),
         VirtualKind::Xor8B => Fr::from_u64(((row as u64) >> 8) & 0xff),
         VirtualKind::Xor8Out => Fr::from_u64(((row as u64) & 0xff) ^ (((row as u64) >> 8) & 0xff)),

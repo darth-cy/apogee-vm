@@ -122,7 +122,7 @@ pub fn zero_entry() -> [Fr; GENERIC_WIDTH] {
 
 /// The packed table's `GENERIC_WIDTH` commitments, in tuple order: what every
 /// verifying key carries, and its SRS digest covers
-/// (`docs/spec/jump-branch-slt.md` §6).
+/// (`docs/spec/lookup.md` §9).
 ///
 /// **One set at every height.** A Mercury commitment is the evaluation table
 /// read as coefficients (`docs/spec/mercury.md`), and every row of

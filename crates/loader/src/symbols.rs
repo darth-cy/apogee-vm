@@ -2,13 +2,13 @@
 //!
 //! A [`crate::ProgramImage`] is the post-load memory, the entry pc and the
 //! instruction stream, and program identity is a commitment over exactly that
-//! (`docs/spec/memory.md` §6.2). A symbol table is what a linker wrote for a
+//! (`docs/spec/program.md` §8). A symbol table is what a linker wrote for a
 //! debugger: it is not part of the image, it is not committed, and nothing here
 //! can change what a proof is about. What it is for is reading — a listing of
 //! four thousand hex words with no names in it is a listing nobody can
 //! navigate — and, since S26, **attributing cycles**: `tools/profiler` turns a
 //! pc into the function that owns it, which is the whole basis of a cycle
-//! profile (`docs/spec/profiling.md` §2).
+//! profile (`docs/tools.md` §2.1).
 //!
 //! Nothing here can fail. A file with no symbol table, or with one this cannot
 //! parse, yields an empty result: `load_elf` has already validated everything

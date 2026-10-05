@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# The shard prover and the global commit phase. `docs/spec/shard-proof.md` is
+# The shard prover and the global commit phase. `docs/spec/proof.md` is
 # normative. std + rayon: commitments and the forward pass are data-parallel.
 
 # THE WORKSPACE'S ONE AND ONLY CARGO FEATURE, and the one exception to master
@@ -23,7 +23,7 @@ publish.workspace = true
 # configuration anti-goal 1 exists to forbid. The rule stands for every future
 # progression: `tests/one_feature.rs` fails if a second `[features]` table
 # appears anywhere in the workspace, or if this one grows a second key.
-# `docs/spec/debug-info.md`.
+# `docs/tools.md` §3.
 [features]
 debug-info = []
 

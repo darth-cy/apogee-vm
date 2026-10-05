@@ -4,7 +4,7 @@
 //! one shard. It exists to make the block layer's stage gate real — one
 //! execution cut into two shards of the same cycle-owning family, with pc
 //! continuity across the cut carried by the global memory multiset and by
-//! nothing else (`docs/spec/block-proof.md` §3).
+//! nothing else (`docs/spec/proof.md` §6).
 //!
 //! The shape is a counted loop whose body is 64 unrolled `add`s:
 //!
@@ -36,7 +36,7 @@
 //! # Input, advice and the journal
 //!
 //! Unused. The guest reads nothing and commits nothing: `EXIT` is still the
-//! only provable ecall (`docs/spec/shard-proof.md` §8.4).
+//! only provable ecall (`docs/spec/add-sub.md` §4).
 //!
 //! # The result
 //!

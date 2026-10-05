@@ -1,5 +1,5 @@
 /* The guest memory map, frozen at S10. `prompts/S10-toolchain.md` pins this
-   script; `docs/spec/ecall-abi.md` section 7 documents the symbols.
+   script; `docs/spec/ecall-abi.md` §6 documents the symbols.
 
    The symbol names __bss_start, __bss_end, __heap_start and __stack_top are
    frozen: crt0 in src/lib.rs zeroes the first range and the bump allocator

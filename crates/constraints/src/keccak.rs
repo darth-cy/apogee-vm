@@ -1,7 +1,7 @@
 //! The `KECCAK_F` delegation family's circuit: **one Keccak round a row**, over
 //! the 51-word frame a delegation request handed over.
 //!
-//! `docs/spec/delegation.md` §6 is normative: the frame, the anchor, the three
+//! `docs/spec/delegation-circuits.md` §2 is normative: the frame, the anchor, the three
 //! request-side zeroings, the five transformations and the two frame checks.
 //! This file is that document as data.
 //!
@@ -12,7 +12,7 @@
 //! All 24 rounds and all 1,600 bits coexisted horizontally, so the row could
 //! only be afforded at `2^8` — 256 permutations a shard — and five such shards
 //! were **97%** of a measured mini-block's proof bytes
-//! (`docs/spec/delegation.md` §9.1).
+//! (`docs/spec/delegation.md` §9).
 //!
 //! This is the other trade. One row is one round, a permutation is 24
 //! consecutive invocations, and what glues them is the same thing that glues
@@ -25,7 +25,7 @@
 //! circuit** but the structural selectors: the committed unit is a **byte**, and
 //! every Boolean operation of the round is one obligation on the `XOR8` channel
 //! — a virtual table of the 65,536 triples `(a, b, a ^ b)`
-//! (`docs/spec/lookup.md` §14). `AND`, `ANDN` and `OR` are then *linear forms*
+//! (`docs/spec/lookup.md` §3). `AND`, `ANDN` and `OR` are then *linear forms*
 //! over the result, because `a & b = (a + b − (a ^ b)) / 2`, and so is a byte's
 //! rotation: masking a byte's top `s` bits is one XOR against a literal, and
 //! the rotated byte is a literal-weighted combination of the byte and its mask.
@@ -929,7 +929,7 @@ pub fn check_shape(a: &CircuitArtifact) {
     // The number this circuit's cost turns on: 1,020 fractions plus the
     // table's is 1,021, and a fraction tree is padded to a power of two, so
     // 1,024 leaves. Four more obligations would double the tree and cost 4,096
-    // inner columns (`docs/spec/delegation.md` §6.5).
+    // inner columns (`docs/spec/delegation-circuits.md` §2.4).
     assert_eq!(xor8, 1_020, "keccak: the round's obligations");
     assert!(
         (xor8 + 1).next_power_of_two() == 1_024,

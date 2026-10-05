@@ -16,7 +16,7 @@
 //! is advice: ordinary loads from `guest_memory::ADVICE_ORIGIN`, costing the
 //! statement nothing. **Nothing binds it.** [`revm_block::BlockWitness::decode`]
 //! refuses a non-canonical encoding, and the journal is what the execution did
-//! (`docs/spec/revm-block.md` §2) — but no state root is checked or published,
+//! (`docs/spec/ethereum.md` §3) — but no state root is checked or published,
 //! so a proof covers these transactions over the witness's state, not that this
 //! is Ethereum's state. `src/stateless_main.rs` is the binary that checks it.
 //!
@@ -43,7 +43,7 @@ guest_sdk::entry!(main);
 /// The advice is not a canonical `BlockWitness`.
 const EXIT_WITNESS_MALFORMED: i32 = 61;
 /// A transaction is not executable: revm refused it outright, or it does not
-/// fit in the gas the block has left (`docs/spec/revm-block.md` §1.4).
+/// fit in the gas the block has left (`docs/spec/ethereum.md` §2.2).
 const EXIT_NOT_EXECUTABLE: i32 = 62;
 
 fn main() {

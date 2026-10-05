@@ -1,5 +1,5 @@
 //! The transcript-tape validator, S20: the global commit phase's absorb
-//! sequence against the frozen pre-fork order of `docs/spec/shard-proof.md`
+//! sequence against the frozen pre-fork order of `docs/spec/proof.md`
 //! §2, the committed tape of S20's two-shard statement, and the negative
 //! control — a fork that swaps two absorptions.
 //!

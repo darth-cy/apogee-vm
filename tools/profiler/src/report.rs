@@ -287,7 +287,7 @@ impl ProfileReport {
             out,
             "\nMachine-independent: every number is a count of executed cycles on one \
              image.\nA function's cycles include everything the compiler inlined into it \
-             (docs/spec/profiling.md §3.1)."
+             (docs/tools.md §2.2)."
         );
         out
     }

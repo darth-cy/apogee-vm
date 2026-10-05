@@ -3,7 +3,7 @@
 //! A Mercury verification ends in one pairing relation `e(A, [1]_2) =
 //! e(B, [x]_2)`, and both `A` and `B` are small multi-scalar multiplications of
 //! points the verifier already holds against scalars it has just derived
-//! (`docs/spec/mercury.md` §8.2 and §8.3). **Deferring** a verification means
+//! (`docs/spec/mercury.md` §4 and §4). **Deferring** a verification means
 //! emitting those terms instead of running the pairings: twelve
 //! [`AccumulatorEntry`] items, each a `(side, scalar, point)` triple, whose
 //! weighted sums are `A` and `B`.
@@ -12,7 +12,7 @@
 //! them. [`discharge`] is where they are finally spent: one RLC weight per
 //! deferred check, one MSM per side, one two-pairing check.
 //!
-//! `docs/spec/accumulator.md` is normative for everything in this module — the
+//! `docs/spec/mercury.md` §6 is normative for everything in this module — the
 //! entry order, the word layout, the digest and the discharge equation.
 
 use constants::transcript_tags as tags;
@@ -32,7 +32,7 @@ use crate::{infinity_sentinel, PcsError};
 /// One term of one deferred pairing relation: `scalar * point`, on `side`.
 ///
 /// **Frozen forever**, in this field order, which is also the word order of
-/// `docs/spec/accumulator.md` §2. A list of these is the whole accumulator;
+/// `docs/spec/mercury.md` §6.1. A list of these is the whole accumulator;
 /// there is no header, no length prefix and no other kind of entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AccumulatorEntry {
@@ -52,7 +52,7 @@ pub struct AccumulatorEntry {
 /// followed by its entries, so the words carry the grouping and a byte
 /// concatenation of two lists is itself a valid list.
 ///
-/// `docs/spec/accumulator.md` §2 and §3.
+/// `docs/spec/mercury.md` §6.1 and §6.3.
 pub fn accumulator_words(
     entries: &[AccumulatorEntry],
     checks: &[usize],
@@ -140,7 +140,7 @@ pub fn accumulator_from_words(
 /// satisfied by two relations whose errors cancel.
 ///
 /// Every entry's point is validated here, on the curve and in the order-`r`
-/// subgroup. `docs/spec/accumulator.md` §4 is normative for why that obligation
+/// subgroup. `docs/spec/mercury.md` §6.3 is normative for why that obligation
 /// lands here and nowhere else.
 pub fn discharge(
     vsrs: &SrsVerifier,
@@ -226,9 +226,9 @@ pub(crate) fn check_pairings(
 /// Every entry's point is on the curve and in the order-`r` subgroup.
 ///
 /// An entry's point is a **claim**: transcript and digest absorption bind the
-/// limbs a party wrote down (`docs/spec/mercury.md` §4), an entry built in
+/// limbs a party wrote down (`docs/spec/transcript.md` §4), an entry built in
 /// memory has been through no decoder, and the in-VM replay does no curve
-/// arithmetic at all. `docs/spec/accumulator.md` §4 is the rule; this is it.
+/// arithmetic at all. `docs/spec/mercury.md` §6.3 is the rule; this is it.
 ///
 /// On G1 the subgroup check *is* the curve check — the cofactor is 1 — and both
 /// are called anyway so this call site reads like every other one in the crate.

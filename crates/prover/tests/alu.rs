@@ -37,7 +37,7 @@ fn proved() -> (ProverSetup, TraceArchive, PublicInputs, Vec<ShardProof>) {
     (setup, archive, public, proofs)
 }
 
-/// The byte length a proof of `artifact` has: `docs/spec/shard-proof.md` §9's
+/// The byte length a proof of `artifact` has: `docs/spec/proof.md` §9's
 /// layout, every count read off the circuit.
 fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
     let transitions: usize = (0..a.depth())
@@ -65,7 +65,7 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// circuit's shape.
 ///
 /// The two new families' shapes are pinned twice — as the literals
-/// `docs/spec/shift-bitwise.md` §6 and `docs/spec/mul-div.md` §6 state, and as
+/// `docs/spec/circuits.md` §1 and `docs/spec/circuits.md` §1 state, and as
 /// the numbers read off the registry's circuit — so that a change to either
 /// family shows up on both sides. What the trace holds, instruction by
 /// instruction, is `crates/checker/tests/shift_bitwise.rs` and `crates/checker/
@@ -194,7 +194,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     let claim = reduced(&proofs[1]);
     // 41 + 33 since S21's eighth frame query (`deleg`), 42 + 35 since S23 gave
     // that query its `deleg_space` column and one selector per delegation type,
-    // 42 + **36** since S26's fourth type (`docs/spec/delegation.md` §10), and
+    // 42 + **36** since S26's fourth type (`docs/spec/delegation.md` §3), and
     // 27 + **35** since S26c's fifth and sixth, `SHA256_COMP` and `EC_ADD`.
     assert_eq!(claim.len(), 27 + 35 + 7);
     assert_eq!(&claim[62..], &setup.vk.setup_commitments[0][..]);

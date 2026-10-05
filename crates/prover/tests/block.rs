@@ -277,7 +277,7 @@ fn a4_a6_every_block_twin_is_refused() {
     );
 
     // 4(b) Another `ProgramIdentity`. An in-memory edit: such a key would not
-    // load (`docs/spec/shard-proof.md` §7.2), and checks 1 to 5 refuse it
+    // load (`docs/spec/proof.md` §7.2), and checks 1 to 5 refuse it
     // anyway because G6 absorbs the identity.
     let mut other = setup.vk.clone();
     other.identity.0 += Fr::ONE;

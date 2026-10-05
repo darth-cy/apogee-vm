@@ -73,7 +73,7 @@ enum Gating {
     /// `(0, 0, 0)`, and `0 ^ 0 = 0` is true in the same way.
     ///
     /// Named for the discipline and not for a channel kind: `XOR8` is a table
-    /// channel that takes it (S26d, `docs/spec/lookup.md` §14).
+    /// channel that takes it (S26d, `docs/spec/lookup.md` §3).
     NoOffset,
     /// `flag·(key + 1)` on column 0 and `flag·v_j` on the rest, the neutral
     /// tuple being the all-zero `ZeroEntry` row. The `+ 1` is what keeps a real
@@ -373,7 +373,7 @@ pub fn table_vars(channel: u32) -> u32 {
 const XOR8_BYTE_BITS: u32 = 8;
 
 /// The `XOR8` channel's table, in tuple order: `(a, b, a ^ b)` as closed forms
-/// of the row index. `docs/spec/lookup.md` §14.
+/// of the row index. `docs/spec/lookup.md` §3.
 pub fn xor8_table() -> alloc::vec::Vec<PolyAddress> {
     vec![
         PolyAddress::Virtual(VirtualKind::Xor8A),

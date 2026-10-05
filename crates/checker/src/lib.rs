@@ -937,7 +937,7 @@ fn below(v: Fr, bits: u32) -> bool {
     (bits..256).all(|i| (bytes[(i / 8) as usize] >> (i % 8)) & 1 == 0)
 }
 
-/// The native lookup evaluator, `docs/spec/memory.md` §7: the names of the
+/// The native lookup evaluator, `docs/spec/circuits.md` §3: the names of the
 /// **range** lookups `w` violates, in lookup order. A lookup is violated when
 /// its selector is nonzero on the row and an expression of its tuple has a
 /// canonical integer at or above `2^BITS[channel]`
@@ -1047,7 +1047,7 @@ impl ChannelSum {
     }
 }
 
-/// The LogUp self-check hook, `docs/spec/lookup.md` §7: every channel's
+/// The LogUp self-check hook, `docs/spec/circuits.md` §3: every channel's
 /// fractional sum and denominator product, recomputed natively from the base
 /// layer and the artifact's lookup list, and every row whose gated tuple no
 /// table row answers.

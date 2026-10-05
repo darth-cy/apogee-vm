@@ -3,7 +3,7 @@
 //! Three claims, checked three ways.
 //!
 //! * **The twelve entries are the two pairing relations.** Their scalars are
-//!   rebuilt here from `docs/spec/mercury.md` §6 and §8, out of a second
+//!   rebuilt here from `docs/spec/mercury.md` §3.3 and §4, out of a second
 //!   transcription of the transcript schedule and a second, naive univariate
 //!   arithmetic — no crate internals. Since S09 this is what pins the merge
 //!   challenge's *use*: `rho` is literally the scalar of entry 11, so an
@@ -110,7 +110,7 @@ fn the_entries_are_the_two_relations() {
             &it.proof,
             &common::replay_schedule(&it.cm, &it.u, it.v, &it.proof, &|_| {}),
         ),
-        "the deferred terms must be the relations of docs/spec/mercury.md section 8"
+        "the deferred terms must be the relations of docs/spec/mercury.md §4"
     );
 
     // Ten `G2One` terms then two `G2X` terms, and the points are the statement's
@@ -557,7 +557,7 @@ fn a_predictable_merge_challenge_would_be_forgeable() {
     );
 }
 
-/// An empty accumulator discharges successfully — `docs/spec/accumulator.md`
+/// An empty accumulator discharges successfully — `docs/spec/mercury.md` §6
 /// §6 states it, so it is asserted rather than left to `msm`'s empty case and
 /// `pairing_check`'s vacuous truth to keep agreeing by accident.
 #[test]

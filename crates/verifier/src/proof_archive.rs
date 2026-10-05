@@ -125,7 +125,7 @@ pub fn write_proof(
 /// file is named rather than producing a half-decoded value. The key goes
 /// through `load_verifying_key`, which is the loader with the load rules —
 /// it recomputes the SRS digest from the key's own points and revalidates every
-/// circuit against the registry (`docs/spec/shard-proof.md` §7) — and not
+/// circuit against the registry (`docs/spec/proof.md` §7) — and not
 /// through `VerifyingKey::from_bytes`, which checks encoding only.
 ///
 /// The identity comes back as the 32 bytes, parsed from the file's hex. It is

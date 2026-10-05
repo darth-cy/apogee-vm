@@ -112,7 +112,7 @@ fn each_space_has_exactly_its_addresses() {
     // **`Ram` is wider than ordinary RAM since S-IO** and a delegation space is
     // not: the two public windows sit below `RAM_ORIGIN` and the advice region
     // above RAM, and all three are `address_space::RAM` tuples
-    // (`docs/spec/public-values.md` §2). A delegation frame may be in none of
+    // (`docs/spec/public-values.md` §4). A delegation frame may be in none of
     // them.
     for addr in [
         guest_memory::PUBLIC_INPUT_ORIGIN,
@@ -139,7 +139,7 @@ fn each_space_has_exactly_its_addresses() {
     }
 }
 
-/// `docs/spec/delegation.md` §5.4: the three memory spaces chain — a query's
+/// `docs/spec/delegation.md` §5.3: the three memory spaces chain — a query's
 /// read is the last write at its address — and a delegation space does not.
 /// Every query there reads the invocation's answer tuple, stamped 0, whatever
 /// stands at that frame base already, which is what pairs two requests at one

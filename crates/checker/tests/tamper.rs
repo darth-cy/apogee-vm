@@ -4,7 +4,7 @@
 //! proved honestly once per test, then proved again with one tamper as an
 //! honest prover would prove the tampered witness, and one shard verified
 //! through `verify_shard`. Each twin asserts the class of the check that
-//! refuses it (`docs/spec/shard-proof.md` §6).
+//! refuses it (`docs/spec/proof.md` §6).
 //!
 //! **`#[ignore]`d, and run by name with `--include-ignored --test-threads=1`**:
 //! the add/sub shard is `2^20` rows and a statement's proof peaks at 8.6 GB —
@@ -668,7 +668,7 @@ fn jalr_moved(r: usize, v: u64, next: u64) -> Vec<Cell> {
 /// §5.2, run through the family-parameterized helper every later family invokes by
 /// name. They are the block's, not one shard's: a dropped invocation's only
 /// symptom is the cross-shard root product, and that check reads the statement
-/// rather than a proof (`docs/spec/block-proof.md` §3).
+/// rather than a proof (`docs/spec/proof.md` §6).
 #[test]
 #[ignore]
 fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
@@ -809,7 +809,7 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
     // which are 0. Setting lane 1's byte 3 asks word 3 to be 2^24 and
     // `input_w3` refuses it. The distinction matters: a reviewer reading "every
     // gate is gated on live" would expect this cell to be free, and it is not
-    // (`docs/spec/constraint-manifest.md` §12.5, §12.10).
+    // (`docs/spec/delegation-circuits.md` §2.2, §2.3).
     h.assert_rejects(
         &tamper(vec![keccak_cell(kec::state_in(1, 3), padding_row, Fr::ONE)]),
         (KEC, 0),

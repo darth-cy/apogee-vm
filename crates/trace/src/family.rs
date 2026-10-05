@@ -158,7 +158,7 @@ impl Row {
 
 /// One shard's rows of one cycle-owning family: a borrowed window into a trace
 /// buffer, `[index·height, min((index+1)·height, len))`
-/// (`docs/spec/block-proof.md` §5.1).
+/// (`docs/spec/streaming.md` §4).
 ///
 /// A fill reads its shard through this and never indexes the whole buffer, so
 /// one fill serves a slice of an archived execution and a streaming executor's

@@ -18,9 +18,7 @@
 //! [`check_global_tape`] runs the real phase and diffs the two, naming the
 //! first line that differs.
 //!
-//! The order is the master prompt's *Statement binding* bullet as
-//! `docs/spec/memory.md` §6.1 amends it and `docs/spec/shard-proof.md` §2
-//! writes it out, G1 to G11.
+//! The order is `docs/spec/proof.md` §2's, G1 to G11.
 
 use constants::transcript_tags as tags;
 use transcript::TranscriptEvent;
@@ -61,7 +59,7 @@ pub fn global_tape(vk: &VerifyingKey, statement: &PublicInputs) -> Vec<String> {
 }
 
 /// The tape the frozen pre-fork order requires, written from the statement's
-/// shape: G1 to G11 of `docs/spec/shard-proof.md` §2.
+/// shape: G1 to G11 of `docs/spec/proof.md` §2.
 ///
 /// | # | line |
 /// | --- | --- |
@@ -131,7 +129,7 @@ fn group_order(vk: &VerifyingKey) -> Vec<u32> {
 /// This does **not** check the values absorbed — the event log carries none —
 /// so it is a check on the script, not on the statement. What binds the values
 /// is that the same `global_commit` produces the digest every shard is seeded
-/// with (`docs/spec/shard-proof.md` §2).
+/// with (`docs/spec/proof.md` §2).
 pub fn check_global_tape(
     vk: &VerifyingKey,
     statement: &PublicInputs,

@@ -3,7 +3,7 @@
 //! delegation request per registered delegation type
 //! (`docs/spec/delegation.md` §5).
 //!
-//! `docs/spec/shard-proof.md` §8 is normative: the columns, the gates, the
+//! `docs/spec/add-sub.md` is normative: the columns, the gates, the
 //! lookups and the argument. This file is that section as data, assembled by
 //! S15's `memory::frame_with_channels_artifact` beside S14's frame.
 //!
@@ -308,7 +308,7 @@ fn names(list: &[&str]) -> Vec<String> {
     list.iter().map(|s| s.to_string()).collect()
 }
 
-/// The family's circuit over `2^trace_vars` rows, `docs/spec/shard-proof.md`
+/// The family's circuit over `2^trace_vars` rows, `docs/spec/proof.md`
 /// §8. `trace_vars` is at least 19, the timestamp channel's width, which the
 /// assembly refuses below; a Mercury opening needs it even as well.
 ///

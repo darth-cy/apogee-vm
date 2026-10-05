@@ -333,7 +333,7 @@ fn each_range_tables_closed_form_is_its_multilinear_extension() {
 }
 
 /// The `XOR8` table's three closed forms are the multilinear extensions of their
-/// own columns (S26d, `docs/spec/lookup.md` §14).
+/// own columns (S26d, `docs/spec/lookup.md` §3).
 ///
 /// **This is the one that could have been wrong silently.** `Xor8A` and `Xor8B`
 /// are weighted sums of the row's bits, like the two range tables; `Xor8Out` is

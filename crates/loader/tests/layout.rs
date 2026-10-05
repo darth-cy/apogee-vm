@@ -278,7 +278,7 @@ fn every_committed_guest_is_host_loadable() {
 ///
 /// Stated separately from [`check`] because it is the specific claim that the
 /// heap and the stack are one contiguous writable region growing toward each
-/// other, which is what the memory map in `docs/spec/ecall-abi.md` section 7
+/// other, which is what the memory map in `docs/spec/ecall-abi.md` §6
 /// promises and what the bump allocator assumes.
 #[test]
 fn the_heap_and_the_stack_share_one_writable_segment() {

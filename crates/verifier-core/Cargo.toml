@@ -8,7 +8,7 @@ publish.workspace = true
 # for `riscv32imac-unknown-none-elf`. Everything a shard's verification does
 # except the one Mercury opening lives here; `crates/verifier` is the `std`
 # wrapper that decodes curve points and calls `pcs::batch_verify`.
-# `docs/spec/shard-proof.md` is normative.
+# `docs/spec/proof.md` is normative.
 [dependencies]
 constants.workspace = true
 # `FamilyCircuit`, the registry a key's circuits are held to, and the rules a

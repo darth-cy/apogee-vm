@@ -136,7 +136,7 @@ fn replay(text: &str) -> Result<Vec<AccumulatorEntry>, String> {
         return Err("the claim is not fhat(u)".to_string());
     }
 
-    // The two values `docs/spec/mercury.md` §7 derives rather than receives,
+    // The two values `docs/spec/mercury.md` §3.4 derives rather than receives,
     // recomputed from the six sent evaluations and checked against the ones the
     // harness read straight off the polynomials.
     let (h_alpha, d_z) = common::derived(&kat.u, kat.v, &kat.proof, &c);
