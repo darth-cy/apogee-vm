@@ -21,7 +21,7 @@
 use curve::pairing::pairing_check;
 use curve::{G1Affine, G1Projective, G2Affine};
 use field::Fr;
-use groth16::{Proof, ProvingKey, Sink, Var, VerifyingKey, ONE};
+use groth16::{phase2, Proof, ProvingKey, Sink, Var, VerifyingKey, ONE};
 use verifier_core::chain;
 use verifier_core::fold::{FoldPoint, Side};
 use verifier_core::node::{journal, node, Advice, Driver, Header, ImageTemplate, NodeImage};
@@ -219,13 +219,30 @@ impl Circuit<'_, '_> {
         }
     }
 
+    /// A wire of its own for a sum over `basis`.
+    fn summed(&mut self, basis: &[Var], lane: &[Fr], value: Fr) -> Var {
+        let out = self.sink.alloc(value);
+        let lane: Vec<(Var, Fr)> = basis
+            .iter()
+            .copied()
+            .zip(lane.iter().copied())
+            .filter(|(_, c)| *c != Fr::ZERO)
+            .collect();
+        self.sink
+            .enforce(&lane, &[(ONE, Fr::ONE)], &[(out, Fr::ONE)]);
+        out
+    }
+
     /// `transcript::poseidon2_permute` over three lanes, each a wire and its
     /// value, lane 2 with `count` more: three constraints an S-box, and one a
     /// lane of the result.
     ///
     /// A lane is a sum over `basis`, wire 0 of it the constant: a linear
     /// layer moves coefficients and costs nothing, so through the partial
-    /// rounds lanes 1 and 2 grow a term a round.
+    /// rounds lanes 1 and 2 grow a term a round. Every eighth of those rounds
+    /// they are made wires of their own, two constraints, so that a sum
+    /// stays a dozen terms and its coefficients small: a key's ceremony pays
+    /// a scalar multiplication a term, by the coefficient.
     fn permute(&mut self, input: [(Var, Fr); 3], count: Fr) -> [Var; 3] {
         let mut basis = vec![ONE];
         let mut lanes: [Vec<Fr>; 3] = core::array::from_fn(|_| vec![Fr::ZERO]);
@@ -268,6 +285,10 @@ impl Circuit<'_, '_> {
         mix(&mut lanes, &mut values, false);
         for round in 0..64 {
             let full = !(4..60).contains(&round);
+            let own = match !full && round > 4 && round % 8 == 4 {
+                true => Some([1, 2].map(|k| self.summed(&basis, &lanes[k], values[k]))),
+                false => None,
+            };
             let mut outputs = Vec::with_capacity(3);
             for k in 0..if full { 3 } else { 1 } {
                 // `y = (lane + rc)^5`, by `u² `, `u⁴` and `u⁴·u`.
@@ -289,7 +310,7 @@ impl Circuit<'_, '_> {
                 values[k] = v4 * v;
                 outputs.push(y);
             }
-            if full {
+            if full || own.is_some() {
                 // Three new wires are the whole state.
                 basis.truncate(1);
                 for lane in lanes.iter_mut() {
@@ -299,7 +320,8 @@ impl Circuit<'_, '_> {
             } else {
                 lanes[0].fill(Fr::ZERO);
             }
-            for (k, y) in outputs.into_iter().enumerate() {
+            let wires = outputs.into_iter().chain(own.into_iter().flatten());
+            for (k, y) in wires.enumerate() {
                 basis.push(y);
                 for (j, lane) in lanes.iter_mut().enumerate() {
                     lane.push(if j == k { Fr::ONE } else { Fr::ZERO });
@@ -309,18 +331,7 @@ impl Circuit<'_, '_> {
         }
         self.constants = constants;
 
-        core::array::from_fn(|k| {
-            let out = self.sink.alloc(values[k]);
-            let lane: Vec<(Var, Fr)> = basis
-                .iter()
-                .copied()
-                .zip(lanes[k].iter().copied())
-                .filter(|(_, c)| *c != Fr::ZERO)
-                .collect();
-            self.sink
-                .enforce(&lane, &[(ONE, Fr::ONE)], &[(out, Fr::ONE)]);
-            out
-        })
+        core::array::from_fn(|k| self.summed(&basis, &lanes[k], values[k]))
     }
 }
 
@@ -449,13 +460,37 @@ impl<'a> Decider<'a> {
     }
 }
 
-/// The key of the decider's circuit over a root of `root`'s shape — its
-/// program and its statement's shard counts and windows — with trapdoors
-/// `groth16::setup` derives from `seed`.
-pub fn setup(root: &Root, seed: &[u8]) -> Result<ProvingKey, String> {
+/// The decider's circuit over a root of `root`'s shape — its program, its
+/// statement's shard counts and windows, the public values' lengths — as
+/// `make` takes a circuit: a key's setup, in a ceremony or without one.
+fn shaped<T>(root: &Root, make: impl FnOnce(groth16::Circuit) -> T) -> Result<T, String> {
     let mut decider = Decider::new(root)?;
-    let pk = groth16::setup(&mut |sink: &mut dyn Sink| decider.synthesize(sink), seed);
-    decider.failed.map_or(Ok(pk), Err)
+    let made = make(&mut |sink: &mut dyn Sink| decider.synthesize(sink));
+    decider.failed.map_or(Ok(made), Err)
+}
+
+/// The domain the circuit's constraints fit: the size a ceremony's first
+/// phase is read at.
+pub fn domain(root: &Root) -> Result<usize, String> {
+    shaped(root, groth16::domain)
+}
+
+/// The circuit's ceremony at its start, over a powers-of-tau transcript's
+/// Lagrange basis and powers in G1 (`groth16::phase2`): what a contribution
+/// is made to, and what a finished ceremony is verified against.
+pub fn ceremony(
+    root: &Root,
+    lagrange: &[G1Affine],
+    tau: &[G1Affine],
+) -> Result<phase2::State, String> {
+    shaped(root, |circuit| phase2::init(circuit, lagrange, tau))
+}
+
+/// **Development and tests only**: the circuit's key with every trapdoor
+/// derived from `seed` (`groth16::setup_dev`), which anyone who knows the
+/// seed forges under. A key that is worth a proof is a ceremony's.
+pub fn setup_dev(root: &Root, seed: &[u8]) -> Result<ProvingKey, String> {
+    shaped(root, |circuit| groth16::setup_dev(circuit, seed))
 }
 
 /// `root`, decided under `pk`.
@@ -678,7 +713,7 @@ mod tests {
             }
             wires
         };
-        let pk = groth16::setup(&mut circuit, b"test");
+        let pk = groth16::setup_dev(&mut circuit, b"test");
         let (proof, data) = groth16::prove(&pk, &mut circuit).expect("it proves");
         let decision = Decision {
             proof,

@@ -27,7 +27,8 @@ use std::path::Path;
 
 use rayon::prelude::*;
 
-use curve::{Fq, G1Affine, G2Affine};
+use curve::{Fq, Fq2, G1Affine, G1Projective, G2Affine, G2Projective};
+use field::Fr;
 
 use crate::{Srs, SrsError, MAX_POWER};
 
@@ -42,8 +43,11 @@ const MAX_SECTIONS: u32 = 64;
 /// while giving rayon enough work per chunk to be worth the fan-out.
 const POINTS_PER_CHUNK: usize = 1 << 16;
 
-/// See [`crate::Srs::from_ptau`].
-pub(crate) fn from_ptau(path: &Path, power: u32) -> Result<Srs, SrsError> {
+/// A `.ptau` file, opened: its reader, its section table — each section's id,
+/// where its payload starts and its size — and the power its header declares.
+type Opened = (BufReader<File>, Vec<(u32, u64, u64)>, u32);
+
+fn open(path: &Path) -> Result<Opened, SrsError> {
     let file = File::open(path)?;
     let file_len = file.metadata()?.len();
     let mut input = BufReader::with_capacity(1 << 20, file);
@@ -104,6 +108,12 @@ pub(crate) fn from_ptau(path: &Path, power: u32) -> Result<Srs, SrsError> {
     if file_power > MAX_POWER {
         return Err(SrsError::BadSection("declared power is implausible"));
     }
+    Ok((input, table, file_power))
+}
+
+/// See [`crate::Srs::from_ptau`].
+pub(crate) fn from_ptau(path: &Path, power: u32) -> Result<Srs, SrsError> {
+    let (mut input, table, file_power) = open(path)?;
     if power > file_power {
         return Err(SrsError::PowerTooLarge {
             requested: power,
@@ -143,6 +153,106 @@ pub(crate) fn from_ptau(path: &Path, power: u32) -> Result<Srs, SrsError> {
     Ok(Srs { g1, g2_gen, g2_tau })
 }
 
+/// A Groth16 setup's first phase over the ceremony, for a domain of `2^power`
+/// constraints: everything of a key that depends on `tau` and on nothing else.
+///
+/// A prepared `.ptau` holds, beside the powers, the **Lagrange basis** at
+/// `tau` of every domain up to its own — sections 12 and 13, one domain after
+/// another, smallest first — which is what turns a constraint system into
+/// group elements without anyone knowing `tau`.
+pub struct Phase1 {
+    /// `[L_j(tau)]_1` and `[L_j(tau)]_2`, `L_j` the Lagrange polynomial of
+    /// `omega^j` and `omega` the root of unity of order `2^power` that
+    /// `constants::FR_TWO_ADIC_ROOT_OF_UNITY` squares down to.
+    pub lagrange_g1: Vec<G1Affine>,
+    pub lagrange_g2: Vec<G2Affine>,
+    /// `[tau^k]_1` for `k < 2^(power + 1) - 1`.
+    pub tau_g1: Vec<G1Affine>,
+}
+
+impl Phase1 {
+    /// Read it from a prepared `.ptau`. The G2 basis is held to the curve and
+    /// not to the subgroup, which would cost a scalar multiplication a point:
+    /// the ceremony's integrity is presumed, as it is for the powers. What is
+    /// checked is that the basis is this domain's — it sums to the generator
+    /// in each group, and weighted by `omega^j` to `[tau]_1` — so a file with
+    /// another layout or another root of unity is refused, not misread.
+    pub fn from_ptau(path: &Path, power: u32) -> Result<Phase1, SrsError> {
+        let (mut input, table, file_power) = open(path)?;
+        if power > file_power || power > constants::FR_TWO_ADICITY {
+            return Err(SrsError::PowerTooLarge {
+                requested: power,
+                available: file_power,
+            });
+        }
+        let n = 1usize << power;
+        let r_inv = montgomery_r_inverse();
+        // Where point `skip` of a section is; each must hold `2n - 1` points:
+        // the powers a quotient needs, or the bases of every domain up to
+        // this one.
+        let at = |id: u32, what: &'static str, skip: usize, width: usize| {
+            let (start, size) = unique(&table, id, what)?;
+            if size < ((2 * n - 1) * width) as u64 {
+                return Err(SrsError::BadSection(what));
+            }
+            Ok(SeekFrom::Start(start + (skip * width) as u64))
+        };
+        input.seek(at(2, "tauG1", 0, 64)?)?;
+        let tau_g1 = read_montgomery_g1(&mut input, 2 * n - 1, &r_inv)?;
+        input.seek(at(12, "tauG1 Lagrange", n - 1, 64)?)?;
+        let lagrange_g1 = read_montgomery_g1(&mut input, n, &r_inv)?;
+        input.seek(at(13, "tauG2 Lagrange", n - 1, 128)?)?;
+        let lagrange_g2 = read_montgomery(&mut input, n, 128, |raw| {
+            let mut canonical = [0u8; 128];
+            for (src, dst) in raw.chunks_exact(32).zip(canonical.chunks_exact_mut(32)) {
+                canonicalize(src, dst, &r_inv)?;
+            }
+            let half = |at: usize| Fq2::from_bytes(canonical[at..at + 64].try_into().ok()?);
+            let point = G2Affine {
+                x: half(0)?,
+                y: half(64)?,
+                infinity: false,
+            };
+            point.is_on_curve().then_some(point)
+        })?;
+
+        let mut omega = Fr::from_hex(constants::FR_TWO_ADIC_ROOT_OF_UNITY)
+            .expect("the frozen two-adic root is a canonical hex literal");
+        for _ in power..constants::FR_TWO_ADICITY {
+            omega = omega.square();
+        }
+        let mut powers = Vec::with_capacity(n);
+        let mut at = Fr::ONE;
+        for _ in 0..n {
+            powers.push(at);
+            at *= omega;
+        }
+        let sum_g1 = lagrange_g1
+            .par_iter()
+            .fold(|| G1Projective::IDENTITY, |acc, p| acc.add_affine(p))
+            .reduce(|| G1Projective::IDENTITY, |a, b| a.add(&b));
+        let sum_g2 = lagrange_g2
+            .par_iter()
+            .fold(|| G2Projective::IDENTITY, |acc, p| acc.add_affine(p))
+            .reduce(|| G2Projective::IDENTITY, |a, b| a.add(&b));
+        let weighted = curve::msm::msm(&lagrange_g1, &powers).expect("a scalar a base");
+        if tau_g1[0] != G1Affine::GENERATOR
+            || sum_g1.to_affine() != G1Affine::GENERATOR
+            || sum_g2.to_affine() != G2Affine::GENERATOR
+            || (n > 1 && weighted.to_affine() != tau_g1[1])
+        {
+            return Err(SrsError::BadSection(
+                "the Lagrange basis is not this domain's",
+            ));
+        }
+        Ok(Phase1 {
+            lagrange_g1,
+            lagrange_g2,
+            tau_g1,
+        })
+    }
+}
+
 /// The one section with this id, or which way the file is malformed.
 fn unique(table: &[(u32, u64, u64)], id: u32, what: &'static str) -> Result<(u64, u64), SrsError> {
     let mut hits = table.iter().filter(|(section, _, _)| *section == id);
@@ -167,16 +277,26 @@ fn read_montgomery_g1(
     count: usize,
     r_inv: &Fq,
 ) -> Result<Vec<G1Affine>, SrsError> {
+    read_montgomery(input, count, 64, |raw| g1_from_montgomery(raw, r_inv))
+}
+
+/// `count` points of `width` bytes each, decoded a chunk at a time.
+fn read_montgomery<P: Send>(
+    input: &mut BufReader<File>,
+    count: usize,
+    width: usize,
+    decode: impl Fn(&[u8]) -> Option<P> + Sync,
+) -> Result<Vec<P>, SrsError> {
     let mut points = Vec::with_capacity(count);
-    let mut buf = vec![0u8; POINTS_PER_CHUNK * 64];
+    let mut buf = vec![0u8; POINTS_PER_CHUNK * width];
     while points.len() < count {
         let take = POINTS_PER_CHUNK.min(count - points.len());
-        input.read_exact(&mut buf[..take * 64])?;
+        input.read_exact(&mut buf[..take * width])?;
         let base = points.len();
-        let decoded: Result<Vec<G1Affine>, usize> = buf[..take * 64]
-            .par_chunks_exact(64)
+        let decoded: Result<Vec<P>, usize> = buf[..take * width]
+            .par_chunks_exact(width)
             .enumerate()
-            .map(|(i, raw)| g1_from_montgomery(raw, r_inv).ok_or(base + i))
+            .map(|(i, raw)| decode(raw).ok_or(base + i))
             .collect();
         points.extend(decoded.map_err(|index| SrsError::InvalidPoint { index })?);
     }

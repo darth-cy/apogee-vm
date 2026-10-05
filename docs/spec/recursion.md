@@ -266,7 +266,7 @@ The root is still a GKR proof and some hundreds of points, and a contract can ch
 
 **The circuit** is §8.1's node procedure over one child, the root, through a `Driver` that
 writes rank-1 constraints: an `FR_OP` is one constraint in the common case and none where it
-only copies, a duplex is 243, advice is a free wire. It verifies the root as a node would, and
+only copies, a duplex is 255, advice is a free wire. It verifies the root as a node would, and
 holds its journal to `from = 0` and `to = count`. But it **folds nothing**: every MSM template
 is skipped, and each point's four limbs and its scalar are **bound** wires instead, after the
 two identities, the base statement's exit status, and its public input and output, a wire a
@@ -284,7 +284,41 @@ into a sink, so no matrix is held. Three things are not the textbook's:
   `c` and the result. `D` is fixed before `c`, so wires that differ from the values agree with
   them at `c` with probability `len/r`.
 - **No blinding.** A proof hides nothing and is a function of its witness.
-- **The setup is not a ceremony.** Its trapdoors come from a public seed: a development key.
+- **A Lagrange basis.** `A` and `B` are sums over the constraints, `Σ_j (A·w)_j·[L_j(τ)]`, not
+  over the wires. So the one element a key holds a wire is `[(β·A_i + α·B_i + C_i)/x]_1`, `x`
+  being `γ`, `η` or `δ` — and a powers-of-tau ceremony already publishes `[L_j(τ)]`.
+
+**The key is a ceremony's**, in two phases:
+
+- **Phase 1 is `ppot_0080_24.ptau`**, the ceremony the tree's own commitments are under
+  (`srs::Phase1`): the Lagrange basis at the circuit's domain in both groups, and the powers a
+  quotient takes. Everything of the key that depends on `τ` is a combination of those points,
+  and nothing derives `τ`.
+- **Phase 2 is the circuit's own** (`groth16::phase2`, `bench ceremony`), and makes `α`, `β`,
+  `γ`, `δ` and `η` from 1 by **contributions**: each multiplies a trapdoor by a factor only its
+  contributor knew, so a trapdoor is unknown while one contributor to it was honest.
+
+  | step | |
+  | --- | --- |
+  | `init` | every trapdoor 1: a wire's `[A_i(τ)]_1`, `[B_i(τ)]_1`, `[C_i(τ)]_1`, and `[τ^k·Z(τ)]_1`. Deterministic from the circuit and the file |
+  | round 1, `contribute` | to `α` and `β`: `[β·A_i]_1` and `[α·B_i]_1`, kept apart |
+  | `seal` | a wire's three terms summed |
+  | round 2, `contribute` | to `γ`, `δ` and `η`: the sum over the wire's trapdoor, and `[τ^k·Z(τ)/δ]_1` |
+  | `key` | the last state verified and, if every trapdoor has a contribution, written as the key |
+
+  **The order of the rounds is the soundness.** A prover may hold a wire's three terms only
+  summed, over `δ` or `η`: apart, it could give `A`, `B` and `C` three witnesses. A contribution
+  to `α` or `β` scales the terms apart, so those are finished before anything is divided.
+
+  A state carries each contribution's record — its factor in G1 with a Schnorr proof of knowing
+  it, bound to the records before it, and the trapdoor in G2 afterwards. Verifying a state
+  checks that chain, then its elements against `init`'s under those trapdoors, one pairing
+  equation over a random combination: against the circuit and the file alone, with no earlier
+  state. Every step lists the records by their factors' points, so a contributor finds its own
+  under the state the key is made of. `bench decide` reads the key `key` wrote, and nothing
+  else writes one.
+- **`setup_dev`**, `bench decide --dev-key`, derives all six trapdoors from a public seed. It
+  is for development and tests: anyone forges under it.
 
 **The contract** (`contracts/ApogeeVerifier.sol`) is `verify(input, output, exitStatus, proof,
 points)`, a point being `x, y, scalar`, side `[1]_2`'s points and then side `[x]_2`'s. It
@@ -294,22 +328,30 @@ the Groth16 pairing, folds each side with `ecMul` and `ecAdd`, which is also wha
 to the curve, and checks `e(A, [1]_2) = e(B, [x]_2)`. Its Groth16 key, the ceremony's two G2
 points and the two identities are set at deployment.
 
-`bench decide <out>` makes the key and the proof, checks them natively, deploys and calls the
-contract in revm, and writes `decision.constructor` and `decision.calldata`.
+`bench decide <out>` proves under the ceremony's key, checks the proof natively, deploys and
+calls the contract in revm, and writes `decision.constructor` and `decision.calldata`.
 
-**Not production.** The key is a development key. The circuit depends on the root's shape — its
-program, its shard counts, the public values' lengths — so a key is per shape. And the contract
-pays about 9k gas a point, because the circuit folds none.
+**What a deployment still owes.** A key is as trustworthy as its ceremony: one honest
+contributor a round, which a ceremony run on one machine is not. The circuit depends on the
+root's shape — its program, its shard counts, the public values' lengths — so a key, and its
+ceremony, is per shape. And the contract pays about 9k gas a point, because the circuit folds
+none.
 
 ## 10. Running it
 
 ```text
-bench prove --stateless <fixture> --out <dir>                     the base proof
-bench recurse <dir>/<stem> --out <out> --in-flight 4              the tree, then the decider
-bench decide <out>                                                the decider alone
+bench prove --stateless <fixture> --out <dir>             the base proof
+bench recurse <dir>/<stem> --out <out> --in-flight 4      the tree
+bench ceremony <out> init                                 the decider's key: once a root shape,
+bench ceremony <out> contribute                           each contributor in turn, to alpha and beta
+bench ceremony <out> seal
+bench ceremony <out> contribute                           and to gamma, delta and eta
+bench ceremony <out> key
+bench decide <out>                                        the Groth16 proof, and the contract
 ```
 
-It needs `assets/ptau/ppot_0080_24.ptau`. Measured on block 257,510, a 32-CPU, 247 GiB machine:
+It needs `assets/ptau/ppot_0080_24.ptau`. Measured on block 257,510 — the tree on a 32-CPU,
+247 GiB machine, the ceremony and the decider on an 18-core laptop:
 
 | | |
 | --- | --- |
@@ -317,5 +359,7 @@ It needs `assets/ptau/ppot_0080_24.ptau`. Measured on block 257,510, a 32-CPU, 2
 | tree | 4 leaves of at most 64 base shards and a root: 116 shards |
 | leaves, four at once | 21, 24, 23 and 27 shards; 2,157 s; 92 GiB peak |
 | root, four shards in flight | 21 shards, 460 s, 1.03 MB |
-| decider | 7,532,726 constraints; key 25 s, proof 26 s |
-| contract | 358 points; 3,620,002 gas; 34,980 bytes of calldata |
+| decider's circuit | 7,896,686 constraints, a domain of `2^23` |
+| ceremony | `init` 65 s; a contribution 50–56 s; `key` 70 s, 12.7 GB; the key 2.65 GB |
+| decider | the key read in 1 s, the proof 18.5 s, 6.1 GB |
+| contract | 358 points; 3,620,026 gas; 34,980 bytes of calldata |

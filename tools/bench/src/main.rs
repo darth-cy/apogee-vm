@@ -92,11 +92,12 @@ fn main() {
     // block and what the hardware costs, which the routine table's `fn()` has
     // nowhere to put. It is matched before the table rather than added to it,
     // so the eight existing routines keep their signature.
-    // Three more: a recursion tree, one node of it, and its root's decision
-    // (`recurse.rs`).
+    // Four more: a recursion tree, one node of it, its decider's key and its
+    // root's decision (`recurse.rs`).
     let recursion = match args.first().map(String::as_str) {
         Some("recurse") => Some(recurse::run(&args[1..])),
         Some("recurse-node") => Some(recurse::node(&args[1..])),
+        Some("ceremony") => Some(recurse::ceremony(&args[1..])),
         Some("decide") => Some(recurse::decide(&args[1..])),
         _ => None,
     };

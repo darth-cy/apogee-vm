@@ -1,25 +1,33 @@
 //! Groth16 over BN254, as the recursion tree's last proof takes it.
 //!
 //! A circuit is a function that writes rank-1 constraints into a [`Sink`], so
-//! no matrix is ever held: [`setup`] runs it for the key and [`prove`] for a
-//! witness. Three things are not the textbook's.
+//! no matrix is ever held. Three things are not the textbook's.
 //!
 //! - **Bound wires.** A circuit returns the wires its verifier must know the
 //!   values of — here thousands, a public input apiece being an elliptic-curve
 //!   multiplication a verifier cannot afford. They are committed instead: the
 //!   proof carries `D = Σ w_j·[(β·A_j + α·B_j + C_j)/η]`, a fifth trapdoor `η`
-//!   keeping it apart from the public inputs' `γ` and the witness's `δ` (the
-//!   commit-carrying Groth16 of LegoSNARK), and one more pairing checks it.
-//!   A challenge `c` is hashed from `D` and the verifier's own data, and the
-//!   circuit ends by evaluating the bound wires' polynomial at `c`: the two
-//!   public inputs are `c` and that value, which the verifier computes from
-//!   its data in field operations. `D` is fixed before `c` is, so wires that
-//!   differ from the data agree with it at `c` with probability `len/r`.
+//!   keeping it apart from the public inputs' `γ` and the witness's `δ`, and
+//!   one more pairing checks it. A challenge `c` is hashed from `D` and the
+//!   verifier's own data, and the circuit ends by evaluating the bound wires'
+//!   polynomial at `c`: the two public inputs are `c` and that value, which
+//!   the verifier computes from its data in field operations. `D` is fixed
+//!   before `c` is, so wires that differ from the data agree with it at `c`
+//!   with probability `len/r`.
 //! - **No blinding.** A proof hides nothing, so `r = s = 0` and it is a
 //!   function of the witness.
-//! - **The setup is not a ceremony.** [`setup`] derives its trapdoors from a
-//!   seed, so whoever knows the seed can forge: a development key, to be
-//!   replaced by a ceremony's before a proof it checks is worth anything.
+//! - **The key is over a Lagrange basis.** `A` and `B` are sums over the
+//!   constraints, `Σ_j (A·w)_j·[L_j(τ)]`, not over the wires, so the only
+//!   elements a key holds per wire are the combined
+//!   `[(β·A_i + α·B_i + C_i)/x]_1` — and a powers-of-tau ceremony already
+//!   publishes `[L_j(τ)]` in both groups.
+//!
+//! **A key comes from a ceremony** ([`phase2`]): `τ` from a powers-of-tau
+//! transcript, and `α`, `β`, `γ`, `δ`, `η` from contributions to this circuit's
+//! own. [`setup_dev`] derives all six from a seed instead, so whoever knows
+//! the seed can forge: it is for development and tests, and nothing else.
+
+pub mod phase2;
 
 use constants::{FR_TWO_ADICITY, FR_TWO_ADIC_ROOT_OF_UNITY};
 use curve::pairing::pairing_check;
@@ -67,15 +75,14 @@ pub struct VerifyingKey {
     pub ic: [G1Affine; 3],
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProvingKey {
     pub vk: VerifyingKey,
-    /// The circuit's constraints, and the domain's size: the power of two
-    /// they fit.
+    /// The circuit's constraints.
     constraints: usize,
-    n: usize,
-    /// `[A_i(τ)]_1` a wire, and `[B_i(τ)]_2` for the wires that have one.
-    a: Vec<G1Affine>,
-    b: Vec<(Var, G2Affine)>,
+    /// `[L_j(τ)]_1` and `[L_j(τ)]_2` a point of the domain, whose size is
+    /// their length: the power of two the constraints fit.
+    lagrange: (Vec<G1Affine>, Vec<G2Affine>),
     /// `[(β·A_i + α·B_i + C_i)/x]_1` a wire: `x` is `γ` for a public wire,
     /// `η` for a bound one and `δ` for the rest.
     l: Vec<G1Affine>,
@@ -88,7 +95,7 @@ pub struct ProvingKey {
 impl ProvingKey {
     /// The circuit's constraints and its wires.
     pub fn size(&self) -> (usize, usize) {
-        (self.constraints, self.a.len())
+        (self.constraints, self.l.len())
     }
 }
 
@@ -199,6 +206,36 @@ fn bind(sink: &mut dyn Sink, bound: &[Var]) {
     }
 }
 
+/// A circuit's shape: its constraints, [`bind`]'s among them, its wires, and
+/// its bound wires in the circuit's order.
+fn shape(circuit: Circuit) -> (usize, usize, Vec<Var>) {
+    let mut count = Count {
+        wires: PUBLIC as u32,
+        constraints: 0,
+    };
+    let bound = circuit(&mut count);
+    assert!(!bound.is_empty(), "groth16: a circuit binds a wire");
+    bind(&mut count, &bound);
+    (count.constraints, count.wires as usize, bound)
+}
+
+/// The domain a circuit's constraints fit: the power of two a ceremony's
+/// first phase is read at.
+pub fn domain(circuit: Circuit) -> usize {
+    shape(circuit).0.next_power_of_two().max(2)
+}
+
+/// The bound wires, each once, ascending: none of them public.
+fn bound_set(mut bound: Vec<Var>) -> Vec<Var> {
+    bound.sort_unstable();
+    bound.dedup();
+    assert!(
+        bound[0] >= PUBLIC as Var,
+        "groth16: a public wire is not bound"
+    );
+    bound
+}
+
 /// [`bind`]'s value over `data` at `c`, as a verifier computes it.
 fn horner(data: &[Fr], c: Fr) -> Fr {
     data.iter().fold(Fr::ZERO, |acc, d| (acc + *d) * c)
@@ -222,7 +259,12 @@ fn challenge(d: &G1Affine, data: &[Fr]) -> Fr {
     for v in data {
         bytes.extend(word(&v.to_bytes()));
     }
-    let hash = test_support::sha256(&bytes);
+    hashed(&bytes)
+}
+
+/// SHA-256 of `bytes` as a big-endian integer, reduced.
+fn hashed(bytes: &[u8]) -> Fr {
+    let hash = test_support::sha256(bytes);
     hash.chunks_exact(8).fold(Fr::ZERO, |acc, limb| {
         let limb = u64::from_be_bytes(limb.try_into().expect("8 bytes"));
         acc * Fr::from_u64(1 << 32) * Fr::from_u64(1 << 32) + Fr::from_u64(limb)
@@ -339,12 +381,12 @@ impl<G: Group> Table<G> {
 /// `Σ scalars_i·bases_i` by buckets, a window a task: G2's, `curve::msm` being
 /// G1's.
 fn msm<G: Group>(bases: &[G::Affine], scalars: &[Fr]) -> G {
-    const WIDTH: usize = 13;
+    const WIDTH: usize = 16;
     let scalars: Vec<[u8; 32]> = scalars.par_iter().map(|s| s.to_bytes()).collect();
     let windows: Vec<G> = (0..254usize.div_ceil(WIDTH))
         .into_par_iter()
         .map(|w| {
-            // On the heap: G2's are a megabyte and a half, a task's stack less.
+            // On the heap: G2's are megabytes, a task's stack less.
             #[allow(clippy::useless_vec)]
             let mut buckets = vec![G::IDENTITY; (1 << WIDTH) - 1];
             for (base, scalar) in bases.iter().zip(&scalars) {
@@ -497,27 +539,23 @@ fn quotient(abc: [Vec<Fr>; 3], n: usize) -> Vec<Fr> {
 // Setup, prove, verify
 // ---------------------------------------------------------------------------
 
-/// The trapdoors `τ, α, β, γ, δ, η` a seed gives: **known to whoever knows
-/// the seed**.
-fn trapdoors(seed: &[u8]) -> [Fr; 6] {
-    core::array::from_fn(|i| {
+/// **Development and tests only.** The key of `circuit` with all six
+/// trapdoors — `τ, α, β, γ, δ, η` — derived from `seed`, so whoever knows the
+/// seed forges proofs under it. A key a proof is worth anything under comes
+/// from [`phase2`].
+pub fn setup_dev(circuit: Circuit, seed: &[u8]) -> ProvingKey {
+    let trapdoors = core::array::from_fn(|i| {
         let mut bytes = test_support::sha256(&[seed, &[i as u8]].concat());
         bytes[31] &= 0x1f;
         Fr::from_bytes(&bytes).expect("below 2^253")
-    })
+    });
+    derive(circuit, trapdoors)
 }
 
-/// The key of `circuit`, its trapdoors derived from `seed`.
-pub fn setup(circuit: Circuit, seed: &[u8]) -> ProvingKey {
-    let mut count = Count {
-        wires: PUBLIC as u32,
-        constraints: 0,
-    };
-    let bound = circuit(&mut count);
-    assert!(!bound.is_empty(), "groth16: a circuit binds a wire");
-    bind(&mut count, &bound);
-    let n = count.constraints.next_power_of_two().max(2);
-    let [tau, alpha, beta, gamma, delta, eta] = trapdoors(seed);
+/// The key of `circuit` under known trapdoors `τ, α, β, γ, δ, η`.
+fn derive(circuit: Circuit, [tau, alpha, beta, gamma, delta, eta]: [Fr; 6]) -> ProvingKey {
+    let (constraints, _, bound) = shape(circuit);
+    let n = constraints.next_power_of_two().max(2);
 
     // The Lagrange polynomials at τ: `ω^j·(τ^n − 1)/(n·(τ − ω^j))`.
     let omega = root(n);
@@ -548,20 +586,10 @@ pub fn setup(circuit: Circuit, seed: &[u8]) -> ProvingKey {
         "groth16: a circuit is one circuit"
     );
     bind(&mut sink, &bound);
-    assert_eq!(
-        sink.at, count.constraints,
-        "groth16: a circuit is one circuit"
-    );
+    assert_eq!(sink.at, constraints, "groth16: a circuit is one circuit");
     let [a, b, c] = sink.abc;
-    drop(lagrange);
 
-    let mut bound = bound;
-    bound.sort_unstable();
-    bound.dedup();
-    assert!(
-        bound[0] >= PUBLIC as Var,
-        "groth16: a public wire is not bound"
-    );
+    let bound = bound_set(bound);
     let mut divisor = vec![inverse(delta); a.len()];
     divisor[..PUBLIC].fill(inverse(gamma));
     for wire in &bound {
@@ -581,10 +609,6 @@ pub fn setup(circuit: Circuit, seed: &[u8]) -> ProvingKey {
     let g1 = Table::<G1Projective>::new();
     let g2 = Table::<G2Projective>::new();
     let l = g1.mul_all(&l);
-    let in_b: Vec<Var> = (0..b.len() as Var)
-        .filter(|i| b[*i as usize] != Fr::ZERO)
-        .collect();
-    let b: Vec<Fr> = in_b.iter().map(|i| b[*i as usize]).collect();
     let [beta, gamma, delta, eta] = [beta, gamma, delta, eta].map(|x| g2.mul(&x).to_affine());
     ProvingKey {
         vk: VerifyingKey {
@@ -595,10 +619,8 @@ pub fn setup(circuit: Circuit, seed: &[u8]) -> ProvingKey {
             eta,
             ic: [l[0], l[1], l[2]],
         },
-        constraints: count.constraints,
-        n,
-        a: g1.mul_all(&a),
-        b: in_b.into_iter().zip(g2.mul_all(&b)).collect(),
+        constraints,
+        lagrange: (g1.mul_all(&lagrange), g2.mul_all(&lagrange)),
         l,
         h: g1.mul_all(&h),
         bound,
@@ -611,13 +633,12 @@ pub fn setup(circuit: Circuit, seed: &[u8]) -> ProvingKey {
 pub fn prove(pk: &ProvingKey, circuit: Circuit) -> Result<(Proof, Vec<Fr>), String> {
     let mut s = Witness {
         w: vec![Fr::ONE, Fr::ZERO, Fr::ZERO],
-        abc: core::array::from_fn(|_| Vec::with_capacity(pk.n)),
+        abc: core::array::from_fn(|_| Vec::with_capacity(pk.lagrange.0.len())),
         broken: None,
     };
+    let n = pk.lagrange.0.len();
     let order = circuit(&mut s);
-    let mut bound = order.clone();
-    bound.sort_unstable();
-    bound.dedup();
+    let bound = bound_set(order.clone());
     if bound != pk.bound {
         return Err("the circuit is not the key's: its bound wires differ".into());
     }
@@ -632,17 +653,16 @@ pub fn prove(pk: &ProvingKey, circuit: Circuit) -> Result<(Proof, Vec<Fr>), Stri
     if let Some(j) = s.broken {
         return Err(format!("constraint {j} is not satisfied"));
     }
-    if s.w.len() != pk.a.len() || s.abc[0].len() > pk.n {
+    if (s.abc[0].len(), s.w.len()) != pk.size() {
         return Err("the circuit is not the key's: its size differs".into());
     }
 
-    let h = quotient(s.abc, pk.n);
-    let a = G1Projective::from(pk.vk.alpha).add(&msm_g1(&pk.a, &s.w));
-    let (bases, scalars): (Vec<G2Affine>, Vec<Fr>) =
-        pk.b.iter()
-            .map(|(v, base)| (*base, s.w[*v as usize]))
-            .unzip();
-    let b = G2Projective::from(pk.vk.beta).add(&msm::<G2Projective>(&bases, &scalars));
+    // `A` and `B` over the constraints: each side's values on the basis.
+    let rows = pk.constraints;
+    let a = G1Projective::from(pk.vk.alpha).add(&msm_g1(&pk.lagrange.0[..rows], &s.abc[0]));
+    let b =
+        G2Projective::from(pk.vk.beta).add(&msm::<G2Projective>(&pk.lagrange.1[..rows], &s.abc[1]));
+    let h = quotient(s.abc, n);
     // The witness's part: the public wires are the verifier's and the bound
     // ones are `D`.
     let mut private = s.w;
@@ -650,7 +670,7 @@ pub fn prove(pk: &ProvingKey, circuit: Circuit) -> Result<(Proof, Vec<Fr>), Stri
     for v in &bound {
         private[*v as usize] = Fr::ZERO;
     }
-    let c = msm_g1(&pk.l, &private).add(&msm_g1(&pk.h, &h[..pk.n - 1]));
+    let c = msm_g1(&pk.l, &private).add(&msm_g1(&pk.h, &h[..n - 1]));
     let proof = Proof {
         a: a.to_affine(),
         b: b.to_affine(),
@@ -689,33 +709,34 @@ pub fn verify(vk: &VerifyingKey, proof: &Proof, data: &[Fr]) -> bool {
 mod tests {
     use super::*;
 
-    /// `x³ + x + 5 = y` with `x` and `y` bound, `y` twice: proved, verified
-    /// against the bound values, and refused against any other, with a wrong
-    /// witness refused before a proof is made.
+    /// `x³ + x + 5 = y`, with `x` and `y` bound and `y` bound twice.
+    pub(crate) fn cubic(x: u64) -> impl FnMut(&mut dyn Sink) -> Vec<Var> {
+        move |s: &mut dyn Sink| {
+            let f = Fr::from_u64;
+            let [x, x2, x3, y] = [x, x * x, x * x * x, x * x * x + x + 5].map(|v| s.alloc(f(v)));
+            let one = Fr::ONE;
+            s.enforce(&[(x, one)], &[(x, one)], &[(x2, one)]);
+            s.enforce(&[(x2, one)], &[(x, one)], &[(x3, one)]);
+            s.enforce(
+                &[(x3, one), (x, one), (ONE, f(5))],
+                &[(ONE, one)],
+                &[(y, one)],
+            );
+            vec![y, x, y]
+        }
+    }
+
+    /// A small circuit under a development key: proved, verified against its
+    /// bound values, and refused against any other, with a wrong witness
+    /// refused before a proof is made.
     #[test]
     fn a_small_circuit_proves_and_binds() {
-        let circuit = |x: u64| {
-            move |s: &mut dyn Sink| {
-                let f = Fr::from_u64;
-                let [x, x2, x3, y] =
-                    [x, x * x, x * x * x, x * x * x + x + 5].map(|v| s.alloc(f(v)));
-                let one = Fr::ONE;
-                s.enforce(&[(x, one)], &[(x, one)], &[(x2, one)]);
-                s.enforce(&[(x2, one)], &[(x, one)], &[(x3, one)]);
-                s.enforce(
-                    &[(x3, one), (x, one), (ONE, f(5))],
-                    &[(ONE, one)],
-                    &[(y, one)],
-                );
-                vec![y, x, y]
-            }
-        };
-        let pk = setup(&mut circuit(3), b"test");
-        let (proof, data) = prove(&pk, &mut circuit(3)).expect("it proves");
+        let pk = setup_dev(&mut cubic(3), b"test");
+        let (proof, data) = prove(&pk, &mut cubic(3)).expect("it proves");
         assert_eq!(data, [35, 3, 35].map(Fr::from_u64));
         assert!(verify(&pk.vk, &proof, &data));
         assert!(!verify(&pk.vk, &proof, &[35, 4, 35].map(Fr::from_u64)));
-        let (other, data) = prove(&pk, &mut circuit(4)).expect("it proves");
+        let (other, data) = prove(&pk, &mut cubic(4)).expect("it proves");
         assert!(verify(&pk.vk, &other, &data) && !verify(&pk.vk, &proof, &data));
         let mut broken = |s: &mut dyn Sink| {
             let x = s.alloc(Fr::from_u64(3));

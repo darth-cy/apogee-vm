@@ -49,8 +49,10 @@ pub fn usage() -> &'static str {
      \x20   prove a base block proof's recursion tree, node by node\n\
      bench recurse-node <out> <id> [--shards-in-flight <m>]\n\
      \x20   prove one node of a planned tree; `recurse` runs it\n\
-     bench decide <out>\n\
-     \x20   the tree's root in a Groth16 proof, checked by the contract; `recurse` ends with it"
+     bench ceremony <out> init|contribute|seal|verify|key\n\
+     \x20   the decider's key: tau from the ceremony file, the rest from contributions\n\
+     bench decide <out> [--dev-key]\n\
+     \x20   the tree's root in a Groth16 proof under that key, checked by the contract"
 }
 
 /// The ceremony at `2^24`, the recursion format's stacking height, cached
@@ -320,11 +322,16 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
     println!("the tree proved in {:.1} s", begun.elapsed().as_secs_f64());
     check_root(&o.out, &tree, costs.len(), &base_vk, &block)?;
-    // A tree over a prefix of the statement has no root to decide.
-    if o.limit.is_some() {
-        return Ok(());
+    // A tree over a prefix of the statement has no root to decide, and a
+    // root is decided under a ceremony's key or under none.
+    let out = o.out.to_string_lossy().into_owned();
+    if o.limit.is_none() && o.out.join("decider.key").exists() {
+        return decide(&[out]);
     }
-    decide(&[o.out.to_string_lossy().into_owned()])
+    println!(
+        "`bench ceremony {out} init` begins its decider's key, or `bench decide {out} --dev-key`"
+    );
+    Ok(())
 }
 
 fn describe(node: &TreeNode) -> String {
@@ -437,75 +444,181 @@ fn vk_of(out: &Path, name: &str) -> Result<VerifyingKey, String> {
         .map_err(|e| format!("{name}.vk: {e:?}"))
 }
 
-/// The seed of the decider's key: **public, so the key is a development
-/// key** (`groth16::setup`).
+/// The seed of `--dev-key`'s key: **public, so anyone forges under it**
+/// (`groth16::setup_dev`).
 const SEED: &[u8] = b"apogee development key";
 
-/// `bench decide <out>`: the root of the tree in `<out>` in a Groth16 proof
-/// (`host::decider`), checked natively and by the contract in an EVM. Writes
-/// the contract's constructor arguments and `verify`'s calldata beside the
-/// tree, as hex.
-pub fn decide(args: &[String]) -> Result<(), String> {
-    use host::decider;
-    let [out] = args else {
-        return Err("decide needs <out>".into());
-    };
-    let out = PathBuf::from(out);
-    let (archive, tree) = plan(&out)?;
+/// The root of the tree in `<out>` as the decider takes it, and the
+/// ceremony's `[1]_2` and `[x]_2`.
+fn with_root<T>(
+    out: &Path,
+    then: impl FnOnce(&host::decider::Root, (curve::G2Affine, curve::G2Affine)) -> Result<T, String>,
+) -> Result<T, String> {
+    let (archive, tree) = plan(out)?;
     let (dir, stem) = split_stem(&archive)?;
     let (base_vk, _, _, base) = host::proof_archive::read_proof(dir, &stem)?;
-    let io = [&base.statement().input[..], &base.statement().output[..]];
-    let (leaf_vk, node_vk) = (vk_of(&out, "leaf")?, vk_of(&out, "node")?);
+    let (leaf_vk, node_vk) = (vk_of(out, "leaf")?, vk_of(out, "node")?);
     let leaf = matches!(tree.nodes[tree.root], TreeNode::Leaf { .. });
     let block = BlockProof::from_bytes(&read(&out.join(format!("{}.block", tree.root)))?)
         .map_err(|e| format!("the root's proof: {e:?}"))?;
     let keys =
         recursion::program_keys(&read(&out.join("leaf.elf"))?, &read(&out.join("node.elf"))?)?;
     let image = node_image(Kind::Internal, &BaseKey::of(&base_vk), &keys);
-    let root = decider::Root {
+    let vsrs = verifier::decode_srs_verifier(&base_vk.srs_verifier)
+        .ok_or("the base key's SrsVerifier holds a point that is not one")?;
+    let root = host::decider::Root {
         image: &image,
         program: !leaf as u32,
         vk: if leaf { &leaf_vk } else { &node_vk },
         block: &block,
         identities: [leaf_vk.identity.0, node_vk.identity.0],
-        io,
+        io: [&base.statement().input[..], &base.statement().output[..]],
     };
+    then(&root, (vsrs.g2_gen, vsrs.g2_tau))
+}
 
-    let t = Instant::now();
-    let pk = decider::setup(&root, SEED)?;
-    let (constraints, wires) = pk.size();
-    println!(
-        "the decider's key, a DEVELOPMENT key: {constraints} constraints over {wires} wires, \
-         set up in {:.1} s",
-        t.elapsed().as_secs_f64()
-    );
-    let t = Instant::now();
-    let decision = decider::prove(&pk, &root)?;
-    let [a, b] = decision.sides;
-    println!(
-        "the root decided in {:.1} s, {a} points to fold on `[1]_2` and {b} on `[x]_2`",
-        t.elapsed().as_secs_f64()
-    );
+/// `count` bytes nobody can guess: a contributor's secret, a verifier's coin.
+fn random(count: usize) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut bytes = vec![0u8; count];
+    let mut source = std::fs::File::open("/dev/urandom").map_err(|e| e.to_string())?;
+    source.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+    Ok(bytes)
+}
 
-    let vsrs = verifier::decode_srs_verifier(&base_vk.srs_verifier)
-        .ok_or("the base key's SrsVerifier holds a point that is not one")?;
-    let srs = (vsrs.g2_gen, vsrs.g2_tau);
-    decider::verify(&pk.vk, srs, &decision)?;
-    let constructor = decider::constructor(&pk.vk, srs, root.identities, &decision);
-    let calldata = decider::calldata(&decision, io);
-    let gas = decider::onchain(&constructor, &calldata)?;
-    for (name, bytes) in [("constructor", &constructor), ("calldata", &calldata)] {
-        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-        std::fs::write(out.join(format!("decision.{name}")), hex).map_err(|e| e.to_string())?;
-    }
+/// `bench ceremony <out> <step>`: the decider's key, made as
+/// `groth16::phase2` makes one — `tau` from the powers-of-tau ceremony the
+/// tree's own commitments are under, the circuit's five other trapdoors from
+/// contributions to `<out>/decider.phase2`:
+///
+/// ```text
+/// init          the circuit's first state, every trapdoor 1
+/// contribute    a contribution to the round's trapdoors, from /dev/urandom
+///               and any words that follow; run by each contributor in turn
+/// seal          alpha and beta are finished; gamma, delta and eta begin
+/// verify        the state against the circuit and the ceremony file
+/// key           the same, and if the ceremony is complete, <out>/decider.key
+/// ```
+pub fn ceremony(args: &[String]) -> Result<(), String> {
+    use groth16::phase2::State;
+    let [out, step, words @ ..] = args else {
+        return Err("ceremony needs <out> and init, contribute, seal, verify or key".into());
+    };
+    let out = PathBuf::from(out);
+    let file = out.join("decider.phase2");
+    let t = Instant::now();
+    // The circuit's first state, over the ceremony file at the circuit's
+    // domain, with that domain's basis in both groups: what `init` writes,
+    // and what any later state is verified against.
+    let first = || {
+        with_root(&out, |root, _| {
+            let ptau = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../assets/ptau/ppot_0080_24.ptau");
+            let power = host::decider::domain(root)?.trailing_zeros();
+            let phase1 = srs::Phase1::from_ptau(&ptau, power)
+                .map_err(|e| format!("{}: {e:?}", ptau.display()))?;
+            let state = host::decider::ceremony(root, &phase1.lagrange_g1, &phase1.tau_g1)?;
+            Ok((state, (phase1.lagrange_g1, phase1.lagrange_g2)))
+        })
+    };
+    let coin = || -> Result<Fr, String> {
+        let mut bytes: [u8; 32] = random(32)?.try_into().expect("32 bytes");
+        bytes[31] &= 0x1f;
+        Ok(Fr::from_bytes(&bytes).expect("below 2^253"))
+    };
+    let state = match step.as_str() {
+        "init" => first()?.0,
+        "contribute" => {
+            let mut state = State::read(&file)?;
+            state.contribute(&[random(64)?, words.concat().into_bytes()].concat());
+            state
+        }
+        "seal" => {
+            let mut state = State::read(&file)?;
+            state.seal()?;
+            state
+        }
+        "verify" | "key" => {
+            let state = State::read(&file)?;
+            let (init, lagrange) = first()?;
+            println!("{}", state.progress());
+            if step == "verify" {
+                state.verify(&init, coin()?)?;
+                println!("it verifies, in {:.1} s", t.elapsed().as_secs_f64());
+            } else {
+                let key = out.join("decider.key");
+                state.finish(&init, coin()?, lagrange, &key)?;
+                println!(
+                    "it verifies and is complete: {} written in {:.1} s",
+                    key.display(),
+                    t.elapsed().as_secs_f64()
+                );
+            }
+            return Ok(());
+        }
+        other => return Err(format!("`{other}` is no step of a ceremony")),
+    };
+    state.write(&file)?;
     println!(
-        "the contract verifies it, {} bytes of input and {} of output: {gas} gas, {} bytes of \
-         calldata",
-        io[0].len(),
-        io[1].len(),
-        calldata.len()
+        "{step}: {}, in {:.1} s",
+        state.progress(),
+        t.elapsed().as_secs_f64()
     );
     Ok(())
+}
+
+/// `bench decide <out> [--dev-key]`: the root of the tree in `<out>` in a
+/// Groth16 proof (`host::decider`) under the ceremony's key,
+/// `<out>/decider.key` — or, with `--dev-key`, under a development key —
+/// checked natively and by the contract in an EVM. Writes the contract's
+/// constructor arguments and `verify`'s calldata beside the tree, as hex.
+pub fn decide(args: &[String]) -> Result<(), String> {
+    use host::decider;
+    let (out, dev) = match args {
+        [out] => (PathBuf::from(out), false),
+        [out, flag] if flag == "--dev-key" => (PathBuf::from(out), true),
+        _ => return Err("decide needs <out>, and takes only --dev-key".into()),
+    };
+    with_root(&out, |root, srs| {
+        let t = Instant::now();
+        let (pk, whose) = if dev {
+            (decider::setup_dev(root, SEED)?, "a DEVELOPMENT key, set up")
+        } else {
+            let key = groth16::ProvingKey::read(&out.join("decider.key")).map_err(|e| {
+                format!("{e}\n`bench ceremony` makes the key; --dev-key does without one")
+            })?;
+            (key, "the ceremony's key, read")
+        };
+        let (constraints, wires) = pk.size();
+        println!(
+            "the decider, {constraints} constraints over {wires} wires: {whose} in {:.1} s",
+            t.elapsed().as_secs_f64()
+        );
+        let t = Instant::now();
+        let decision = decider::prove(&pk, root)?;
+        let [a, b] = decision.sides;
+        println!(
+            "the root decided in {:.1} s, {a} points to fold on `[1]_2` and {b} on `[x]_2`",
+            t.elapsed().as_secs_f64()
+        );
+
+        decider::verify(&pk.vk, srs, &decision)?;
+        let constructor = decider::constructor(&pk.vk, srs, root.identities, &decision);
+        let calldata = decider::calldata(&decision, root.io);
+        let gas = decider::onchain(&constructor, &calldata)?;
+        for (name, bytes) in [("constructor", &constructor), ("calldata", &calldata)] {
+            let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            std::fs::write(out.join(format!("decision.{name}")), hex).map_err(|e| e.to_string())?;
+        }
+        println!(
+            "the contract verifies it, {} bytes of input and {} of output: {gas} gas, {} bytes \
+             of calldata",
+            root.io[0].len(),
+            root.io[1].len(),
+            calldata.len()
+        );
+        Ok(())
+    })
 }
 
 /// `bench recurse-node <out> <id>`: one node of `<out>/tree.txt`, proved.

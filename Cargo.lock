@@ -622,6 +622,7 @@ dependencies = [
  "emulator",
  "field",
  "gkr",
+ "groth16",
  "host",
  "loader",
  "pcs",
