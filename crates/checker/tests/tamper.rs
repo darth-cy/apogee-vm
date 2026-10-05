@@ -330,6 +330,33 @@ fn a13_the_teardown_binds_the_final_values() {
     h.assert_rejects(&result, (INIT, 0), MEMORY);
 }
 
+/// A row's pc write is a cycle or more after the one it reads
+/// (`docs/spec/memory.md` §2.4, §9). Row 3, at cycle 4, reads the pc row 2
+/// wrote at 12, its gap 0; that read moved one later, to 13, is refused by the
+/// timestamp channel, `gap_lo_pc` being −1 there. One earlier, to 11, the gap
+/// is in range and the multiset alone refuses it (the `a3` tamper above).
+///
+/// The cycle is not the cell moved: the harness derives a shard's time window
+/// from its cycle column, as an honest prover does, so a fractional cycle puts
+/// the window off the clock, a `Statement` refusal before any lookup is read.
+/// `crates/checker/tests/multiset.rs`' `consecutive_rows_are_a_cycle_apart`
+/// holds a fractional cycle to `gap_lo_pc` in the circuit.
+#[test]
+#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
+fn a_pc_read_less_than_a_cycle_before_its_write_is_refused() {
+    let setup = common::setup();
+    let archive = common::archive(&setup.program);
+    let h = TamperHarness::new(&setup, &archive);
+    let read_ts = frame(PC, FIELD_READ_TS);
+    assert_eq!(h.cell(ADD, 0, CYCLE, 3), f(4));
+    assert_eq!(h.cell(ADD, 0, read_ts, 3), f(12));
+    h.assert_rejects(
+        &tamper(vec![cell(ADD, read_ts, 3, f(13))]),
+        (ADD, 0),
+        lookup(lookup_channel::TIMESTAMP),
+    );
+}
+
 /// The frame's and the halting rule's tamper targets, `docs/spec/memory.md`
 /// §2.1 and §5, and the image column's opening, §6.2: each refused.
 ///

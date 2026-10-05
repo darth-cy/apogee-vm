@@ -402,12 +402,12 @@ fn the_delegation_family_has_no_query_table_frame() {
 /// so the low chunk `gap − 2^19·hi` is below `2^19` on every row. Fails if the
 /// builder chunked `gap + 1`, or `gap` by any other width.
 ///
-/// The **pc** gap is 3 on every row of every execution and its high chunk is
-/// therefore always 0: the pc's last write before cycle `c` is cycle `c − 1`'s
-/// pc query, whatever family owned that cycle, so the gap is
-/// `4c − 4(c − 1) − 1`. That is also why a buffer does not store the pc query's
-/// read timestamp (`docs/spec/execution-trace.md` §11), and the rows below are four
-/// cycles of one family with other families' cycles in between.
+/// The **pc** gap is 0 on every row of every execution, and so is its high
+/// chunk: the pc's last write before cycle `c` is cycle `c − 1`'s pc query,
+/// whatever family owned that cycle, so the gap is `4c − 4(c − 1) − 4`, the
+/// pc's least advance being 4. That is also why a buffer does not store the pc
+/// query's read timestamp (`docs/spec/execution-trace.md` §11), and the rows
+/// below are four cycles of one family with other families' cycles in between.
 #[test]
 fn the_gap_columns_hold_the_high_chunk_at_the_chunks_edge() {
     let c2 = (1 << 17) + 1;

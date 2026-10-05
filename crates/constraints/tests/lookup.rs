@@ -21,7 +21,7 @@ use field::Fr;
 
 /// `tools/kat-gen/src/lookup.rs`'s output.
 const TOY: &str = "lookup_toy.bin";
-const TOY_SHA256: &str = "abab86f0c6cda7d087de044f632f7764bc0cf8db4bdb95ebe229a4f61a85da8b";
+const TOY_SHA256: &str = "4f47409bf6c36f37719393abef9ed0bf8ad250a9dd89ccbeacd270f355bc95b8";
 
 /// The toy's family, height and mask width, as that file fixes them.
 const FAMILY: u32 = family::JUMP_BRANCH_SLT;

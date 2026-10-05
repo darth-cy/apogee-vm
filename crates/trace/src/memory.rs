@@ -10,7 +10,8 @@ use constants::lookup_channel;
 use constants::memory::{HALT_PC, RAM_LIVE_BIT, TS_STEP};
 use constraints::memory::{
     deleg_space, frame, frame_query_takes, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, DELEG,
-    FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, RD,
+    FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA,
+    FRAME_MIN_ADVANCE, RD,
 };
 use constraints::PolyAddress;
 use field::Fr;
@@ -189,8 +190,9 @@ pub fn build_memory_columns(
 /// over the rows [`build_memory_columns`] fills for the same `rows`, `queries`
 /// and `height`:
 ///
-/// - `W[s] <q>_gap_hi`: `gap >> 19`, `gap = 4·cycle + Δ_q − read_ts − 1`, where
-///   the cycle has the query at slot `s`;
+/// - `W[s] <q>_gap_hi`: `gap >> 19`, `gap = 4·cycle + Δ_q − read_ts − a_q`,
+///   `a_q` the query's `FRAME_MIN_ADVANCE`, where the cycle has the query at
+///   slot `s`;
 /// - `W[w] rd_inv`: the inverse of `rd`'s address, where it is not 0;
 /// - `W[w + 1] rd_is_zero`: 1 exactly on a live `rd` query at address 0;
 /// - `W[w + 2] rd_selected`: `rd`'s write value, where its address is not 0;
@@ -210,7 +212,7 @@ pub fn build_frame_witness(
     for (at, &q) in queries.iter().enumerate() {
         let hi = rows.iter().map(|row| {
             row[at].map_or(0, |e| {
-                let gap = TS_STEP * e.cycle() + FRAME_DELTA[q] - e.read_ts - 1;
+                let gap = TS_STEP * e.cycle() + FRAME_DELTA[q] - e.read_ts - FRAME_MIN_ADVANCE[q];
                 gap >> chunk
             })
         });

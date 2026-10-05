@@ -275,12 +275,13 @@ its own verification.
 
 **The count.** Read each query as an edge from its read tuple to its write tuple. Inits are only
 written and finals only read, so a balanced multiset is paths from inits to finals plus loops. An
-edge advances the timestamp by an integer in `[1, 2^38]` (the gap), so a loop needs more than
-`p/2^38 > 2^215` edges, and a statement has fewer than `2^67` tuples: under `2^32` shards a
-family (a `u32` count), 23 families, at most `2^22` rows (the menu's top), at most 196 tuples a
-row (`EC_ADD`'s 97 frame words and its anchor, both sides), and 66 boundary tuples. So nothing
-loops: every path starts at an init at timestamp 0 and ends at a final, and every timestamp on it
-is an integer below `2^105`.
+edge advances the timestamp by an integer in `[1, 2^38 + 3]` (the gap plus the query's least
+advance, 4 at the pc and 1 elsewhere), so a loop needs more than `p/(2^38 + 3) > 2^215` edges,
+and a statement has fewer than `2^67` tuples: under `2^32` shards a family (a `u32` count), 23
+families, at most `2^22` rows (the menu's top), at most 196 tuples a row (`EC_ADD`'s 97 frame
+words and its anchor, both sides), and 66 boundary tuples. So nothing loops: every path starts at
+an init at timestamp 0 and ends at a final, and every timestamp on it is an integer below
+`2^105`.
 
 ## 5. Halting
 

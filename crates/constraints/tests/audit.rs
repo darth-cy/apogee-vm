@@ -95,7 +95,7 @@ fn every_gate(a: &CircuitArtifact) -> Vec<&GateDef> {
 fn lookup_toy() -> CircuitArtifact {
     let bytes = fixture_bytes(
         "lookup_toy.bin",
-        "abab86f0c6cda7d087de044f632f7764bc0cf8db4bdb95ebe229a4f61a85da8b",
+        "4f47409bf6c36f37719393abef9ed0bf8ad250a9dd89ccbeacd270f355bc95b8",
     );
     CircuitArtifact::from_bytes(&bytes).expect("the lookup toy decodes")
 }

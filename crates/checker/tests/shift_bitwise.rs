@@ -40,7 +40,7 @@ const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../constraints/tests/vectors/shift_bitwise.bin"
 );
-const FIXTURE_SHA256: &str = "b0af932594af665ca82f2ecd35fba64f8eeecc96fb50a9002466628265e3fd4c";
+const FIXTURE_SHA256: &str = "6f11927bb7102a504841482f4a6052f10c379c7470d1d33ec52f28b80ed73285";
 
 /// The cycle every hand-built row runs at, and the row it is evaluated at.
 const CYCLE: u64 = 7;

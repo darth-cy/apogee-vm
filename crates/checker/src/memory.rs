@@ -19,7 +19,8 @@ use constants::lookup_channel;
 use constants::memory::TS_STEP;
 use constraints::memory::{
     deleg_space, frame, frame_query_takes, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, DELEG,
-    FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, RD,
+    FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA,
+    FRAME_MIN_ADVANCE, RD,
 };
 use constraints::PolyAddress;
 use field::Fr;
@@ -167,7 +168,7 @@ pub fn frame_witness_from_log(
     for (at, &q) in queries.iter().enumerate() {
         let hi = rows.iter().map(|row| {
             row[at].map_or(0, |e| {
-                let gap = TS_STEP * e.cycle() + FRAME_DELTA[q] - e.read_ts - 1;
+                let gap = TS_STEP * e.cycle() + FRAME_DELTA[q] - e.read_ts - FRAME_MIN_ADVANCE[q];
                 gap >> chunk
             })
         });
