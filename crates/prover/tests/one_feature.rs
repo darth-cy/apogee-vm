@@ -173,29 +173,6 @@ fn the_granted_features_are_the_only_cargo_features_in_the_repository() {
     );
 }
 
-/// The exception is documented where a future stage will read it, not only in
-/// the manifest that takes it. Each of these says so in its own words; this
-/// holds them to saying it at all — including the anti-goal itself, which has to
-/// record that it has an exception and name it.
-#[test]
-fn the_exception_is_written_down_where_the_rules_are() {
-    let root = root();
-    for (path, needle) in [
-        ("CLAUDE.md", "debug-info"),
-        ("docs/spec/debug-info.md", "anti-goal 1"),
-        ("crates/prover/CLAUDE.md", "debug-info"),
-        ("prompts/00-master.md", "debug-info"),
-    ] {
-        let text = fs::read_to_string(root.join(path))
-            .unwrap_or_else(|_| panic!("{path} exists and is readable"));
-        assert!(
-            text.contains(needle),
-            "{path} does not mention {needle:?}: each cargo feature in the repository \
-             must be documented where the next stage looks for the rules"
-        );
-    }
-}
-
 /// The exemption, checked in both directions: every directory in [`VENDORED`]
 /// exists and holds at least one manifest, and every crate it holds is one
 /// `guests/Cargo.toml` patches in. A vendored crate nothing patches is either

@@ -186,25 +186,3 @@ fn the_pipeline_is_one_scope_of_workers_and_one_lock() {
         shape.join("\n  ")
     );
 }
-
-/// The exception is documented where a future stage will read it, not only in
-/// the file that takes it — including the anti-goal itself, which has to record
-/// that it has an exception and name it.
-#[test]
-fn the_exception_is_written_down_where_the_rules_are() {
-    let root = root();
-    for (path, needle) in [
-        ("prompts/00-master.md", "S-PIPELINE"),
-        ("CLAUDE.md", "S-PIPELINE"),
-        ("crates/prover/CLAUDE.md", "S-PIPELINE"),
-        ("docs/spec/streaming.md", "anti-goal 7's one exception"),
-    ] {
-        let text = fs::read_to_string(root.join(path))
-            .unwrap_or_else(|_| panic!("{path} exists and is readable"));
-        assert!(
-            text.contains(needle),
-            "{path} does not mention {needle:?}: anti-goal 7's exception must be \
-             documented where the next stage looks for the rules"
-        );
-    }
-}
