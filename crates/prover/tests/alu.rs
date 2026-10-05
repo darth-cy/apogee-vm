@@ -1,14 +1,12 @@
-//! S18's acceptance over the real statement: `guests/alu`, proved and verified
-//! shard by shard.
+//! The shift/bitwise and mul/div statement end to end: `guests/alu`, proved and
+//! verified shard by shard.
 //!
 //! **Every test here is `#[ignore]`d, and runs by name with
 //! `--include-ignored --test-threads=1`**, for `tests/acceptance.rs`' reason:
-//! all four execution families' shards are `2^20` rows. Master rule 7: the
-//! stage's PR runs it locally, and `.github/workflows/ci.yml` carries the
-//! command under `# DEFERRED:`. The circuits row by row, the reduced-width
-//! division check and everything else that needs no proof is
-//! `crates/checker/tests/shift_bitwise.rs` and `crates/checker/tests/
-//! mul_div.rs`, in ordinary CI.
+//! all four execution families' shards are `2^20` rows, and CI does not run
+//! them. The circuits row by row, the reduced-width division check and
+//! everything else that needs no proof is `crates/checker/tests/
+//! shift_bitwise.rs` and `crates/checker/tests/mul_div.rs`, in ordinary CI.
 
 mod common;
 
@@ -29,15 +27,15 @@ const ZERO: u32 = family::ZERO_WINDOWS;
 /// The whole statement, proved by the one proving path.
 fn proved() -> (ProverSetup, TraceArchive, PublicInputs, Vec<ShardProof>) {
     let setup = common::alu_setup();
-    // The archive is still built, and it is **not** proved from: the log's
-    // self-check below reads it, which is a reading of the execution and not
-    // a proving path (`docs/spec/streaming.md` §1).
+    // The archive is built and **not** proved from: the log's self-check below
+    // reads it, which is a reading of the execution and not a proving path
+    // (`docs/spec/streaming.md` §1).
     let archive = common::alu_archive(&setup.program);
     let (public, proofs) = common::streamed_shards(&setup, &common::empty_io());
     (setup, archive, public, proofs)
 }
 
-/// The byte length a proof of `artifact` has: `docs/spec/shard-proof.md` §9's
+/// The byte length a proof of `artifact` has: `docs/spec/proof.md` §9's
 /// layout, every count read off the circuit.
 fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
     let transitions: usize = (0..a.depth())
@@ -56,22 +54,22 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
         + 704
 }
 
-/// Acceptance 1: the guest decodes into the four execution families S18 can
-/// prove — add/sub, jump/branch/slt, shift/bitwise and mul/div — and the two
-/// RAM window families; its trace self-checks and exits with the number of
-/// checks it ran; `advance` proves one shard of each family that runs, five of
-/// them, `ZERO_WINDOWS` among them being the one that does not; `verify_shard`
-/// accepts every one against the one statement; and every proof has its
-/// circuit's shape.
+/// The guest decodes into four execution families — add/sub, jump/branch/slt,
+/// shift/bitwise and mul/div — and the window families; its trace self-checks
+/// and exits with the number of checks it ran; the streaming prover proves one
+/// shard of each execution family, of `INIT_TEARDOWN` and of each public
+/// window, seven in all, `ZERO_WINDOWS` and `ADVICE_WINDOWS` proving none;
+/// `verify_shard` accepts every one against the one statement; and every proof
+/// has its circuit's shape.
 ///
-/// The two new families' shapes are pinned twice — as the literals
-/// `docs/spec/shift-bitwise.md` §6 and `docs/spec/mul-div.md` §6 state, and as
-/// the numbers read off the registry's circuit — so that a change to either
-/// family shows up on both sides. What the trace holds, instruction by
+/// The shift/bitwise and mul/div families' shapes are pinned twice — as
+/// literals and as the numbers read off the registry's circuit
+/// (`docs/spec/circuits.md` §1 tabulates the shapes) — so that a change to
+/// either family shows up on both sides. What the trace holds, instruction by
 /// instruction, is `crates/checker/tests/shift_bitwise.rs` and `crates/checker/
 /// tests/mul_div.rs` over the same fixture, and the emulator's reading of it is
-/// `crates/emulator/tests/guests.rs`', which checks the exit status and
-/// fd 1 and nothing below that.
+/// `crates/emulator/tests/guests.rs`', which checks the exit status and the
+/// journal and nothing below that.
 #[test]
 #[ignore = "four 2^20-row execution shards: one statement's proof peaks at 14.1 GB"]
 fn a1_the_guest_proves_and_every_shard_verifies() {
@@ -142,8 +140,9 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
 
     // The shift/bitwise family: 26 transitions — its `range16` tree's 24
     // obligations and its table fraction pad to 32 leaves, one row-wise level
-    // more than any other family's — 20 rounds on the widest, and a base claim
-    // per committed column: 21 memory, 61 witness, 10 setup.
+    // more than the add/sub and jump/branch/slt circuits — 20 rounds on the
+    // widest, and a base claim per committed column: 21 memory, 61 witness,
+    // 10 setup.
     let shb = &proofs[3];
     assert_eq!(shb.gkr.layers.len(), 26);
     assert_eq!(shb.gkr.layers[0].rounds.len(), 20);
@@ -151,9 +150,9 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     assert_eq!(shb.outputs.len(), 2 + 2 * 4);
     assert_eq!(shb.to_bytes().len(), 68_564);
 
-    // The mul/div family: the same depth for the same reason — its widest tree
-    // is the 16-fraction timestamp one plus a level — its base claim
-    // 21 + 54 + 9.
+    // The mul/div family: the same depth for the same reason — its `range16`
+    // tree's 16 obligations and its table fraction pad to 32 leaves — its base
+    // claim 21 + 54 + 9.
     let md = &proofs[4];
     assert_eq!(md.gkr.layers.len(), 26);
     assert_eq!(md.gkr.layers[0].rounds.len(), 20);
@@ -161,7 +160,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     assert_eq!(md.outputs.len(), 2 + 2 * 4);
     assert_eq!(md.to_bytes().len(), 67_412);
 
-    // The generic table's binding. Both new families read the channel — the
+    // The generic table's binding. Both families read the channel — the
     // shift family for `U16GetSign`, the shift powers and the four AND bytes,
     // the mul/div family for its two operand signs — so each opens the key's
     // three table commitments after its own identity-committed setup columns.
@@ -192,10 +191,9 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     assert_eq!(&claim[81..], &table[..]);
 
     let claim = reduced(&proofs[1]);
-    // 41 + 33 since S21's eighth frame query (`deleg`), 42 + 35 since S23 gave
-    // that query its `deleg_space` column and one selector per delegation type,
-    // 42 + **36** since S26's fourth type (`docs/spec/delegation.md` §10), and
-    // 27 + **35** since S26c's fifth and sixth, `SHA256_COMP` and `EC_ADD`.
+    // The add/sub claim: 27 memory and 35 witness commitments, the witness
+    // count moving by one for every registered delegation type
+    // (`docs/spec/delegation.md` §3), then identity's seven setup ones.
     assert_eq!(claim.len(), 27 + 35 + 7);
     assert_eq!(&claim[62..], &setup.vk.setup_commitments[0][..]);
 }

@@ -1,5 +1,5 @@
 //! `srs::kzg`: the committed arkworks differential, the round trip at every
-//! acceptance degree, the degree bound, and the four tamper twins.
+//! tested degree, the degree bound, and the four tamper twins.
 //!
 //! The SRS is the first `2^17` powers of the real ceremony file, which is
 //! gitignored; every test here returns quietly when it is absent.
@@ -47,7 +47,7 @@ fn coefficients(seed: u64, degree: usize) -> (Vec<Fr>, Fr) {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 7 — the committed differential and the round trip
+// The committed differential and the round trip
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -100,7 +100,7 @@ fn committed_vectors_match() {
     assert_eq!(checked, 4, "every committed case ran");
 }
 
-/// Commit, open and verify agree at every acceptance degree, plus the two
+/// Commit, open and verify agree at degrees from 2 to `2^16`, plus the two
 /// degenerate ones at the bottom.
 #[test]
 fn round_trip_at_every_degree() {
@@ -145,7 +145,7 @@ fn the_zero_polynomial_round_trips() {
     ));
 }
 
-/// Must-be-exact 7: a polynomial the SRS cannot hold is an error at commit
+/// A polynomial the SRS cannot hold is an error at commit
 /// time, not a truncated commitment.
 #[test]
 fn degree_overflow_is_an_error() {
@@ -172,7 +172,7 @@ fn degree_overflow_is_an_error() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 8 — the tamper twins
+// The tamper twins
 // ---------------------------------------------------------------------------
 
 #[test]

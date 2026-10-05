@@ -15,7 +15,7 @@
 //! ```
 //!
 //! Nothing here invokes the prover, the verifier, an SRS or a commitment.
-//! `docs/spec/profiling.md` is the design and the reading guide.
+//! `docs/tools.md` §2 is the design and the reading guide.
 
 use std::path::PathBuf;
 

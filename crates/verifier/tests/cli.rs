@@ -1,11 +1,11 @@
-//! S16 acceptance 10's CLI half: the `verifier` binary verifies the dumped
-//! proof files against the dumped key and statement, given the program's
-//! identity from outside, and refuses a bit-flipped copy of any of them — the
-//! same `verify_shard` every test calls, reached from files. It also refuses a
+//! The CLI: the `verifier` binary verifies the dumped proof files against the
+//! dumped key and statement, given the program's identity from outside, and
+//! refuses a bit-flipped copy of any of them — the same `verify_shard` the
+//! tests call, reached from files. It also refuses a
 //! proof list that is not the statement's shards, each once: a statement is
 //! proven only by all of them.
 //!
-//! Since S20 it also covers the `block` verb over a `BlockProof` file, which
+//! It also covers the `block` verb over a `BlockProof` file, which
 //! is `verify_block` reached from files: one proof carrying its whole shard
 //! set, so no list of shards can be short.
 //!
@@ -139,7 +139,7 @@ fn the_cli_verifies_the_dumped_files_and_refuses_a_flipped_bit() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// S20: the `block` verb over a `BlockProof` file, end to end — the same
+/// The `block` verb over a `BlockProof` file, end to end — the same
 /// statement, proved as a block instead of as loose shards.
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
@@ -152,7 +152,7 @@ fn the_cli_verifies_a_block_file() {
     let dir =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("s20-cli-{}", std::process::id()));
     // **The four files come from `verifier::proof_archive::write_proof`**, which is
-    // the one writer of a proved block's on-disk form (S-STREAM). Writing them
+    // the one writer of a proved block's on-disk form. Writing them
     // here with a local closure instead would be a second spelling of the
     // format the CLI reads, free to drift from the one every real proving run
     // uses.

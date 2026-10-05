@@ -1,6 +1,6 @@
-//! Acceptance 11, must-be-exact 3 and 13: the dead-variant audit over every
-//! compilation of the toy, the gate catalogue, and the claim that the cached
-//! and cache-free compilations are one circuit in two spellings.
+//! The dead-variant audit over every compilation of the toy, the gate
+//! catalogue, and the claim that the cached and cache-free compilations are
+//! one circuit in two spellings.
 
 mod common;
 
@@ -91,24 +91,24 @@ fn every_gate(a: &CircuitArtifact) -> Vec<&GateDef> {
     gates
 }
 
-/// S15's combined toy, the one committed circuit with a fraction tree in it.
+/// The combined lookup toy, the one toy circuit with a fraction tree in it.
 fn lookup_toy() -> CircuitArtifact {
     let bytes = fixture_bytes(
         "lookup_toy.bin",
         "abab86f0c6cda7d087de044f632f7764bc0cf8db4bdb95ebe229a4f61a85da8b",
     );
-    CircuitArtifact::from_bytes(&bytes).expect("the S15 toy decodes")
+    CircuitArtifact::from_bytes(&bytes).expect("the lookup toy decodes")
 }
 
-/// Acceptance 11: across every committed circuit — the audit runs over all of
-/// them, since a variant absent from one may be the one another uses —
-/// every `GateDef` variant is emitted, so none is dead and none needs to be
-/// documented as reserved. Each emitted gate is mapped to its catalogue row by
-/// this file's own variant names, so a catalogue row renamed away from its
-/// variant fails here too.
+/// Across the committed toy circuits — the audit runs over all of them, since
+/// a variant absent from one may be the one another uses — every `GateDef`
+/// variant is emitted, so none is dead and none needs to be documented as
+/// reserved. Each emitted gate is mapped to its catalogue row by this file's
+/// own variant names, so a catalogue row renamed away from its variant fails
+/// here too.
 ///
-/// `TreeCross` is S15's, and the S13 toy emits none: a fraction tree is the one
-/// thing that halves two columns together, and only the S15 toy has one.
+/// The GKR toy emits no `TreeCross`: a fraction tree is the one thing that
+/// halves two columns together, and only the lookup toy has one.
 #[test]
 fn the_audit_over_every_committed_circuit_emits_every_variant() {
     let mut emitted = [false; VARIANTS];
@@ -124,7 +124,7 @@ fn the_audit_over_every_committed_circuit_emits_every_variant() {
     assert!(dead.is_empty(), "variants no test circuit emits: {dead:?}");
 }
 
-/// Must-be-exact 3 and 13: the catalogue has one row per variant, in wire-tag
+/// The catalogue has one row per variant, in wire-tag
 /// order, named for the variant it describes, and no field of any row is empty.
 /// Row `i` is the variant `to_bytes` tags `i` — the tag is read from the
 /// encoding, not from `one_of_each`'s order — so two rows swapped, or a row
@@ -166,7 +166,7 @@ fn the_catalogue_has_one_row_per_variant_in_wire_tag_order() {
     assert_eq!(names.len(), VARIANTS, "catalogue variants are distinct");
 }
 
-/// Must-be-exact 3: the cached and cache-free compilations have the same depth,
+/// The cached and cache-free compilations have the same depth,
 /// the same width and variable count at every layer, and the same producing and
 /// enforcing totals per list; only the cached one has cached entries. Beyond
 /// that, the cache-free compilation differs only in the gates that named a

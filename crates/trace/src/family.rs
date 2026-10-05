@@ -3,8 +3,7 @@
 //!
 //! Rows are live rows only. There is no padding here and no polynomial: what
 //! a padding row holds, and how a column becomes a multilinear, belong to the
-//! constraint system that has not been built yet, and a buffer that guessed
-//! would be a buffer someone has to un-guess.
+//! memory column builders and the family fills that read these rows.
 
 use field::Fr;
 use program::FamilyId;
@@ -12,7 +11,7 @@ use program::FamilyId;
 use crate::log::AddressSpace;
 
 /// What a query does in its cycle. A role fixes the query's address space and
-/// its in-cycle slot, and the frozen order of [`ROLES`] fixes its place among
+/// its in-cycle slot, and the order of [`ROLES`] fixes its place among
 /// the cycle's events.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Role {
@@ -27,7 +26,7 @@ pub enum Role {
     Ram,
     /// Slot 3, a register write: `rd`. On an ecall row, `a0`, the result.
     Rd,
-    /// Slot 3, a **delegation** request's mirror query (S21). Its address is
+    /// Slot 3, a **delegation** request's mirror query. Its address is
     /// the frame base pointer the request handed over in `a0`, in the
     /// delegation family's own address space; its read is the invocation's
     /// answer tuple, stamped 0 (`docs/spec/delegation.md` §5). Only an ecall
@@ -35,16 +34,13 @@ pub enum Role {
     Delegate,
 }
 
-/// Every role, in frozen order. A cycle's events are its pc query, then one
+/// Every role, in order. A cycle's events are its pc query, then one
 /// query per role it has, in this order.
 ///
 /// Eight is the ceiling: `Row::present` is a `u8` with one bit per role, so a
 /// ninth role widens it, and that is a schema change
-/// (`docs/spec/execution-trace.md` §7). There were eight until the POSIX layer
-/// was deleted: `Arg1` and `Arg2` were an ecall row's `a1` and `a2`, which only
-/// `read` and `write` ever passed, so both became unreachable with those calls
-/// and were removed rather than kept as roles no row can have. Two bits are
-/// spare again.
+/// (`docs/spec/execution-trace.md` §7). There are six, so two bits are
+/// spare.
 pub const ROLES: [Role; 6] = [
     Role::Rs1,
     Role::Rs2,
@@ -68,7 +64,7 @@ impl Role {
     ///
     /// [`Role::Delegate`]'s is **the row's**, not the role's: a delegation
     /// family's anchor space *is* its type (`constants::address_space`), and
-    /// with more than one registered type the role alone no longer says which.
+    /// with more than one registered type the role alone does not say which.
     /// `delegation` is the requested family's space, which the row knows
     /// because the invocation riding its cycle names the family; every other
     /// role ignores it, and passing `None` on a row that has this role is a
@@ -158,7 +154,7 @@ impl Row {
 
 /// One shard's rows of one cycle-owning family: a borrowed window into a trace
 /// buffer, `[index·height, min((index+1)·height, len))`
-/// (`docs/spec/block-proof.md` §5.1).
+/// (`docs/spec/streaming.md` §4).
 ///
 /// A fill reads its shard through this and never indexes the whole buffer, so
 /// one fill serves a slice of an archived execution and a streaming executor's
@@ -332,9 +328,9 @@ pub struct QueryColumns {
 /// One family's rows, column-major: every column has one entry per row, and
 /// the row count is the family's occupancy.
 ///
-/// The frozen column names are `cycle`, `pc`, `next_pc`, `present`, and for
+/// The column names are `cycle`, `pc`, `next_pc`, `present`, and for
 /// each role `r` in [`ROLES`] order `r.addr`, `r.read_ts`, `r.read_value`
-/// and `r.write_value` — `rs1.addr` through `rd.write_value`.
+/// and `r.write_value` — `rs1.addr` through `delegate.write_value`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FamilyTrace {
     pub family: FamilyId,
@@ -409,9 +405,9 @@ impl FamilyTrace {
 ///
 /// A delegation family is invoked, never decoded, so a row is not a cycle: it
 /// is one call of the precompile, stamped with the cycle that requested it. Its
-/// memory queries are the frame's fixed-offset words — 50 of them for
-/// keccak-f[1600] — which do not fit [`Row`]'s eight roles and are not roles at
-/// all, so they live here rather than in a [`FamilyTrace`].
+/// memory queries are the frame's fixed-offset words — 51 of them for
+/// `KECCAK_F` — which do not fit [`Row`]'s eight query slots and are not roles
+/// at all, so they live here rather than in a [`FamilyTrace`].
 ///
 /// `words[j]` is frame word `j`, at byte offset `4 * j` from `base`
 /// (`docs/spec/delegation.md` §4); every word's write timestamp is

@@ -1,13 +1,12 @@
-//! S16's acceptance over the real statement: `guests/addsub`, proved and
-//! verified shard by shard.
+//! The add/sub statement end to end: `guests/addsub`, proved and verified
+//! shard by shard.
 //!
 //! **Every test here is `#[ignore]`d, and runs by name with
 //! `--include-ignored --test-threads=1`** — the execution family's shard is
 //! `2^20` rows, the timestamp channel's floor, and one statement's proof peaks
-//! at about 8.6 GB, so two at once do not fit a runner. Master rule 7: the
-//! stage's PR runs it locally, and `.github/workflows/ci.yml` carries the
-//! command under `# DEFERRED:`. What needs no proof — the wire forms, the key's
-//! load rules, the statement's refusals, the circuit row by row — is in
+//! at about 8.6 GB, so two at once do not fit a runner, and CI does not run
+//! them. What needs no proof — the wire forms, the key's load rules, the
+//! statement's refusals, the circuit row by row — is in
 //! `crates/verifier-core/tests` and `crates/checker/tests/add_sub.rs`, and runs
 //! in ordinary CI.
 
@@ -31,16 +30,16 @@ const INIT: u32 = family::INIT_TEARDOWN;
 /// for its log, never proved from — and the statement with its shard proofs.
 fn proved() -> (ProverSetup, TraceArchive, PublicInputs, Vec<ShardProof>) {
     let setup = common::setup();
-    // The archive is still built, and it is **not** proved from: the log's
-    // self-check below reads it, which is a reading of the execution and not
-    // a proving path (`docs/spec/streaming.md` §1).
+    // The archive is built and **not** proved from: the log's self-check below
+    // reads it, which is a reading of the execution and not a proving path
+    // (`docs/spec/streaming.md` §1).
     let archive = common::archive(&setup.program);
     let (public, proofs) = common::streamed_shards(&setup, &common::empty_io());
     (setup, archive, public, proofs)
 }
 
-/// The byte length a proof of `artifact` has: §9's layout, every count read
-/// off the circuit.
+/// The byte length a proof of `artifact` has: `docs/spec/proof.md` §9's
+/// layout, every count read off the circuit.
 fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
     let transitions: usize = (0..a.depth())
         .map(|k| {
@@ -59,16 +58,16 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 1
+// The statement proves and every shard verifies
 // ---------------------------------------------------------------------------
 
-/// Acceptance 1. The tiny guest decodes into exactly the add/sub family and the
-/// two RAM window families, every pc claimed by the first; its trace
-/// self-checks; the streaming prover proves one `INIT_TEARDOWN` shard and one
-/// `ADD_SUB_LUI_AUIPC` shard; `verify_shard` accepts both against one
-/// statement; and every proof has its circuit's shape — its round counts, its
-/// claim counts, and a byte length that is a function of the key and the family
-/// alone. (The emulator's reading of the same guest is
+/// The tiny guest decodes into exactly the add/sub family and the window
+/// families, every pc claimed by the first; its trace self-checks; the
+/// streaming prover proves one `INIT_TEARDOWN` shard, one `ADD_SUB_LUI_AUIPC`
+/// shard and one shard of each public window; `verify_shard` accepts each
+/// against one statement; and every proof has its circuit's shape — its round
+/// counts, its claim counts, and a byte length that is a function of the key
+/// and the family alone. (The emulator's reading of the same guest is
 /// `crates/emulator/tests/guests.rs`': the exit status and the journal, and
 /// nothing below that.)
 #[test]
@@ -101,8 +100,9 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
         Ok(())
     );
     // One entry per config family, in the config's order — which is ascending
-    // `FamilyId`, so S-IO's three follow the two window families. Only `ADD`
-    // owns cycles here (`trace::plan_shards`).
+    // `FamilyId`, so the public-value and advice families follow
+    // `INIT_TEARDOWN` and `ZERO_WINDOWS`. Only `ADD` owns cycles here
+    // (`trace::plan_shards`).
     assert_eq!(
         archive.cycle_profile().counts,
         vec![
@@ -115,7 +115,7 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
         ]
     );
 
-    // S-IO: the two public value families are in every config and prove one
+    // The two public value families are in every config and prove one
     // shard each whatever the program does, and `ADVICE_WINDOWS` proves none
     // for a program with no advice (`docs/spec/public-values.md` §4).
     assert_eq!(public.shard_counts, vec![1, 1, 0, 1, 1, 0]);
@@ -157,23 +157,11 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
         assert_eq!(proof.to_bytes().len(), proof_bytes(a));
     }
     let [init, add] = [&proofs[0], &proofs[1]];
-    // S21 moved all four: the frame took its eighth query (`deleg`), which
-    // widened the base layer by 19 columns, added two timestamp obligations,
-    // pushed that tree from 16 leaves to 32 and so the circuit from five
-    // row-wise gate lists to six (`docs/spec/constraint-manifest.md` §1.2).
-    // S23 moved the base layer alone: `deleg_space` is a ninth memory column
-    // of the frame and `is_deleg_{9,10,11}` replaces one `is_keccak`, so the
-    // claim is three wider and the proof 224 bytes longer. The layer count and
-    // the round count are unchanged — the seven gates S23 added are enforcing
-    // and produce no inner column (`constraint-manifest.md` §1.2).
-    //
-    // S26 moved it once more and by exactly one column: `is_deleg_15`, the
-    // fourth delegation type's request selector. That is one more base claim
-    // (32 bytes) and one more witness commitment (64), so **+96**, and again no
-    // inner column — its three gates are enforcing. This number moves by 96
-    // bytes for every delegation family the repository registers, which is the
-    // standing price `docs/spec/delegation.md` §10 names. S26c registered a
-    // fifth and a sixth, `SHA256_COMP` and `EC_ADD`, so **+192** by that rule.
+    // The add/sub circuit's shape at `2^20` (`docs/spec/circuits.md` §1). Each
+    // registered delegation type costs it one request selector, so one more
+    // base claim (32 bytes) and one more witness commitment (64): **96** bytes
+    // a type, and no inner column, its gates being enforcing
+    // (`docs/spec/delegation.md` §3).
     assert_eq!(add.to_bytes().len(), 57_196);
     assert_eq!(init.to_bytes().len(), 20_524);
     assert_eq!(add.gkr.layers.len(), 25);
@@ -182,7 +170,7 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 5
+// Statement twins
 // ---------------------------------------------------------------------------
 
 fn statement_refusal(result: Result<(), VerifyError>, what: &str) {
@@ -192,11 +180,11 @@ fn statement_refusal(result: Result<(), VerifyError>, what: &str) {
     );
 }
 
-/// Acceptance 5. The honest proofs, checked against a statement they were not
-/// made for: another program identity, another public I/O digest, another
-/// static `VmConfig`, other shard counts, another SRS digest, one memory
-/// commitment swapped, and other public inputs altogether — each refused as
-/// `Statement`, for every shard.
+/// The honest proofs, checked against a statement they were not made for:
+/// another program identity, another public I/O digest, another static
+/// `VmConfig`, other shard counts, another SRS digest, one memory commitment
+/// swapped, and other public inputs altogether — each refused as `Statement`,
+/// for every shard.
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
 fn a5_every_statement_twin_is_refused_as_statement() {
@@ -274,10 +262,10 @@ fn a_statement_root_that_is_not_its_proofs_is_refused_by_that_shard() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 6 and 8
+// The transcript schedule
 // ---------------------------------------------------------------------------
 
-/// Acceptance 8's walker, S13's: a batch or child challenge is drawn only after
+/// A walker over the GKR events: a batch or child challenge is drawn only after
 /// every claim it reduces is absorbed, and after each reduction exactly one
 /// point is outstanding. Returns the index of the last GKR event.
 fn one_claim_after_each_batch(a: &constraints::CircuitArtifact, log: &[TranscriptEvent]) -> usize {
@@ -381,11 +369,11 @@ fn gkr_schedule(a: &constraints::CircuitArtifact) -> Vec<TranscriptEvent> {
     events
 }
 
-/// Acceptance 6 and 8, on the add/sub shard's real transcript: the seed, the
-/// window and the witness commitments first; `g` and `β` after every
-/// commitment; the GKR schedule with at most one outstanding point after each
-/// batch, top to bottom; then the one batched opening, whose column-RLC
-/// challenge follows every evaluation claim it combines. The proof holds one
+/// On every shard's real transcript: the seed, the window and the witness
+/// commitments first; `g` and `β` after every commitment; the GKR schedule
+/// with at most one outstanding point after each batch, top to bottom; then
+/// the one batched opening, whose column-RLC challenge follows every
+/// evaluation claim it combines. The proof holds one
 /// Mercury proof, every base claim is at one point — the prover asserts it, and
 /// the verifier's reduction re-derives the same point — and the global
 /// transcript draws its memory challenges after every memory commitment.
@@ -481,7 +469,8 @@ fn a6_a8_one_opening_at_one_point_and_every_challenge_after_what_it_protects() {
             .unwrap();
         assert!(first_gkr_challenge > 2);
 
-        // The opening: B1, B2, B3, then S08's sixteen steps, once.
+        // The opening: B1, B2, B3, then the sixteen steps of
+        // `docs/spec/mercury.md` §3, once.
         let k = a.committed().len();
         let tail = &log[last_gkr + 1..];
         assert_eq!(
@@ -557,11 +546,7 @@ fn a6_a8_one_opening_at_one_point_and_every_challenge_after_what_it_protects() {
         assert_eq!(claim.commitments.len(), a.committed().len());
         assert_eq!(verify_shard(&setup.vk, proof, &public), Ok(()));
     }
-    // And `prove_shard`, the frozen entry point, is these same steps.
+    // And `prove_shard`, the per-shard entry point, is these same steps.
     let again = prove_shard(&ctx, &archive, ADD, 0);
     assert_eq!(again, proofs[1]);
 }
-
-// ---------------------------------------------------------------------------
-// Serde, the key's load, determinism
-// ---------------------------------------------------------------------------

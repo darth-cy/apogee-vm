@@ -69,9 +69,10 @@ host = { path = "crates/host" }
 # committed fixtures, and the hex codec those files are written in.
 test-support = { path = "tools/test-support" }
 
-# Data parallelism, and the only form of it in the workspace: no threads, no
-# async, no channels. Master rule 2 names it explicitly. `curve` uses it for the
-# MSM's window and input-chunk fan-out, `srs` for point decoding at ingestion.
+# Data parallelism. Beside it the workspace has one thread scope and one lock,
+# the streaming prover's shard pipeline (`docs/spec/streaming.md` §5); no
+# async, no channels. `curve` uses it for the MSM's window and input-chunk
+# fan-out, `srs` for point decoding at ingestion.
 rayon = "1"
 
 # `default-features = false` keeps serde `no_std`, which `constants` and `field`
@@ -81,15 +82,15 @@ serde = { version = "1", default-features = false }
 
 # Test / tool only. Reference implementation for differential checks and the
 # KAT fixtures. Never linked by the prover, verifier, or a guest.
-# `parallel` is enabled so the S07 acceptance-9 gate compares two rayon
+# `parallel` is enabled so `bench`'s MSM comparison is between two rayon
 # implementations rather than ours against a single-threaded arkworks, which
-# would be a gate we pass by not being compared. These are dev-dependencies and
-# tool dependencies only; nothing here is reachable from a prover, a verifier or
-# a guest, and anti-goal 1 bans cargo features *of ours*, not an upstream
-# oracle's build configuration.
+# would be a comparison we win by not being compared. These are dev-dependencies
+# and tool dependencies only; nothing here is reachable from a prover, a
+# verifier or a guest, and a `features` key selects an upstream oracle's build
+# configuration, not a cargo feature of ours.
 ark-bn254 = "0.6"
 # The secp256k1 oracle, and the only reason it is here: `constants::mod_mul`
-# holds that curve's two moduli as literals since S26b, and the group order `n`
+# holds that curve's two moduli as literals, and the group order `n`
 # has no derivation inside this repository. Test/tool only, like every other
 # arkworks crate above.
 ark-secp256k1 = "0.6"
@@ -106,27 +107,27 @@ num-bigint = { version = "0.4", default-features = false }
 # Test only. Exercises the `Fr` serde impls over a real wire format.
 postcard = { version = "1", default-features = false }
 
-# JSON, and only for the host's manual fixture refresh: the Ethereum JSON-RPC
-# responses `host::rpc` reads, and the `BenchReport` `tools/bench` writes.
-# Master rule 2's allowed runtime list names serialization, and this is the
-# second entry under it. Nothing here is reachable from the prover, the
-# verifier or a guest -- `crates/host` and `tools/bench` are the only crates
-# that name it, and CI never lets either of them touch the network.
+# JSON: the Ethereum JSON-RPC responses `host::rpc` reads and the `tests-zkevm`
+# fixtures `host` reads, the zkEVM subset `tools/kat-gen` cuts, and the reports
+# `tools/bench` and `tools/profiler` write. Nothing here is reachable from the
+# prover, the verifier or a guest -- `crates/host`, `tools/kat-gen`,
+# `tools/bench` and `tools/profiler` are the crates that name it, and CI makes
+# no RPC call through any of them.
 serde_json = "1"
 
-# Test only, S21. The reference keccak-f[1600] and keccak256 the emulator's
+# Test only. The reference keccak-f[1600] and keccak256 the emulator's
 # permutation, the guest SDK's software fallback and the delegation circuit's
 # forward pass are each held to. `default-features = false` keeps it `no_std`,
 # which costs nothing here. Never reachable from the prover, the verifier or a
-# guest: master rule 2 allows a reference implementation as a dev-dependency
-# and nowhere else, and `crates/emulator/tests/keccak.rs` is where it is used.
+# guest: a reference implementation is a dev-dependency and nothing else, and
+# `crates/emulator`'s tests are where it is used.
 tiny-keccak = { version = "2", default-features = false, features = ["keccak"] }
 
-# Acceptance 1 proves a 2^20-row zerocheck, and must-be-exact 7's witness digest
-# absorbs every cell of every column through Poseidon2 — about 2^21 sponge
-# elements. Unoptimized that is minutes per run, which would make
-# `cargo test --workspace` unusable. Optimizing the dev profile keeps
-# `debug-assertions` and `overflow-checks` on, so the tests still run with every
-# check the default dev profile gives them; only the code generation changes.
+# The workspace tests build circuits at their real `2^20` rows, execute guests
+# and run the stateless validator natively. Unoptimized that is minutes per
+# run, which would make `cargo test --workspace` unusable. Optimizing the dev
+# profile keeps `debug-assertions` and `overflow-checks` on, so the tests still
+# run with every check the default dev profile gives them; only the code
+# generation changes.
 [profile.dev]
 opt-level = 2

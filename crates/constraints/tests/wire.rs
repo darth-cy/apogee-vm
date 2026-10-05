@@ -1,5 +1,4 @@
-//! Acceptance 10's round-trip half and must-be-exact 15: the artifact's
-//! `postcard` wire form, `docs/spec/gkr.md` §4.1.
+//! The artifact's `postcard` wire form, `docs/spec/gkr.md` §4.1.
 //!
 //! `from_bytes` accepts exactly the bytes `to_bytes` writes and is total: it
 //! returns an error, and never panics, whatever it is handed. Its errors come
@@ -81,7 +80,7 @@ fn toy_with_gate(gate: GateDef) -> CircuitArtifact {
 // The round trip
 // ---------------------------------------------------------------------------
 
-/// Acceptance 10: both committed artifacts decode, re-encode to exactly the
+/// Both committed artifacts decode, re-encode to exactly the
 /// file's bytes, decode again to an equal struct, and are circuits. postcard is
 /// deterministic and not self-describing, so byte identity here tests the
 /// artifact's layout, not a formatter.
@@ -108,7 +107,7 @@ fn both_fixtures_round_trip_byte_identically() {
 }
 
 /// Every `Fr` on the wire is its canonical 32 little-endian bytes with no
-/// length prefix, must-be-exact 15. The file ends with the padding contract:
+/// length prefix. The file ends with the padding contract:
 /// the row's one-byte count, 6, then six zeros in 192 bytes, then the one
 /// `zero_row_valid` byte.
 #[test]
@@ -181,12 +180,13 @@ fn an_overlong_varint_is_refused() {
 /// The format version is read first, and no other version is decoded. The
 /// cached toy's bytes with their first word 2, or 128 (two varint bytes), are
 /// refused naming the version, where under 1 they decode to the toy; and so is
-/// an S13 file — format 0, whose lookup element had no selector — holding one
-/// lookup `(name, channel, tuple)`.
+/// a format-0 file, whose lookup element has no selector, holding one lookup
+/// `(name, channel, tuple)`.
 ///
 /// Kills a reader that checks the version only after decoding the rest: that
-/// reader takes the S13 lookup's tuple length for a selector, misreads the gate
-/// after it, and refuses the file as a malformed gate rather than as format 0.
+/// reader takes the format-0 lookup's tuple length for a selector, misreads
+/// the gate after it, and refuses the file as a malformed gate rather than as
+/// format 0.
 #[test]
 fn a_format_version_other_than_one_is_refused() {
     let bytes = toy_cached_bytes();
@@ -324,8 +324,7 @@ fn a_nonzero_unused_address_field_is_refused() {
         );
         assert_eq!(encode(&address), encode(&raw), "{address} writes {raw:?}");
     }
-    // `(3, 7, 0)` is the first virtual index no kind has, and it moved from 4 to
-    // 7 when S26d appended the `XOR8` table's three columns. That this line has
+    // `(3, 7, 0)` is the first virtual index no kind has. That this line has
     // to move when a kind is added is the point of it.
     let stray: [RawAddress; 9] = [
         (0, 3, 1),
@@ -363,11 +362,11 @@ fn a_nonzero_unused_address_field_is_refused() {
 }
 
 /// Virtual kinds are 0 (`V[row]`), 1 (`V[ram_live]`), 2 (`V[range19]`),
-/// 3 (`V[range16]`) and — since S26d — 4, 5 and 6, the `XOR8` table's three
-/// columns; append-only, and a kind is printed by its short name.
+/// 3 (`V[range16]`), and 4, 5 and 6, the `XOR8` table's three columns; a tag
+/// is never reassigned, and a kind is printed by its short name.
 ///
-/// The `kinds.len()` refusal at the end is what makes this append-only and not
-/// merely a list: adding a kind without a tag, or a tag without a decoder arm,
+/// The `kinds.len()` refusal at the end is what makes this a fixed numbering
+/// and not merely a list: adding a kind without a tag, or a tag without a decoder arm,
 /// fails here. `crates/verifier-core/src/types.rs` carries the **same** seven
 /// tags for a `ChannelSpec`'s table addresses, and
 /// `the_two_virtual_tag_tables_agree` below holds the two equal.

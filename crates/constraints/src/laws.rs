@@ -267,12 +267,14 @@ fn names(a: &CircuitArtifact) -> Result<(), ConstraintError> {
 /// constant; and the selector is an in-range `M`, `W` or `S` column **that gate
 /// list 0 holds to booleanity**. A lookup's name is `names`'.
 ///
-/// The selector rule is S15's, and it is what makes the native reading of an
-/// obligation — it holds where the selector is 0, or where the tuple is in the
-/// table — the same statement LogUp proves. LogUp sums `s/(E + g)` over the
-/// rows, so a row at `s = −1` with an out-of-range tuple cancels a row at
-/// `s = 1` with the same tuple, and a gap of −1 the native evaluator reports
-/// would pass. `docs/spec/lookup.md` §2.
+/// The selector rule is what makes the native reading of an obligation — it
+/// holds where the selector is 0, or where the tuple is in the table — the
+/// same statement LogUp proves. The selector multiplies the tuple inside the
+/// denominator, so LogUp proves the *gated* tuple is a table row, which is the
+/// obligation only at `s ∈ {0, 1}`: at any other `s` a scaled tuple is looked
+/// up instead, and on a range channel `s = t·e⁻¹` lands any nonzero `e` — a
+/// gap of −1 the native evaluator reports included — on an in-range `t`.
+/// `docs/spec/lookup.md` §2.
 fn lookups(a: &CircuitArtifact) -> Result<(), ConstraintError> {
     let committed = |op: PolyAddress| match op {
         PolyAddress::Memory(i) => (i as usize) < a.memory.len(),

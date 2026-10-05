@@ -1,11 +1,11 @@
 //! The SHA-256 four-round circuit, gate by gate and obligation by obligation.
 //!
-//! `docs/spec/delegation.md` §15 is what this suite restates: the 25-word
+//! `docs/spec/delegation-circuits.md` §6 is what this suite restates: the 25-word
 //! frame, the anchor's two tuples, the one-hot round-group selector, four rounds
 //! over two sequences, four derived schedule words, and the window that carries
 //! the schedule from one call to the next.
 //!
-//! **There is no forward pass here, and since S26e there cannot be.** This
+//! **There is no forward pass here, and there cannot be.** This
 //! family carries the `RANGE16` and `XOR8` channels, whose tables each need
 //! sixteen variables, so its circuit cannot be built at a height a whole-shard
 //! pass would afford. So the arithmetic is checked row by row, exactly as
@@ -649,7 +649,7 @@ fn the_circuit_keeps_every_rule() {
         .expect("every obligation is discharged exactly once, in its own channel");
 }
 
-/// The shape `docs/spec/constraint-manifest.md` §19 accounts for.
+/// The shape `docs/spec/delegation-circuits.md` §6 accounts for.
 #[test]
 fn the_shape_is_the_manifests() {
     let a = sha256::artifact(VARS);
@@ -684,7 +684,7 @@ fn the_shape_is_the_manifests() {
             + 2 * R + R
             // the small sigmas' shifted bytes: four and three a derived word
             + 7 * R,
-        "the enforcing gates are the manifest's"
+        "the enforcing gates are the spec's"
     );
     assert_eq!(enforcing, 119);
     assert_eq!(a.outputs.len(), 6, "two memory roots and two channels");
@@ -712,7 +712,7 @@ fn a_height_moves_only_the_halving_layers() {
 }
 
 /// Both channels' tables need sixteen variables, which is the family's floor;
-/// `2^8`, where S26c's row lived, is not a height it has any more.
+/// `2^8` is not a height it has.
 #[test]
 fn the_channels_set_the_family_floor() {
     use constants::family::SHA256_COMP as SHA;
@@ -780,8 +780,8 @@ fn sixteen_calls_are_one_compression() {
     );
 }
 
-/// **Acceptance: the circuit computes four SHA-256 rounds and four schedule
-/// words, at every group.** Sixteen rows are one whole compression, so every
+/// **The circuit computes four SHA-256 rounds and four schedule words, at
+/// every group.** Sixteen rows are one whole compression, so every
 /// round constant and every selector is exercised; four corners and padding
 /// follow, so the padding row's own satisfaction is part of what passes.
 #[test]
@@ -1066,7 +1066,7 @@ fn a_stage_a_sum_reads_is_refused_twice() {
 ///
 /// The twin moves `A_4` up by `2^32` and its carry down by one, which keeps
 /// `r{k}_a` true over `Fr`. Two things refuse it: the written word's own
-/// `RANGE16` pair, `A_4` no longer being below `2^32`, and — where the honest
+/// `RANGE16` pair, `A_4` not being below `2^32`, and — where the honest
 /// carry was 0 — the carry's byte range.
 #[test]
 fn a_rebalanced_sum_is_refused_by_its_ranges() {

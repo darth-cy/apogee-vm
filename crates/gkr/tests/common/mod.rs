@@ -183,8 +183,8 @@ pub fn honest(
     (values, proof, result)
 }
 
-/// The discharge a Mercury opening will replace: every base claim against the
-/// committed column it names.
+/// The discharge a shard proof's Mercury opening does: every base claim
+/// against the committed column it names.
 pub fn discharge(base: &BaseLayer, claims: &[BaseClaim]) -> Result<(), String> {
     for claim in claims {
         let column = base

@@ -7,8 +7,8 @@ publish.workspace = true
 [dependencies]
 guest-sdk.workspace = true
 # The same two crates `echo` links, for the same reason: a guest that verifies
-# Merkle paths over Fr is the strongest statement that S01's field and S02's
-# permutation compile and run on RV32, and it makes the precompile's software
-# fallback the real function rather than a stand-in.
+# Merkle paths over Fr is the strongest statement that this repository's field
+# and Poseidon2 permutation compile and run on RV32, and it makes the
+# delegation's software fallback the real function rather than a stand-in.
 field = { path = "../../crates/field" }
 transcript = { path = "../../crates/transcript" }

@@ -72,7 +72,7 @@ fn the_round_constants_are_the_lfsrs() {
 /// Iota touches four byte positions of a lane and no others, which is what makes
 /// the circuit's iota four `XOR8` obligations instead of eight — and, with the
 /// fraction tree's power-of-two padding, what keeps that channel at 1,024 leaves
-/// instead of 2,048 (`docs/spec/delegation.md` §6.5).
+/// instead of 2,048 (`docs/spec/delegation-circuits.md` §2.4).
 ///
 /// `constants::keccak::IOTA_BYTES_ARE_THE_ONLY_ONES` asserts the same thing at
 /// compile time. This is the reading that says *why*: the LFSR sets only the bits
@@ -102,7 +102,7 @@ fn the_shapes_agree() {
     assert_eq!(keccak::LANES * keccak::LANE_BITS, keccak::STATE_BITS);
     assert_eq!(keccak::STATE_WORDS * 4, keccak::STATE_BYTES);
     // The frame is the round selector and the state, and nothing else: one
-    // invocation is one round since S26d (`docs/spec/delegation.md` §6).
+    // invocation is one round (`docs/spec/delegation-circuits.md` §2).
     assert_eq!(keccak::ROUND_WORD, 0);
     assert_eq!(keccak::STATE_WORD, 1);
     assert_eq!(keccak::FRAME_WORDS, 51);

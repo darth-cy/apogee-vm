@@ -6,8 +6,8 @@ publish.workspace = true
 
 # The verifier half of Mercury, `#![no_std]` + alloc: the recursion guest links
 # this crate. `crates/pcs` is the `std` half — commit, open, the MSMs and the
-# pairings — and re-exports everything public here, so a native verification
-# and a guest's run the same field-side code.
+# pairings — and verifies through this crate's functions, so a native
+# verification and a guest's run the same field-side code.
 [dependencies]
 constants.workspace = true
 field.workspace = true

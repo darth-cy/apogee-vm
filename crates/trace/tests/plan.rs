@@ -1,4 +1,4 @@
-//! Acceptance 9: `plan_shards` at its edges.
+//! `plan_shards` at its edges.
 
 use constants::family;
 use program::VmConfig;

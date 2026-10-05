@@ -1,33 +1,29 @@
-//! The `block` group: **the manual refresh command**, and the one place in
-//! this repository that talks to the network.
+//! The `block` group: **the manual refresh command**, and the one group that
+//! talks to the network.
 //!
 //!     ETH_RPC_URL=https://… cargo run -p kat-gen -- block
 //!
 //! It is **not in `DEFAULT_GROUPS`**, for the same reason `guests` is not: a
 //! bare `cargo run -p kat-gen` is what CI runs before diffing every committed
-//! vector directory, and S25's must-be-exact 4 says CI never touches RPC. Asking
-//! for this group by name is the opt-in, and without `ETH_RPC_URL` it explains
-//! itself and writes nothing.
+//! vector directory, and CI never touches RPC. Asking for this group by name is
+//! the opt-in, and without `ETH_RPC_URL` it explains itself and writes nothing.
 //!
 //! # What one refresh session does
 //!
-//! 1. Finds the most recent **finalized** block, which is what the stage's core
-//!    algorithm names as the fixture's source.
+//! 1. Finds the most recent **finalized** block, the fixture's source.
 //! 2. Records its first [`MINI_TXS`] transactions against the parent state and
 //!    writes the mini-block fixture — the pin, the witness and the journal
 //!    native revm computes from it.
 //! 3. Repeats the recording for the [`REPEATED_BLOCKS`] blocks below it and
 //!    holds each one's guest output to native revm's, **without committing
-//!    them** — their RPC responses go to a scratch cache under `target/`. That is acceptance 2's *"Check the fixture block AND ≥3 recent
-//!    mainnet blocks during one manual refresh session"* — the check that the
-//!    recorder works on blocks nobody tuned it against, which one pinned
-//!    fixture cannot demonstrate.
+//!    them** — their RPC responses go to a scratch cache under `target/`. That
+//!    is the check that the recorder works on blocks nobody tuned it against,
+//!    which one pinned fixture cannot demonstrate.
 //! 4. Re-records the fixture block a second time, from the cache alone, and
 //!    requires byte-identical witness bytes and zero network calls. That is
-//!    acceptance 1, run at refresh time as well as in
+//!    the determinism check, run at refresh time as well as in
 //!    `crates/host/tests/witness.rs`, because a recorder that is deterministic
-//!    only against a cache somebody curated is not the property that was asked
-//!    for.
+//!    only against a cache somebody curated is not deterministic.
 //!
 //! The guest is built once and traced for every block checked, which is what
 //! makes step 3 a *guest* differential and not a host one.
@@ -41,14 +37,14 @@ use loader::load_elf;
 
 /// The mini-block's transaction count.
 ///
-/// **Two, and the stage says why**: *"The mini-block tx count is two, so
-/// inter-tx state carry is exercised."* One transaction would prove the
-/// recorder can read a pre-state; two proves the second sees the first's
-/// writes, which is the only part of a block a single transaction cannot test.
+/// **Two**, so inter-transaction state carry is exercised. One transaction
+/// would prove the recorder can read a pre-state; two proves the second sees
+/// the first's writes, which is the only part of a block a single transaction
+/// cannot test.
 pub const MINI_TXS: usize = 2;
 
 /// How many further recent blocks a refresh session checks beyond the pinned
-/// one. Three, which is acceptance 2's floor.
+/// one.
 pub const REPEATED_BLOCKS: u64 = 3;
 
 /// The fixture directory, under `crates/host/tests/vectors/`.
@@ -171,7 +167,7 @@ fn record_mini(image: &loader::ProgramImage, cache: &Path, number: u64) -> Pin {
     assert!(
         journal.len() <= constants::guest_memory::PUBLIC_PAYLOAD_BYTES as usize,
         "the journal is {} bytes and a public window holds {}; \
-         the mini mode's output commitment is `docs/spec/revm-block.md` §2, which \
+         the mini mode's output commitment is `docs/spec/ethereum.md` §3, which \
          carries a record per transaction, so a block whose first {MINI_TXS} \
          transactions return a lot of data does not fit",
         journal.len(),
@@ -234,7 +230,7 @@ fn finalized(rpc: &mut Rpc) -> Result<u64, String> {
 
 /// The gas the recorded transactions used, read back out of the journal.
 ///
-/// The journal is `docs/spec/revm-block.md` §2 and its per-transaction records
+/// The journal is `docs/spec/ethereum.md` §3 and its per-transaction records
 /// carry `gas_used` already, so the total is derivable from bytes the proof
 /// binds rather than something the recorder has to be trusted about.
 fn tx_gas(journal: &[u8], txs: usize) -> u64 {
@@ -256,9 +252,9 @@ fn tx_gas(journal: &[u8], txs: usize) -> u64 {
 /// The journal the **guest** produces for one witness.
 ///
 /// The witness reaches it as advice and the journal comes back out of the
-/// public output window, which is the arrangement S-IO built and the one a
-/// proof binds. `emulator::run` needs only the image — the decoded tables are
-/// a tracing concern and this check is about the answer, not the trace.
+/// public output window, which is the arrangement a proof binds.
+/// `emulator::run` needs only the image — the decoded tables are a tracing
+/// concern and this check is about the answer, not the trace.
 fn guest_journal(image: &loader::ProgramImage, witness: &[u8]) -> Vec<u8> {
     let io = emulator::GuestIo {
         input: Vec::new(),

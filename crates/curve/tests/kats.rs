@@ -35,7 +35,7 @@ const FILES: [(&str, &str); 6] = [
     ),
     (
         "tests/vectors/g1_kats.txt",
-        "3eaf2b1493a0d231d0a79826a5b6c68d3839ca5b16ccac5f77b0b13cc449c4c9",
+        "5236615895a5bfe104bad416522aa03703b2114a2d5e7d298c5658ff9dcd315d",
     ),
     (
         "tests/vectors/g2_kats.txt",
@@ -528,7 +528,7 @@ fn evaluate(kat: &Kat) -> Result<(), String> {
                         "an off_curve fixture is on the curve",
                     )
                 }
-                // Must-be-exact 3's fourth class: not infinity, because a byte
+                // The fourth rejection class: not infinity, because a byte
                 // is set; not a point, because the pair is off the curve.
                 "nonzero_infinity_pattern" => {
                     let bytes = g1_bytes_from_hex(&f[0])?;
@@ -699,7 +699,7 @@ fn evaluate(kat: &Kat) -> Result<(), String> {
                         "an off_curve fixture is on the curve",
                     )
                 }
-                // Must-be-exact 3's fourth class: not infinity, because a byte
+                // The fourth rejection class: not infinity, because a byte
                 // is set; not a point, because the pair is off the curve.
                 "nonzero_infinity_pattern" => {
                     let bytes = g2_bytes_from_hex(&f[0])?;
@@ -815,7 +815,7 @@ fn evaluate(kat: &Kat) -> Result<(), String> {
 
         // <a> <a^((q^12-1)/r)>, the exact final exponent as an integer.
         //
-        // This is the line that pins Must-be-exact 6: the expected value is
+        // This is the line that pins the exact final exponent: the expected value is
         // arkworks raising the same input to the literal 2,790-bit exponent,
         // so any error in the lambda decomposition fails here immediately.
         "fq12_final_exp" => {

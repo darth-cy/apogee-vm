@@ -1,7 +1,7 @@
-//! S15's engine additions, each cheap enough for ordinary CI: the halving
-//! cross gate end to end over a hand-written fraction circuit, the two range
-//! tables' closed forms against the tables themselves (acceptance 9), the
-//! derived LogUp challenge slots, and the root check.
+//! The engine's LogUp pieces, each cheap enough for ordinary CI: the halving
+//! cross gate end to end over a hand-written fraction circuit, the virtual
+//! tables' closed forms against the tables themselves, the derived LogUp
+//! challenge slots, and the root check.
 
 use constants::{challenge_slot, lookup_channel};
 use constraints::{
@@ -209,11 +209,12 @@ fn a_fraction_tree_adds_every_rows_fraction() {
     }
 }
 
-/// Acceptance 5's mechanism, on the tree itself. A leaf whose pair is `(0, 0)`
-/// annihilates everything: `(x, y) + (0, 0) = (x·0 + 0·y, y·0) = (0, 0)`, so
-/// the root is `(0, 0)` whatever every other row holds — an arbitrary,
-/// unbalanced set of fractions included. The numerator check alone, which is
-/// the test-only fork of the assertion, accepts it; only `den != 0` refuses it.
+/// Why the root check needs `den != 0`, on the tree itself. A leaf whose pair
+/// is `(0, 0)` annihilates everything:
+/// `(x, y) + (0, 0) = (x·0 + 0·y, y·0) = (0, 0)`, so the root is `(0, 0)`
+/// whatever every other row holds — an arbitrary, unbalanced set of fractions
+/// included. The numerator check alone, which is the test-only fork of the
+/// assertion, accepts it; only `den != 0` refuses it.
 ///
 /// The witness is crafted directly here. A prover of the real schedule cannot
 /// reach a zero denominator by choosing columns, because `g` is drawn after
@@ -298,11 +299,11 @@ fn prove_and_verify(
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 9: the virtual tables
+// The virtual tables
 // ---------------------------------------------------------------------------
 
-/// Acceptance 9. Each range table's closed form is the multilinear extension of
-/// its own table: materialize `virtual_at_row` over `2^n` rows, evaluate that
+/// Each range table's closed form is the multilinear extension of its own
+/// table: materialize `virtual_at_row` over `2^n` rows, evaluate that
 /// polynomial directly at pseudo-random points, and require `virtual_at_point`
 /// to agree. Held at `n` below, at and above each bound, so both the
 /// "every value once per `2^bits` rows" case and the "the table is the row
@@ -333,15 +334,15 @@ fn each_range_tables_closed_form_is_its_multilinear_extension() {
 }
 
 /// The `XOR8` table's three closed forms are the multilinear extensions of their
-/// own columns (S26d, `docs/spec/lookup.md` §14).
+/// own columns (`docs/spec/lookup.md` §3).
 ///
 /// **This is the one that could have been wrong silently.** `Xor8A` and `Xor8B`
 /// are weighted sums of the row's bits, like the two range tables; `Xor8Out` is
-/// not — it is `Σ_{j<8} 2^j·(y_j + y_{j+8} − 2·y_j·y_{j+8})`, the first closed
-/// form in the repository that reads two variables in one term, and it is
-/// multilinear only because `y ^ z = y + z − 2yz` is. A verifier that evaluated a
-/// *different* polynomial than the prover's table would accept proofs of the
-/// wrong statement, and nothing else in the fast gate compares the two.
+/// not — it is `Σ_{j<8} 2^j·(y_j + y_{j+8} − 2·y_j·y_{j+8})`, a closed form
+/// that reads two variables in one term, and it is multilinear only because
+/// `y ^ z = y + z − 2yz` is. A verifier that evaluated a *different* polynomial
+/// than the prover's table would accept proofs of the wrong statement, and
+/// nothing else in the fast gate compares the two.
 ///
 /// Held at 8, 15, 16 and 17 variables: below 16 the table is a strict subset
 /// (`constraints::lookup::table_vars` is what refuses a circuit there), at 16 it
@@ -391,8 +392,8 @@ fn the_xor8_closed_forms_are_their_multilinear_extensions() {
     assert_eq!(seen.len(), 1 << 16);
 }
 
-/// Acceptance 9's negative control: a closed form perturbed in one bit's weight
-/// is no longer the table's extension, and the comparison above catches it.
+/// The negative control: a closed form perturbed in one bit's weight is no
+/// longer the table's extension, and the comparison above catches it.
 #[test]
 fn a_perturbed_closed_form_disagrees_with_the_table() {
     let mut rng = Rng::new(0x5115_000a);

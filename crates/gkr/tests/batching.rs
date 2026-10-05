@@ -1,6 +1,6 @@
-//! Acceptance 4: the batched-claim invariant of must-be-exact 6, over the whole
-//! backward pass, read off the transcript's event log — and the log itself,
-//! event for event, against the frozen schedule of `docs/spec/gkr.md` §5.2.
+//! The batched-claim invariant over the whole backward pass, read off the
+//! transcript's event log — and the log itself, event for event, against the
+//! schedule of `docs/spec/gkr.md` §5.2.
 
 mod common;
 
@@ -60,10 +60,10 @@ fn expected_log() -> Vec<TranscriptEvent> {
     log
 }
 
-/// Walk a log and hold must-be-exact 6 at every step: a batch or child
-/// challenge is drawn only once every claim it reduces has been absorbed, and
-/// after each reduction exactly one claim point is outstanding. Which
-/// transitions halve, and how many claims each leaves, are read from
+/// Walk a log and hold the batched-claim invariant at every step: a batch or
+/// child challenge is drawn only once every claim it reduces has been
+/// absorbed, and after each reduction exactly one claim point is outstanding.
+/// Which transitions halve, and how many claims each leaves, are read from
 /// `artifact`, never guessed from the log. Returns how many batches and child
 /// reductions it saw.
 ///

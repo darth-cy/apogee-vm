@@ -9,8 +9,8 @@
 //! Not from `ark_bn254::Bn254::pairing`. That routine's final exponentiation
 //! is the Fuentes-Castañeda variant, which returns `f^(m d)` with
 //! `m = 2x(6x^2 + 3x + 1)` — a fixed power of the true pairing rather than the
-//! pairing — and S06's Must-be-exact 6 requires the exact `(q^12 - 1)/r`
-//! power. So the oracle here is arkworks' **Miller loop** raised to the
+//! pairing — and `curve::pairing` computes the exact `(q^12 - 1)/r` power
+//! (`docs/spec/primitives.md` §4). So the oracle here is arkworks' **Miller loop** raised to the
 //! literal integer exponent, which is the definition and depends on no
 //! library's choice of decomposition. Both consistency checks are asserted at
 //! generation time:
@@ -35,7 +35,7 @@ use crate::shared::{full_final_exponent, hex_fq12, hex_g1, hex_g2};
 
 const SEED: u64 = 20260915;
 
-/// Acceptance 2 asks for at least a hundred random pairs.
+/// Random `(P, Q)` pairs, beside the named cases.
 const RANDOM_PAIRS: usize = 120;
 
 const HEADER: &str = "\

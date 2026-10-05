@@ -2,11 +2,10 @@
 //!
 //! The limb primitives and the Montgomery core below are a deliberate, literal
 //! duplicate of `crates/field`'s, with `FQ_*` constants in place of `FR_*`.
-//! S05 says "reuse the approach, not the type", and the master prompt's rule 1
-//! forbids a generic field: `Fq` is its own concrete struct, so the arithmetic
-//! is its own concrete code. Two copies of a proven 150-line kernel are
-//! cheaper to review than one abstraction over a field that will only ever
-//! have two instances.
+//! The approach is reused, not the type, and there is no generic field: `Fq`
+//! is its own concrete struct, so the arithmetic is its own concrete code. Two
+//! copies of a proven 150-line kernel are cheaper to review than one
+//! abstraction over a field that will only ever have two instances.
 //!
 //! `q < 2^254`, exactly as `p` is, so every bound the `Fr` kernel relies on
 //! holds here unchanged: a sum of two reduced values fits in four limbs, and
@@ -37,7 +36,7 @@ const MINUS_ONE_MONTGOMERY: [u64; 4] = [
 /// makes the derived `PartialEq` correct.
 ///
 /// The limbs are `pub(crate)` rather than private so that `g1.rs` and `g2.rs`
-/// can write the frozen `GENERATOR` constants, which need Montgomery limbs at
+/// can write the `GENERATOR` constants, which need Montgomery limbs at
 /// const-evaluation time. Nothing outside this crate can see the layout.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Fq(pub(crate) [u64; 4]);
@@ -185,7 +184,7 @@ fn from_montgomery(a: &[u64; 4]) -> [u64; 4] {
 }
 
 // ---------------------------------------------------------------------------
-// Public API. The names mirror `field::Fr`'s frozen surface exactly, plus
+// Public API. The names mirror `field::Fr`'s public surface exactly, plus
 // `sqrt`, which `Fr` has no use for and `Fq2` needs.
 // ---------------------------------------------------------------------------
 

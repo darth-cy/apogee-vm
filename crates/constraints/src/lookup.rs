@@ -2,7 +2,7 @@
 //! compressed into one denominator, what a channel's table side is, and the
 //! fraction tree that discharges a whole channel.
 //!
-//! `docs/spec/lookup.md` is normative. A channel claims
+//! `docs/spec/lookup.md` specifies it. A channel claims
 //!
 //! ```text
 //! Σ_rows Σ_l 1/(E_l + g)  −  Σ_rows mult/(T + g)  =  0
@@ -56,7 +56,8 @@ pub struct ChannelSpec {
     pub channel: u32,
     /// The table's columns, one per tuple position and in the same order every
     /// lookup expression of the channel uses: a range channel's one virtual
-    /// table, a table channel's committed `S` columns.
+    /// table, a table channel's committed `S` columns or, for `XOR8`, its three
+    /// virtual ones.
     pub table: Vec<PolyAddress>,
     /// `W[i]`: the channel's one multiplicity column, last in the witness
     /// subtree.
@@ -73,7 +74,7 @@ enum Gating {
     /// `(0, 0, 0)`, and `0 ^ 0 = 0` is true in the same way.
     ///
     /// Named for the discipline and not for a channel kind: `XOR8` is a table
-    /// channel that takes it (S26d, `docs/spec/lookup.md` §14).
+    /// channel that takes it (`docs/spec/lookup.md` §3).
     NoOffset,
     /// `flag·(key + 1)` on column 0 and `flag·v_j` on the rest, the neutral
     /// tuple being the all-zero `ZeroEntry` row. The `+ 1` is what keeps a real
@@ -81,10 +82,10 @@ enum Gating {
     /// that are switched off.
     ZeroEntry,
     /// `flag·(v_j + 1) − 1` on every column, the neutral tuple being
-    /// `MINUS_ONE` in every column: S11's decoded table is `MINUS_ONE`-padded
-    /// and has no all-zero row, so its padding row is the neutral entry. The
-    /// one documented exemption from the `ZeroEntry` rule (S15 must-be-exact
-    /// 4).
+    /// `MINUS_ONE` in every column: the decoded table is `MINUS_ONE`-padded
+    /// and has no all-zero row, so its padding row is the neutral entry. Like
+    /// `NoOffset`, an exemption from the `ZeroEntry` rule
+    /// (`docs/spec/lookup.md` §4).
     MinusOne,
 }
 
@@ -216,8 +217,8 @@ pub fn table_denominator(spec: &ChannelSpec) -> GateDef {
 /// expression, then neutral `(0, 1)` fractions up to a power of two.
 ///
 /// The table goes first so that the tree's first pair-addition, which combines
-/// leaves 0 and 1, is literally `1/(w_0 + g) − mult/(T + g)`: the node
-/// S15 must-be-exact 1 pins. Put it last and that node appears nowhere in a
+/// leaves 0 and 1, is literally `1/(w_0 + g) − mult/(T + g)`, the leaf formula
+/// of `docs/spec/lookup.md` §1. Put it last and that node appears nowhere in a
 /// channel with more than one lookup, because the row fractions pair with each
 /// other.
 ///
@@ -373,7 +374,7 @@ pub fn table_vars(channel: u32) -> u32 {
 const XOR8_BYTE_BITS: u32 = 8;
 
 /// The `XOR8` channel's table, in tuple order: `(a, b, a ^ b)` as closed forms
-/// of the row index. `docs/spec/lookup.md` §14.
+/// of the row index. `docs/spec/lookup.md` §3.
 pub fn xor8_table() -> alloc::vec::Vec<PolyAddress> {
     vec![
         PolyAddress::Virtual(VirtualKind::Xor8A),
@@ -388,10 +389,10 @@ pub fn xor8_table() -> alloc::vec::Vec<PolyAddress> {
 /// **its own channel's** fraction tree: a lookup's denominator of the channel
 /// it names, a table fraction of the channel whose table it compresses.
 ///
-/// This is the construction-time twin of the discharge rule (S15 must-be-exact
-/// 7): `channel_trees` builds the leaves from the lookup list, so the check is
-/// over the *finished* artifact, which is what makes a dropped, duplicated or
-/// misrouted obligation visible. It matches by normalized expansion, so a leaf
+/// This is the discharge rule (`docs/spec/lookup.md` §11), run at
+/// construction: `channel_trees` builds the leaves from the lookup list, so
+/// the check is over the *finished* artifact, which is what makes a dropped,
+/// duplicated or misrouted obligation visible. It matches by normalized expansion, so a leaf
 /// renamed, reordered or rewritten into an equal polynomial still counts, and
 /// one that reads another lookup's columns does not.
 ///
@@ -485,12 +486,12 @@ pub fn check_discharge(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<(),
             .filter(|&j| crate::laws::normal_form(leaves[j]) == want)
             .collect();
         // The count is per channel, not per circuit: the two range channels
-        // gate and neutralize identically (§4), so one lookup's denominator gate
-        // can be another channel's leaf byte for byte, and counting over the
-        // whole list would refuse two obligations that are each discharged
-        // exactly once. Where `specs` names the channel, count inside its cone,
-        // and a lookup whose every match is outside it is misrouted rather than
-        // missing.
+        // gate and neutralize identically (`docs/spec/lookup.md` §4), so one
+        // lookup's denominator gate can be another channel's leaf byte for
+        // byte, and counting over the whole list would refuse two obligations
+        // that are each discharged exactly once. Where `specs` names the
+        // channel, count inside its cone, and a lookup whose every match is
+        // outside it is misrouted rather than missing.
         let channel = lookup_channel::NAMES[l.channel as usize];
         let cone = specs
             .iter()
@@ -597,15 +598,16 @@ fn channel_cones(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<Vec<Vec<u
 /// - a 32-bit value: a witnessed high chunk `h` with obligations on `h` and on
 ///   `x − 2^16·h`, the convention every 32-bit column in this VM is bounded by.
 ///
-/// **The selector is half the check.** S17 matched an obligation on its
-/// expression alone, so a circuit whose direct pair sat under a narrower
-/// selector than its scaled obligation passed: on a row the narrow selector
+/// **The selector is half the check.** Matching an obligation on its
+/// expression alone would pass a circuit whose direct pair sits under a
+/// narrower selector than its scaled obligation: on a row the narrow selector
 /// switches off, the direct bound is vacuous and the scaled one is back to
 /// bounding nothing. Requiring the same selector is conservative — a direct
 /// bound under a genuinely *broader* selector is also sound — and conservative
 /// is the right side to be on for a check whose failure mode is silent.
 ///
-/// S18 consumes this for the shift family's residue; S19 for its own.
+/// Every constructor that bounds a column through a copower runs it
+/// (`docs/spec/lookup.md` §11).
 pub fn check_copowers(
     a: &CircuitArtifact,
     scaled: &[(PolyAddress, PolyAddress)],

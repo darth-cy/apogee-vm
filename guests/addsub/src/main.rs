@@ -1,10 +1,10 @@
 #![no_std]
 #![no_main]
-//! S16's tiny guest: a straight-line chain of 32-bit additions and
+//! A tiny guest: a straight-line chain of 32-bit additions and
 //! subtractions over the add/sub family's roster — `add`, `sub`, `addi`, `lui`,
 //! `auipc`, and the system kind's `fence` and `ecall` — that exits with its
-//! result word. It is the one program S16 proves end to end
-//! (`docs/spec/shard-proof.md`).
+//! result word. `crates/prover/tests/acceptance.rs` proves it end to end
+//! (`docs/spec/proof.md`).
 //!
 //! Everything in its image is an instruction of that family, which is what
 //! lets a proof with one execution family and the two RAM window families

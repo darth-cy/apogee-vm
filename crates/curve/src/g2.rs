@@ -125,9 +125,8 @@ impl G2Affine {
     /// `r * self == O`.
     ///
     /// A real check, unlike G1's: the twist's cofactor `2q - r` is not 1, so
-    /// on-curve does not imply in-subgroup. This is the direct test named by
-    /// S05's core algorithm — one 256-bit window ladder, no endomorphism
-    /// shortcut.
+    /// on-curve does not imply in-subgroup. This is the direct test — one
+    /// 256-bit window ladder, no endomorphism shortcut.
     ///
     /// The `is_on_curve` conjunct is what makes this a *complete* validity
     /// predicate, so a caller may use it alone. Without it, a point off `E'`

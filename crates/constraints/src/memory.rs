@@ -1,11 +1,11 @@
 //! The memory argument's circuits, as data: the frame layout every execution
 //! family's memory subtree follows, the tuple and leaf gates, the gadgets, the
-//! two RAM window artifacts, and the construction-time rules a memory artifact
-//! is held to beside `validate`.
+//! window artifacts, and the construction-time rules a memory artifact is held
+//! to beside `validate`.
 //!
-//! `docs/spec/memory.md` is normative: §1 the tuple, §2 the frame and its
+//! `docs/spec/memory.md` specifies it: §1 the tuple, §2 the frame and its
 //! gadgets, §3.3 the window artifacts, §7 the obligations, §8 the rules. Every
-//! formula, layout, order and name here is that document's.
+//! formula, layout, order and name here is that page's.
 //!
 //! A family's frame holds only the queries its instructions can make, so `w`
 //! below is `frame_queries(family).len()`, never 8.
@@ -18,7 +18,8 @@
 //! lists 1-k  L{k+1}[j] = L{k}[2j]·L{k}[2j+1], halving the width to 2
 //!
 //! windows    M[0] teardown_ts, M[1] teardown_value, V[row];
-//!            INIT_TEARDOWN adds S[0] init_value and V[ram_live]
+//!            INIT_TEARDOWN adds S[0] init_value and V[ram_live],
+//!            PUBLIC_INPUT and ADVICE_WINDOWS add M[2] init_value
 //! list 0     L{1}[0] teardown (read side), L{1}[1] init (write side)
 //!
 //! both       then trace_vars halving lists; outputs [read_root, write_root]
@@ -56,16 +57,12 @@ pub const FIELD_READ_VALUE: u32 = 3;
 pub const FIELD_WRITE_VALUE: u32 = 4;
 
 /// The query table's size: the pc query, then the six roles of
-/// `docs/spec/execution-trace.md` §7 in their frozen order. A family's frame
+/// `docs/spec/execution-trace.md` §7 in their fixed order. A family's frame
 /// holds a *subset* of these — [`frame_queries`] — so this is the table's
 /// length, never a frame's width.
 ///
-/// S21 appended [`DELEG`]. The table was nine until the POSIX layer was
-/// deleted: `arg1` and `arg2` were an ecall row's `a1` and `a2`, which only
-/// `read` and `write` ever passed, so both became unreachable the moment those
-/// calls did and were removed rather than left as columns nothing can make
-/// nonzero. `Row::present` is a `u8` with one bit per role, so it now has two
-/// spare bits; a seventh role is still a schema change.
+/// `Row::present` is a `u8` with one bit per role, so it has two spare bits;
+/// a seventh role is a schema change.
 pub const FRAME_QUERIES: usize = 7;
 
 /// The pc query, which every execution family's frame holds first.
@@ -190,17 +187,16 @@ pub const RD: usize = 5;
 /// columns that are 0 on every row, commits and opens them, and discharges
 /// their obligations vacuously.
 ///
-/// Panics on the two init families, which run no cycles and have no frame, and
-/// on any other id.
+/// Panics on every family that is not an execution family — a window,
+/// delegation or recursion family has no execution frame — and on an id
+/// outside `constants::family`.
 pub fn frame_queries(family: u32) -> &'static [usize] {
     match family {
         // lui, auipc, addi, add, sub, and the system row kind: an ecall's own
         // row reads `a7` and `a0` and writes `a0`. No `load` and no `ram`:
-        // no instruction routed here touches memory, and the ecall transfer
-        // rows that once brought a RAM query with them went with `read` and
-        // `write`. The delegation mirror is here because a delegation ecall is
-        // an ecall, so its row is this family's (`docs/spec/delegation.md`
-        // §5.1).
+        // no instruction routed here touches memory. The delegation mirror is
+        // here because a delegation ecall is an ecall, so its row is this
+        // family's (`docs/spec/delegation.md` §5.1).
         family::ADD_SUB_LUI_AUIPC => &[PC, RS1, RS2, RD, DELEG],
         // Register-register, register-immediate, branches and jumps: no RAM
         // query at all.
@@ -224,7 +220,7 @@ pub fn frame_queries(family: u32) -> &'static [usize] {
              fixed-offset words rather than a subset of the query table; \
              `docs/spec/delegation.md` §4 is its artifact"
         ),
-        other => panic!("family {other} is not in constants::family"),
+        other => panic!("family {other} has no frame, or is not in constants::family"),
     }
 }
 
@@ -472,8 +468,8 @@ pub fn family_frame_artifact(family: u32, trace_vars: u32) -> CircuitArtifact {
 /// The frame's own columns come first in every subtree, so `witness` starts at
 /// `W[w + 3]` (or `W[w]` for a frame without an `rd` query) and `setup` at
 /// `S[0]`. The frame's `2w` gap obligations come first in the lookup list, so
-/// `lookups` follows them. An empty `FamilySpec` is [`frame_artifact`], which is
-/// exactly S14's frame.
+/// `lookups` follows them. An empty `FamilySpec` is [`frame_artifact`], the
+/// bare memory frame.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FamilySpec {
     pub witness: Vec<String>,
@@ -498,9 +494,10 @@ pub struct FamilySpec {
 /// **`family_spec.channels` must not be empty.** A frame carries its own `2w` gap
 /// obligations whatever a caller adds, so a channel list of nothing is a
 /// circuit every one of whose obligations is undischarged. The one artifact of
-/// that shape is S14's [`frame_artifact`], a *component* whose discharge S15
-/// owes and whose bytes are frozen fixtures; it is built here rather than
-/// through this entry point, and this one refuses the shape outright.
+/// that shape is [`frame_artifact`], a *component* that declares its
+/// obligations and discharges none, and whose bytes are committed fixtures; it
+/// is built here rather than through this entry point, and this one refuses
+/// the shape outright.
 pub fn frame_with_channels_artifact(
     queries: &[usize],
     trace_vars: u32,
@@ -509,7 +506,7 @@ pub fn frame_with_channels_artifact(
     assert!(
         !family_spec.channels.is_empty(),
         "memory frame: no channel, and a frame's own {} gap obligations would be discharged \
-         by nothing; S14's bare frame is `frame_artifact`",
+         by nothing; the bare frame is `frame_artifact`",
         2 * queries.len()
     );
     frame_body(queries, trace_vars, frame_gaps(queries), family_spec)
@@ -526,7 +523,7 @@ fn frame_gaps(queries: &[usize]) -> Vec<LookupExpr> {
 
 /// [`frame_with_channels_artifact`] with the frame's own obligations passed
 /// in, so the construction's count assertion — two per read
-/// (`docs/spec/memory.md` §2.4; S14 must-be-exact 5) — has something to refuse.
+/// (`docs/spec/memory.md` §2.4) — has something to refuse.
 fn frame_body(
     queries: &[usize],
     trace_vars: u32,
@@ -779,9 +776,9 @@ pub fn value_window_artifact(trace_vars: u32) -> CircuitArtifact {
 /// `crate::build::assemble` is the assembly; this is the memory argument's
 /// share of it.
 ///
-/// Asserts first that `lookups` holds exactly two obligations per read of the
-/// read side (`docs/spec/memory.md` §2.4; S14 must-be-exact 5), then validates
-/// through `assemble` and runs [`check_memory`], panicking on any refusal.
+/// Asserts first that the two sides have as many leaves, then validates
+/// through `assemble` and runs [`check_memory`] and, where `channels` is not
+/// empty, [`lookup::check_discharge`], panicking on any refusal.
 pub(crate) fn assemble(
     trace_vars: u32,
     layout: [Vec<String>; 3],
@@ -839,10 +836,10 @@ pub(crate) fn assemble(
     if let Err(e) = check_memory(&artifact) {
         panic!("memory artifact: {e}");
     }
-    // A frame with no channel is a *component*: S14 froze `frame_artifact`
-    // with its obligations declared and their discharge owed to S15, and its
-    // fixtures are those bytes. Only a circuit that declares channels claims
-    // to discharge anything, and only there is the discharge rule meaningful.
+    // A frame with no channel is a *component*: `frame_artifact` declares its
+    // obligations and discharges none, and its fixtures are those bytes. Only
+    // a circuit that declares channels claims to discharge anything, and only
+    // there is the discharge rule meaningful.
     if !channels.is_empty() {
         if let Err(e) = lookup::check_discharge(&artifact, channels) {
             panic!("memory artifact: {e}");
@@ -1007,7 +1004,7 @@ pub fn check_memory(a: &CircuitArtifact) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    /// S14 acceptance 12's negative control. The `ADD_SUB_LUI_AUIPC` frame's
+    /// A dropped obligation fails the build. The `ADD_SUB_LUI_AUIPC` frame's
     /// 10 obligations, less the last gadget's `gap_lo_deleg` — an obligation
     /// built and then dropped before the artifact is written — fail the build
     /// at the count assertion, before `validate` or `check_memory` run. The

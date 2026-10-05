@@ -17,7 +17,7 @@
 //! `block` form takes one `BlockProof`, which carries its whole shard set and
 //! the statement it binds, and runs `verify_block` — the same per-shard path
 //! plus the block's structural and time-window checks
-//! (`docs/spec/block-proof.md` §3).
+//! (`docs/spec/proof.md` §6).
 //!
 //! Exit 0 when everything verifies; 1 naming the first file refused and why,
 //! or the shards missing or repeated; 2 on a usage error.

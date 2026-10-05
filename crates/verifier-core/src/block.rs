@@ -1,16 +1,17 @@
-//! The block: one execution's shards as one object. `docs/spec/block-proof.md`
-//! is normative.
+//! The block: one execution's shards as one object. `docs/spec/proof.md`
+//! specifies it.
 //!
 //! A statement is proven by one `ShardProof` per shard of every family, every
-//! one of them against one `PublicInputs` (`docs/spec/shard-proof.md` §1). A
+//! one of them against one `PublicInputs` (`docs/spec/proof.md` §1). A
 //! [`BlockProof`] is that set, closed: the static `VmConfig` it was proven
 //! under, the statement, and the proofs in statement order. Nothing in it is
 //! new evidence — `verify_block` is `verify_shard` over every shard plus the
-//! block's own structural checks — and its public-data API is what S24's
-//! occupancy assertions and S26/S27's replay read.
+//! block's own structural checks — and its public-data API is what the block
+//! verifier's time-window check and the proving suites' occupancy assertions
+//! read.
 //!
-//! [`BlockReconciliation`] is the cross-shard record set as a named type, in
-//! the frozen layout S27's aggregation guest replays.
+//! [`BlockReconciliation`] is the cross-shard record set as a named type, with
+//! a wire form of its own (`docs/spec/proof.md` §9).
 
 use alloc::vec::Vec;
 
@@ -22,7 +23,7 @@ use crate::types::{PublicInputs, ShardProof};
 use crate::wire::{Reader, Writer};
 
 /// One shard's cross-shard record: what the other shards' verification reads
-/// of it, and nothing else. `docs/spec/block-proof.md` §2, the frozen layout.
+/// of it, and nothing else. `docs/spec/proof.md` §1.3.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShardRecord {
     pub family: u32,
@@ -36,8 +37,8 @@ pub struct ShardRecord {
 }
 
 /// The cross-shard record set: every shard's record in statement order,
-/// `verifier_core::statement_shards`'. S27's aggregation guest replays it, so
-/// its serialization is frozen (`docs/spec/block-proof.md` §6).
+/// `verifier_core::statement_shards`'. Its serialization is
+/// `docs/spec/proof.md` §9's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlockReconciliation {
     pub records: Vec<ShardRecord>,
@@ -48,7 +49,7 @@ pub struct BlockReconciliation {
 ///
 /// The `VmConfig` is carried rather than only read from the key because the
 /// statement descriptor — the static shape plus the per-proof shard counts —
-/// is public data of the proof (`docs/spec/shard-proof.md` §2, G3 and G4), and
+/// is public data of the proof (`docs/spec/proof.md` §2, G3 and G4), and
 /// `verify_block` holds the carried copy to the key's. The statement is
 /// carried for the same reason and held to the one the verifier was given.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,7 +94,7 @@ impl BlockProof {
     /// The cross-shard record set, in statement order.
     ///
     /// Well-shaped by construction for a block [`BlockProof::from_bytes`]
-    /// decoded or `prove_block` assembled. A hand-built block whose statement
+    /// decoded or a prover assembled. A hand-built block whose statement
     /// and proofs disagree is a caller error and panics, as
     /// `statement_shards` does on counts that are not its config's.
     pub fn reconciliation(&self) -> BlockReconciliation {
@@ -118,7 +119,7 @@ impl BlockProof {
         BlockReconciliation { records }
     }
 
-    /// The frozen wire form, `docs/spec/block-proof.md` §6: the `VmConfig`
+    /// The wire form, `docs/spec/proof.md` §9: the `VmConfig`
     /// encoding, the `PublicInputs` encoding, then each `ShardProof`
     /// encoding, each as a length-prefixed byte string.
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -184,7 +185,7 @@ impl BlockProof {
 }
 
 impl BlockReconciliation {
-    /// The frozen wire form, `docs/spec/block-proof.md` §6: a list of records,
+    /// The wire form, `docs/spec/proof.md` §9: a list of records,
     /// each `family, shard index, ts_start, ts_end, memory commitments in
     /// column order, read root, write root`.
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -223,7 +224,7 @@ impl BlockReconciliation {
     }
 }
 
-/// The block's time-window rule, `docs/spec/block-proof.md` §4: **within each
+/// The block's time-window rule, `docs/spec/proof.md` §8: **within each
 /// cycle-owning family**, the shards' windows are non-empty, ordered and
 /// pairwise disjoint — `ts_end` of shard `i` is at or below `ts_start` of
 /// shard `i + 1`.
@@ -231,21 +232,21 @@ impl BlockReconciliation {
 /// Per family, because cycle numbers are global and two families interleave:
 /// `ADD_SUB_LUI_AUIPC` may own cycles 1 and 3 while `JUMP_BRANCH_SLT` owns 2,
 /// so their windows overlap by construction and a block-wide disjointness
-/// rule could never hold. A family that owns no cycles — the two RAM window
-/// families, whose rows are words, and the delegation families to come — is
-/// exempt: its window is a claim about invocations, not a slice of the
-/// execution (`constants::family::CYCLE_OWNING`).
+/// rule could never hold. A family that owns no cycles — a window family,
+/// whose rows are words, or a delegation family, whose rows are invocations —
+/// is exempt: its window is not a slice of the execution
+/// (`constants::family::CYCLE_OWNING`).
 ///
 /// `records` is in statement order, so a family's records are consecutive and
 /// ascending by shard index; that is what makes checking neighbours enough.
 /// Each record's window is already `[start, end)` inside the clock: step 4 of
-/// `docs/spec/shard-proof.md` §6 holds every shard's to that.
+/// `docs/spec/proof.md` §6 holds every shard's to that.
 ///
 /// **What this does and does not bind.** It is a check on the *plan*: nothing
 /// in a family's circuit ties a claimed window to the rows committed under it,
-/// so `ts_start` is a claim (`docs/spec/block-proof.md` §4.1, the owner's S20
-/// decision). Cross-shard ordering, cycle uniqueness and pc continuity are
-/// carried by the global memory multiset alone (`docs/spec/memory.md` §4.2).
+/// so `ts_start` is a claim (`docs/spec/proof.md` §8). Cross-shard ordering,
+/// cycle uniqueness and pc continuity are carried by the global memory
+/// multiset alone (`docs/spec/memory.md` §9).
 pub fn check_ts_windows(records: &[ShardRecord]) -> Result<(), &'static str> {
     let owns_cycles = |r: &ShardRecord| {
         family::CYCLE_OWNING

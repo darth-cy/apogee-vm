@@ -2,11 +2,11 @@
 //! profile and the shard plan, the archive that snapshots them, and the memory
 //! argument's columns filled from them.
 //!
-//! `docs/spec/execution-trace.md` is the frozen convention every value here
-//! follows: the timestamps, the slot of every query kind, the x0 rule, the
-//! ecall frame. `crates/trace/CLAUDE.md` is the design record. `crates/emulator`
-//! is the only producer; everything here is a data structure over what it
-//! produced, or a column built from one.
+//! `docs/spec/execution-trace.md` specifies the convention every value here
+//! follows — the timestamps, the slot of every query kind, the x0 rule, the
+//! ecall frame — and, in §11, these containers. `crates/emulator` is the only
+//! producer; everything here is a data structure over what it produced, or a
+//! column built from one.
 
 mod archive;
 mod family;
@@ -39,7 +39,7 @@ use program::{FamilyId, VmConfig};
 /// those counts sum to the execution's cycle count — [`CycleProfile::total`].
 /// A **delegation** family's count is its *invocations*, which are not cycles:
 /// they ride a requesting cycle that the add/sub family already counts
-/// (`docs/spec/delegation.md` §8), so they are outside that sum. Either way
+/// (`docs/spec/delegation.md` §1), so they are outside that sum. Either way
 /// the count is what [`plan_shards`] divides by the family's height.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CycleProfile {
@@ -71,10 +71,13 @@ pub struct ShardPlan {
 /// families of `config`, in its order — a profile from another config is a
 /// caller error and panics.
 ///
-/// `INIT_TEARDOWN` and `ZERO_WINDOWS` run no cycles, so both plan 0 shards
-/// here. Their rows are addresses rather than cycles: the prover assembles
-/// exactly 1 `INIT_TEARDOWN` shard, RAM window 0, and one `ZERO_WINDOWS`
-/// shard per entry of [`init_windows`] (`docs/spec/memory.md` §3).
+/// A window family runs no cycles, so it plans 0 shards here. Its rows are
+/// addresses rather than cycles, and its count is the prover's: exactly 1
+/// `INIT_TEARDOWN` shard, RAM window 0; one `ZERO_WINDOWS` shard per entry of
+/// [`init_windows`]; one each of `PUBLIC_INPUT` and `PUBLIC_OUTPUT`;
+/// [`advice_window_count`] of `ADVICE_WINDOWS`; and
+/// [`MemoryState::field_windows`] of `FIELD_WINDOWS` (`docs/spec/memory.md`
+/// §3).
 pub fn plan_shards(profile: &CycleProfile, config: &VmConfig) -> ShardPlan {
     assert!(
         profile.counts.len() == config.families.len()

@@ -14,10 +14,10 @@
 //! is completely insecure, because `tau` is written down four lines below. It
 //! exists to exercise the protocol, never to stand in for a ceremony.
 //!
-//! It is built by writing the archive of `docs/spec/srs.md` §5 and loading it
+//! It is built by writing the archive of `docs/spec/srs.md` §4 and loading it
 //! through `Srs::load`, which is the only way to get an `Srs` from points and
-//! keeps every point going through `crates/curve`'s validating decoder. No
-//! constructor was added to `crates/srs` for the sake of a test.
+//! keeps every point going through `crates/curve`'s validating decoder.
+//! `crates/srs` has no constructor for a test's sake.
 
 #![allow(dead_code)]
 
@@ -34,7 +34,7 @@ use test_support::Rng;
 /// The toy SRS secret. Written down on purpose; see the module docs.
 pub const TOY_TAU: &str = "0x0000000000000000000000000000000000000000000000000000000000abcdef";
 
-/// `docs/spec/srs.md` §5, transcribed. Duplicated from `crates/srs` on purpose:
+/// `docs/spec/srs.md` §4, transcribed. Duplicated from `crates/srs` on purpose:
 /// a test that reads the layout out of the crate cannot notice it changing.
 const ARCHIVE_MAGIC: &[u8; 8] = b"APOGESRS";
 const ARCHIVE_VERSION: u32 = 1;
@@ -150,11 +150,11 @@ pub fn records(text: &str) -> Vec<Vec<String>> {
 // ---------------------------------------------------------------------------
 //
 // Everything below rebuilds what `crates/pcs` derives, from the definitions in
-// `docs/spec/mercury.md` and `docs/spec/accumulator.md` rather than from the
-// crate. Two files read it: `accumulator.rs`, which replays the schedule to
-// recover the challenges, and `edge_cases.rs`, which reads forced ones out of a
-// fixture. Naive on purpose — schoolbook multiplication, Lagrange written out,
-// `eq` from its product form — so that agreeing with the crate means something.
+// `docs/spec/mercury.md` rather than from the crate. Two files read it:
+// `accumulator.rs`, which replays the schedule to recover the challenges, and
+// `edge_cases.rs`, which reads forced ones out of a fixture. Naive on purpose —
+// schoolbook multiplication, Lagrange written out, `eq` from its product form —
+// so that agreeing with the crate means something.
 
 use constants::transcript_tags as tags;
 use curve::G1Affine;
@@ -236,7 +236,7 @@ pub fn product_formula(u: &[Fr], x: Fr) -> Fr {
     acc
 }
 
-/// `docs/spec/mercury.md` §7's two derived values: `h(alpha)` and `D(z)`.
+/// `docs/spec/mercury.md` §3.4's two derived values: `h(alpha)` and `D(z)`.
 pub fn derived(u: &[Fr], v: Fr, p: &MercuryProof, c: &Challenges) -> (Fr, Fr) {
     let t = u.len() / 2;
     let b = 1usize << t;
@@ -254,7 +254,7 @@ pub fn derived(u: &[Fr], v: Fr, p: &MercuryProof, c: &Challenges) -> (Fr, Fr) {
     (h_alpha, pow(c.z, b - 1) * p.g_inv_z)
 }
 
-/// The twelve accumulator entries of `docs/spec/accumulator.md` §2, rebuilt
+/// The twelve accumulator entries of `docs/spec/mercury.md` §6.1, rebuilt
 /// from the specification for a given challenge set.
 pub fn deferred_entries(
     g1_gen: &G1Affine,
@@ -269,7 +269,7 @@ pub fn deferred_entries(
     let z_inv = c.z.inverse().expect("z is nonzero");
     let (h_alpha, d_z) = derived(u, v, p, c);
 
-    // The BDFG20 batch of §6, in its frozen order g, h, S, D.
+    // The BDFG20 batch of `docs/spec/mercury.md` §3.3, in its order g, h, S, D.
     let complements = [
         vanishing(&[c.alpha]),
         vec![Fr::ONE],
@@ -324,11 +324,11 @@ pub fn deferred_entries(
     ]
 }
 
-/// `docs/spec/mercury.md` §5's schedule, transcribed a second time, run to
+/// `docs/spec/mercury.md` §3.2's schedule, transcribed a second time, run to
 /// recover every challenge it draws.
 ///
 /// `prefix` is whatever the transcript absorbed before the opening: nothing for
-/// a single verification, §11's preamble for a batch.
+/// a single verification, §5's preamble for a batch.
 pub fn replay_schedule(
     cm: &MercuryCommitment,
     u: &[Fr],

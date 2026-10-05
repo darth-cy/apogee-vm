@@ -8,8 +8,8 @@
 //! - **Three canonical root vectors**, the ones every Ethereum client's test
 //!   suite carries. They are the only external oracle available: there is no
 //!   trie implementation in this workspace to differential against, and
-//!   `alloy-trie` is not a dependency of anything here (nor should it be — S25
-//!   says own the MPT).
+//!   `alloy-trie` is not a dependency of anything here: the MPT is this
+//!   repository's own.
 //! - **Round-trip laws** that need no oracle: a trie built by insertion equals
 //!   one built in a different order; deleting a key gives the same root as
 //!   never having inserted it; a sparse trie rebuilt from a subset of its own
@@ -568,21 +568,20 @@ fn a_single_slot_storage_trie_has_the_computed_root() {
 }
 
 // ---------------------------------------------------------------------------
-// The decoder's two aborts. Both were found by the S25 adversarial review, and
-// both share a shape: a node is **advice**, it reaches `build` before
-// `check_root` can say anything about it, and the failure was an abort rather
-// than an `MptError`. A guest that aborts writes to fd 2, which is not
-// provable, so the run is one no proof can cover — the rule the root
-// `CLAUDE.md` states for `Bytecode::new_raw`, and the same rule here.
+// The decoder's two aborts. Both share a shape: a node is **advice**, it
+// reaches `build` before `check_root` can say anything about it, and the
+// failure would be an abort rather than an `MptError`. A guest that aborts
+// exits 101, which names nothing — the rule `docs/spec/ethereum.md` §2.2
+// states for `Bytecode::new_raw`, and the same rule here.
 
 /// A declared RLP length that overflows the address space is `Malformed`.
 ///
-/// `long` bounded the length itself with `checked_mul`/`checked_add` and then
-/// computed `at + len` with a plain `+`. `bytes.get` would have refused the
-/// slice safely, but the range has to be built before `get` sees it: on the
-/// 64-bit host `0xbf` with eight `0xff` bytes overflowed, and on the guest —
-/// four-byte `usize`, `overflow-checks` pinned on in both profiles — the
-/// five-byte `bb ff ff ff ff` does.
+/// `long` bounds the length itself with `checked_mul`/`checked_add`, and
+/// `at + len` with `checked_add` too. `bytes.get` would refuse the slice
+/// safely, but the range has to be built before `get` sees it: on the 64-bit
+/// host `0xbf` with eight `0xff` bytes overflows a plain `+`, and on the
+/// guest — four-byte `usize`, `overflow-checks` pinned on in both profiles —
+/// the five-byte `bb ff ff ff ff` does.
 #[test]
 fn an_rlp_length_that_overflows_the_address_space_is_malformed() {
     // The host's width: 0xbf is a long-form *string* of 8 length bytes.

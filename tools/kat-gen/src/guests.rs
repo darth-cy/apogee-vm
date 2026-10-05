@@ -35,10 +35,9 @@ pub fn generate() {
 
 /// Build one guest into a fresh target directory and return its ELF bytes.
 ///
-/// The command is acceptance 1's, typed out: nothing but `cargo build
+/// The command is the guest manual's, typed out: nothing but `cargo build
 /// --target riscv32imac-unknown-none-elf`, run from the guest's own directory,
-/// with the target, the runner and the linker flags coming from
-/// `guests/.cargo/config.toml`.
+/// with the target and the linker flags coming from `guests/.cargo/config.toml`.
 fn build(name: &str, slot: &str) -> Vec<u8> {
     let guest_dir = repo_root().join("guests").join(name);
     let target_dir = std::env::temp_dir().join(format!("apogee-guest-{name}-{slot}"));

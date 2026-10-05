@@ -16,7 +16,7 @@ pub enum AddressSpace {
     Ram,
     /// The program counter; the one address is 0.
     Pc,
-    /// `family::KECCAK_F`'s **delegation anchor** space (S21): the address is
+    /// `family::KECCAK_F`'s **delegation anchor** space: the address is
     /// a request's frame base pointer.
     ///
     /// Not memory. No instruction reaches it, no RAM window initializes it,
@@ -26,26 +26,26 @@ pub enum AddressSpace {
     /// has a space of its own — the tag *is* the delegation type — so a
     /// keccak request cannot consume another type's answer.
     KeccakF,
-    /// `family::POSEIDON2`'s delegation anchor space (S23). As [`KeccakF`] in
+    /// `family::POSEIDON2`'s delegation anchor space. As [`KeccakF`] in
     /// every respect but the type it names.
     ///
     /// [`KeccakF`]: AddressSpace::KeccakF
     Poseidon2,
-    /// `family::FR_ARITH`'s delegation anchor space (S23).
+    /// `family::FR_ARITH`'s delegation anchor space.
     FrArith,
-    /// `family::MOD_MUL`'s delegation anchor space (S26).
+    /// `family::MOD_MUL`'s delegation anchor space.
     ModMul,
-    /// `family::SHA256_COMP`'s delegation anchor space (S26c).
+    /// `family::SHA256_COMP`'s delegation anchor space.
     Sha256Comp,
-    /// `family::EC_ADD`'s delegation anchor space (S26c).
+    /// `family::EC_ADD`'s delegation anchor space.
     EcAdd,
-    /// `family::FR_OP`'s delegation anchor space (S-RECURSION).
+    /// `family::FR_OP`'s delegation anchor space.
     FrOp,
-    /// `family::P2_FIELD`'s delegation anchor space (S-RECURSION).
+    /// `family::P2_FIELD`'s delegation anchor space.
     P2Field,
-    /// `family::FIELD_IO`'s delegation anchor space (S-RECURSION).
+    /// `family::FIELD_IO`'s delegation anchor space.
     FieldIo,
-    /// `family::FQ_OP`'s delegation anchor space (S-RECURSION).
+    /// `family::FQ_OP`'s delegation anchor space.
     FqOp,
 }
 
@@ -66,7 +66,7 @@ pub const DELEGATION_SPACES: [AddressSpace; 10] = [
 ];
 
 impl AddressSpace {
-    /// The frozen tag.
+    /// The space's tag.
     pub fn tag(self) -> u8 {
         match self {
             AddressSpace::Reg => address_space::REG,
@@ -110,12 +110,12 @@ impl AddressSpace {
     /// a delegation space — a frame base pointer, which is a 4-aligned word
     /// address inside ordinary RAM.
     ///
-    /// The `Ram` space is wider than ordinary RAM since S-IO: it also holds the
+    /// The `Ram` space is wider than ordinary RAM: it also holds the
     /// two public windows below `RAM_ORIGIN` and the advice region above RAM.
     /// All three are `address_space::RAM` tuples — what tells a public value,
     /// an advice word and a heap word apart is which family initializes the
     /// address, never a tag a load would have to name
-    /// (`docs/spec/public-values.md` §2).
+    /// (`docs/spec/public-values.md` §4).
     pub fn holds(self, addr: u32) -> bool {
         match self {
             AddressSpace::Reg => addr < 32,
@@ -370,7 +370,7 @@ impl MemoryState {
     ///
     /// Ordinary RAM and not every `Ram` tuple: the two public windows and the
     /// advice region are `Ram` tuples too, and each has a family of its own
-    /// that initializes it (`docs/spec/public-values.md` §2).
+    /// that initializes it (`docs/spec/public-values.md` §4).
     pub fn touched_ram_windows(&self, height: u32) -> Vec<u32> {
         let words = 4 * height as u64;
         let mut out: Vec<u32> = self
@@ -727,9 +727,8 @@ pub fn in_ram(addr: u32) -> bool {
 /// Whether `addr` is in a region some family initializes: ordinary RAM, one of
 /// the two public windows, or the advice region.
 ///
-/// Everything else — `[0, PUBLIC_INPUT_ORIGIN)`, the whole of it since
-/// S-STREAM put the two windows at `2^12` and they now end flush against
-/// `RAM_ORIGIN` — is a **hole** no family initializes, so an access there
+/// Everything else — `[0, PUBLIC_INPUT_ORIGIN)`, the two windows ending flush
+/// against `RAM_ORIGIN` — is a **hole** no family initializes, so an access there
 /// could not balance whatever an executor did with it. Making it
 /// unaddressable is what turns a null dereference into a loud executor error
 /// rather than a trace nothing can prove.
@@ -739,8 +738,8 @@ pub fn addressable(addr: u32) -> bool {
     in_ram(addr) || public || addr >= guest_memory::ADVICE_ORIGIN
 }
 
-/// What every address holds before the execution starts, `docs/spec/memory.md`
-/// §4.2's write at timestamp 0.
+/// What every address holds before the execution starts: its write at
+/// timestamp 0 (`docs/spec/execution-trace.md` §2).
 ///
 /// Three regions and three sources: the image in ordinary RAM, the statement's
 /// public input in its window, and the prover's advice above RAM. The journal

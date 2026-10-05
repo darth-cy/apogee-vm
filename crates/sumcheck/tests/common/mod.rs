@@ -21,7 +21,7 @@ pub fn bound_transcript(digest: Fr) -> Transcript {
 }
 
 /// The `n` eq-randomizers a proof over `digest` is built on, replayed from the
-/// frozen transcript script. They are drawn before any round message exists, so
+/// transcript script. They are drawn before any round message exists, so
 /// no proof is needed to read them.
 pub fn eq_randomizers(digest: Fr, n: usize) -> Vec<Fr> {
     let mut t = bound_transcript(digest);
@@ -84,7 +84,7 @@ pub fn square_witness_with_row(n: usize, seed: u64, row: usize, mask: u16) -> Ve
 }
 
 /// Rebuild a [`square_witness`] with `B[row]` bumped by one and `A` untouched,
-/// so the witness no longer satisfies `A * A - B` anywhere but row `row`.
+/// so the witness satisfies `A * A - B` everywhere but row `row`.
 pub fn square_witness_with_bumped_b(n: usize, seed: u64, row: usize) -> Vec<MultilinearPoly> {
     let (a, mut b) = square_columns(n, seed);
     b[row] += 1;
@@ -211,8 +211,8 @@ fn wide_polys(cols: WideColumns) -> Vec<MultilinearPoly> {
 // Discharge
 // ---------------------------------------------------------------------------
 
-/// The final-evals discharge, done here by direct evaluation because the
-/// Mercury PCS that will do it against commitments arrives in a later stage.
+/// The final-evals discharge, done here by direct evaluation rather than by an
+/// opening against commitments.
 ///
 /// `columns` must be the witness the transcript's digest was taken over. An
 /// error, never a panic: a prover that swapped its witness after the digest

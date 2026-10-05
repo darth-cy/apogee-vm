@@ -52,8 +52,9 @@ pub fn generate() {
     out.push_str("#   inv         <a> <c>       c = a^-1, or the literal `none` for a = 0\n");
     out.push_str("#   pow         <a> <e> <c>   c = a^e\n");
 
-    // 2^256 mod p and its square, as field element *values*: acceptance 3 asks
-    // for R and R^2 as inputs to every operator.
+    // 2^256 mod p and its square, as field element *values*: R and R^2 are
+    // inputs to every operator, because a wrong Montgomery constant is most
+    // visible on its own radix.
     let r: Fr = Fr::from(2u64).pow([256u64, 0, 0, 0]);
     let r2: Fr = r * r;
     let edges: Vec<Fr> = vec![

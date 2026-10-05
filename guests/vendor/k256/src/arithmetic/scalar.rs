@@ -1245,7 +1245,7 @@ mod tests {
 
 // ---------------------------------------------------------------------------
 // apogee-vm's vendored change. `guests/vendor/README.md` is the account of it;
-// `docs/spec/delegation.md` §14 is the circuit and the ABI.
+// `docs/spec/delegation-circuits.md` §5 is the circuit, `delegation.md` the ABI.
 // ---------------------------------------------------------------------------
 
 /// secp256k1's scalar-field multiply, routed through the `MOD_MUL` delegation.

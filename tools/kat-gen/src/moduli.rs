@@ -1,15 +1,14 @@
 //! The `moduli` group: `constants::mod_mul::MODULI` against arkworks.
 //!
-//! S26b fixed the `MOD_MUL` delegation's modulus to one of four, which put
-//! four 256-bit numbers into `crates/constants` as literals — and
-//! `crates/constants/CLAUDE.md`'s standing rule is that a table of numbers
-//! copied from a reference is exactly the kind of constant a test must
-//! re-derive. Three of the four can be derived inside this repository:
-//! secp256k1's `p` is `2^256 − 2^32 − 977`, and BN254's two are already here
-//! as `constants::FQ_MODULUS` and `constants::FR_MODULUS`. **secp256k1's `n`
+//! The `MOD_MUL` delegation's modulus is one of four, which puts four 256-bit
+//! numbers into `crates/constants` as literals — and a table of numbers copied
+//! from a reference is exactly the kind of constant a test re-derives. Three of
+//! the four can be derived inside this repository: secp256k1's `p` is
+//! `2^256 − 2^32 − 977`, and BN254's two are already here as
+//! `constants::FQ_MODULUS` and `constants::FR_MODULUS`. **secp256k1's `n`
 //! cannot** — the group order has no closed form and appears nowhere in
-//! `crates/`, so an outside oracle is the only honest pin, and master rule 2
-//! names arkworks as exactly that.
+//! `crates/`, so an outside oracle is the only honest pin, and arkworks is one
+//! of this repository's reference oracles.
 //!
 //! So this file writes all four out of `ark-secp256k1` and `ark-bn254`, which
 //! never reach the prover, the verifier or a guest, and
@@ -22,7 +21,7 @@ use ark_ff::{BigInteger, PrimeField};
 
 use crate::write_vectors;
 
-/// One field's modulus as sixteen little-endian 32-bit limbs in hex — the
+/// One field's modulus as eight little-endian 32-bit limbs in hex — the
 /// frame's own encoding, which is what `constants::mod_mul::MODULI` holds.
 fn line(name: &str, modulus: &[u8]) -> String {
     assert_eq!(modulus.len(), 32, "{name} is not 256 bits wide");
@@ -44,7 +43,7 @@ pub fn generate() {
     let mut out = String::new();
     out.push_str("# the four moduli `constants::mod_mul::MODULI` holds, from arkworks\n");
     out.push_str(
-        "# docs/spec/delegation.md \u{00a7}14 is normative; the order is `mod_mul::CODES`\n",
+        "# docs/spec/delegation-circuits.md \u{00a7}5.1 lists them, in `mod_mul::CODES` order\n",
     );
     out.push_str("# name, then eight little-endian 32-bit limbs in hex, low limb first\n");
     out.push_str(&line("SECP256K1_P", &modulus_of::<ark_secp256k1::Fq>()));

@@ -1,4 +1,4 @@
-//! S13: the GKR engine's four passes — `forward`, `self_check`, `prove` and
+//! The GKR engine's four passes — `forward`, `self_check`, `prove` and
 //! `verify` — over one circuit wide enough that per-gate and per-row costs
 //! show, at 2^VARS rows.
 //!

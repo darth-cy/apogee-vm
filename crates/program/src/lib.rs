@@ -2,9 +2,9 @@
 //! [`VmConfig`] they derive, and the [`ProgramIdentity`] that commits to both,
 //! to the image's words in RAM window 0 and to the entry pc.
 //!
-//! `crates/program/CLAUDE.md` is the design record: the table shape, the
-//! extra-mask encoding, the family list with its pc-claiming rule, the digest
-//! recipe and the binding argument. This file is that record in code.
+//! `docs/spec/program.md` §4–§8 specifies the table shape, the extra-mask
+//! encoding, the family list with its pc-claiming rule, the digest recipe and
+//! the binding argument. This file is that specification in code.
 //!
 //! # The table, in one paragraph
 //!
@@ -278,7 +278,7 @@ pub enum RowField {
     ExtraMask,
 }
 
-/// The eight row fields in frozen column order. Field `k` of this list is bit
+/// The eight row fields in column order. Field `k` of this list is bit
 /// `k` of a family's field mask.
 pub const ROW_FIELDS: [RowField; 8] = [
     RowField::Pc,
@@ -292,12 +292,12 @@ pub const ROW_FIELDS: [RowField; 8] = [
 ];
 
 /// The lookup tuple a family's circuit builds against its decoded table, in
-/// frozen column order.
+/// column order.
 ///
 /// This is the one place a family's columns are chosen; [`field_mask`] and
 /// the committed column order are both read off it. `funct3` is in no tuple:
 /// the extra mask is one-hot per mnemonic, which leaves it nothing to say.
-/// A family that claims no pc — the two init families, and every delegation
+/// A family that claims no pc — every window family and every delegation
 /// family — has an empty table with no columns.
 pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
     use RowField::*;
@@ -331,10 +331,10 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
 /// The family's field mask: bit `k` set exactly when [`ROW_FIELDS`]`[k]` is in
 /// its lookup tuple.
 ///
-/// Derived, never chosen. Walking the frozen field list, a field the tuple
+/// Derived, never chosen. Walking [`ROW_FIELDS`], a field the tuple
 /// holds pushes `true` and one it skips pushes `false`; the assertions are
 /// that the `true`s count the tuple's arity — so no field is repeated and none
-/// is outside the frozen set — and that the tuple is in frozen order, so the
+/// is outside the set — and that the tuple is in [`ROW_FIELDS`] order, so the
 /// order columns are committed in is the order this mask reads.
 pub fn field_mask(family: FamilyId) -> u8 {
     let tuple = lookup_tuple(family);
@@ -354,7 +354,7 @@ pub fn field_mask(family: FamilyId) -> u8 {
     );
     assert!(
         tuple.windows(2).all(|w| w[0] < w[1]),
-        "{}: a lookup tuple lists its fields in frozen column order",
+        "{}: a lookup tuple lists its fields in column order",
         family_name(family)
     );
     if claims_pcs(family) {
@@ -367,7 +367,7 @@ pub fn field_mask(family: FamilyId) -> u8 {
     mask
 }
 
-/// The instruction at `pc` as a row: all eight fields, in frozen order.
+/// The instruction at `pc` as a row: all eight fields, in [`ROW_FIELDS`] order.
 ///
 /// A field the form has no use for is 0 — register `x0`, immediate 0 — and
 /// only the fields of the owning family's tuple reach its table. `imm` is the
@@ -419,7 +419,7 @@ pub struct ProgramParams {
 }
 
 impl ProgramParams {
-    /// The frozen defaults of `constants::family`.
+    /// The defaults of `constants::family`.
     pub fn defaults() -> ProgramParams {
         ProgramParams {
             bytecode_size_words: family::DEFAULT_BYTECODE_SIZE_WORDS,
@@ -430,9 +430,8 @@ impl ProgramParams {
 }
 
 // `VmConfig`, its wire form, `ProgramIdentity` and the statement descriptor
-// moved to `crates/verifier-core` at S16, so the no_std verifier binds a
-// statement with the same code the prover does. They are re-exported here, and
-// every path that named them still does.
+// live in `crates/verifier-core`, so the no_std verifier binds a statement with
+// the same code the prover does. They are re-exported here.
 pub use verifier_core::{
     absorb_statement_descriptor, advice_first_window, public_io_words, ProgramIdentity, VmConfig,
 };
@@ -632,17 +631,6 @@ fn narrowest(values: Vec<u32>) -> PolyBacking {
 // Derivation
 // ---------------------------------------------------------------------------
 
-/// Decode a program into its family tables, and derive its `VmConfig`.
-///
-/// The family set is derived, never chosen: a family is present exactly when
-/// it claims at least one pc, and `INIT_TEARDOWN` and `ZERO_WINDOWS` are
-/// always present. See `crates/program/CLAUDE.md` for every refusal.
-///
-/// `image` must satisfy `ProgramImage`'s documented invariants, which
-/// `loader::load_elf` and the wire-form reader establish: an even
-/// `slot_base`, every 32-bit instruction followed by its second halfword. A
-/// hand-built image that breaks them is a caller error, and trips the
-/// partition assertion rather than producing a table.
 /// The delegation families the linked binary **declares**, ascending.
 ///
 /// Static detachment for a delegation family, `docs/spec/delegation.md` §7.
@@ -655,7 +643,7 @@ fn narrowest(values: Vec<u32>) -> PolyBacking {
 ///
 /// The scan is over the image's **file-backed bytes**, at every byte offset,
 /// in address order. Those bytes are already what program identity binds
-/// through the image column (`docs/spec/memory.md` §6.2), so a declaration
+/// through the image column (`docs/spec/program.md` §8), so a declaration
 /// cannot be altered without moving identity, and no loader change is needed
 /// to carry it: a record is an ordinary run of `.rodata` bytes. The scan is
 /// byte-wise and not word-wise because a `static`'s address is the linker's,
@@ -725,6 +713,19 @@ fn height_of(family: FamilyId, params: &ProgramParams) -> u32 {
     }
 }
 
+/// Decode a program into its family tables, and derive its `VmConfig`.
+///
+/// The family set is derived, never chosen: an instruction family is present
+/// exactly when it claims at least one pc, a delegation family exactly when
+/// the image declares it, and a window family always — `FIELD_WINDOWS` exactly
+/// when a field delegation family is present (`docs/spec/program.md` §7).
+/// [`ProgramError`] names every refusal.
+///
+/// `image` must satisfy `ProgramImage`'s documented invariants, which
+/// `loader::load_elf` and the wire-form reader establish: an even
+/// `slot_base`, every 32-bit instruction followed by its second halfword. A
+/// hand-built image that breaks them is a caller error, and trips the
+/// partition assertion rather than producing a table.
 pub fn decode_program(
     image: &ProgramImage,
     params: &ProgramParams,
@@ -808,8 +809,8 @@ pub fn decode_program_detaching(
         let rows = &claims[family as usize];
         // Three presence rules, and no fourth. A family that claims a pc is
         // present because it claims one. A **window** family is present in
-        // every config — the two RAM window ones (`docs/spec/memory.md` §3.2)
-        // and, since S-IO, the two public value ones and `ADVICE_WINDOWS`
+        // every config — the two RAM window ones (`docs/spec/memory.md` §3.2),
+        // the two public value ones and `ADVICE_WINDOWS`
         // (`docs/spec/public-values.md` §4). A delegation family is present
         // exactly when the linked binary declares it
         // (`docs/spec/delegation.md` §7) — never because a caller asked. The
@@ -971,7 +972,7 @@ pub fn image_init_column(image: &ProgramImage, height: u32) -> MultilinearPoly {
 
 /// The program's identity: its [`setup_commitments`], digested with the code
 /// version, the static `VmConfig` and the entry pc by
-/// [`identity_from_commitments`]. `docs/spec/memory.md` §6.2.
+/// [`identity_from_commitments`]. `docs/spec/program.md` §8.
 pub fn program_identity(
     image: &ProgramImage,
     tables: &DecodedTables,
@@ -988,8 +989,8 @@ pub fn program_identity(
 
 /// Every family's setup commitments, one list per family of `config`, in its
 /// order: an instruction family's decoded-table columns in lookup-tuple order;
-/// `INIT_TEARDOWN`'s one, the [`image_init_column`] at its height;
-/// `ZERO_WINDOWS`' none.
+/// `INIT_TEARDOWN`'s one, the [`image_init_column`] at its height; every
+/// other family's none.
 ///
 /// `tables` and `config` must be `image`'s derivation, and `srs` must hold as
 /// many powers as the tallest table has rows; either failing is a broken
@@ -1030,7 +1031,7 @@ pub fn setup_commitments(
             // `ZERO_WINDOWS` has no setup column, and a delegation family has
             // no decoded table at all: it is invoked, never decoded, so there
             // is nothing about it for identity to commit but its presence in
-            // the `VM_CONFIG` message. The three S-IO window families are
+            // the `VM_CONFIG` message. The public pair and `ADVICE_WINDOWS` are
             // empty for a stronger reason: an `S` column is bound by program
             // identity, and one execution's public values — or one
             // execution's advice — have no business in every execution's
@@ -1062,7 +1063,7 @@ pub fn setup_commitments(
 /// The identity digest over given setup commitments. It needs no SRS: this is
 /// what a verifying-key loader recomputes, and it is
 /// `verifier_core::identity_digest` over the points' canonical encodings,
-/// whose doc is the frozen recipe (`docs/spec/memory.md` §6.2).
+/// whose doc is the recipe (`docs/spec/program.md` §8).
 ///
 /// `commitments` holds one list per family of `config`; anything else is a
 /// caller error and panics.

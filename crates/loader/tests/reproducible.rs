@@ -1,4 +1,4 @@
-//! Acceptance 2: two clean builds of a guest give byte-identical ELFs.
+//! Two clean builds of a guest give byte-identical ELFs.
 //!
 //! This lives in a test rather than in a CI script so that it runs wherever
 //! `cargo test` does, and so that a regression is a failing test rather than a
@@ -7,8 +7,9 @@
 //! **What it does not claim.** Byte-identity holds for two builds of the same
 //! source on the same machine. It does *not* hold across machines: rustc
 //! embeds absolute paths in the panic-location strings of every crate outside
-//! the guest workspace and of `core` itself, and stable Rust has no way to
-//! remap them — `trim-paths` is still unstable in the pinned cargo. That is
+//! the guest workspace and of `core` itself, and the guest build does not
+//! remap them — no `--remap-path-prefix` is passed, and `trim-paths` is
+//! unstable in the pinned cargo. That is
 //! why `crates/loader/tests/vectors/*.elf` are refreshed on one machine, by
 //! `cargo run -p kat-gen -- guests`, and are not regenerated in CI. Everything
 //! derived from them is.

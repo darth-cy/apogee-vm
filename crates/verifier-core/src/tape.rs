@@ -867,10 +867,10 @@ pub fn batch_preamble(
     (weights, v_star)
 }
 
-/// `pcs_verify::scalars` over cells: §5's schedule over `(cm, u, v)` and the
-/// proof's eight points and six values, §7's challenge rule as assertions, the
-/// two derived values and the BDFG20 batch at `z'`. Returns the twelve
-/// scalars in entry order.
+/// `pcs_verify::scalars` over cells: `docs/spec/mercury.md` §3.2's schedule
+/// over `(cm, u, v)` and the proof's eight points and six values, §3.4's
+/// challenge rule as assertions, the two derived values and the BDFG20 batch
+/// at `z'`. Returns the twelve scalars in entry order.
 pub fn mercury_scalars(
     t: &mut Tape,
     tr: &mut CellTranscript,
@@ -898,9 +898,9 @@ pub fn mercury_scalars(
     append_points(tr, t, tags::PCS_OPENING, &[q, g]);
     let gamma = tr.challenge(t, tags::MERCURY_GAMMA);
     append_points(tr, t, tags::PCS_OPENING, &[s, d]);
-    // §7: `z` is drawn once and the resample a zero would cost is an
-    // assertion — a liveness loss at probability `1/p`, never a soundness one —
-    // as are the three degeneracies.
+    // `docs/spec/mercury.md` §3.4: `z` is drawn once and the resample a zero
+    // would cost is an assertion — a liveness loss at probability `1/p`, never
+    // a soundness one — as are the three degeneracies.
     let z = tr.challenge(t, tags::MERCURY_Z);
     let one = t.constant(Fr::ONE);
     t.assert_nonzero(z);

@@ -1,8 +1,8 @@
-//! The public I/O digest: the value the statement-binding order absorbs as
-//! "public I/O digest", frozen at S10.
+//! `io_digest`: the value the global transcript absorbs at G7 as the "public
+//! I/O digest".
 //!
 //! The committed vectors come from `tools/transcript-ref`, which transcribes
-//! `docs/spec/ecall-abi.md` section 6 over Plonky3's permutation and never
+//! `docs/spec/public-values.md` §5 over Plonky3's permutation and never
 //! links this crate. The sensitivity properties are asserted directly, because
 //! what they say is "these two inputs differ", and a committed pair only shows
 //! it for one pair.
@@ -15,10 +15,11 @@ use test_support::{hex_to_bytes, sha256, to_hex};
 const VECTORS: &str = "tests/vectors/io_digest.txt";
 use transcript::io_digest;
 
-/// Master rule 11: the fixture is what it was when the digest was written down.
-const IO_DIGEST_SHA256: &str = "314578e795a351c766c8c9c10dd890082149fb94401c955fe4641c2c19a315cd";
+/// The fixture's pinned SHA-256: the vectors are the ones the digest was
+/// written down with.
+const IO_DIGEST_SHA256: &str = "427980e025f21127cd81317bd3d1446c5765e335118bd5717f865c9eac594887";
 
-/// Acceptance 10: every committed case, replayed.
+/// Every committed case, replayed.
 #[test]
 fn every_committed_case_matches() {
     let cases = committed();
@@ -32,7 +33,7 @@ fn every_committed_case_matches() {
         );
     }
 
-    // The four shapes acceptance 10 names are all present.
+    // The four required shapes are all present.
     for required in ["empty_empty", "input_only", "output_only", "multi_block"] {
         assert!(
             cases.iter().any(|(name, ..)| name == required),
@@ -59,7 +60,7 @@ fn the_empty_cases_are_defined_and_distinct() {
     assert_ne!(empty, Fr::ZERO);
 }
 
-/// Must-be-exact 10: swapping unequal streams changes the digest.
+/// Swapping unequal streams changes the digest.
 #[test]
 fn swapping_the_streams_changes_the_digest() {
     let cases: [(&[u8], &[u8]); 4] = [
@@ -80,7 +81,7 @@ fn swapping_the_streams_changes_the_digest() {
     assert_eq!(io_digest(b"same", b"same"), io_digest(b"same", b"same"));
 }
 
-/// Must-be-exact 10: appending a zero byte changes the digest.
+/// Appending a zero byte changes the digest.
 ///
 /// This is the property the byte length buys. Without it the zero-extended
 /// final limb would make `x` and `x || 0x00` absorb identically whenever `x`
@@ -103,7 +104,7 @@ fn appending_a_zero_byte_changes_the_digest() {
     }
 }
 
-/// Must-be-exact 10: flipping one bit changes the digest.
+/// Flipping one bit changes the digest.
 #[test]
 fn flipping_one_bit_changes_the_digest() {
     let base: Vec<u8> = (0..40).map(|i| (i as u8).wrapping_mul(31)).collect();

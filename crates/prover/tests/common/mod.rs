@@ -1,26 +1,26 @@
 //! The statements the proving suites prove, over a toy SRS whose `tau` is
 //! written down here. Test-only.
 //!
-//! - S16's: `guests/addsub`'s committed ELF, decoded with its execution family
-//!   at `2^20` rows — the timestamp channel's floor — and everything else at
+//! - `guests/addsub`'s committed ELF, decoded with its execution family at
+//!   `2^20` rows — the timestamp channel's floor — and everything else at
 //!   `2^16`, traced into an archive.
-//! - S17's: `guests/control`'s, the same way, with both of its execution
-//!   families — add/sub and jump/branch/slt — at `2^20`.
-//! - S18's: `guests/alu`'s, with all four of its execution families — those
-//!   two, shift/bitwise and mul/div — at `2^20`.
-//! - S19's: `guests/mem`'s, with five — add/sub, jump/branch/slt and the three
-//!   families S19 proves — at `2^20`. It is the first statement whose rows
-//!   touch RAM, so it is also the first with a `ZERO_WINDOWS` shard.
+//! - `guests/control`'s, the same way, with both of its execution families —
+//!   add/sub and jump/branch/slt — at `2^20`.
+//! - `guests/alu`'s, with all four of its execution families — those two,
+//!   shift/bitwise and mul/div — at `2^20`.
+//! - `guests/mem`'s, with five — add/sub, jump/branch/slt and the three
+//!   memory-op families — at `2^20`. Its rows touch RAM, so it has a
+//!   `ZERO_WINDOWS` shard.
+//! - `guests/shards`', with add/sub and jump/branch/slt at `2^20`. Its add/sub
+//!   family runs 1,064,970 cycles, past `2^20`, so it has **two shards of one
+//!   family** — and it touches no RAM, so it has a family the config carries
+//!   and no shard proves.
 //!
-//! S24's statement is the one that is **not** here: `guests/revm-block`'s is
-//! built from source rather than from a committed ELF, so it lives in
-//! `tests/revm.rs` beside the suite that proves it, and this module stays free
-//! of the guest workspace — `crates/checker`'s suites include it too.
-//! - S20's: `guests/shards`', with add/sub and jump/branch/slt at `2^20`. Its
-//!   add/sub family runs 1,064,970 cycles, past `2^20`, so it is the first
-//!   statement with **two shards of one family** — and it touches no RAM, so
-//!   it is also the first with a family the config carries and no shard
-//!   proves.
+//! The revm block's statement is the one that is **not** here:
+//! `guests/revm-block`'s is built from source rather than from a committed ELF,
+//! so it lives in `tests/revm.rs` beside the suite that proves it, and this
+//! module stays free of the guest workspace — `crates/checker`'s suites include
+//! it too.
 
 #![allow(dead_code)]
 
@@ -65,18 +65,18 @@ pub const SHARDS_ADD_CYCLES: u64 = 1_064_970;
 pub const KECCAK_RESULT: u32 = 6;
 
 /// How many keccak-f **permutations** `guests/keccak-test` computes: one per
-/// block of its six inputs, `docs/spec/delegation.md`'s corpus.
+/// block of its six inputs, the guest's own corpus.
 pub const KECCAK_PERMUTATIONS: u64 = 10;
 
-/// How many `KECCAK_F` **invocations** that is. Since S26d one invocation is one
-/// round, so a permutation is 24 of them (`docs/spec/delegation.md` §6).
+/// How many `KECCAK_F` **invocations** that is. One invocation is one round,
+/// so a permutation is 24 of them (`docs/spec/delegation-circuits.md` §2).
 pub const KECCAK_INVOCATIONS: u64 = KECCAK_PERMUTATIONS * constants::keccak::ROUNDS as u64;
 
 /// The delegation family's height. `RANGE16`'s table and `XOR8`'s each need 16
 /// variables, so `constraints::family_circuit` returns `None` below `2^16` — but
 /// 16 is the **floor and not the choice**: the family is at `2^18`, one menu
 /// entry up and four times the cost a shard, so that a stateless block's keccak
-/// load is fewer, fatter shards (`docs/spec/delegation.md` §6.5, §9.2).
+/// load is fewer, fatter shards (`docs/spec/delegation-circuits.md` §2.4, `docs/spec/delegation.md` §9).
 ///
 /// This must equal `constants::family::DEFAULT_HEIGHTS[KECCAK_F]`'s exponent:
 /// `crates/prover/tests/revm.rs` derives its delegation heights from that array
@@ -84,9 +84,9 @@ pub const KECCAK_INVOCATIONS: u64 = KECCAK_PERMUTATIONS * constants::keccak::ROU
 /// disagreeing is a red suite rather than a slow one.
 pub const KECCAK_VARS: u32 = 18;
 
-/// `SHA256_COMP`'s height since S26e, for [`KECCAK_VARS`]' reason: its two
+/// `SHA256_COMP`'s height, for [`KECCAK_VARS`]' reason: its two
 /// channels put its floor at 16 and `2^18` is the choice above it, a
-/// compression being 16 rows (`docs/spec/delegation.md` §15). This must equal
+/// compression being 16 rows (`docs/spec/delegation-circuits.md` §6). This must equal
 /// `constants::family::DEFAULT_HEIGHTS[SHA256_COMP]`'s exponent.
 pub const SHA256_VARS: u32 = 18;
 
@@ -102,28 +102,25 @@ pub const RECURSION_UNUSED_RESULT: u32 = 11;
 /// `guests/mod-mul-ops`' exit status: the number of checks it passed.
 pub const MOD_MUL_RESULT: u32 = 28;
 
-/// S21's and S23's delegation heights. **Not `MOD_MUL`'s**, which is `2^16`
-/// (`constants::family::DEFAULT_HEIGHTS`, `docs/spec/delegation.md` §9.1).
+/// `POSEIDON2`'s and `FR_ARITH`'s height. **Not `MOD_MUL`'s**, which is `2^16`
+/// (`constants::family::DEFAULT_HEIGHTS`, `docs/spec/delegation.md` §9).
 pub const DELEGATION_VARS: u32 = 8;
 
-/// The height the two **channel-carrying** delegation families are proved at
-/// here, and the only one they have: `RANGE16`'s table needs sixteen variables,
-/// so `constraints::family_circuit` returns `None` below `2^16`
-/// (`docs/spec/delegation.md` §10.3).
+/// The height `MOD_MUL` and `EC_ADD` are proved at here, and the lowest they
+/// can have: `RANGE16`'s table needs sixteen variables, so
+/// `constraints::family_circuit` returns `None` below `2^16`
+/// (`docs/spec/delegation.md` §9).
 ///
-/// **This was `MOD_MUL_FIXTURE_VARS = 8` until S26c**, chosen so the fixture
-/// would be multi-shard: at `2^8` this family's 1,443 invocations are six
-/// shards, and a last shard is the only place padding rows appeared. The
-/// re-shape closed that option and made it unnecessary in the same move — at
-/// `2^16` a single shard is 98% padding, so padding rows are covered in shard 0
-/// and more richly than six `2^8` shards ever covered them.
+/// At `2^16` a single shard of this fixture is 98% padding, so shard 0 covers
+/// padding rows.
 ///
-/// What it did cost is the **forward pass**: 4.7 GB for `MOD_MUL` at `2^16` and
-/// 10.5 GB for `EC_ADD`, which is a deferred-suite figure. So the fill checks
-/// in `tests/fills.rs` evaluate sampled rows row-locally rather than running a
-/// pass, which is the same statement per row — and the end-to-end proof of both
-/// families at this height is the deferred `prover::revm` and `host::prove`
-/// suites, whose params read `DEFAULT_HEIGHTS`.
+/// The cost is the **forward pass**: 4.6 GB for `MOD_MUL` at `2^16` and
+/// 18.3 GB for `EC_ADD`. So the fill checks in `tests/fills.rs` evaluate
+/// sampled rows row-locally rather than running a pass, which is the same
+/// statement per row — and the end-to-end proof of both families at this
+/// height is the `#[ignore]`d `host::prove` suite, whose params read
+/// `DEFAULT_HEIGHTS`: the synthetic block `prover::revm` proves invokes
+/// neither.
 pub const DELEGATION_CHANNEL_VARS: u32 = 16;
 
 /// The committed ELF of guest `name`.
@@ -153,12 +150,12 @@ pub fn params() -> ProgramParams {
     heights(&[family::ADD_SUB_LUI_AUIPC])
 }
 
-/// S17's heights: both of `control`'s execution families at `2^20`.
+/// `control`'s heights: both of its execution families at `2^20`.
 pub fn control_params() -> ProgramParams {
     heights(&[family::ADD_SUB_LUI_AUIPC, family::JUMP_BRANCH_SLT])
 }
 
-/// S18's heights: all four of `alu`'s execution families at `2^20`.
+/// `alu`'s heights: all four of its execution families at `2^20`.
 pub fn alu_params() -> ProgramParams {
     heights(&[
         family::ADD_SUB_LUI_AUIPC,
@@ -168,7 +165,7 @@ pub fn alu_params() -> ProgramParams {
     ])
 }
 
-/// S19's heights: all five of `mem`'s execution families at `2^20`.
+/// `mem`'s heights: all five of its execution families at `2^20`.
 pub fn mem_params() -> ProgramParams {
     heights(&[
         family::ADD_SUB_LUI_AUIPC,
@@ -179,13 +176,13 @@ pub fn mem_params() -> ProgramParams {
     ])
 }
 
-/// S20's heights: both of `shards`' execution families at `2^20`.
+/// `shards`' heights: both of its execution families at `2^20`.
 pub fn shards_params() -> ProgramParams {
     heights(&[family::ADD_SUB_LUI_AUIPC, family::JUMP_BRANCH_SLT])
 }
 
-/// S21's heights: the five execution families `keccak-test` runs at `2^20`,
-/// and the delegation family at `2^16`, which since S26d is its only one.
+/// `keccak-test`'s heights: the six execution families it runs at `2^20`, and
+/// the delegation family at [`KECCAK_VARS`].
 pub fn keccak_params() -> ProgramParams {
     let mut params = heights(&[
         family::ADD_SUB_LUI_AUIPC,
@@ -199,9 +196,9 @@ pub fn keccak_params() -> ProgramParams {
     params
 }
 
-/// S26's heights: the six execution families `mod-mul-ops` runs at `2^20`,
-/// `MOD_MUL` and `EC_ADD` at [`DELEGATION_CHANNEL_VARS`], which is the only
-/// height either has, and the window families at `2^18` — see
+/// `mod-mul-ops`' heights: the six execution families it runs at `2^20`,
+/// `MOD_MUL` and `EC_ADD` at [`DELEGATION_CHANNEL_VARS`], the lowest height
+/// either can have, and the window families at `2^18` — see
 /// [`mod_mul_program`] for why `2^16` does not fit them.
 pub fn mod_mul_params() -> ProgramParams {
     let mut heights = [1 << 18; family::COUNT as usize];
@@ -224,7 +221,7 @@ pub fn mod_mul_params() -> ProgramParams {
     }
 }
 
-/// S23's heights: the execution families `recursion-ops` runs at `2^20`, and
+/// `recursion-ops`' heights: the execution families it runs at `2^20`, and
 /// the two delegation families at `2^8`.
 pub fn recursion_params() -> ProgramParams {
     let mut params = heights(&[
@@ -288,23 +285,23 @@ pub fn recursion_unused_program() -> Program {
     program_of("recursion-unused", &recursion_params())
 }
 
-/// S26's guest: `guests/mod-mul-ops`, which calls the `MOD_MUL` delegation by
-/// name over all four moduli and reaches it a second time through
-/// `guests/vendor/k256`'s patched field and scalar multiplies — and, since
-/// S26c, reaches `EC_ADD` too through that crate's patched `ProjectivePoint`,
-/// which this guest's own source names not at all.
+/// `guests/mod-mul-ops`, which calls the `MOD_MUL` delegation by name over all
+/// four moduli and reaches it a second time through `guests/vendor/k256`'s
+/// patched field and scalar multiplies — and reaches `EC_ADD` too through that
+/// crate's patched `ProjectivePoint`, which this guest's own source names not
+/// at all.
 ///
 /// Its six execution families run at `2^20` and its two delegation families at
 /// [`DELEGATION_CHANNEL_VARS`], but its **window** families need `2^18` rather
 /// than `2^16`: the guest's `.text`
-/// reaches pc `0x452c6` and `decode_program` refuses an image byte past RAM
+/// reaches pc `0x45be6` and `decode_program` refuses an image byte past RAM
 /// window 0, which at `2^16` ends at `0x40000` — that one fits, but the decoded
 /// tables do not, a table's row `i` being pc `2i`.
 pub fn mod_mul_program() -> Program {
     program_of("mod-mul-ops", &mod_mul_params())
 }
 
-/// S-IO's guest: `guests/public-io`, which reads its public input and its
+/// `guests/public-io`, which reads its public input and its
 /// advice with ordinary loads and writes its journal with ordinary stores
 /// (`docs/spec/public-values.md`). Its execution families at `2^20`, the rest
 /// at `2^16`.
@@ -424,12 +421,12 @@ pub fn mod_mul_archive(program: &Program) -> TraceArchive {
     trace(program, MOD_MUL_RESULT)
 }
 
-/// S26c's guest: `guests/sha256-ops`, which calls the `SHA256_COMP` delegation
-/// by name and through `guest_sdk::sha256`'s block loop.
+/// `guests/sha256-ops`, which calls the `SHA256_COMP` delegation by name and
+/// through `guest_sdk::sha256`'s block loop.
 ///
-/// `SHA256_COMP` is at [`SHA256_VARS`], its default since S26e made one row four
-/// rounds (`docs/spec/delegation.md` §15). Its window families need `2^18` for
-/// `mod_mul_program`'s reason.
+/// `SHA256_COMP` is at [`SHA256_VARS`], its default, one row being four rounds
+/// (`docs/spec/delegation-circuits.md` §6). Its window families need `2^18`
+/// for `mod_mul_program`'s reason.
 pub fn sha256_program() -> Program {
     let mut heights = [1 << 18; family::COUNT as usize];
     for f in [
@@ -484,9 +481,9 @@ pub fn trace(program: &Program, status: u32) -> TraceArchive {
 ///
 /// `prover::prove_block_streaming` proves at most this many shards at once,
 /// so it is what bounds a suite's peak (`docs/spec/streaming.md` §5). Four
-/// rather than eight: a deferred suite is run for its verdict and not for its
-/// wall clock, and the measured difference between the two is 14% of the time
-/// against 6.8 GiB of peak. The block does not depend on it —
+/// rather than eight: an `#[ignore]`d suite is run for its verdict and not for
+/// its wall clock, and the measured difference between the two is 14% of the
+/// time against 6.8 GiB of peak. The block does not depend on it —
 /// `tests/streaming.rs` proves the bytes equal at 1 and 8 — so no test's
 /// assertion rests on the number.
 pub const IN_FLIGHT: usize = 4;
@@ -511,11 +508,10 @@ pub fn public_io_io(advice: &[u8]) -> GuestIo {
 
 /// **Prove one execution as a block, the only way this repository proves.**
 ///
-/// `prover::prove_block_streaming` at [`IN_FLIGHT`]. Since S-STREAM nothing in
-/// any suite reaches `prover::prove_block`: the archived path still compiles,
-/// because `checker`'s column-fill suites and `checker::TamperHarness` build
-/// their columns from a `TraceArchive`, but it proves nothing anywhere
-/// (`docs/spec/streaming.md` §1).
+/// `prover::prove_block_streaming` at [`IN_FLIGHT`]. No suite calls
+/// `prover::prove_block`: the archived path's per-shard component serves
+/// `checker`'s column-fill suites and `checker::TamperHarness`, which build
+/// their columns from a `TraceArchive` (`docs/spec/streaming.md` §6).
 pub fn streamed(setup: &ProverSetup, io: &GuestIo) -> BlockProof {
     let (block, report) =
         prover::prove_block_streaming(setup, io, IN_FLIGHT).expect("the block proves");
@@ -527,12 +523,12 @@ pub fn streamed(setup: &ProverSetup, io: &GuestIo) -> BlockProof {
     block
 }
 
-/// The statement and its shard proofs, which is what `prover::finish` handed
+/// The statement and its shard proofs, which is what `prover::finish` hands
 /// back on the archived path.
 ///
 /// A `BlockProof` carries both, in statement order, so a suite that verifies
 /// loose shards takes them from the block rather than from a second proving
-/// run (`docs/spec/block-proof.md` §2).
+/// run (`docs/spec/proof.md` §1.3).
 pub fn streamed_shards(setup: &ProverSetup, io: &GuestIo) -> (PublicInputs, Vec<ShardProof>) {
     let block = streamed(setup, io);
     (block.statement, block.shards)

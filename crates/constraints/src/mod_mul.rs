@@ -1,10 +1,9 @@
 //! The `MOD_MUL` family's circuit: one Ethereum field multiplication a row,
 //! invoked by the `ecall::PRECOMPILE_MOD_MUL` ecall and never decoded.
 //!
-//! `docs/spec/delegation.md` §14 is normative. One invocation is one row and
-//! one row is one operation — `ops/row = 1`, as every delegation family has it
-//! — so the family needs no batch, no populated count and no no-op selector: a
-//! row is live or it is padding.
+//! `docs/spec/delegation-circuits.md` §5 specifies it. One invocation is one
+//! row and one row is one operation, so the family needs no batch, no
+//! populated count and no no-op selector: a row is live or it is padding.
 //!
 //! ```text
 //! frame     M[0..104]: cycle live base anchor_value, then 4 per word
@@ -23,40 +22,35 @@
 //!
 //! # Why this family carries a lookup channel
 //!
-//! It did not until S26c. `docs/spec/delegation.md` §9 forbade a delegation
-//! family any channel; §10.3 amends that, and this family is the measured
-//! reason. Every bound it makes was a bit decomposition — 950 gap bits, 768
-//! value bits, 768 chain bits, 256 quotient bits, 518 carry bits — and at
-//! `2^16`, where its table fits, `RANGE16` makes each of them one committed
-//! column and two obligations instead. **3,468 committed columns become 325**,
-//! a factor of 10.7, and the proof falls from 360,948 bytes a shard to 135,220,
-//! a factor of 2.7.
+//! At `2^16`, where its table fits, `RANGE16` makes each bound one committed
+//! column and two obligations where a bit decomposition would take a column a
+//! bit — 950 gap bits, 768 value bits, 768 chain bits, 256 quotient bits, 518
+//! carry bits (`docs/spec/delegation.md` §9). So the family commits **325
+//! columns rather than 3,468**, a factor of 10.7, and a shard's proof is
+//! 135,220 bytes rather than 360,948, a factor of 2.7.
 //!
-//! **The peak does not fall, and the earlier claim that it fell 1.9x was
-//! wrong.** The work moved out of the base layer and its first bind and into the
-//! inner layers: 158 inner columns became 2,244, so the forward pass grew from
-//! 0.27 GB to 4.57 GB while the committed base fell from 0.96 GB to 0.16 GB and
-//! the first bind from 3.64 GB to 0.34 GB. About 4.9 GB before and 5.1 GB after,
-//! both computed. What the channel buys is the **proof and the commitments** —
-//! 325 Mercury column commitments where there were 3,468 — and it buys them at
-//! constant peak rather than at a lower one.
+//! **The peak does not fall.** The work sits in the inner layers rather than
+//! the base layer and its first bind: 2,244 inner columns rather than 158, so
+//! the forward pass is 4.57 GB rather than 0.27 GB while the committed base is
+//! 0.16 GB rather than 0.96 GB and the first bind 0.34 GB rather than 3.64 GB.
+//! About 5.1 GB against 4.9 GB, both computed. What the channel buys is the
+//! **proof and the commitments** — 325 Mercury column commitments where bits
+//! would take 3,468 — and it buys them at constant peak rather than at a lower
+//! one.
 //!
 //! `TIMESTAMP` would be the natural channel for the frame's gap and it does not
 //! fit — its table needs 19 variables — so the gap takes `RANGE16` in two
 //! chunks with a scaled obligation on the top one, exact at `2^38`
 //! (`delegation::bound_chunked`).
 //!
-//! Nothing else about the family moved: the frame is the same 25 words, the
-//! ecall number is the same `0x0504`, the four moduli are the same, and every
-//! gate states the same thing. What changed is how a bound is spelled.
-//!
 //! # Why the modulus is a selector
 //!
-//! `FR_ARITH` (§13) multiplies modulo **the circuit's own field**, so its
-//! multiply is one degree-2 gate: `prod = a·b` over `Fr` *is* the reduction. A
-//! 256-bit modulus cannot work that way — a 256-bit value does not fit an `Fr`
-//! at all, `p` being 254 bits — so this circuit carries the values as eight
-//! 32-bit limbs and proves the schoolbook identity
+//! `FR_ARITH` (`docs/spec/delegation-circuits.md` §4) multiplies modulo **the
+//! circuit's own field**, so its multiply is one degree-2 gate: `prod = a·b`
+//! over `Fr` *is* the reduction. A 256-bit modulus cannot work that way — a
+//! 256-bit value does not fit an `Fr` at all, `p` being 254 bits — so this
+//! circuit carries the values as eight 32-bit limbs and proves the schoolbook
+//! identity
 //!
 //! ```text
 //! a·b = q·m + out,   a < m,   b < m,   out < m,   every limb below 2^32
@@ -65,15 +59,14 @@
 //! over the integers, limb by limb, with a signed carry chain. Every term of a
 //! limb equation is far below `p` — the largest is `8·(2^32−1)^2 < 2^67` — so
 //! the `Fr` equation **is** the integer equation, which is the same argument
-//! §13.3's borrow chain rests on.
+//! the canonicity chain rests on (`docs/spec/delegation-circuits.md` §1).
 //!
 //! `m` is not a frame operand. Frame word 0 names one of **four** moduli —
 //! secp256k1's `p` and `n`, BN254's `q` and `r`, which between them are every
 //! 256-bit field Ethereum block execution multiplies in — and eight witness
-//! limbs are pinned to that selector's literals by a degree-1 gate each. S26
-//! carried the modulus as a witnessed operand and S26b removed it: no caller
-//! ever passed one outside this table, and carrying it cost eight frame words,
-//! 256 witness bits, and the ability to say `a < m` at all.
+//! limbs are pinned to that selector's literals by a degree-1 gate each. A
+//! modulus carried as a witnessed operand would cost eight frame words and the
+//! ability to say `a < m` at all.
 //!
 //! # Soundness, in one paragraph
 //!
@@ -83,20 +76,20 @@
 //! asked for and a code outside the table has no witness. `m_limb{k}_rule`
 //! then fixes every limb of `m` to that modulus' literal — which is also its
 //! `2^32` bound, so `m` needs no bits. Every limb of `a`, `b`, `out` and `q`
-//! is decomposed into 32 boolean bits, so each is a non-negative integer below
-//! `2^32` and each value below `2^256`. The fifteen limb equations telescope
-//! to `a·b − q·m − out = 0` over ℤ exactly when the last carry is zero, which
-//! the last equation forces by having no outgoing carry. Three borrow chains
+//! carries a `RANGE16` pair — a committed high halfword and the derived low
+//! one — so each is a non-negative integer below `2^32` and each value below
+//! `2^256`. The fifteen limb equations telescope to `a·b − q·m − out = 0` over
+//! ℤ exactly when the last carry is zero, which the last equation forces by
+//! having no outgoing carry. Three borrow chains
 //! put `a`, `b` and `out` below `m`. Integer division being unique, `out` is
 //! `a·b mod m` and nothing else.
 //!
 //! **The operand bounds are what make the statement total.** With `a, b < m`
 //! the honest quotient is `q = (a·b − out)/m < m ≤ 2^256`, so it always fits
-//! the eight limbs its bits bound it to: every frame this circuit accepts has
-//! a witness, and every witness it has is accepted. S26, which bounded neither
-//! operand, had one half of that — an unreduced operand was a quotient the
-//! prover could not fit, a cost to the prover and never a hole for the
-//! verifier — and this is the other half.
+//! the eight limbs its pairs bound it to: every frame this circuit accepts has
+//! a witness, and every witness it has is accepted. Without the operand
+//! bounds an unreduced operand would be a quotient the prover could not fit —
+//! a cost to the prover, never a hole for the verifier.
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -322,8 +315,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
 
     // Each of the three frame values is below the modulus. Their **limbs** are
     // frame `M` columns, so there is nothing to decode: the 32-bit bound is two
-    // `RANGE16` obligations and no gate at all, which is where 768 of the
-    // family's old witness columns went.
+    // `RANGE16` obligations and no gate at all.
     for (v, (name, first, field)) in VALUES.into_iter().enumerate() {
         enforcing.extend(below_modulus_gates(name, first, field, v));
     }
@@ -430,24 +422,23 @@ fn scaled_columns() -> Vec<(PolyAddress, PolyAddress)> {
 /// m_limb{k}_rule             m_k = Σ MODULI[i][k]·s_i
 /// ```
 ///
-/// **`one_modulus_a_live_row` is load-bearing twice, and the second time is
-/// not about the selector at all.** The first is §13.3's lesson from
-/// `fr_arith`'s three opcodes: `1 + 3 = 4`, so a row claiming secp256k1's `p`
-/// *and* BN254's `q` spells the same selector word as one claiming BN254's
-/// `r`, and only `Σ s_i = live` refuses it. The `const` assertion below says
-/// that forgery is constructible, so nobody deletes the gate believing the
-/// codes are separated.
+/// **`one_modulus_a_live_row` does two jobs, and the second is not about the
+/// selector at all.** The first is the one-code rule
+/// (`docs/spec/delegation-circuits.md` §1), as in `fr_arith`'s three opcodes:
+/// `1 + 3 = 4`, so a row claiming secp256k1's `p` *and* BN254's `q` spells the
+/// same selector word as one claiming BN254's `r`, and only `Σ s_i = live`
+/// refuses it. The `const` assertion below says that forgery is constructible,
+/// so nobody deletes the gate believing the codes are separated.
 ///
-/// The second is the **carry bound**. `m` has no bit decomposition; its limbs
-/// are bounded only by being one table entry each, and that holds only while
-/// at most one selector is set. Two selectors at once would give
-/// `m_0 = 0xffff_fc2f + 0xd036_4141 > 2^32`, `S_k = Σ q_i·m_j` would reach
-/// `2^68`, and the module header's "every term is far below `p`, so the `Fr`
-/// equation **is** the integer equation" would stop being true — the identity
-/// would no longer be about integers at all. **So this gate is not
+/// The second is the **bound on `m`**. `m` has no bit decomposition; its limbs
+/// are below `2^32` only by being one table entry each, and that holds only
+/// while at most one selector is set. Two selectors at once give
+/// `m_0 = 0xffff_fc2f + 0xd036_4141 > 2^32`: the limb identity stays an integer
+/// identity — every term stays below `2^69`, far below `p` — but its modulus
+/// is the sum of two moduli, a field no code names. **So this gate is not
 /// redundant at any code spacing**: separating the codes to 1, 2, 4, 8 would
 /// make the selector word distinguish the combinations and would still leave
-/// `Σ s_i = live` as the only thing bounding `m`.
+/// `Σ s_i = live` as the only thing keeping `m` one entry of the table.
 ///
 /// **`m` needs no bits.** Each limb is pinned to one literal of a four-entry
 /// table, all of whose entries are below `2^32`, so the pinning gate is its
@@ -459,8 +450,8 @@ fn scaled_columns() -> Vec<(PolyAddress, PolyAddress)> {
 /// `selector_rule`.
 fn selector_gates() -> Vec<(String, GateDef)> {
     // Two codes summing to a third is what makes `one_modulus_a_live_row`
-    // necessary rather than decorative. If a later table were separated —
-    // 1, 2, 4, 8 — this assertion would fire and the comment above would need
+    // necessary rather than decorative. Were the table separated — 1, 2, 4,
+    // 8 — this assertion would fire and the comment above would need
     // rewriting, which is the point of asserting it.
     const _: () = assert!(f::SECP256K1_P + f::BN254_P == f::BN254_R);
 
@@ -495,11 +486,11 @@ fn selector_gates() -> Vec<(String, GateDef)> {
     out
 }
 
-/// Carry `k` as a linear form: `Σ 2^t·bit − 2^36·live`, or the empty form for
+/// Carry `k` as a linear form: `carry{k} − 2^36·live`, or the empty form for
 /// the position past the last carry, whose carry the identity forces to zero.
 ///
 /// The `live` factor on the offset is what makes a padding row's carry **0**
-/// rather than `−2^36`: every bit is zero there and so is `live`.
+/// rather than `−2^36`: `carry{k}` is zero there and so is `live`.
 fn carry_terms(k: usize) -> Vec<(Coeff, PolyAddress)> {
     if k >= f::CARRIES {
         return Vec::new();
@@ -573,19 +564,20 @@ fn product_gates() -> Vec<(String, GateDef)> {
 ///
 /// telescopes to `x − m + 2^256·b_7 = D` with `D` below `2^256`, and
 /// `b_7 = live` says the subtraction borrowed out, so `x < m` on a live row.
-/// It is §13.3's canonicity chain with `m`'s **columns** where that one has
-/// `p`'s literals, which is the one place the selector costs anything: a
-/// literal times `live` becomes a column, so the gate is **ungated** instead
-/// of `live`-gated. That is free rather than expensive — `m_i` is 0 on a
-/// padding row, by the selector's sum gate, and so is every other term.
+/// It is the canonicity chain of `docs/spec/delegation-circuits.md` §1 with
+/// `m`'s **columns** where `fr_arith`'s has `p`'s literals, which is the one
+/// place the selector costs anything: a literal times `live` becomes a column,
+/// so the gate is **ungated** instead of `live`-gated. That is free rather than
+/// expensive — `m_i` is 0 on a padding row, by the selector's sum gate, and so
+/// is every other term.
 ///
 /// **Which of the three is soundness and which is totality.** `out < m` is the
 /// reduction: without it a prover answers `r + m` with the quotient one lower,
 /// and the identity holds over the integers just as well. `a < m` and `b < m`
-/// are not soundness — S26 was sound without them — they are what bounds the
-/// honest quotient below `2^256`, so that every frame the circuit accepts is
-/// one an honest prover can fill. They are also what makes the frame's meaning
-/// exactly "two canonical elements of the selected field".
+/// are not soundness — the circuit is sound without them — they are what
+/// bounds the honest quotient below `2^256`, so that every frame the circuit
+/// accepts is one an honest prover can fill. They are also what makes the
+/// frame's meaning exactly "two canonical elements of the selected field".
 fn below_modulus_gates(name: &str, first: usize, field: u32, v: usize) -> Vec<(String, GateDef)> {
     let mut out: Vec<(String, GateDef)> = Vec::new();
     for i in 0..f::LIMBS {
@@ -618,10 +610,10 @@ fn below_modulus_gates(name: &str, first: usize, field: u32, v: usize) -> Vec<(S
 
 /// The family's lookup channels: `RANGE16`.
 ///
-/// S26c's amendment to `docs/spec/delegation.md` §9. The channel's table needs
-/// sixteen variables, which makes `2^16` this family's floor — and `2^16` is
-/// already its `DEFAULT_HEIGHTS` entry, chosen at S26 for an unrelated reason.
-/// `family_circuit` derives the floor from this list, so the two cannot drift.
+/// The channel's table needs sixteen variables, which makes `2^16` this
+/// family's floor and its `DEFAULT_HEIGHTS` entry (`docs/spec/delegation.md`
+/// §9). `family_circuit` derives the floor from this list, so the two cannot
+/// drift.
 pub fn channels() -> Vec<crate::lookup::ChannelSpec> {
     vec![crate::lookup::ChannelSpec {
         channel: constants::lookup_channel::RANGE16,
@@ -682,7 +674,7 @@ fn witness_names() -> Vec<String> {
 ///
 /// The counts are what a fill writes and what `crates/checker` reads, so a
 /// layout change that moved one silently would be a fill writing into the wrong
-/// column. `docs/spec/constraint-manifest.md` §18 is the same account by name.
+/// column. `docs/spec/delegation-circuits.md` §5 is the same account by name.
 fn check_shape(artifact: &CircuitArtifact) {
     assert_eq!(
         artifact.memory.len(),
@@ -738,7 +730,7 @@ mod tests {
             a.setup.is_empty(),
             "a delegation family has no setup column"
         );
-        assert_eq!(channels().len(), 1, "one channel, RANGE16, since S26c");
+        assert_eq!(channels().len(), 1, "one channel, RANGE16");
         assert_eq!(a.validate(), Ok(()));
         assert_eq!(crate::memory::check_memory(&a), Ok(()));
     }
@@ -813,7 +805,7 @@ mod tests {
     }
 
     /// Every column the layout names is inside the witness, and the regions do
-    /// not overlap: a fill that wrote `q`'s bits over a chain's would produce a
+    /// not overlap: a fill that wrote `q`'s limbs over a chain's would produce a
     /// circuit that still validates.
     #[test]
     fn the_witness_regions_do_not_overlap() {

@@ -703,8 +703,8 @@ impl<T: MontConfig<N>, const N: usize> FpConfig<N> for MontBackend<T, N> {
     /// zero bit in the rest of the modulus.
     ///
     /// apogee-vm: on the guest target, and for BN254's two fields only, this
-    /// is two `MOD_MUL` delegations instead — `docs/spec/delegation.md` §14
-    /// and `guests/vendor/README.md`.
+    /// is two `MOD_MUL` delegations instead — `docs/spec/delegation-circuits.md`
+    /// §5 and `guests/vendor/README.md`.
     #[inline]
     fn mul_assign(a: &mut Fp<Self, N>, b: &Fp<Self, N>) {
         #[cfg(target_arch = "riscv32")]
@@ -934,7 +934,7 @@ mod test {
 
 // ---------------------------------------------------------------------------
 // apogee-vm's vendored change. `guests/vendor/README.md` is the account of it;
-// `docs/spec/delegation.md` §14 is the circuit and the ABI.
+// `docs/spec/delegation-circuits.md` §5 is the circuit, `delegation.md` the ABI.
 // ---------------------------------------------------------------------------
 
 /// BN254's two field multiplies, routed through the `MOD_MUL` delegation.

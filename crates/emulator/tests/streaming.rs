@@ -42,8 +42,8 @@ use trace::{plan_shards, FamilyTraces, MemoryEventLog};
 /// their delegation families, which is the menu's smallest, so their invocation
 /// buffers flush. For `recursion-ops` that is still what a real statement gives
 /// it — `POSEIDON2` and `FR_ARITH` default to `2^8` — but for `keccak-test` it is
-/// a choice made **here**: `KECCAK_F` defaults to `2^18` since S26d
-/// (`docs/spec/delegation.md` §9.2), where its 240 rounds are one shard.
+/// a choice made **here**: `KECCAK_F` defaults to `2^18`
+/// (`docs/spec/delegation.md` §9), where its 240 rounds are one shard.
 const GUESTS: [(&str, u32); 13] = [
     ("fib", 16),
     ("heap", 16),
@@ -57,11 +57,11 @@ const GUESTS: [(&str, u32); 13] = [
     ("keccak-test", 16),
     ("recursion-ops", 16),
     // **`2^18` and not `2^16`**: its `.text` runs past pc `0x20000`, and a
-    // decoded table's row `i` is pc `2i`, so `2^16` rows stop there. Since
-    // `guests/consistency` was deleted it is the *only* committed guest that
-    // needs a taller table (`crates/program/tests/partition.rs`).
+    // decoded table's row `i` is pc `2i`, so `2^16` rows stop there. It is
+    // the *only* committed guest that needs a taller table
+    // (`crates/program/tests/partition.rs`).
     ("mod-mul-ops", 18),
-    // S20's counted loop: 1,064,970 add/sub cycles, so **seventeen** shards at
+    // The counted loop: 1,064,970 add/sub cycles, so **seventeen** shards at
     // `2^16` and the only committed guest whose buffers fill mid-execution.
     // Without it every chunk here would come from the tail and the flush path
     // would never run.
@@ -302,12 +302,11 @@ fn the_executor_holds_one_partial_shard_per_family() {
         s.stops
     );
     // Nothing is longer than a height, which is the invariant that makes a
-    // chunk a shard. Every instruction commits exactly one cycle now, so no
-    // instruction can overshoot a height by more than a row — but the flush
-    // still happens inside `record` rather than between instructions, so the
+    // chunk a shard. Every instruction commits exactly one cycle, so no
+    // instruction can overshoot a height by more than a row — and the flush
+    // happens inside `record` rather than between instructions, so the
     // property holds by construction and not by an argument about which
-    // instructions exist. It was load-bearing at S26: a `read` or `write`
-    // ecall committed one transfer cycle per word it moved.
+    // instructions exist.
     for chunk in &s.chunks {
         if let ChunkRows::Cycles(rows) = &chunk.rows {
             assert!(rows.len() <= 1 << 16, "a chunk of {} rows", rows.len());

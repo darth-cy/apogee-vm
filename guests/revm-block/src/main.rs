@@ -3,8 +3,8 @@
 //! The provable guest: one `BlockWitness` out of the **advice** region, revm
 //! over it, the output commitment into the **journal**.
 //!
-//! This is the shape the target architecture asks for, and the reason S-IO
-//! exists (`docs/spec/public-values.md`):
+//! This is the shape the three memory regions are for
+//! (`docs/spec/public-values.md`):
 //!
 //! ```text
 //! large Ethereum witness -> ADVICE          prover-supplied, bound by nothing
@@ -16,15 +16,13 @@
 //! is advice: ordinary loads from `guest_memory::ADVICE_ORIGIN`, costing the
 //! statement nothing. **Nothing binds it.** [`revm_block::BlockWitness::decode`]
 //! refuses a non-canonical encoding, and the journal is what the execution did
-//! (`docs/spec/revm-block.md` §2) — but no state root is checked or published,
+//! (`docs/spec/ethereum.md` §3) — but no state root is checked or published,
 //! so a proof covers these transactions over the witness's state, not that this
 //! is Ethereum's state. `src/stateless_main.rs` is the binary that checks it.
 //!
-//! Until S-IO this program could not be proven at all. There was no provable
-//! way to get a witness in, so S24 proved a second binary with the witness
-//! baked into its `.rodata` — which moved the program identity with every
-//! block, and is what made per-block proving impossible. The witness is data
-//! now, not code, and the identity is the same for every block.
+//! The witness is data, not code, so the program identity is the same for
+//! every block. A witness baked into `.rodata` would move the identity with
+//! every block.
 //!
 //! # The exit status
 //!
@@ -43,7 +41,7 @@ guest_sdk::entry!(main);
 /// The advice is not a canonical `BlockWitness`.
 const EXIT_WITNESS_MALFORMED: i32 = 61;
 /// A transaction is not executable: revm refused it outright, or it does not
-/// fit in the gas the block has left (`docs/spec/revm-block.md` §1.4).
+/// fit in the gas the block has left (`docs/spec/ethereum.md` §2.2).
 const EXIT_NOT_EXECUTABLE: i32 = 62;
 
 fn main() {

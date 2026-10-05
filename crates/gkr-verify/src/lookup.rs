@@ -60,13 +60,13 @@ pub fn insert_lookup_challenges(
     }
 }
 
-/// A channel's root check, S15 must-be-exact 8: **both** conditions, on the
-/// `(num, den)` pair the artifact's output map carries for that channel.
+/// A channel's root check: **both** conditions, on the `(num, den)` pair the
+/// artifact's output map carries for that channel.
 ///
 /// `num == 0` is the channel's claim. `den != 0` is the other half and it is
-/// load-bearing: a fraction whose denominator is 0 propagates a zero
-/// denominator to the root, and every numerator above it is then a multiple of
-/// it, so `num == 0` alone accepts a witness that made one up.
+/// load-bearing: `den` is the product of every leaf denominator, so one leaf
+/// `(0, 0)` makes the root `(0, 0)` whatever the other leaves hold, and
+/// `num == 0` alone would accept it.
 pub fn channel_holds(root: (Fr, Fr)) -> bool {
     root.0 == Fr::ZERO && root.1 != Fr::ZERO
 }

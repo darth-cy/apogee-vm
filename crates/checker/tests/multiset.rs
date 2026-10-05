@@ -1,4 +1,4 @@
-//! S14's acceptance items and the design's controls, over a real execution:
+//! The memory argument's tampers and its controls, over a real execution:
 //! fib's committed ELF traced with every family at `h = 2^16` — one frame per
 //! family that ran, each over that family's cycles at the smallest power-of-two
 //! height holding them, `INIT_TEARDOWN`'s window 0, `ZERO_WINDOWS`' stack
@@ -13,18 +13,19 @@
 //! `constraints::memory::frame_queries(family)` — and not by a query id. Each
 //! tamper below names the family whose frame it edits and the slot it aims at,
 //! and a query no one frame has is reached in whichever family's frame has it:
-//! `arg1` and `arg2` in `ADD_SUB_LUI_AUIPC`'s, `load` in `MEM_WORD`'s.
+//! `load` in `MEM_WORD`'s.
 //!
-//! Every test says which item it is and what would make it fail. Cited rather
-//! than repeated: acceptance 1 is `tests/memory.rs`' honest statement; 6's
-//! closed-form half is `crates/constraints/tests/memory.rs`'
-//! `the_read_sets_are_pinned`, 9 is `a_tuple_fed_from_a_witness_column_is_refused`
-//! there, and 11's exhaustive half `the_gap_encoding_is_strict_at_reduced_width`;
-//! 12 is `a_dropped_gap_obligation_fails_the_build` in
-//! `crates/constraints/src/memory.rs`; 7's window list against the touched words
-//! is `crates/emulator/tests/trace.rs`'
-//! `the_window_list_is_exactly_the_touched_windows_above_zero`; and C2's rules at
-//! their unit boundaries are `crates/program/tests/config.rs`'
+//! Every test says what it checks and what would make it fail. Checked
+//! elsewhere rather than repeated: the honest statement is `tests/memory.rs`';
+//! the read sets in closed form are `crates/constraints/tests/memory.rs`'
+//! `the_read_sets_are_pinned`, a tuple fed from a witness column
+//! `a_tuple_fed_from_a_witness_column_is_refused` there, and the gap encoding
+//! exhaustively `the_gap_encoding_is_strict_at_reduced_width`; a dropped gap
+//! obligation is `a_dropped_gap_obligation_fails_the_build` in
+//! `crates/constraints/src/memory.rs`; the window list against the touched
+//! words is `crates/emulator/tests/trace.rs`'
+//! `the_window_list_is_exactly_the_touched_windows_above_zero`; and the window
+//! rules at their unit boundaries are `crates/program/tests/config.rs`'
 //! `the_window_rules_hold_at_their_boundaries`.
 
 mod common;
@@ -49,7 +50,7 @@ use gkr::{
 use trace::{build_boundary_finals, AddressSpace, MemoryEvent};
 
 /// fib's six frame shards, in `shards` order — the families that ran, ascending
-/// — and then its two windows. `fib` pins the whole list.
+/// — and then its windows. `fib` pins the whole list.
 const ALU: usize = 0;
 const JUMP: usize = 1;
 const MEM: usize = 4;
@@ -64,15 +65,13 @@ fn int(v: u64) -> Fr {
 /// then the two public value windows, in that order — and its finals.
 ///
 /// `mul_div` is among them because `guest_sdk::read_input` copies the public
-/// input with `copy_from_slice`, and `core`'s copy reaches a multiply. Before
-/// the POSIX layer went, fib read fd 0 and executed no mul/div cycle, so the
-/// family had rows in its table and no shard.
+/// input with `copy_from_slice`, and `core`'s copy reaches a multiply.
 ///
 /// The public windows are here because they are in **every** statement
 /// (`docs/spec/public-values.md` §4). `fib` reads neither, so each window's
 /// init and teardown tuples are equal and cancel, and every tamper below
-/// reconciles or fails exactly as it did before they existed — which is the
-/// point: they cost the memory argument nothing.
+/// reconciles or fails exactly as it would without them — which is the point:
+/// they cost the memory argument nothing.
 struct Fib {
     t: Traced,
     memory: ExternalChallenges,
@@ -306,13 +305,13 @@ fn small(v: Fr) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance
+// Tampers
 // ---------------------------------------------------------------------------
 
-/// S14 acceptance 2, one value. fib's first RAM store — its `ram` query, at
-/// slot 4 of `MEM_WORD`'s frame — reads the word it overwrites; that read value
-/// moved by one leaves every gate and every obligation holding, since none reads
-/// a store's read value, and the roots do not reconcile: the read tuple is no
+/// One value. fib's first RAM store — its `ram` query, at slot 4 of
+/// `MEM_WORD`'s frame — reads the word it overwrites; that read value moved by
+/// one leaves every gate and every obligation holding, since none reads a
+/// store's read value, and the roots do not reconcile: the read tuple is no
 /// write's. The honest twin keeps every gate and obligation and reconciles. A
 /// value tamper's failure surface is reconciliation alone.
 ///
@@ -342,12 +341,12 @@ fn one_changed_value_does_not_reconcile() {
     assert_eq!(surface(&f, &forged, &f.finals), expected);
 }
 
-/// S14 acceptance 3, one timestamp, in both of its places on row 11 of
-/// `ADD_SUB_LUI_AUIPC`'s frame, cycle 18:
+/// One timestamp, in both of its places on row 11 of `ADD_SUB_LUI_AUIPC`'s
+/// frame, cycle 18:
 ///
 /// - its pc query's read timestamp moved one earlier, 68 to 67, with `gap_hi`
 ///   rewritten for the new gap (it stays 0): no gate and no obligation breaks,
-///   and the roots do not reconcile — acceptance 2's surface;
+///   and the roots do not reconcile — the value tamper's surface;
 /// - its cycle moved one earlier, 18 to 17, which moves every write timestamp
 ///   of the row four earlier: the roots do not reconcile, and the lookup
 ///   evaluator also names, on that row, the low chunk of every live query whose
@@ -402,14 +401,13 @@ fn one_changed_timestamp_does_not_reconcile_and_a_moved_cycle_breaks_a_gap() {
     assert_eq!(surface(&f, &forged, &f.finals), expected);
 }
 
-/// S14 acceptance 8, the x0 gadget's other two gates, each against the forgery
-/// only it refuses, and each forgery balanced, so reconciliation cannot stand
-/// in for the gate:
+/// The x0 gadget's other two gates, each against the forgery only it refuses,
+/// and each forgery balanced, so reconciliation cannot stand in for the gate:
 ///
 /// - `rd_is_zero_at_nonzero`: fib's first two `rd` writes in a row to one
 ///   nonzero register, `x11`, R1 writing a nonzero value. R1 is a cycle of
 ///   `ADD_SUB_LUI_AUIPC` and R2 one of `MEM_WORD`, so this forgery spans two
-///   frames, `rd` sitting at slot 6 of the first and slot 5 of the second. R1
+///   frames, `rd` sitting at slot 3 of the first and slot 5 of the second. R1
 ///   claims `rd_is_zero = 1` with `rd_inv = 0` and writes 0, and R2 reads that 0
 ///   — a register write zeroed. The inverse gate holds (`addr·0 + 1 − 1`), and
 ///   so does `rd_write_masked` (`0 − sel + 1·sel`).
@@ -463,9 +461,6 @@ fn a_zeroed_register_write_and_a_nonzero_x0_write_are_each_refused_by_their_gate
 /// built over another query's columns under the right name fails too; and since
 /// no family holds all three, this crosses frames — `load` is a memory family's
 /// alone. Fails if a read-only query could write back a value it did not read.
-///
-/// It was five queries until the POSIX layer went: `arg1` and `arg2` were
-/// `ADD_SUB_LUI_AUIPC`'s alone and read an ecall's `a1` and `a2`.
 #[test]
 fn a_read_only_query_writing_back_another_value_is_refused_by_its_gate() {
     let f = fib();
@@ -490,13 +485,13 @@ fn a_read_only_query_writing_back_another_value_is_refused_by_its_gate() {
     assert_eq!(families, [ALU, ALU, MEM], "three queries, two frames");
 }
 
-/// S14 acceptance 11, the full-width boundary: `ADD_SUB_LUI_AUIPC`'s own `rs1`
-/// obligations through `violated_lookups`, on a row at cycle `2^36`, where
+/// The full-width boundary: `ADD_SUB_LUI_AUIPC`'s own `rs1` obligations through
+/// `violated_lookups`, on a row at cycle `2^36`, where
 /// `gap = 4·2^36 + 1 − read_ts − 1 = 2^38 − read_ts`. `rs1` is slot 1 of every
-/// family's frame. Gaps 0 and `2^38 − 1` with `gap_hi = gap >> 19` are accepted;
-/// gaps −1 and `2^38` are refused with every `gap_hi` tried — 0, 1, `2^19 − 1`,
-/// `2^19` and `−1`. The exhaustive statement over every high chunk is the
-/// reduced-width test `crates/constraints/tests/memory.rs`'
+/// family's frame. Gaps 0 and `2^38 − 1` with `gap_hi = gap >> 19` are
+/// accepted; gaps −1 and `2^38` are refused with every `gap_hi` tried — 0, 1,
+/// `2^19 − 1`, `2^19` and `−1`. The exhaustive statement over every high chunk
+/// is the reduced-width test `crates/constraints/tests/memory.rs`'
 /// `the_gap_encoding_is_strict_at_reduced_width`. Fails if the chunk bound were
 /// not `2^19`, or the low chunk not the gap less `2^19·hi`.
 #[test]
@@ -549,7 +544,7 @@ fn the_gap_obligations_accept_exactly_0_through_2_38_minus_1() {
 // Controls
 // ---------------------------------------------------------------------------
 
-/// Control C5, mask booleanity (`docs/spec/memory.md` §2.4). On the first
+/// Mask booleanity (`docs/spec/memory.md` §2.4). On the first
 /// padding row of `ADD_SUB_LUI_AUIPC`'s frame, row 657, the pc query — slot 0 of
 /// every frame — forged with mask −1: address 10, reading `x10`'s last write and
 /// writing 42 at `4·2,118`, the row's cycle set to 2,118, one past fib's last,

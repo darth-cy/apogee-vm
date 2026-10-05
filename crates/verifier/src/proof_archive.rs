@@ -1,11 +1,11 @@
 //! **The one thing a proving run archives: the proof.**
 //!
-//! Since S-STREAM the prover streams, and streaming has no `TraceArchive` —
-//! the whole point is that no shard's columns outlive the batch that proves
-//! them (`docs/spec/streaming.md`). What a run still has to leave behind is the
-//! *proof*, because recursion development reads it back: a recursion guest's
-//! input is a base proof, and producing one is a quarter of an hour that
-//! nobody should pay twice.
+//! The prover streams, and streaming has no `TraceArchive` — the whole point is
+//! that no shard's columns outlive the worker that proves them
+//! (`docs/spec/streaming.md`). What a run has to leave behind is the *proof*,
+//! because recursion reads it back: the recursion tree's input is a base proof
+//! (`docs/spec/recursion.md` §8.4), and producing one is a quarter of an hour
+//! that nobody should pay twice.
 //!
 //! # Three of the four are the `verifier` CLI's files
 //!
@@ -123,10 +123,10 @@ pub fn write_proof(
 ///
 /// Each file goes through its own type's decoder, so a truncated or corrupted
 /// file is named rather than producing a half-decoded value. The key goes
-/// through `load_verifying_key`, which is the loader with the load rules —
-/// it recomputes the SRS digest from the key's own points and revalidates every
-/// circuit against the registry (`docs/spec/shard-proof.md` §7) — and not
-/// through `VerifyingKey::from_bytes`, which checks encoding only.
+/// through `load_verifying_key`: `VerifyingKey::from_bytes`, whose load rules
+/// recompute the SRS digest from the key's own points and revalidate every
+/// circuit against the registry (`docs/spec/proof.md` §7), and then every curve
+/// point the key carries through its validating decoder.
 ///
 /// The identity comes back as the 32 bytes, parsed from the file's hex. It is
 /// **not** compared against the key's: a reader that wants that comparison
@@ -215,9 +215,8 @@ mod tests {
     /// decoder. The real end-to-end path — a proved block written here and
     /// verified by the `verifier` binary from those files — is
     /// `tests/cli.rs::the_cli_verifies_a_block_file`, which is `#[ignore]`d
-    /// because it proves a `2^20` statement. This is the fast test the root
-    /// `CLAUDE.md` asks of a change whose only other cover is a deferred
-    /// suite.
+    /// because it proves a `2^20` statement. This is the fast test that covers
+    /// the format in every workspace run.
     #[test]
     fn a_written_proof_reads_back_as_itself() {
         let vk = crate::tests::key();
@@ -237,7 +236,7 @@ mod tests {
         };
         // Three shells, because `BlockProof::from_bytes` requires one proof,
         // one commitment list and one root pair per shard and the statement
-        // above counts three — `INIT_TEARDOWN` and S-IO's two public windows,
+        // above counts three — `INIT_TEARDOWN` and the two public windows,
         // which every statement carries.
         let shell = |family: u32| ShardProof {
             family,

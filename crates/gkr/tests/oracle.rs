@@ -6,7 +6,7 @@
 //! formulas, and each round's cubic is recomputed at its four nodes as a direct
 //! sum over the remaining cube of `eq(p, point) · S(point)`, every column read
 //! through `MultilinearPoly::evaluate`. The challenges are replayed from the
-//! frozen schedule of `docs/spec/gkr.md` §5.2, a second transcription of it.
+//! schedule of `docs/spec/gkr.md` §5.2, a second transcription of it.
 
 mod common;
 

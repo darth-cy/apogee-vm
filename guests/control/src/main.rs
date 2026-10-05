@@ -1,12 +1,12 @@
 #![no_std]
 #![no_main]
-//! S17's guest: the jump/branch/slt family's twelve instructions — `jal`,
-//! `jalr`, the six branches, `slt`, `sltu`, `slti`, `sltiu` — with the
-//! operands and control flow the stage's acceptance names, checking every
-//! result itself and exiting with the number of checks that passed. It is the
-//! one program S17 proves end to end (`docs/spec/jump-branch-slt.md`).
+//! The jump/branch/slt family's twelve instructions — `jal`, `jalr`, the six
+//! branches, `slt`, `sltu`, `slti`, `sltiu` — at the operands and control flow
+//! where each is easiest to get wrong, checking every result itself and exiting
+//! with the number of checks that passed. `crates/prover/tests/control.rs`
+//! proves it end to end (`docs/spec/jump-branch-slt.md`).
 //!
-//! Everything in its image is an instruction of the two families S17 proves,
+//! Everything in its image is an instruction of two execution families,
 //! add/sub/lui/auipc and jump/branch/slt, plus the exit ecall: no SDK, no
 //! `main`, no panic path. The panic handler below is required of a `no_std`
 //! binary and is unreachable, so the linker drops it.

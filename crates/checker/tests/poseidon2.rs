@@ -1,13 +1,12 @@
 //! The Poseidon2 delegation circuit, round by round.
 //!
-//! `docs/spec/delegation.md` §12 is what this suite restates: the 24-word
+//! `docs/spec/delegation-circuits.md` §3 is what this suite restates: the 24-word
 //! frame, the anchor's two tuples, the three sub-layers a round takes, and the
 //! canonicity of every lane that crosses the frame. The permutation itself is
 //! checked the only way a circuit can be — by running its forward pass over a
 //! witness whose written lanes come from `transcript::poseidon2_permute`, and
-//! asserting the circuit accepts it. That is acceptance 2: a circuit whose
-//! rounds, constants or matrices differed by one term would refuse an honest
-//! witness.
+//! asserting the circuit accepts it. So a circuit whose rounds, constants or
+//! matrices differed by one term would refuse an honest witness.
 
 use constants::poseidon2 as p2;
 use constants::{challenge_slot, guest_memory, memory as mem};

@@ -1,522 +1,301 @@
-# The GKR engine: layered circuits, the artifact, and the backward pass
+# The GKR engine
 
-Frozen as of S13; S14 amended §2.1, §4, §4.1, §4.2, §4.3 and §5.1, and S15
-amended §1, §2.1, §3, §4.1, §4.2, §4.3 and §5.3. Changing anything here is a
-protocol-version change.
+The layered-circuit model every family circuit is written in, the artifact that carries one, its
+laws, and the backward pass reducing a circuit's outputs to claims on its committed columns at one
+point, which the shard's opening discharges ([proof.md](proof.md) §5).
 
-Implementation, by crate:
-
-| crate | what | build |
-| --- | --- | --- |
-| `crates/constraints` | the circuit as data: addresses, gate shapes, the artifact, its laws and wire form | `#![no_std]` + alloc |
-| `crates/gkr-verify` | the verifier half: the gate kernel, the layer sumcheck's verifier, `verify`, and every type `verify` touches | `#![no_std]` + alloc; the recursion guest links it |
-| `crates/gkr` | the prover half: the forward pass, its self-check, the layer sumcheck's prover, `prove`; re-exports `gkr-verify` whole | `std` + rayon |
-| `crates/checker` | the standalone validators, the witness-row evaluator, the cross-check, the dump | `std` |
-
-Depends on `docs/spec/transcript.md` for the duplex and its typed framing, on
-`crates/poly` for the index convention, and on `crates/sumcheck` for the
-4-coefficient round format and the `SumcheckProof` shape.
-
----
+`crates/constraints` is §1–§4; `crates/gkr-verify` is §5's verifier half and the verifier's
+helpers for the memory argument ([memory.md](memory.md) §3, §4) and LogUp
+([lookup.md](lookup.md) §2, §8). Both are `no_std`, as `verifier-core` and the recursion guest
+build on them. `crates/gkr`, `std` and rayon, is the prover half and re-exports `gkr-verify`.
+`crates/checker` enforces §4.2–§4.3 again ([circuits.md](circuits.md) §3).
 
 ## 1. The layer model
 
-A circuit has layers `0..=N`, `N >= 1`. Layer `k` is `w_k` columns, each a
-multilinear in `n_k` variables — a table of `2^{n_k}` rows under the frozen
-index convention (variable `j` is bit `j`).
+Layer `k`, `0 ≤ k ≤ N`, `N ≥ 1`, is `w_k` columns of `n_k` variables, indexed as
+[primitives.md](primitives.md) §6 fixes. **Layer 0** is the committed columns `M`, `W`, `S` in
+layout order at `n_0 = trace_vars`, beside the virtual tables the artifact lists (§2.1), which
+count in no width. **Gate list** `k` reads layer `k` and writes layer `k + 1`; the **top**, layer
+`N`, is exactly the outputs. A list is **row-wise**, `n_{k+1} = n_k`, or **halving**,
+`n_{k+1} = n_k − 1`.
 
-- **Layer 0** is the base: the committed columns `M[i]`, `W[i]`, `S[i]` in the
-  artifact's layout, plus the virtual tables `V[kind]` it lists. `n_0` is the
-  artifact's `trace_vars`; `w_0` counts the committed columns only.
-- **Gate list `k`** (`0 <= k < N`) reads layer `k` and writes layer `k + 1`.
-- **Layer `N`**, the top, has no gate list. It holds exactly the outputs.
-
-A gate list is one of two kinds:
-
-| kind | `n_{k+1}` | `w_{k+1}` | its producing gates |
-| --- | --- | --- | --- |
-| row-wise | `n_k` | any | `out(y) = G(inputs at y)` for every row `y` |
-| halving | `n_k - 1` | `w_k` | a **halving shape** over layer `k`'s columns, each operand read at both children |
-
-A halving list **halves every column of its layer**: it writes exactly as many
-columns as it reads, and `nothing_dropped` (§4.2) refuses a list leaving one
-unread. The child bit is the **highest** variable of layer `k`. A halving list
-has no enforcing gates and no cached entries, reads inner-layer columns only
-(never layer 0), and needs `n_k >= 1`. A row-wise list has no halving shape.
-
-There are two halving shapes. `TreeProduct { x }` is one level of a **product
-tree**, `out[i] = x[i]·x[i + 2^{n_k−1}]`, and entry `j` of a product tree halves
-column `j` into column `j`. `TreeCross { p, q }` is the numerator of one level of
-a **fraction tree** (`docs/spec/lookup.md` §6), `out[i] = p[i]·q[i + h] +
-p[i + h]·q[i]` with `h = 2^{n_k−1}`, and it reads its denominator beside its own
-column — which is why an entry is no longer pinned to the column at its own
-offset. S15 relaxed that; nothing else about the halving model moved, and the
-claim layout, L3's message and L4's line-folding are what they were.
-
-Every relation is written in one fixed template, whatever its shape:
+A halving list halves each column of its layer: it writes `w_k` columns by halving shapes (§3)
+reading layer-`k` columns at both **children** — child 0 is rows `[0, h)`, child 1 rows `[h, 2h)`,
+`h = 2^{n_k−1}`, the child bit being the highest variable. An entry may read any column, as a
+fraction tree's numerator reads its denominator ([lookup.md](lookup.md) §6), but every column is
+read (§4.2). Only halving lists hold halving shapes; a halving list is never list 0, has no cached
+or enforcing entries and needs `n_k ≥ 1`. Every relation has the one template `checker dump` prints:
 
 ```text
-producing (row-wise)   L{k+1}[j](x) = Σ_y eq(x, y) · G(inputs at y)
-producing (halving)    L{k+1}[j](x) = Σ_y eq(x, y) · G(layer k at (y, 0) and (y, 1))
-enforcing              0 = G(inputs at y)   for every y
+producing, row-wise   L{k+1}[j](x) = Σ_y eq(x, y)·G(layer k at y)
+producing, halving    L{k+1}[j](x) = Σ_y eq(x, y)·G(layer k at (y, 0) and (y, 1))
+enforcing             0 = G(layer k at y)   for every y ∈ {0,1}^{n_k}
 ```
 
 ## 2. Addresses
 
-`PolyAddress` is the only way a polynomial is named. Short notation, used in
-every dump and diagnostic:
+`constraints::PolyAddress` names every polynomial; dumps use its `Display` notation:
 
-| variant | notation | what |
-| --- | --- | --- |
-| `Memory(i)` | `M[i]` | committed column, memory-argument subtree |
-| `Witness(i)` | `W[i]` | committed column, witness subtree (not memory-tied) |
-| `Setup(i)` | `S[i]` | committed setup column |
-| `Virtual(kind)` | `V[row]` | virtual setup table, closed form, never materialized or committed |
-| `Inner { layer, offset }` | `L{k}[j]` | column `j` of inner layer `k >= 1` |
-| `Scratch(i)` | `scratch[i]` | an intermediate value in the flat constraint list |
-| `Cached { layer, offset }` | `C{k}[j]` | shared sub-expression `j` of gate list `k` |
+| variant | notation | | read by |
+| --- | --- | --- | --- |
+| `Memory(i)`, `Witness(i)`, `Setup(i)` | `M[i]`, `W[i]`, `S[i]` | committed columns | list 0, relations, lookups |
+| `Virtual(kind)` | `V[row]`, … | virtual tables, §2.1 | the same, if `virtuals` lists it |
+| `Inner { layer, offset }` | `L{k}[j]` | column `j` of layer `k ≥ 1` | list `k` |
+| `Cached { layer, offset }` | `C{k}[j]` | cached entry `j` of list `k`, §3.1 | list `k` |
+| `Scratch(i)` | `scratch[i]` | an intermediate of the flat relation list, §4 | relations |
 
-Where each may appear:
-
-- **gates** (the layered encoding): `M`, `W`, `S`, `V` in gate list 0;
-  `L{k}` in gate list `k >= 1`; `C{k}` in gate list `k`. Never `scratch`.
-- **relations** (the flat encoding): `M`, `W`, `S`, `V`, `scratch`. Never `L`
-  or `C`.
-- **the scratch bijection** maps every `scratch[i]` to one `L{k}[j]` and covers
-  every inner address exactly once.
+The **scratch bijection** maps each `scratch[i]` to one `L{k}[j]`, covering every inner column
+once. A committed value needed above layer 1 is carried up by copy gates. `M`, `W` and `S` differ
+in when they are bound ([memory.md](memory.md) §8).
 
 ### 2.1 Virtual tables
 
-Four kinds. Each closed form **is its multilinear extension** over `n_0`
-variables, and the kind tag is how the closed form is in the artifact:
+A virtual table is a closed form, evaluated per row by `gkr_verify::virtual_at_row` and at a point
+by `virtual_at_point`, never materialized, committed or claimed. Each form is its table's
+multilinear extension, so the verifier evaluates what the prover sums
+(`crates/gkr/tests/{lookup,ram_live}.rs` check all but `V[row]`). Wire form: a `u32`, in table
+order from 0.
 
-| kind | notation | value at row `y` | closed form |
+| kind | notation | value at row `y` | closed form at `(y_0, …, y_{n−1})` |
 | --- | --- | --- | --- |
-| `RowIndex` | `V[row]` | `y` | `Σ_j 2^j · y_j` |
-| `RamLive` | `V[ram_live]` | 1 if `y ≥ 2^14`, else 0 | `1 − Π_{j=14}^{n_0−1} (1 − y_j)`, which is 0 when `n_0 ≤ 14` |
-| `Range19` | `V[range19]` | `y mod 2^19` | `Σ_{j < min(19, n_0)} 2^j · y_j` |
-| `Range16` | `V[range16]` | `y mod 2^16` | `Σ_{j < min(16, n_0)} 2^j · y_j` |
+| `RowIndex` | `V[row]` | `y` | `Σ_{j<n} 2^j·y_j` |
+| `RamLive` | `V[ram_live]` | 1 if `y ≥ 2^14`, else 0 | `1 − Π_{14≤j<n} (1 − y_j)`; 0 if `n ≤ 14` |
+| `Range19` | `V[range19]` | `y mod 2^19` | `Σ_{j<min(19,n)} 2^j·y_j` |
+| `Range16` | `V[range16]` | `y mod 2^16` | `Σ_{j<min(16,n)} 2^j·y_j` |
+| `Xor8A` | `V[xor8_a]` | `a = y mod 2^8` | `Σ_{j<8} 2^j·y_j` |
+| `Xor8B` | `V[xor8_b]` | `b = ⌊y/2^8⌋ mod 2^8` | `Σ_{j<8} 2^j·y_{j+8}` |
+| `Xor8Out` | `V[xor8_out]` | `a ⊕ b` | `Σ_{j<8} 2^j·(y_j + y_{j+8} − 2·y_j·y_{j+8})` |
 
-14 is `constants::memory::RAM_LIVE_BIT`. `RamLive` is S14's, the mask on RAM
-window 0's rows below `RAM_ORIGIN` (`docs/spec/memory.md` §3.3); its closed form
-costs `n_0 − 14` multiplications and is 0 or 1 on the cube by construction.
-`Range19` and `Range16` are S15's, the range channels' tables
-(`docs/spec/lookup.md` §3); each is `[0, 2^BITS)` exactly when `n_0 ≥ BITS`, and
-a narrower set below that, which is why a circuit narrower than a range
-channel's bound is refused.
-
-A virtual table has layer 0's height. It is **never materialized**: the forward
-pass evaluates the closed form per row, the prover at every point a round needs
-(`(bound, X, bits)` at `X = 0, 1`), and the verifier at the bound point. It is
-never committed, never claimed, and never returned as a `BaseClaim`. A later kind
-is admissible only if its MLE has a closed form at every such point.
+14 is `constants::memory::RAM_LIVE_BIT` ([memory.md](memory.md) §3); the range and `XOR8` kinds
+are channel tables ([lookup.md](lookup.md) §3). `Xor8Out`'s form is multilinear because
+`y ⊕ z = y + z − 2yz` is.
 
 ## 3. Gate shapes
 
-`GateDef` is a closed enum. Coefficients are `Coeff::Literal(Fr)` or
-`Coeff::Challenge(slot)`, a slot of `constants::challenge_slot` resolved from
-`ExternalChallenges` at forward, prove and verify time. A challenge is degree 0.
+`constraints::GateDef` is a closed enum. A coefficient is `Coeff::Literal(Fr)` or
+`Coeff::Challenge(slot)`, a `constants::challenge_slot` read from the pass's `ExternalChallenges`,
+of degree 0.
 
-| # | variant | formula | operands, in kernel order |
-| --- | --- | --- | --- |
-| 0 | `Linear { terms, constant }` | `Σ c_i·x_i + c_0` | `x_1..x_t` |
-| 1 | `Product { coeff, left, right }` | `c·x·y` | `x, y` |
-| 2 | `MaskIntoIdentity { input, mask }` | `x·m + (1 − m)` | `x, m` |
-| 3 | `AffineProduct { left, left_constant, right, right_constant }` | `(Σ a_i·x_i + a_0)·(Σ b_j·y_j + b_0)` | `x_1..x_t, y_1..y_u` |
-| 4 | `TreeProduct { input }` | `x(·,0)·x(·,1)` | `x(·,0), x(·,1)` |
-| 5 | `Quadratic { constant, linear, products }` | `c_0 + Σ a_i·x_i + Σ b_j·y_j·z_j` | `x_1..x_t, y_1, z_1, .., y_u, z_u` |
-| 6 | `TreeCross { left, right }` | `p(·,0)·q(·,1) + p(·,1)·q(·,0)` | `p(·,0), p(·,1), q(·,0), q(·,1)` |
+| tag | variant | value |
+| --- | --- | --- |
+| 0 | `Linear { terms, constant }` | `Σ c_i·x_i + c_0` |
+| 1 | `Product { coeff, left, right }` | `c·x·y` |
+| 2 | `MaskIntoIdentity { input, mask }` | `x·m + (1 − m)` |
+| 3 | `AffineProduct { left, left_constant, right, right_constant }` | `(Σ a_i·x_i + a_0)·(Σ b_j·y_j + b_0)` |
+| 4 | `TreeProduct { input }` | `x(·,0)·x(·,1)` |
+| 5 | `Quadratic { constant, linear, products }` | `c_0 + Σ a_i·x_i + Σ b_j·y_j·z_j` |
+| 6 | `TreeCross { left, right }` | `p(·,0)·q(·,1) + p(·,1)·q(·,0)` |
 
-A gate's coefficients, wherever they are listed, are in the order of its fields;
-`Quadratic`'s are `c_0, a_1..a_t, b_1..b_u`. `Quadratic` is every degree-2
-polynomial written term by term, which is what lets one gate say
-`a·b + c·d − e·f`: an `AffineProduct`'s quadratic part is a product of two
-linear forms, and that one is not.
-
-**The kernel** — `gkr_verify::eval_gate`, one evaluation per variant over operand
-values in that order — is the semantic authority, and nothing else evaluates a gate.
-The engine's passes — the forward pass, the self-check and both halves of the layer
-sumcheck — reach it through `gkr_verify::ResolvedList`, which resolves a gate list's
-operands once and which `gkr_verify::gate_values` and `summand` wrap; the checker's witness-row evaluator, padding check and Law 4 sampler call
-it directly over the flat relations. `constraints::CATALOGUE` records, per variant, where it is
-defined and evaluated, what it reads and writes, its formula in the template, and
-what it is for.
+`Quadratic` spells degree-2 relations, such as `a·b + c·d − e·f`, that no product of affine forms
+does. **The kernel**, `gkr_verify::eval_gate`, takes one value per operand in `GateDef::operands`
+order, a halving shape's each at child 0 then child 1, and is the semantic authority. Both passes
+reach it through `gkr_verify::ResolvedList`, `crates/checker` calls it over the relations, and
+`verifier_core::tape` transcribes it for the recursion nodes ([recursion.md](recursion.md) §7).
 
 ### 3.1 Cached entries and the degree ceiling
 
-A cached entry `C{k}[j] = H` is a sub-expression of gate list `k`, reading
-layer-`k` columns only (never another cached entry), and named by at least one
-gate of its list. It is **substituted** into every gate that names it: it is not
-a column, has no table, is never claimed, contributes nothing to a width or to
-the gate totals, and does not appear in `LayerValues`. The forward pass evaluates
-`H` once per row. The sumcheck prover evaluates `H` at every evaluation node of
-every round from the columns' values there, and **never binds it as a table**:
-binding a table gives the multilinear extension of `H`'s values, which for a
-degree-2 `H` is not `H` of the columns' extensions.
+A **cached entry** `C{k}[j] = H` is a sub-expression of row-wise list `k` over its layer's columns,
+not another cached entry, substituted into the gates of its list naming it, with no table, claim
+or width. The prover evaluates `H` at every round node and never binds it: a bound table is
+the extension of `H`'s values, which for a degree-2 `H` is not `H` of the extensions. No
+registered circuit has one. `CircuitArtifact::inline_cached` writes a `Product` with one `Linear`
+cached factor as an `AffineProduct` and refuses any other reference; both prove the same bytes.
 
-**Degree** is counted after substitution: a column is degree 1, a challenge
-degree 0, `C{k}[j]` the degree of its expression. A `Quadratic` is as wide as its
-widest term — a linear term `d(x_i)`, a product `d(y_j) + d(z_j)` — and degree 0
-when it has neither. Every gate, every cached
-expression, and every relation must be degree ≤ 2 in the layer it reads.
-`Product(C, y)` with `C` of degree 2 is the degree-3 gate construction refuses.
+**Degree** is read from the shape after substitution — a column or virtual table 1, a challenge 0,
+`C{k}[j]` its expression's, a halving shape 2, a `Quadratic` its widest term — and `validate` holds
+every gate, cached entry and relation to at most 2, so a higher relation is split across layers.
+With `eq` multilinear, every round polynomial is then a cubic (§5.3).
 
-**A relation that will not fit is split across layers** with an intermediate
-column: the toy's `a·b·masked_m` is `ab = a·b` in layer 1, then
-`abm = ab · masked_m` in layer 2.
+## 4. The circuit artifact
 
-**Cache-free compilation** (`CircuitArtifact::inline_cached`) rewrites every
-reference into its inline form and empties the cached lists. The one inlinable
-reference is a `Product` with exactly one factor naming a `Linear` cached entry:
+`constraints::CircuitArtifact` holds a circuit twice: as **layered gates**, which the engine
+proves, and as a **flat relation list** over `M`, `W`, `S`, `V` and `scratch`, which the row-local
+checks read ([circuits.md](circuits.md) §3). Law 4 makes them one constraint set. In wire order:
 
 ```text
-Product { c, C, y }  →  AffineProduct { C.terms, C.constant ; [(c, y)], 0 }
-Product { c, x, C }  →  AffineProduct { [(c, x)], 0 ; C.terms, C.constant }
+CircuitArtifact = (format_version = 1, coefficient_encoding = 0, trace_vars ≤ 30,
+                   memory, witness, setup: [name], virtuals: [(VirtualKind, name)],
+                   layers: [LayerSpec], relations: [Relation], lookups: [LookupExpr],
+                   scratch: [(name, L{k}[j])], outputs: [L{N}[j]],
+                   padding: (row: [Fr], zero_row_valid: bool))
+LayerSpec       = (halving, num_vars, width,
+                   cached:    [(name, C{k}[j], GateDef)],
+                   producing: [(relation, L{k+1}[j], GateDef)],
+                   enforcing: [(relation, GateDef)])
+Relation        = (name, output: Option<scratch index>, GateDef)
+LookupExpr      = (name, channel, selector: PolyAddress, tuple: [GateDef])
 ```
 
-Anything else — both factors cached, a cached entry that is not `Linear`, a
-reference from any of the other five shapes, a `Quadratic` included — refuses to
-inline. A gate naming no cached entry, of any shape, is left as it is. Layer count, widths, gate
-totals, forward-pass values and proofs are unchanged.
-
-## 4. The artifact
-
-`CircuitArtifact` holds, in wire order:
-
-| field | what |
-| --- | --- |
-| `format_version` | `1` since S14; S13's was `0`. A postcard layout is not self-describing, so this is how a reader refuses an artifact of another layout instead of misreading it |
-| `coefficient_encoding` | `0` = every `Fr` canonical 32-byte little-endian; the only value, and how the file declares it |
-| `trace_vars` | `n_0`; the trace length is `2^{trace_vars}`, at most `2^30` so `1 << n` fits a 32-bit `usize` |
-| `memory`, `witness`, `setup` | the committed layout per subtree, one name per column |
-| `virtuals` | `(kind, name)`: the virtual tables the circuit reads |
-| `layers` | gate list `k` for `k = 0..N` |
-| `relations` | the flat constraint list |
-| `lookups` | the range obligations: format 1's element, which carries a selector (`docs/spec/memory.md` §7); S15 discharges them |
-| `scratch` | `(name, L{k}[j])`: the scratch bijection |
-| `outputs` | the output map: a permutation of the top layer, in `OutputClaims` order |
-| `padding` | `(row, zero_row_valid)`: the padding contract, §4.3 |
-
-```text
-LayerSpec   = (halving, num_vars, width,
-               cached:    [(name, C{k}[j], GateDef)],
-               producing: [(relation, L{k+1}[j], GateDef)],
-               enforcing: [(relation, GateDef)])
-Relation    = (name, output: Option<scratch index>, GateDef)
-LookupExpr  = (name, channel, selector: PolyAddress, tuple: [GateDef])
-```
-
-`num_vars` and `width` are the layer **written**, `k + 1`: derived values stored
-for readers, which Law 2 holds to what the gates imply. The `j`-th cached and
-producing entry sit at `C{k}[j]` and `L{k+1}[j]`.
-
-A lookup holds on a row where its selector is 0, or where its tuple is in its
-channel's table. Every channel of `constants::lookup_channel` is a range channel
-at S14: its tuple is one expression, which holds when its canonical integer is
-below `2^BITS[channel]`.
+`validate` holds the first three to those values and every name to non-empty `[a-z0-9_]`, unique
+in the artifact; names mean nothing to the engine. Encoding 0, `COEFFICIENT_ENCODING_CANONICAL_LE`,
+is every `Fr` canonical 32-byte little-endian, and 30 is `MAX_TRACE_VARS`. `outputs` orders the
+top layer as `OutputClaims` lists it; a relation with an output defines that slot, one without is
+enforcing; `lookups` are [lookup.md](lookup.md) §1's.
 
 ### 4.1 Wire form
 
-`postcard` over the tuple above, hand-written serde. A `u32` is a postcard
-varint; a `u8` tag and a `bool` are one raw byte; `Option` is postcard's tag; a sequence is a varint
-length then its elements; a name is a `str`; an `Fr` is its 32 canonical bytes
-with no length prefix (`crates/field`'s `[u8; 32]` tuple).
+`postcard` over §4's tuples, hand-written serde: a `u32` is a varint, a `u8` tag and a `bool` a
+byte, an `Option` a tag byte, a sequence a varint count then its elements, a name a `str`, an `Fr`
+its 32 canonical bytes.
 
 ```text
-VirtualKind     u32                           0 RowIndex, 1 RamLive, 2 Range19, 3 Range16
-PolyAddress     (tag u8, a u32, b u32)        tags: 0 M, 1 W, 2 S, 3 V, 4 L, 5 scratch, 6 C
-                                              V: a = kind; L, C: a = layer, b = offset;
-                                              every unused field is 0
-Coeff           (tag u8, slot u32, value Fr)  0 Literal (slot 0), 1 Challenge (value 0)
-GateDef         (tag u8, split u32, coeffs [Coeff], operands [PolyAddress])
-                0 Linear         split 0, coeffs c_1..c_t c_0,              operands x_1..x_t
-                1 Product        split 0, coeffs c,                         operands x y
-                2 Mask           split 0, coeffs none,                      operands x m
-                3 AffineProduct  split t, coeffs a_1..a_t a_0 b_1..b_u b_0, operands x_1..x_t y_1..y_u
-                4 TreeProduct    split 0, coeffs none,                      operands x
-                5 Quadratic      split t, coeffs c_0 a_1..a_t b_1..b_u,     operands x_1..x_t y_1 z_1 .. y_u z_u
-LookupExpr      (name str, channel u32, selector PolyAddress, tuple [GateDef])
+PolyAddress  (tag u8, a u32, b u32): 0 M, 1 W, 2 S, 5 scratch (a = index); 3 V (a = kind);
+             4 L, 6 C (a = layer, b = offset); unused fields 0
+Coeff        (tag u8, slot u32, value Fr): 0 literal (slot 0), 1 challenge (value 0)
+GateDef      (tag u8, split u32, coefficients [Coeff], operands [PolyAddress] in operands() order)
+  0 Linear            split 0  c_1..c_t, c_0                 x_1..x_t
+  1 Product           split 0  c                             x, y
+  2 MaskIntoIdentity  split 0  —                             x, m
+  3 AffineProduct     split t  a_1..a_t, a_0, b_1..b_u, b_0  x_1..x_t, y_1..y_u
+  4 TreeProduct       split 0  —                             x
+  5 Quadratic         split t  c_0, a_1..a_t, b_1..b_u       x_1..x_t, y_1, z_1, …, y_u, z_u
+  6 TreeCross         split 0  —                             p, q
 ```
 
-A `Quadratic` decodes only when `t` is at most the operand count, the operands
-after the first `t` pair up, and there are exactly `1 + t + (operands − t)/2`
-coefficients. Tags are append-only. `from_bytes` is total — it returns an error and never
-panics, whatever it is handed, and reserves nothing an untrusted length asks for
-— and accepts exactly the bytes `to_bytes` writes: it re-encodes and compares. It
-reads `format_version` first and refuses any version but 1 before decoding
-anything after it, because the layout that follows is the version's. It checks no
-law: a decoded artifact may break every one, which is what lets the
-checker be handed one.
+`CircuitArtifact::from_bytes` refuses a `format_version` other than 1 before decoding the rest,
+postcard not being self-describing; refuses an unknown tag, a nonzero unused field, a gate with
+counts its shape lacks and a non-canonical `Fr`; re-encodes and compares, as postcard admits
+overlong varints and trailing bytes; never panics or reserves what a declared length asks; and
+checks no law.
 
 ### 4.2 The laws
 
-Enforced twice: by `CircuitArtifact::validate` in `constraints`, which whatever
-builds or loads an artifact calls, once, and by `checker`'s standalone
-validators, which share no code with it. The engine's entry points assume an
-artifact that has passed `validate` and do not check it again (§5.1).
+`CircuitArtifact::validate` runs once where an artifact is built or loaded, never per proof: each
+`constraints` constructor panics on a refusal, and `verifier_core::VerifyingKey::check` applies it
+to a key's circuits, for prover and verifier ([proof.md](proof.md) §7). `checker::check_laws`
+enforces Laws 1–4 and the lookup rules again, sharing no code with `crates/constraints/src/laws.rs`
+([circuits.md](circuits.md) §3).
 
-1. **Locality.** Every operand of gate list `k` is at layer `k` in the sense of
-   §2 (base and setup counting as layer 0), in range, and a cached operand is one
-   of list `k`'s own entries.
-2. **Derived width.** A stored `width` is the number of producing gates, their
-   outputs are exactly `L{k+1}[0..width)` in order, and a stored `num_vars` is
-   `n_k` or `n_k − 1` by the list's kind. A halving list's width is `w_k`, and
-   every entry of one is a halving shape over layer `k`'s columns. Layer 0's
-   size is the committed layout.
-3. **Top layer.** The last list writes layer `N`, which has no list, and
-   `outputs` is a permutation of `L{N}[0..w_N)`: nothing more, nothing less.
-4. **Single source of truth.** Every relation is named by exactly one gate
-   entry and every gate entry names one relation (equal cardinality); a
-   producing entry's output maps to its relation's scratch output through the
-   bijection, an enforcing entry's relation has none; and the relation and the
-   gate are the same polynomial — scratch mapped to `L` through the bijection,
-   cached entries substituted. `constraints` compares expanded normal forms
-   (monomials over columns, children and challenge slots, merged and sorted);
-   `checker` compares kernel evaluations at independent pseudo-random points.
+1. **Locality.** Every operand of list `k` is in range and readable at layer `k` (§2): a `V` only
+   if listed, a `C{k}[j]` only one of list `k`'s own, from a producing or enforcing gate.
+2. **Derived width.** A list's stored `width` is its producing count, entry `j` writes
+   `L{k+1}[j]`, and its stored `num_vars` is `n_k`, or `n_k − 1` if halving.
+3. **Top layer.** `outputs` is a permutation of `L{N}[0..w_N)`.
+4. **Single source of truth.** Relations and gate entries correspond one to one, a producing
+   entry's relation defining the slot the bijection maps to its output, an enforcing entry's none,
+   and each pair is one polynomial, scratch read through the bijection and cached entries
+   substituted: `validate` compares normalized expansions, `checker` evaluations at random points.
 
-Besides the laws, `validate` refuses: degree above 2 (§3.1); a halving list
-breaking §1's rules; a relation operand outside §2's set; a scratch slot that is
-not exactly one producing relation's output; an inner column below the top that the
-next list never reads — decided on the gates' normalized expansions, so a cancelling
-or zero-coefficient term reads nothing — a cached entry no gate names, and an
-enforcing gate whose normalized expansion is zero, each a relation constructed and
-then dropped, on which nothing depends; an empty name, one outside
-`[a-z0-9_]`, or one used twice anywhere in the artifact; an unknown challenge
-slot; a `padding.row` whose length is not `w_0`; a format version other than 1 or
-a coefficient encoding other than 0; `trace_vars > 30`. Every refusal is a
-`ConstraintError` naming the law, gate or address.
+`validate` also refuses, each a `ConstraintError` naming what broke: §4's bounds, no gate list,
+`padding.row` not `w_0` long, a virtual kind listed twice, §1's halving rules, degree above 2, a
+relation reading anything but `M`, `W`, `S`, listed `V` and existing `scratch`, a scratch list that
+is no bijection onto the inner columns or not defined once each, a slot outside
+`constants::challenge_slot`, and a relation constructed and then dropped — an inner column below
+the top the list above never reads, a cached entry no gate names, an enforcing gate whose
+expansion is zero. Reads are decided on normalized expansions: `x − x` and `0·x` read nothing.
 
-**The lookup rules** (S14, `docs/spec/memory.md` §7; S15, `docs/spec/lookup.md`).
-`validate` refuses a lookup whose channel is not one of
-`constants::lookup_channel`; whose tuple is not exactly one expression on a range
-channel, or is empty or wider than `lookup_channel::MAX_TUPLE` on a table one;
-whose width differs from another lookup's of the same channel, since one channel
-has one table; whose expression is not `Linear` with literal coefficients, its
-constant included, over in-range `M`, `W`, `S` columns and virtual tables
-`virtuals` lists; whose selector is not an in-range `M`, `W` or `S` column; or
-whose **selector no enforcing gate of gate list 0 holds to booleanity**, without
-which LogUp and the native reading of an obligation are different statements
-(`docs/spec/lookup.md` §2). Its name is held to the name rule above. Each refusal
-is a `ConstraintError` naming the lookup, and `checker::check_laws` enforces the
-same rules with code of its own.
-
-Names are documentation, never semantics, stored beside what they name rather
-than derived from a position, so none can drift with a layer index. An artifact
-is a struct literal of complete vectors followed by `validate`; there is no
-incremental builder to push into after a collection point.
+**The lookup rules.** A lookup's channel is in `constants::lookup_channel`; its tuple is one
+expression on a range channel, else 1 to `lookup_channel::MAX_TUPLE` (7), as wide as its channel's
+other lookups'; its selector is an in-range committed column some enforcing gate of list 0 holds
+to booleanity (`x − x²` up to normal form); and each expression is `Linear` over in-range committed
+columns and listed virtual tables, with literal coefficients, unit and constant-free above
+position 0 ([lookup.md](lookup.md) says what each protects).
 
 ### 4.3 The padding contract
 
-S13 has no gating: **every relation must hold on every row, padding rows
-included.** `padding.row` is the committed columns' values on an inactive row,
-in layout order. Computing the row-local scratch values from it — every
-producing relation below the first halving list — makes every row-local
-enforcing relation vanish, for every challenge value and every row index.
-
-Since S15 that is a statement about the columns the contract reads, not about
-every cell a prover writes on a padding row. A channel's **multiplicity** column
-(`docs/spec/lookup.md` §7) counts a table value over the whole shard, padding
-rows included, so it is nonzero on rows where `padding.row` says 0; it enters no
-enforcing relation and no product tree, so neither clause below asks anything of
-it, and a witness builder must not zero it to match `padding.row`. A circuit
-with no channel is unchanged: there, `padding.row` is every committed cell of
-every padding row, and `crates/checker/tests/multiset.rs` holds S14's frames to
-exactly that.
-`zero_row_valid` says whether the all-zero committed row has the same property.
-The checker holds both statements to the relations, at pseudo-random challenge
-values and row indices.
-
-**The product-tree clause** (S14, master rule 7). For a family whose shards have
-inactive rows, every column the first halving list reads — computed from
-`padding.row` through every row-wise producing relation below that list — is
-exactly 1, for every challenge value and every row index: an inactive row
-contributes the multiplicative identity to every product. A RAM window family
-(`docs/spec/memory.md` §3) has no inactive rows — every row is an address — so the
-clause does not apply to it. Neither does it apply to a **fraction tree** (S15):
-its identity is `(0, 1)` and a padding row is not inactive in a channel at all —
-it contributes the channel's neutral entry, which the multiplicity column counts
-(`docs/spec/lookup.md` §6) — so `checker::check_padding_identity` exempts every
-column a `TreeCross` reads. `checker::check_padding_identity` holds an artifact
-to the clause at pseudo-random challenge values and row indices; an artifact with
-no halving list passes.
-
-Still not covered: that the contract holds for the setup values a real padding
-row carries rather than the ones `padding.row` names, and — since S15 — that a
-real padding row's **multiplicity columns** carry what `padding.row` says. They
-do not: a multiplicity counts table rows, not trace rows, and is nonzero on
-inactive rows of a channel-carrying circuit (`docs/spec/lookup.md` §6).
-`padding.row` is a row on which every row-local relation holds, which is what
-this contract asks of it, and not the row a prover writes.
+The engine gates nothing, an enforcing gate being a zerocheck over the whole cube, so a family
+switches relations off with its own columns ([memory.md](memory.md) §2). On `padding.row`, a
+committed row, the **row-local** scratch values, those of producing relations not at or above a
+halving shape, make every row-local enforcing relation vanish at every challenge value and row
+index; `zero_row_valid` says whether the all-zero row does too. **The product-tree clause**: where
+shards have inactive rows, every column the first halving list reads is 1 on `padding.row`, so
+padding leaves each product unchanged; the RAM window families ([memory.md](memory.md) §3) and the
+columns a `TreeCross` reads ([lookup.md](lookup.md) §6) are exempt. This is completeness, not
+soundness: a cheating prover's padding rows are its family's gates' business. Nor is `padding.row`
+the row a prover writes, multiplicities and setup columns differing; no prover or verifier reads
+it, and `checker::check_padding` and `checker::check_padding_identity` test it.
 
 ## 5. The backward pass
 
-### 5.0 The types
-
-All but the prover's are `gkr-verify`'s, re-exported by `gkr`.
-
-| type | what |
-| --- | --- |
-| `ExternalChallenges` | `slot -> Fr`; `new`, `insert` (a slot once), `get` |
-| `OutputClaims { tables }` | `tables[i]` is the full `2^{n_N}`-row table of `outputs[i]` |
-| `BaseClaim { address, point, value }` | a committed column's claimed value at `point`, `point[j]` bound to variable `j` |
-| `GkrProof { layers: Vec<SumcheckProof> }` | `layers[k]` is transition `k` |
-| `GkrError` | §5.5 |
-| `gkr::BaseLayer` | the committed columns by address, one per `M`, `W`, `S` address; `new` takes them as given |
-| `gkr::LayerValues { base, layers }` | the forward pass's output: the base, then layers `1..=N` in offset order |
-| `gkr::SelfCheckError { layer, row, relation }` | the first gate the materialized values break |
-
-`gkr::forward` materializes every layer. `gkr::self_check` recomputes every gate
-against those layers and names the first broken relation. It is a debugging hook,
-not a step of proving: a caller may run it after `forward`.
-`gkr::prove` does **not** run it and recomputes nothing: it proves whatever
-`LayerValues` holds, and a verifier rejects what is wrong.
-
-The layer sumcheck driver is two functions, and each owns step L2 only: the
-caller draws L1's batch before it and absorbs L3's claims after it.
-
-```rust
-gkr::prove_sumcheck(eq_point: &[Fr], summand: &LayerSummand, tables: &mut LayerTables,
-                    t: &mut Transcript) -> (Vec<[Fr; 4]>, Vec<Fr>)
-gkr_verify::verify_sumcheck(claim: Fr, rounds: &[[Fr; 4]], t: &mut Transcript)
-                    -> Option<(Vec<Fr>, Fr)>
-```
-
-The prover's summand is one gate list with its batch weights; the verifier's
-returns the bound point and the last claim, which the caller holds to
-`eq(eq_point, point) · S(values)`. The claim is not a prover input: an honest
-round 0 sums to it by construction. The master's claim-merging sumcheck was to
-extend this driver to a weighted sum of `eq` tables; S16 found no claims to merge —
-a shard is one circuit and the backward pass leaves every committed column at one
-point — and has none (`docs/spec/shard-proof.md` §5.3). The single point here is
-the only one.
+`gkr::forward` materializes every layer from the committed columns; `gkr::prove` proves those
+values as they stand, one `sumcheck::SumcheckProof` per transition; `gkr_verify::verify` replays
+the schedule, checking, from `OutputClaims`, one table per output, to `BaseClaim`s or a
+`GkrError`. `gkr::self_check`, naming the first failing gate, row and relation, and
+`gkr::explain_self_check`, listing that row's operands, are a debugging hook costing a second
+forward pass ([tools.md](../tools.md) §3). Rayon splits rows and row pairs, never lists or rounds:
+proofs do not depend on the thread count.
 
 ### 5.1 What the caller owes
 
-- **Before** `prove` or `verify`, the caller has bound the base layer into the
-  transcript (at S13 the tests absorb `sumcheck::witness_digest` of the committed
-  columns; since S16 the shard transcript absorbs the commitments,
-  `docs/spec/shard-proof.md` §4). The engine never absorbs base material.
-- Every `ExternalChallenges` value is either drawn **after** everything its
-  gates can reach is bound — every committed column on any path from a gate
-  naming the slot down through the inner layers — or a **derived** value: a fixed
-  function of such challenges and of statement data absorbed before them,
-  computed by the verifier and never read from a proof.
-  `constants::challenge_slot::MEM_WINDOW_CONSTANT` is the one derived slot at
-  S14. At S13 the tests draw the toy's slot as
-  `challenge_scalar(SUMCHECK_CHALLENGE)` immediately after the digest. This rule
-  suffices for the GKR argument but not for the multiset argument, whose
-  provenance rule is `docs/spec/memory.md` §8.
-- The artifact is the verifier's, not the prover's: it is part of what a
-  verifying key conveys.
-- The artifact has passed `CircuitArtifact::validate`. `verify`, `forward`,
-  `self_check` and `prove` do not check it again: validation belongs to a
-  verifying or proving key, once, not to every proof, and the routine that loads
-  a key calls it. No such routine exists at S13; the stage that introduces
-  `VerifyingKey` must call `validate` there. On an artifact that breaks a law the
-  engine's answer means nothing: it may panic, and `verify` may accept.
-- The base, the layer values and the challenges have the artifact's shape.
-  `forward`, `self_check` and `prove` check nothing about their inputs: soundness
-  is `verify`'s alone, and a cheating prover runs none of the prover's code, so a
-  malformed input costs only the honest prover — a panic where it is first read,
-  or a proof or base claims that fail downstream.
+- The base is bound into the transcript before `prove` or `verify`, which absorb none of it
+  ([proof.md](proof.md) §4 binds a shard's commitments).
+- Each challenge is drawn after every committed column its gates reach is bound, or is
+  **derived**: a fixed function of such challenges and of statement data bound before them,
+  computed by the verifier. That suffices for GKR; the memory argument needs more
+  ([memory.md](memory.md) §8).
+- The artifact has passed `validate` (§4.2) and is not checked again; on a lawless one the engine
+  may panic, and `verify` may accept.
+- The prover's inputs have the artifact's shape; it checks none, nor that its values satisfy the
+  gates. Soundness is `verify`'s alone and a cheating prover runs none of this code, so a bad
+  input costs the honest prover only a panic or a failing proof.
 
-### 5.2 The transcript schedule (frozen)
+### 5.2 The transcript schedule
 
-Both sides, in this order. Every squeeze is `challenge_scalar(tag)`. `p` is the
-current claim point and `v_j` the claim on column `j` of the layer the next list
-writes.
+`prove` and `verify` run these steps and end in one sponge state; the tags are
+[transcript.md](transcript.md) §5's. `p` is the claim point, `v_j` the claim on column `j` of the
+layer the next list writes.
 
 | step | op | tag | message |
 | --- | --- | --- | --- |
-| O1 | absorb | `GKR_OUTPUTS` (25, scalars) | `OutputClaims.tables` in output-map order, rows in index order, as **one** message of `w_N · 2^{n_N}` scalars |
-| O2 | squeeze ×`n_N` | `GKR_OUTPUT_POINT` (26, challenge) | `p = r`, `r_i` bound to variable `i`; `v_j = tables[i](r)` for the `i` with `outputs[i] = L{N}[j]` |
+| O1 | absorb | `GKR_OUTPUTS` | the output tables in output-map order, rows in index order: one message of `w_N·2^{n_N}` scalars |
+| O2 | squeeze ×`n_N` | `GKR_OUTPUT_POINT` | `p = r`, `r_i` binding variable `i`; `v_j = tables[i](r)` for `outputs[i] = L{N}[j]` |
+| L1 | squeeze | `GKR_BATCH` | `λ`; the claim is `c = Σ_j λ^j·v_j` |
+| L2 | ×`n_{k+1}`: absorb, squeeze | `SUMCHECK_ROUND`, `SUMCHECK_CHALLENGE` | a round's cubic, then `ρ_i`, binding variable `i` |
+| L3 | absorb | `GKR_LAYER_CLAIMS` | row-wise: `L{k}[j](ρ)` per `j` in offset order, layout order at `k = 0`; halving: `L{k}[j](ρ,0), L{k}[j](ρ,1)` per `j` |
+| L4 | squeeze, halving only | `GKR_CHILD` | `τ`; `p = (ρ, τ)`; `v_j = L{k}[j](ρ,0) + τ·(L{k}[j](ρ,1) − L{k}[j](ρ,0))` |
 
-then for `k = N − 1` down to `0`:
-
-| step | op | tag | message |
-| --- | --- | --- | --- |
-| L1 | squeeze | `GKR_BATCH` (27, challenge) | `λ`; the claim is `c = Σ_j λ^j · v_j` |
-| L2 | ×`n_{k+1}`: absorb, squeeze | `SUMCHECK_ROUND` (4), `SUMCHECK_CHALLENGE` (5) | the round cubic `[c0, c1, c2, c3]`, then `ρ_i`, binding variable `i` |
-| L3 | absorb | `GKR_LAYER_CLAIMS` (28, scalars) | row-wise: `w_k` values, `L{k}[0..]` in offset order (at `k = 0`: `M`, `W`, `S` in layout order); halving: `2·w_k` values, `L{k}[j](ρ,0), L{k}[j](ρ,1)` per `j` |
-| L4 | squeeze (halving only) | `GKR_CHILD` (29, challenge) | `τ`; `p = (ρ, τ)`, `v_j = (1 − τ)·L{k}[j](ρ,0) + τ·L{k}[j](ρ,1)` |
-
-After a row-wise list `p = ρ` and `v` is L3's message. After `k = 0` the
-`BaseClaim`s are `(M[i] | W[i] | S[i], ρ, value)` in layout order — all at one
-point.
+L1–L4 run for `k = N − 1` down to 0; after a row-wise list `p = ρ` and `v` is L3's message. The
+base claims are layer 0's, in layout order at one point. Every registered circuit halves to a top
+with no variables ([circuits.md](circuits.md) §2), so O2 draws nothing and O1 fixes the roots
+before `λ`.
 
 ### 5.3 The layer sumcheck
 
-Transition `k` proves `c = Σ_y eq(p, y) · S_k(y)` over `n_{k+1}` variables:
+Transition `k` proves `c = Σ_{y∈{0,1}^{n_{k+1}}} eq(p, y)·S_k(y)`, where
 
 ```text
-row-wise   S_k(y) = Σ_j λ^j · G_j(inputs at y) + Σ_e λ^{w_{k+1} + e} · E_e(inputs at y)
-halving    S_k(x) = Σ_j λ^j · G_j(layer k at (x, 0) and (x, 1))
+row-wise   S_k(y) = Σ_j λ^j·G_j(layer k at y) + Σ_e λ^{w_{k+1}+e}·E_e(layer k at y)
+halving    S_k(y) = Σ_j λ^j·G_j(layer k at (y, 0) and (y, 1))
 ```
 
-`G_j` is the producing gate writing `L{k+1}[j]`; `E_e` is the `e`-th enforcing
-gate of the list, whose claim is the constant `0`. **Enforcing claims share the
-descending point.** `eq` is multilinear and every summand term degree ≤ 2 in the
-layer below, so each round is a cubic, sent as exactly 4 ascending coefficients;
-there is one round per variable of layer `k + 1`, and none is skipped.
-
-The verifier checks round `i` as `g_i(0) + g_i(1) = claim`, sets
-`claim = g_i(ρ_i)`, and after L3 checks
-
-```text
-claim = eq(p, ρ) · S_k(values)
-```
-
-where layer-`k` operands take L3's values, `V[row]` its closed form at `ρ`, a
-cached entry its expression over those, and a challenge its slot. A failing
-round or final check is `GkrError::LayerInconsistency { layer: k }`; a verifier
-cannot tell a wrong descending claim from a violated enforcing gate, and does
-not try.
-
-**A zero claim is legal.** The stage prompt calls the driver's initial claim
-"nonzero"; what it means is that the claim is an arbitrary batched value rather
-than the constant 0 of S04's zerocheck. Outputs that are zero, or a list with
-only enforcing gates above a width-0 layer, give `c = 0`, and an honest proof of
-it verifies. A transition with `n_{k+1} = 0` has no rounds and its final check is
-`c = S_k(values)`.
+`G_j` writes `L{k+1}[j]` and `E_e`, the list's `e`-th enforcing gate, claims 0: enforcing gates are
+zerochecks sharing the descending point and its batch. The rounds are
+[primitives.md](primitives.md) §7's cubics, run from `c`, one per variable of layer `k + 1`, a
+halving list's two children being separate tables. After L3 the verifier checks
+`claim = eq(p, ρ)·S_k(values)`, layer-`k` operands taking L3's values, virtual tables their closed
+form at `ρ`, cached entries their expression; with `n_{k+1} = 0` there are no rounds and the check
+is `c = S_k(values)`. A zero claim is legal. `gkr::prove_sumcheck` and
+`gkr_verify::verify_sumcheck` run L2.
 
 ### 5.4 Why it is sound
 
-Every challenge is drawn after what it protects is absorbed.
+Each challenge is drawn after what it protects:
 
-- **Outputs before `r`.** `r` is drawn after O1, so an output table cannot be
-  chosen after `r` is known. Without O1 a prover can predict `r` and forge a
-  different table with the same evaluation there.
-- **`λ` after the claims.** If some `v_j` is wrong, or some enforcing gate is
-  nonzero on the cube, then `Σ_j λ^j (v_j − true_j) + Σ_e λ^{w+e} Ẽ_e(p)` is a
-  nonzero polynomial in `λ` of degree below `w + |E|`, vanishing with probability
-  at most `(w + |E|)/|Fr|`. `Ẽ_e(p)` is nonzero except with probability
-  `n/|Fr|`, because `E_e`'s values on the cube are fixed by the bound base and
-  the external challenges — hence by the true inner layers — all determined
-  before any coordinate of `p` is squeezed.
-- **`τ` after both children.** A wrong pair of child values defines a line that
-  meets the true line `τ ↦ L{k}[j](ρ, τ)` in at most one point.
-- **The rounds** are the textbook argument: a wrong cubic agrees with the true
-  one at a random `ρ_i` with probability at most `3/|Fr|`.
+- **`r` after the outputs**, or a prover predicting `r` claims another table agreeing with the
+  true one there.
+- **`λ` after the claims and `p`.** If some `v_j` is not the true `v̂_j`, or some `E_e` is nonzero
+  on the cube, `Σ_j λ^j·(v_j − v̂_j) − Σ_e λ^{w_{k+1}+e}·Ê_e(p)` is a nonzero polynomial in `λ` of
+  degree below `w_{k+1} + |E_k|`; `Ê_e`, the extension of `E_e`'s values, is fixed before `p` is
+  drawn and vanishes there with probability at most `n_{k+1}/|Fr|`.
+- **`ρ_i` after round `i`**: a wrong cubic agrees with the true one there with chance ≤ `3/|Fr|`.
+- **`τ` after both children**: a wrong pair's line meets `τ ↦ L{k}[j](ρ, τ)` in at most one point.
 
-At the bottom, only claims about committed columns at one point remain, and
-discharging them against the commitments is the caller's.
+Summed over a registered circuit's transitions at its default height, these stay under
+`2^14/|Fr|`. The random-oracle assumption is [architecture.md](../architecture.md)'s.
 
 ### 5.5 Shapes and errors
 
-`layers[k].rounds` has `n_{k+1}` entries and `layers[k].final_evals` L3's count;
-nothing in a proof is data-dependent. `verify` runs these checks, in this order,
-before it touches the transcript, and returns an error rather than panicking on
-anything the proof or the claims carry:
+Transition `k` carries `n_{k+1}` rounds and `w_k` claims, `2·w_k` if halving, so a proof's shape
+is the artifact's alone (wire form: [proof.md](proof.md) §9). `verify` checks, in order and
+before touching the transcript, and on a validated artifact never panics on proof or claim data:
 
-| order | variant | when |
-| --- | --- | --- |
-| 1 | `MissingChallenge { slot }` | a gate or cached entry names a slot the caller did not supply |
-| 2 | `OutputShape` | `OutputClaims` does not match the output map in count or variables |
-| 3 | `ProofShape { layer }` | `layer = N`: the proof has the wrong number of layers; otherwise transition `layer`, lowest first, has the wrong round or claim count |
-| — | `LayerInconsistency { layer }` | a round or the final check of transition `layer` failed |
+| `GkrError` | when |
+| --- | --- |
+| `MissingChallenge { slot }` | a gate names a slot not supplied |
+| `OutputShape` | `OutputClaims` mismatches the output map in count or variables |
+| `ProofShape { layer }` | `layer = N`: a wrong transition count; else transition `layer`, lowest first, has a wrong round or claim count |
+| `LayerInconsistency { layer }` | a round or the final check of transition `layer` fails |
 
-The artifact is not among what `verify` checks. It is assumed to have passed
-`CircuitArtifact::validate` where its verifying key was loaded (§5.1), and the
-guarantee above — no panic on anything the proof or the claims carry — is for
-such an artifact. On one that breaks a law `verify`'s answer means nothing: it
-may panic, and it may accept.
+One `LayerInconsistency` covers a wrong descending claim and a violated enforcing gate alike: a
+batched sum cannot tell them apart, and the proof spends nothing on it. [proof.md](proof.md) §6
+maps these errors to its classes.

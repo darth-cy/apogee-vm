@@ -1,5 +1,5 @@
 //! **The cycle profiler**: where a guest's RV32 cycles go, by function and by
-//! semantic workload. `docs/spec/profiling.md` is the design.
+//! semantic workload. `docs/tools.md` §2 is the design.
 //!
 //! It invokes nothing proving-related. Three inputs — a guest ELF, the bytes it
 //! runs on, and the ELF's own symbol table — and arithmetic. No SRS, no key, no
@@ -18,9 +18,10 @@
 //!
 //! The executor is `emulator::StreamingRun`, so the profiler's memory is one
 //! partial trace buffer per family plus the histogram — 8 bytes a halfword of
-//! image, 16 MB for the largest image on the menu. **A whole Ethereum block
-//! profiles in a minute and a few hundred megabytes**, where `trace_run` would
-//! need ~520 GB for the same execution (`docs/spec/streaming.md` §1).
+//! image, 32 MiB for the largest image a `2^22` decoded table reaches. **A whole
+//! Ethereum block profiles in a minute and a few hundred megabytes**, where
+//! `trace_run` would need ~520 GB for the same execution
+//! (`docs/spec/streaming.md` §1).
 
 pub mod categories;
 pub mod demangle;

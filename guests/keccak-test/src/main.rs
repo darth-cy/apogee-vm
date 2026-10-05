@@ -1,15 +1,15 @@
 #![no_std]
 #![no_main]
-//! S21's guest: `guest_sdk::keccak256` over a corpus that covers every shape
-//! the sponge has, checked in-guest against digests a reference computed.
+//! `guest_sdk::keccak256` over a corpus that covers every shape the sponge
+//! has, checked in-guest against digests a reference computed.
 //!
 //! It is the fixture for the keccak-f[1600] delegation family
 //! (`docs/spec/delegation.md`). Under `crates/emulator` the delegation ecall
 //! runs the circuit's function and the invocations reach the `KECCAK_F` trace
 //! buffer; on an executor with no circuit the same ecall answers `-ENOSYS` and
 //! the SDK's software fallback runs. **The digests are the same either way**,
-//! which is exactly what acceptance 3 asks: the two paths are bit-identical
-//! behind one frozen signature.
+//! which is the property the fallback exists to have: the two paths are
+//! bit-identical behind one signature.
 //!
 //! # The corpus
 //!
@@ -24,8 +24,8 @@
 //! - **137** — one past it, the first input with a full block and a partial;
 //! - **400** — two full blocks and a partial: a multi-block input.
 //!
-//! Ten keccak-f permutations in all, so a `2^8` delegation shard holds them
-//! with room to spare.
+//! Ten keccak-f permutations in all, 240 one-round invocations, so one
+//! `KECCAK_F` shard holds them with room to spare.
 //!
 //! # Input, advice and the journal
 //!

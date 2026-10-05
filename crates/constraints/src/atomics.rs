@@ -1,14 +1,15 @@
 //! The `ATOMICS` family's circuit: `lr.w`, `sc.w` and the nine AMOs.
 //!
-//! `docs/spec/memory-ops.md` is normative: the columns, the gates, the lookups
-//! and the argument. This file is that document as data, assembled by S15's
-//! `memory::frame_with_channels_artifact` beside S14's frame, with S17's
-//! comparison gadget and S18's byte AND table.
+//! `docs/spec/memory-ops.md` §6 specifies it: the columns, the gates, the
+//! lookups and the argument. This file is that section as data, assembled by
+//! `memory::frame_with_channels_artifact` beside the memory frame, with the
+//! comparison gadget (`gadgets::comparison`) and the packed generic table's
+//! byte AND rows.
 //!
 //! One row is one read-modify-write: the RAM query at slot 3 carries the old
 //! word as its read and the new word as its write, and `rd` at the same slot
-//! takes the old word. That is why the A extension is the one family with two
-//! queries in a single Δ slot, so one of its rows makes five
+//! takes the old word. So its rows, like a delegation request's, carry two
+//! queries in a single Δ slot, and one of its rows makes five
 //! (`docs/spec/execution-trace.md` §4).
 //!
 //! ```text
@@ -77,9 +78,8 @@ const DECODED_MASK: PolyAddress = DECODED[4];
 /// `W[13..24]`: the packed mask's bits, bit `k` at index `k` —
 /// `constants::extra_mask::atomics`' order, which is ascending `funct5`:
 /// `amoadd`, `amoswap`, `lr`, `sc`, `amoxor`, `amoor`, `amoand`, `amomin`,
-/// `amomax`, `amominu`, `amomaxu`. **Not the stage prompt's listing order**,
-/// which transposes `amoand` and `amoor`; every arm below indexes this array
-/// through its constant, never by position.
+/// `amomax`, `amominu`, `amomaxu`. Every arm below indexes this array through
+/// its constant, never by position.
 pub const KINDS: [PolyAddress; 11] = [
     w(5),
     w(6),
@@ -563,7 +563,7 @@ fn family_spec() -> FamilySpec {
         quadratic(vec![(lit(1), new)], new_products),
     ));
     // rd takes the old word for every kind but `sc.w`, which writes 0 because
-    // it always succeeds (`docs/spec/memory-ops.md` §6.3).
+    // it always succeeds (`docs/spec/memory-ops.md` §6).
     enforcing.push((
         "rd_value_rule".into(),
         quadratic(
@@ -627,11 +627,11 @@ fn family_spec() -> FamilySpec {
 fn assemble(trace_vars: u32, family_spec: FamilySpec) -> CircuitArtifact {
     // The comparison's four parameters are not derivable from anything else in
     // the artifact, and each wrong choice is a silent, total break of the four
-    // min/max kinds (`docs/spec/memory-ops.md` §6.4), so they are asserted
+    // min/max kinds (`docs/spec/memory-ops.md` §6), so they are asserted
     // here rather than only read. The selector carries a second thing besides:
     // the gadget's `lhs` range pair, under `m_pc`, is the only 32-bit bound on
     // the old word, and so the only bound on `rd_selected`, which is that word
-    // on ten of the eleven kinds (`memory-ops.md` §5.1). Narrowing it to the
+    // on ten of the eleven kinds (`memory-ops.md` §5). Narrowing it to the
     // min/max bits would leave every other kind's `rd` write unbounded.
     let cmp = the_comparison();
     assert_eq!(

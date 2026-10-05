@@ -6,13 +6,13 @@
 //!
 //! Nothing here calls `CircuitArtifact::validate` or `inline_cached`: the laws
 //! are enforced twice, by `constraints` at construction and by this crate, with
-//! no code shared (S13 must-be-exact 4). Gates are evaluated only through
-//! `gkr::eval_gate` and `gkr::gate_values`, the kernel that is the semantic
-//! authority.
+//! no code shared. Gates are evaluated only through `gkr::eval_gate` and
+//! `gkr::gate_values`, the kernel that is the semantic authority.
 //!
-//! Since S16 it also holds [`TamperHarness`], the tamper-twin harness: a
-//! statement re-proved with a witness cell or the boundary changed, and one
-//! shard verified through `verifier::verify_shard`.
+//! It also holds [`TamperHarness`], the tamper-twin harness: a statement
+//! re-proved with a witness cell or the boundary changed, and one shard
+//! verified through `verifier::verify_shard` or the whole block through
+//! `verifier::verify_block`.
 //!
 //! The sampled checks draw deterministic pseudo-random points (splitmix64,
 //! fixed seeds), so every verdict is reproducible; each trial wrongly accepts
@@ -108,9 +108,9 @@ fn challenge_slots(gates: &[&GateDef]) -> Vec<u32> {
 
 /// The scratch bijection read the other way: an inner address to its slot.
 ///
-/// Built once per caller. Every use of it here used to be a scan of the whole
-/// bijection, which is quadratic in a circuit whose inner columns number in the
-/// hundreds of thousands — a delegation family's do.
+/// Built once per caller: a scan of the whole bijection per use would be
+/// quadratic in a circuit whose inner columns number in the thousands — a
+/// delegation family's do.
 fn slot_index(a: &CircuitArtifact) -> BTreeMap<PolyAddress, usize> {
     a.scratch
         .iter()
@@ -216,13 +216,15 @@ pub fn check_law1(a: &CircuitArtifact) -> Result<(), String> {
 /// `L{k+1}[0..width)` once each, in position order, which is the order the
 /// engine reads them in; the stored `num_vars` is `n_k` for a row-wise list and
 /// `n_k − 1` for a halving one. A halving list halves every inner column of its
-/// layer in order: it is not gate list 0, which reads the base, its width is
-/// layer `k`'s, and producing gate `j` is exactly `TreeProduct { input: L{k}[j] }`.
+/// layer: it is not gate list 0, which reads the base, its width is layer
+/// `k`'s, and every producing gate is a halving shape, a `TreeProduct` or a
+/// `TreeCross`.
 ///
 /// Does NOT cover: operand locality (Law 1), the output map (Law 3), the flat
-/// list (Law 4); layer 0's width, which is the layout and stores nothing; that
-/// a halving list has no cached or enforcing entries and a row-wise list no
-/// `TreeProduct`; any other construction rule outside the laws.
+/// list (Law 4); layer 0's width, which is the layout and stores nothing; which
+/// columns a halving gate reads; that a halving list has no cached or enforcing
+/// entries and a row-wise list no halving shape; any other construction rule
+/// outside the laws.
 pub fn check_law2(a: &CircuitArtifact) -> Result<(), String> {
     for (k, list) in a.layers.iter().enumerate() {
         let (up, width, written) = (k as u32 + 1, list.width, list.producing.len());
@@ -365,8 +367,8 @@ pub fn check_law4(a: &CircuitArtifact) -> Result<(), String> {
     // With equal counts, every index named exactly once also means no entry
     // names an index outside the list.
     // Counted into a tally rather than searched per index: a circuit whose
-    // relations and scratch slots number in the hundreds of thousands — a
-    // delegation family's does — makes a scan per index quadratic.
+    // relations and scratch slots number in the thousands — a delegation
+    // family's does — makes a scan per index quadratic.
     let mut named = vec![0usize; listed];
     for e in &entries {
         if let Some(count) = named.get_mut(e.1 as usize) {
@@ -457,7 +459,7 @@ pub fn check_law4(a: &CircuitArtifact) -> Result<(), String> {
 /// Does NOT cover: whatever each law's checker, and `check_lookups`, does not;
 /// the construction rules of `docs/spec/gkr.md` §3.1 and §4.2 outside the laws
 /// and the lookup rules — the degree ceiling, a halving list with cached or
-/// enforcing entries, a row-wise list with a `TreeProduct`, an inner column no
+/// enforcing entries, a row-wise list with a halving shape, an inner column no
 /// gate reads, an identically zero enforcing gate, a cached entry no gate
 /// names, a relation reading a `V` that `virtuals` does not list, names other
 /// than lookups', challenge slots, `padding.row`'s length, `format_version`,
@@ -474,11 +476,14 @@ pub fn check_laws(a: &CircuitArtifact) -> Result<(), String> {
 
 /// The lookup rules of `docs/spec/gkr.md` §4.2, lookup by lookup: its name is a
 /// non-empty `[a-z0-9_]` string no other name in the artifact repeats; its
-/// channel is one of `constants::lookup_channel`; its tuple holds exactly one
-/// expression, every channel being a range channel; that expression is
-/// `Linear`, its every coefficient and its constant literals, reading only
-/// in-range `M`, `W`, `S` columns and virtual tables `virtuals` lists; its
-/// selector is an in-range `M`, `W` or `S` column.
+/// channel is one of `constants::lookup_channel`; its tuple holds one
+/// expression on a range channel and 1 to `lookup_channel::MAX_TUPLE` on a
+/// table channel, as many as every other lookup of that channel; each
+/// expression is `Linear`, its every coefficient and its constant literals,
+/// with unit weights and no constant above position 0, reading only in-range
+/// `M`, `W`, `S` columns and virtual tables `virtuals` lists; its selector is
+/// an in-range `M`, `W` or `S` column that an enforcing gate of gate list 0
+/// holds to booleanity.
 ///
 /// Does NOT cover: whether a row satisfies a lookup (`violated_lookups`); the
 /// names of anything but lookups.
@@ -797,12 +802,14 @@ pub fn check_padding(a: &CircuitArtifact) -> Result<(), String> {
 /// The padding contract's product-tree clause, `docs/spec/gkr.md` §4.3: from
 /// `padding.row`, compute every row-local scratch value as `check_padding`
 /// does, at `TRIALS` pseudo-random challenge values and row indices, and
-/// require every column the first halving list reads to be exactly 1, the
-/// multiplicative identity, so an inactive row leaves every product it enters
-/// unchanged. An artifact with no halving list passes.
+/// require every column the first halving list reads, but those a `TreeCross`
+/// reads, to be exactly 1, the multiplicative identity, so an inactive row
+/// leaves every product it enters unchanged. An artifact with no halving list
+/// passes.
 ///
-/// Does NOT cover: the all-zero row and `zero_row_valid`; halving lists after
-/// the first, which read products rather than rows; rows and challenge values
+/// Does NOT cover: the all-zero row and `zero_row_valid`; the columns a
+/// fraction tree reads, whose identity is `(0, 1)`; halving lists after the
+/// first, which read products rather than rows; rows and challenge values
 /// not sampled; the laws, which it assumes; whether the artifact's shards have
 /// inactive rows at all — a RAM window's have none (`docs/spec/memory.md`
 /// §3.3), and the clause is not asked of it; whether a prover really pads with
@@ -937,7 +944,7 @@ fn below(v: Fr, bits: u32) -> bool {
     (bits..256).all(|i| (bytes[(i / 8) as usize] >> (i % 8)) & 1 == 0)
 }
 
-/// The native lookup evaluator, `docs/spec/memory.md` §7: the names of the
+/// The native lookup evaluator, `docs/spec/circuits.md` §3: the names of the
 /// **range** lookups `w` violates, in lookup order. A lookup is violated when
 /// its selector is nonzero on the row and an expression of its tuple has a
 /// canonical integer at or above `2^BITS[channel]`
@@ -1047,7 +1054,7 @@ impl ChannelSum {
     }
 }
 
-/// The LogUp self-check hook, `docs/spec/lookup.md` §7: every channel's
+/// The LogUp self-check hook, `docs/spec/circuits.md` §3: every channel's
 /// fractional sum and denominator product, recomputed natively from the base
 /// layer and the artifact's lookup list, and every row whose gated tuple no
 /// table row answers.
@@ -1280,9 +1287,9 @@ fn compress(powers: &[Fr], tuple: &[Fr]) -> Fr {
 }
 
 /// The gated value of tuple position `j` at selector `s` and raw expression
-/// value `raw`, `docs/spec/lookup.md` §4: a range channel gates to 0, the
-/// generic channel to the all-zero `ZeroEntry` with its key offset by one, and
-/// the decoder channel to `MINUS_ONE` in every column.
+/// value `raw`, `docs/spec/lookup.md` §4: a range channel and `XOR8` gate to 0,
+/// the generic channel to the all-zero `ZeroEntry` with its key offset by one,
+/// and the decoder channel to `MINUS_ONE` in every column.
 fn gate_tuple(channel: u32, j: usize, s: Fr, raw: Fr) -> Fr {
     match channel {
         lookup_channel::GENERIC if j == 0 => s * (raw + Fr::ONE),
@@ -1369,11 +1376,11 @@ pub fn check_channel_roots(roots: &[(Fr, Fr)], sums: &[ChannelSum]) -> Result<()
     Ok(())
 }
 
-/// The obligation-discharge cross-check, S15 must-be-exact 7: every lookup of
-/// `a` is the denominator of exactly one gate-list-0 column, no column is two
-/// lookups', and — where `specs` is given — that column is a leaf of that
-/// lookup's own channel's fraction tree, so an obligation cannot be summed
-/// against another channel's table.
+/// The obligation-discharge cross-check: every lookup of `a` is the
+/// denominator of exactly one gate-list-0 column, no column is two lookups',
+/// and — where `specs` is given — that column is a leaf of that lookup's own
+/// channel's fraction tree, so an obligation cannot be summed against another
+/// channel's table.
 ///
 /// A column discharges a lookup when the two agree at `TRIALS` independent
 /// pseudo-random assignments of the committed columns, the row index and the

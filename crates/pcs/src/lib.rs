@@ -1,13 +1,13 @@
 //! Mercury: a multilinear polynomial commitment scheme over a KZG SRS.
 //!
 //! Eagen and Gabizon, ePrint 2025/385 §6, finished with the batched KZG opening
-//! of Boneh, Drake, Fisch and Gabizon, ePrint 2020/081 §4. The normative
-//! document is `docs/spec/mercury.md`; this crate is that specification in
+//! of Boneh, Drake, Fisch and Gabizon, ePrint 2020/081 §4.
+//! `docs/spec/mercury.md` specifies it; this crate is that specification in
 //! code, and nothing else.
 //!
 //! A commitment is a plain univariate KZG commitment to the polynomial whose
 //! **coefficients are the multilinear's evaluation table**, in
-//! `crates/poly`'s frozen little-endian index order. An opening at
+//! `crates/poly`'s little-endian index order. An opening at
 //! `u = (u1, u2)` costs `O(n)` field operations and `2n + O(sqrt n)` scalar
 //! multiplications, and is a fixed 8 `G1` points and 6 `Fr` values however
 //! large `n` is.
@@ -31,13 +31,13 @@
 //! Mercury instance: the commitments and the claimed values are absorbed, a
 //! challenge `rho` is squeezed, and `cm* = sum rho^i cm_i` and
 //! `f* = sum rho^i f_i` go through one ordinary opening.
-//! `docs/spec/mercury.md` §11 is normative and carries the lemma.
+//! `docs/spec/mercury.md` §5 specifies it and carries the lemma.
 //!
 //! [`verify_deferred`] and [`batch_verify_deferred`] run the identical
 //! verification and, instead of executing the two pairings, emit their terms as
 //! [`AccumulatorEntry`] items. [`discharge`] spends a concatenated list of them
 //! with one MSM per side and one two-pairing check.
-//! `docs/spec/accumulator.md` is normative for that.
+//! `docs/spec/mercury.md` §6 specifies that.
 //!
 //! # What this crate does not do
 //!
@@ -146,7 +146,7 @@ impl MercuryProof {
         ]
     }
 
-    /// Canonical little-endian, per master rule 3: the eight points in
+    /// Canonical little-endian: the eight points in
     /// `crates/curve`'s 64-byte uncompressed form, then the six values in
     /// `Fr`'s 32-byte form, concatenated in field order.
     pub fn to_bytes(&self) -> [u8; PROOF_BYTES] {
@@ -193,7 +193,7 @@ impl MercuryProof {
 }
 
 // ---------------------------------------------------------------------------
-// Typed G1 absorption — the S02 typed layer, extended
+// Typed G1 absorption — the transcript's typed layer, extended
 // ---------------------------------------------------------------------------
 
 /// `constants::G1_INFINITY_SENTINEL`, decoded.
@@ -202,8 +202,7 @@ impl MercuryProof {
 /// the one value no real limb can take. Read here rather than in each caller so
 /// the absorber and the accumulator's decoder cannot disagree about it.
 fn infinity_sentinel() -> Fr {
-    Fr::from_hex(G1_INFINITY_SENTINEL)
-        .expect("the frozen infinity sentinel is a canonical hex literal")
+    Fr::from_hex(G1_INFINITY_SENTINEL).expect("the infinity sentinel is a canonical hex literal")
 }
 
 /// Absorb one affine `G1` point under `tag`, as one typed message of four `Fr`
@@ -217,8 +216,8 @@ pub fn append_g1(tr: &mut Transcript, tag: Tag, p: &G1Affine) {
 ///
 /// One message, not one per point: the list's length is bound by the typed
 /// framing's length field, so a list of `k` points cannot be confused with any
-/// other list or with `k` separate messages. S09's commitment-list absorption
-/// is this function.
+/// other list or with `k` separate messages. A batch's commitment list is
+/// absorbed this way.
 pub fn append_g1_list(tr: &mut Transcript, tag: Tag, ps: &[G1Affine]) {
     let points: Vec<[u8; 64]> = ps.iter().map(G1Affine::to_bytes).collect();
     transcript::append_g1_points(tr, tag, &points);
@@ -230,11 +229,11 @@ pub fn append_g1_list(tr: &mut Transcript, tag: Tag, ps: &[G1Affine]) {
 
 /// `[f(x)]_1`, where `f`'s coefficients are the multilinear's evaluation table.
 ///
-/// Dispatches on the backing (S03's frozen `backing()`): a `U1`, `U8`, `U16` or
-/// `U32` column is **widened to `u32` and never lifted to `Fr`**, so a narrow
-/// trace column commits through the small-scalar MSM path; only an `Fr` backing
-/// takes the general one. The two paths agree on every value and differ only in
-/// cost.
+/// Dispatches on the backing (`MultilinearPoly::backing()`): a `U1`, `U8`,
+/// `U16` or `U32` column is **widened to `u32` and never lifted to `Fr`**, so a
+/// narrow trace column commits through the small-scalar MSM path; only an `Fr`
+/// backing takes the general one. The two paths agree on every value and
+/// differ only in cost.
 pub fn commit(srs: &Srs, f: &MultilinearPoly) -> Result<MercuryCommitment, PcsError> {
     let n = check_num_vars(f.num_vars())? as usize;
     let powers = srs.g1();
@@ -500,11 +499,11 @@ pub fn open(
 /// its two pairing relations.
 ///
 /// This is the one verification path. It validates the points, then hands the
-/// field side — `docs/spec/mercury.md` §5's schedule, `h(alpha)`, `D(z)`, the
+/// field side — `docs/spec/mercury.md` §3.2's schedule, `h(alpha)`, `D(z)`, the
 /// BDFG20 batch and the merge challenge — to [`pcs_verify::scalars`], which
 /// the recursion guest runs too, and pairs each scalar with its point as
 /// [`ENTRY_POINTS`] says. That is the twelve [`AccumulatorEntry`] items of
-/// `docs/spec/accumulator.md` §2. Its callers either execute them or return
+/// `docs/spec/mercury.md` §6.1. Its callers either execute them or return
 /// them, and that branch is the only thing that separates a native
 /// verification from a deferred one.
 fn accumulate(
@@ -562,7 +561,7 @@ fn accumulate(
 /// One length-delimited message of `4k` limbs for the commitments **as
 /// passed**, then one message of `u` followed by all `k` claimed values, then
 /// the challenge. Nothing may be chosen after `rho` is drawn, which is what the
-/// order of those three steps buys. `docs/spec/mercury.md` §11.
+/// order of those three steps buys. `docs/spec/mercury.md` §5.
 ///
 /// Callers run [`check_batch`] before reaching here, so this only absorbs and
 /// combines. Returns the weights `rho^i`, `cm*` and `v*`.
@@ -645,7 +644,7 @@ pub fn verify_deferred(
 ///
 /// The commitments are absorbed **as passed** and `cm*` is derived from them by
 /// KZG's homomorphism, so a list in a different order, or one commitment short,
-/// is a different statement and fails. `docs/spec/mercury.md` §11.
+/// is a different statement and fails. `docs/spec/mercury.md` §5.
 pub fn batch_verify(
     vsrs: &SrsVerifier,
     cms: &[MercuryCommitment],

@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 //! A constant-product automated market maker: one two-asset pool, a batch of at
-//! most 64 operations applied to it in order, and the pool it leaves behind.
+//! most 453 operations applied to it in order, and the pool it leaves behind.
 //!
 //! The arithmetic is Uniswap v2's — the `x*y` swap price, the pro-rata mint, the
 //! pro-rata burn, `sqrt(x*y)` for the first shares — with one deliberate
@@ -69,13 +69,13 @@
 //! goes through a byte copy, which has no alignment requirement of its own.
 //!
 //! **The whole batch is the statement's own input, and the window is what caps
-//! it.** A public input holds 1,020 bytes (`docs/spec/public-values.md` §3), so
+//! it.** A public input holds 16,380 bytes (`docs/spec/public-values.md` §3), so
 //! 56 bytes of header leave room for [`MAX_OPS`] records and no more. The batch
 //! could have gone in advice, where there is no such bound — and it is not
 //! there, because nothing binds advice: a journal computed from an advised
 //! batch is a statement about a batch the prover chose. Per-op cost is what
 //! makes this guest a wide-arithmetic fixture, and a swap is tens of thousands
-//! of instructions, so 26 of them is a long run either way.
+//! of instructions, so 453 of them is a long run either way.
 //!
 //! ```text
 //! header    0..16    reserve_x       u128
@@ -83,7 +83,7 @@
 //!          32..48    total_shares    u128; zero means an unclaimed seed
 //!          48..52    fee_bps         u32; basis points off every swap input,
 //!                                    at most 1000
-//!          52..56    n_ops           u32; at most 26
+//!          52..56    n_ops           u32; at most 453
 //!
 //! record    0..4     kind            u32; 0..=4, see below
 //!           4..20    amount          u128

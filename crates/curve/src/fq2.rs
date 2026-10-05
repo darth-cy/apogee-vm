@@ -9,8 +9,7 @@
 //! that builds Fq6 over Fq2. That is the universal meaning of the name at this
 //! tower level (bls12_381's `Fp2::mul_by_nonresidue`, gnark's
 //! `E2.MulByNonResidue`), and the reading `self * (-1)` would be a second
-//! spelling of `Neg`. S05's Must-be-exact 1 reserves `xi` for the pairing
-//! stage; the multiplication by it is frozen here.
+//! spelling of `Neg`.
 
 use core::fmt;
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};

@@ -1,5 +1,5 @@
-//! S19's `MEM_WORD` circuit (`docs/spec/memory-ops.md`), row by row, in
-//! ordinary CI.
+//! The `MEM_WORD` circuit (`docs/spec/memory-ops.md`), row by row, in ordinary
+//! CI.
 //!
 //! No forward pass over `2^20` rows: each row is built by hand from what the
 //! instruction computes — Rust's own `u32` arithmetic, not the circuit's — and
@@ -11,8 +11,8 @@
 //! the packed table — so its setup columns are the decoded table alone.
 //!
 //! The family is two instructions and one idea. `lw` and `sw` name a word by
-//! `rs1 + imm`, and the whole of the addressing is the prompt's must-be-exact
-//! 1: `addr = 4·word_index` is an alignment statement over the integers and
+//! `rs1 + imm`, and the whole of the addressing is one fact:
+//! `addr = 4·word_index` is an alignment statement over the integers and
 //! **nothing at all over `Fr`**, where 4 is a unit. What makes the split
 //! genuinely base-4 is the bound on `word_index`, and
 //! [`a_misaligned_word_access_is_unprovable`] and
@@ -187,8 +187,8 @@ struct Instr {
     rs2: u32,
     /// The load's destination; 0 on a store.
     rd: u32,
-    /// The decoded immediate, sign-extended into a `u32` as S11's table holds
-    /// it.
+    /// The decoded immediate, sign-extended into a `u32` as the decoded table
+    /// holds it.
     imm: u32,
     compressed: bool,
 }
@@ -1019,13 +1019,13 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     r.set("pc_write_value", f(0x1008));
     cases.push(("an lw jumping four ahead", r, vec!["next_pc_rule"]));
 
-    // S14's control C8 on this frame: a padding row whose `rd` query rewrites
-    // a register after the program has exited. Nothing in the frame ties a
-    // query's mask to the row's pc mask, so the family's mask rule is what
-    // refuses it — together with the address rule, the decoded `rd` being 0 on
-    // a row that decodes nothing. What this family *cannot* forge even so is a
-    // nonzero write: `rd_value_rule` holds the written value to a load query
-    // the padding row has no kind bit for, so the value below is 0.
+    // A padding row whose `rd` query rewrites a register after the program has
+    // exited. Nothing in the frame ties a query's mask to the row's pc mask, so
+    // the family's mask rule is what refuses it — together with the address
+    // rule, the decoded `rd` being 0 on a row that decodes nothing. What this
+    // family *cannot* forge even so is a nonzero write: `rd_value_rule` holds
+    // the written value to a load query the padding row has no kind bit for, so
+    // the value below is 0.
     let mut r = Row::default();
     r.query("rd", 3, 10, 42, 0);
     r.set("rd_inv", f(10).inverse().expect("nonzero"));
@@ -1036,9 +1036,10 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     ));
 
     // Every gate this family adds is named by some row above. The frame's
-    // thirteen are S14's and covered by `crates/checker/tests/memory.rs`, so
-    // they are set aside; what is left is this family's own semantics, and a
-    // gate added with no forgery beside it fails here rather than silently.
+    // thirteen are `docs/spec/memory.md` §2.4's and covered by
+    // `crates/checker/tests/memory.rs`, so they are set aside; what is left is
+    // this family's own semantics, and a gate added with no forgery beside it
+    // fails here rather than silently.
     let named: Vec<&str> = cases
         .iter()
         .flat_map(|(_, _, want)| want.iter().copied())
@@ -1085,9 +1086,9 @@ fn each_gate_is_the_one_that_refuses_its_row() {
 /// The decoder lookup is the lone refusal of rows every gate and every range
 /// obligation accepts. Three of them: a row reading the instruction four bytes
 /// on, a row writing into a register its table row does not name, and a live
-/// row whose packed mask is all zero — the control S15, S16 and S17 each
-/// carry, because on an all-zero mask every gated constraint goes vacuous and
-/// only the table's domain is left.
+/// row whose packed mask is all zero — the control every execution family's
+/// suite carries, because on an all-zero mask every gated constraint goes
+/// vacuous and only the table's domain is left.
 #[test]
 fn each_table_lookup_is_the_one_that_refuses_its_row() {
     let a = artifact();
@@ -1146,7 +1147,7 @@ fn each_table_lookup_is_the_one_that_refuses_its_row() {
 }
 
 // ---------------------------------------------------------------------------
-// Alignment: the prompt's must-be-exact 1
+// Alignment
 // ---------------------------------------------------------------------------
 
 /// A misaligned word access is unprovable, and the range check is the whole of
@@ -1238,18 +1239,17 @@ fn a_word_index_above_2_to_the_30_is_refused() {
 /// is the tie.
 ///
 /// The load's `read_value` is not bounded here — a value read from memory is
-/// exempt, on the write-side induction S19 rests on — so what makes it a word
+/// exempt, on the write-side induction — so what makes it a word
 /// at all is the multiset: some earlier write put it there, and that write was
 /// bounded. The gate is what carries the pinning into `rd`, and
 /// `rd_selected`'s own range pair is what keeps every register value in this
-/// VM locally 32-bit (`docs/spec/memory-ops.md` §5.1).
+/// VM locally 32-bit (`docs/spec/memory-ops.md` §5).
 ///
 /// The cell on the other side is the one **no gate reads**: a store's
 /// `ram_read_value`, the word it is about to overwrite. Nothing row-local has
 /// an opinion on it, and the row below shows that directly. Only the
-/// permutation product pins it, which is why the prompt's acceptance 8 makes
-/// exactly that cell this family's tamper twin: the refusal has to surface
-/// from the memory argument or from nowhere.
+/// permutation product pins it: the refusal has to surface from the memory
+/// argument or from nowhere.
 #[test]
 fn the_loaded_value_is_the_word_the_memory_argument_pins() {
     let a = artifact();

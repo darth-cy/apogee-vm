@@ -1,13 +1,12 @@
-//! S17's acceptance over the real statement: `guests/control`, proved and
+//! The jump/branch/slt statement end to end: `guests/control`, proved and
 //! verified shard by shard.
 //!
 //! **Every test here is `#[ignore]`d, and runs by name with
 //! `--include-ignored --test-threads=1`**, for `tests/acceptance.rs`' reason:
-//! both execution families' shards are `2^20` rows. Master rule 7: the stage's
-//! PR runs it locally, and `.github/workflows/ci.yml` carries the command under
-//! `# DEFERRED:`. The circuit row by row, the reduced-width comparison and
-//! everything else that needs no proof is `crates/checker/tests/
-//! jump_branch_slt.rs`, in ordinary CI.
+//! both execution families' shards are `2^20` rows, and CI does not run them.
+//! The circuit row by row, the reduced-width comparison and everything else
+//! that needs no proof is `crates/checker/tests/jump_branch_slt.rs`, in
+//! ordinary CI.
 
 mod common;
 
@@ -26,15 +25,15 @@ const ZERO: u32 = family::ZERO_WINDOWS;
 /// The whole statement, proved by the one proving path.
 fn proved() -> (ProverSetup, TraceArchive, PublicInputs, Vec<ShardProof>) {
     let setup = common::control_setup();
-    // The archive is still built, and it is **not** proved from: the log's
-    // self-check below reads it, which is a reading of the execution and not
-    // a proving path (`docs/spec/streaming.md` §1).
+    // The archive is built and **not** proved from: the log's self-check below
+    // reads it, which is a reading of the execution and not a proving path
+    // (`docs/spec/streaming.md` §1).
     let archive = common::control_archive(&setup.program);
     let (public, proofs) = common::streamed_shards(&setup, &common::empty_io());
     (setup, archive, public, proofs)
 }
 
-/// The byte length a proof of `artifact` has: `docs/spec/shard-proof.md` §9's
+/// The byte length a proof of `artifact` has: `docs/spec/proof.md` §9's
 /// layout, every count read off the circuit.
 fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
     let transitions: usize = (0..a.depth())
@@ -53,18 +52,17 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
         + 704
 }
 
-/// Acceptance 1 (and 7's honest twin): the guest decodes into the add/sub
-/// family, the jump/branch/slt family and the two RAM window families; its
-/// trace self-checks; `advance` proves one shard of each family that runs;
-/// `verify_shard` accepts every one against one statement, whose result is the
-/// guest's 16 passed checks; and every proof has its circuit's shape. What the
-/// trace holds — the twelve instructions and the acceptance matrix — is
-/// `crates/checker/tests/jump_branch_slt.rs`' `the_guest_runs_the_acceptance_matrix`,
-/// over the same fixture, and the emulator's reading of it is
-/// `crates/emulator/tests/guests.rs`', which checks the exit status and
-/// fd 1 and nothing below that.
+/// The guest decodes into the add/sub family, the jump/branch/slt family and
+/// the window families; its trace self-checks; the streaming prover proves one
+/// shard of each family that has one; `verify_shard` accepts every one against
+/// one statement, whose result is the guest's 16 passed checks; and every proof
+/// has its circuit's shape. What the trace holds — the twelve instructions and
+/// the branch matrix — is `crates/checker/tests/jump_branch_slt.rs`'
+/// `the_guest_runs_the_acceptance_matrix`, over the same fixture, and the
+/// emulator's reading of it is `crates/emulator/tests/guests.rs`', which checks
+/// the exit status and the journal and nothing below that.
 ///
-/// The generic table, which this family is the first to read, is bound: the key
+/// The generic table, which this family reads, is bound: the key
 /// carries the packed table's commitments — the ones
 /// `program::lookup_tables::generic_commitments` makes over this SRS at `2^18`
 /// — its SRS digest covers them, and the family's opening claim ends with
@@ -156,13 +154,10 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     assert_eq!(&claim[65..72], &setup.vk.setup_commitments[1][..]);
     assert_eq!(&claim[72..], &table[..]);
     let add = reduced(&proofs[1]);
-    // 41 + 33 since S21's eighth frame query (`deleg`), 42 + 35 since S23 gave
-    // that query the `deleg_space` column and split `is_keccak` into one selector
-    // per registered delegation type, and 42 + **36** since S26 registered a
-    // fourth — so identity's seven setup commitments start at 78 rather than 77.
-    // This pair moves by one for every delegation family
-    // (`docs/spec/delegation.md` §10) — hence 35 and 62 since S26c registered
-    // `SHA256_COMP` and `EC_ADD`, `constants::delegation::TYPES` now holding six.
+    // The add/sub claim is its 27 memory, 35 witness and 7 setup commitments,
+    // so identity's setup commitments start at 62. The witness count, and with
+    // it that offset, moves by one for every registered delegation type
+    // (`docs/spec/delegation.md` §3), the base format registering six.
     assert_eq!(add.len(), 27 + 35 + 7);
     assert_eq!(&add[62..], &setup.vk.setup_commitments[0][..]);
 }

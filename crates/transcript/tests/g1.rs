@@ -1,4 +1,4 @@
-//! S16's curve-free G1 absorption, `docs/spec/mercury.md` §4 over a point's
+//! The curve-free G1 absorption, `docs/spec/transcript.md` §4 over a point's
 //! 64-byte encoding: all-zero is infinity and absorbs the sentinel four times,
 //! anything else splits each coordinate at byte 16, and a list is one message.
 //! `crates/pcs/tests/kats.rs`' arkworks-derived absorption vectors hold the

@@ -1,10 +1,10 @@
-//! S24's fixtures: the synthetic block, what native revm makes of it, and the
+//! The `revm` group: the synthetic block, what native revm makes of it, and the
 //! keccak-f frames the guest's delegation hands over.
 //!
-//! This module is the **host-side fixture builder** the stage asks for. It
-//! constructs the pre-state and the two transactions from the named constants
-//! below, serializes the witness, runs `revm_block::run` natively over it, and
-//! then builds and traces the guest and holds the two to one answer — so a
+//! This module is the **host-side fixture builder**. It constructs the
+//! pre-state and the two transactions from the named constants below,
+//! serializes the witness, runs `revm_block::run` natively over it, and then
+//! builds and traces the guest and holds the two to one answer — so a
 //! regeneration *is* the guest-versus-native-revm differential, and CI's
 //! regenerate-and-diff re-runs it on every push.
 //!
@@ -12,8 +12,8 @@
 //!
 //! | File | What |
 //! | --- | --- |
-//! | `revm_block_witness.bin` | the `BlockWitness`, `postcard`, fd 0's bytes |
-//! | `revm_block_output.bin` | the output commitment, fd 1's bytes |
+//! | `revm_block_witness.bin` | the `BlockWitness`, `postcard`: the guest's advice |
+//! | `revm_block_output.bin` | the output commitment: the guest's journal |
 //! | `revm_block_keccak.bin` | every keccak-f frame the run delegated |
 //!
 //! Unlike `guests`, this group *is* run by a bare `cargo run -p kat-gen`. It
@@ -222,10 +222,8 @@ pub fn synthetic_block() -> BlockWitness {
             blob_gasprice: Some(1),
             slot_num: 0,
             // The synthetic block's two transactions read no ancestor hash, so
-            // nothing is recorded here. S25 added the field and closed
-            // `docs/spec/revm-block.md` §1.2's `BLOCKHASH` gap: an ancestor the
-            // witness does not carry is now `DbError::UnknownBlockHash` rather
-            // than `keccak256` of the block number's decimal string.
+            // nothing is recorded here. An ancestor the witness does not carry
+            // is `DbError::UnknownBlockHash` (`docs/spec/ethereum.md` §2.2).
             block_hashes: Vec::new(),
         },
         accounts,
@@ -314,11 +312,11 @@ pub fn generate() {
 /// revm's answer, and return the input state of every keccak-f **permutation**
 /// its delegation handed over.
 ///
-/// Since S26d one invocation is one round, so the frames are 24 to a permutation
-/// and 23 of them carry mid-permutation states. What the fixture wants is the
+/// One invocation is one round, so the frames are 24 to a permutation and 23 of
+/// them carry mid-permutation states. What the fixture wants is the
 /// permutation's input, so the harvest keeps the invocations whose round word is
 /// **0** and drops the round word from each — which is what keeps the file 200
-/// bytes a permutation, unchanged in size and in meaning from S21.
+/// bytes a permutation.
 ///
 /// The build is the manual's, with everything that could reach rustc from the
 /// ambient environment cleared, because this is the same command every other

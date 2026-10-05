@@ -1,6 +1,5 @@
-//! Must-be-exact 4's construction-time half, must-be-exact 5 and 14, and
-//! acceptances 5 and 6: `CircuitArtifact::validate` refuses every law and rule
-//! of `docs/spec/gkr.md` §4.2, and `inline_cached` refuses what §3.1 says it
+//! `CircuitArtifact::validate` refuses every law and rule of
+//! `docs/spec/gkr.md` §4.2, and `inline_cached` refuses what §3.1 says it
 //! cannot inline.
 //!
 //! Every test starts from the decoded toy — its fields are public — and makes
@@ -124,7 +123,7 @@ fn the_toy_and_its_cache_free_compilation_validate() {
 // Law 1: locality
 // ---------------------------------------------------------------------------
 
-/// Law 1, acceptance 5: gate list 2 reads layer 2 and nothing else. Its first
+/// Law 1: gate list 2 reads layer 2 and nothing else. Its first
 /// tree rewritten to halve `L{1}[0]`, two layers down, is refused as locality
 /// in list 2, naming the gate's relation and the operand. Relation 6 moves with
 /// it, to `scratch[0]`, so the flat list still says what the gate says.
@@ -241,7 +240,7 @@ fn law1_refuses_a_cached_entry_reading_another() {
 /// locality in list 0, naming the gate and the operand. The toy's spelling,
 /// `C{0}[0]`, validates.
 ///
-/// Kills L20 (the cached arm's `l == layer` made vacuous): `C{7}[0]` then
+/// Catches the cached arm's `l == layer` made vacuous: `C{7}[0]` then
 /// resolves to list 0's entry by offset alone, Law 4 finds the same
 /// polynomial, and the artifact is refused only later, as `shifted_a` named by
 /// no gate — `Malformed`, not this `Locality`.
@@ -269,7 +268,7 @@ fn law1_refuses_a_cached_operand_of_another_list() {
 // Law 2: derived width
 // ---------------------------------------------------------------------------
 
-/// Law 2, acceptance 5 — the keccak_special5 defect class: list 1 produces two
+/// Law 2 — a stored width the gates do not produce: list 1 produces two
 /// columns, so a stored width of 3, or of 1, is refused at layer 2, the layer
 /// the width describes.
 #[test]
@@ -345,17 +344,17 @@ fn law2_refuses_outputs_out_of_order() {
 // Law 3: the top layer
 // ---------------------------------------------------------------------------
 
-/// Law 3, acceptance 5: the output map is a permutation of layer 3, nothing
+/// Law 3: the output map is a permutation of layer 3, nothing
 /// more and nothing less. The reversed order validates. Refused: an output
 /// dropped (the top layer then holds a column absent from the map), an output
 /// replaced by `L{2}[0]` from below the top, an output duplicated, a third
 /// output `L{3}[2]` past the top layer's width, and — with the count right —
 /// `[L{3}[1], L{3}[2]]`, whose second output is past the width.
 ///
-/// The last case kills L15 (the top-layer `offset < width` test made
-/// vacuous): the third-output case is refused by the count before the offset
-/// is looked at, so only a map of the right length can see it, and under L15
-/// that map validates.
+/// The last case catches the top-layer `offset < width` test made vacuous:
+/// the third-output case is refused by the count before the offset is looked
+/// at, so only a map of the right length can see it, and under that mutation
+/// the map validates.
 #[test]
 fn law3_refuses_an_output_map_that_is_not_the_top_layer() {
     let mut reversed = toy();
@@ -397,7 +396,7 @@ fn law3_refuses_an_output_map_that_is_not_the_top_layer() {
 // Law 4: single source of truth
 // ---------------------------------------------------------------------------
 
-/// Law 4, acceptance 5 (semantics): the relation and its gate are one
+/// Law 4 (semantics): the relation and its gate are one
 /// polynomial. `define_fingerprint3`'s constant 3 changed to 4 in the flat list
 /// alone is refused, naming the relation and the list; changed in both it
 /// validates. `define_ab` with coefficient 2 is refused; spelled as the same
@@ -445,7 +444,7 @@ fn law4_refuses_a_relation_that_says_something_else() {
 /// the relation and the list. Written as `(m − 1)·s` on both sides, it
 /// validates.
 ///
-/// Kills L24 (the `1` dropped from `MaskIntoIdentity`'s expansion), under which
+/// Catches the `1` dropped from `MaskIntoIdentity`'s expansion, under which
 /// the mask expands to `m·s − s` and matches the affine gate.
 #[test]
 fn law4_refuses_an_affine_product_that_is_a_mask_missing_its_one() {
@@ -474,7 +473,7 @@ fn law4_refuses_an_affine_product_that_is_a_mask_missing_its_one() {
 /// relation against the toy's gate, `1·L{1}[1] + 3`, is a different polynomial,
 /// refused naming the relation and the list.
 ///
-/// Kills L05 (equal monomials never merged in `normalize`), under which the
+/// Catches equal monomials never merged in `normalize`, under which the
 /// lawful pair's expansions have three monomials and two, and are refused.
 #[test]
 fn law4_merges_equal_monomials_before_comparing() {
@@ -558,7 +557,7 @@ fn shift_relations_after(a: &mut CircuitArtifact, removed: u32) {
     }
 }
 
-/// Law 4, acceptance 5 (count): the flat list and the gates have equal
+/// Law 4 (count): the flat list and the gates have equal
 /// cardinality. List 0's enforcing gate deleted, its relation `gated_equality`
 /// left in the flat list, is refused as eight relations against seven gates.
 /// Deleting both, with every later relation index fixed up, validates (`e` is
@@ -693,7 +692,7 @@ fn toy_with_ab_cached(gate: GateDef) -> CircuitArtifact {
     a
 }
 
-/// Acceptance 6, must-be-exact 5: a gate of degree 3 in the layer it reads is
+/// The degree ceiling: a gate of degree 3 in the layer it reads is
 /// refused at construction, with the gate's name and its degree. `ab_cached`
 /// is `a·b`, degree 2. Named by `ab`'s gate as `Linear { 1·C{0}[1] }` it is
 /// degree 2, the flat list's `a·b` agrees, and the circuit validates. Named as
@@ -854,8 +853,8 @@ fn a_term_that_reads_nothing_hides_neither_a_column_nor_a_constraint() {
     assert_eq!(toy().validate(), Ok(()));
 }
 
-/// The review's L21 and L22 scenarios, which used a zero-coefficient term to
-/// name an operand Law 4 cannot see. Law 1 range-checks every operand whatever
+/// Two scenarios that use a zero-coefficient term to name an operand Law 4
+/// cannot see. Law 1 range-checks every operand whatever
 /// its coefficient, so both are refused as locality:
 /// - `shifted_a = γ·a + 1·row + 0·M[5]`, past the one-column memory layout, is
 ///   refused as locality in list 0 naming `shifted_a` and `M[5]`;
@@ -866,8 +865,8 @@ fn a_term_that_reads_nothing_hides_neither_a_column_nor_a_constraint() {
 /// holds, the zero term normalizes away, and each validates; so does the
 /// in-range spelling with coefficient 1 and the relation to match.
 ///
-/// Kills L21 (Law 1's memory range widened) and L22 (Law 1's virtual-listed
-/// test dropped): under either, the out-of-range artifact validates.
+/// Catches Law 1's memory range widened, and Law 1's virtual-listed test
+/// dropped: under either, the out-of-range artifact validates.
 #[test]
 fn a_zero_coefficient_operand_is_still_range_checked_first() {
     let with_shifted_a = |terms: &[(Coeff, PolyAddress)], fingerprint: GateDef| {
@@ -880,7 +879,7 @@ fn a_zero_coefficient_operand_is_still_range_checked_first() {
         |terms: &[(Coeff, PolyAddress)]| affine(terms, lit(0), &[(lit(1), C)], lit(0));
     let shifted_a_and = |c: Coeff, x: PolyAddress| [(GAMMA, A), (lit(1), ROW), (c, x)];
 
-    // L21: a memory column past the layout.
+    // A memory column past the layout.
     let past = with_shifted_a(
         &shifted_a_and(zero(), PolyAddress::Memory(5)),
         fingerprint(&[(GAMMA, A), (lit(1), ROW)]),
@@ -904,7 +903,7 @@ fn a_zero_coefficient_operand_is_still_range_checked_first() {
     );
     assert_eq!(read.validate(), Ok(()));
 
-    // L22: a virtual table the artifact does not list.
+    // A virtual table the artifact does not list.
     let mut unlisted = with_shifted_a(&[(GAMMA, A), (zero(), ROW)], fingerprint(&[(GAMMA, A)]));
     unlisted.virtuals.clear();
     assert_eq!(
@@ -928,8 +927,8 @@ fn a_zero_coefficient_operand_is_still_range_checked_first() {
 // ---------------------------------------------------------------------------
 
 /// A halving list halves every column of its layer, and every entry of it is a
-/// halving shape. Since S15 an entry may halve any column of its layer — a
-/// fraction tree's numerator reads its denominator too — so list 2's two trees
+/// halving shape. An entry may halve any column of its layer — a fraction
+/// tree's numerator reads its denominator too — so list 2's two trees
 /// swapped, relations 6 and 7 swapped with them so the flat list agrees, is a
 /// lawful circuit and not a reordering to refuse. What is refused is an entry
 /// that halves nothing: `define_abm_product` rewritten as a copy of `L{2}[0]`,
@@ -1019,7 +1018,7 @@ fn a_halving_list_refuses_an_enforcing_gate() {
 /// `L{1}[1]`, its relation a tree of `scratch[1]`, is refused in row-wise
 /// gate list 1: the list's kind is unchanged, so its variable count still
 /// holds and the shape is the one thing wrong. Then the same for `TreeCross`,
-/// S15's fraction-tree numerator — it reads four values where a row-wise list
+/// the fraction-tree numerator — it reads four values where a row-wise list
 /// supplies two, so an artifact carrying one outside a halving list is refused
 /// here rather than panicking in `eval_gate` on the first forward pass.
 #[test]
@@ -1074,7 +1073,7 @@ fn toy_with_a_copy(read: bool) -> CircuitArtifact {
     a
 }
 
-/// Must-be-exact 14: no relation is constructed and then dropped. A column
+/// No relation is constructed and then dropped. A column
 /// `L{1}[3]` that list 1 never reads constrains nothing — a trace breaking its
 /// relation still verifies — and is refused, naming the column. Read by list 1,
 /// the same column validates.
@@ -1087,7 +1086,7 @@ fn an_inner_column_nothing_reads_is_refused() {
     );
 }
 
-/// Must-be-exact 14: a cached entry no gate names is refused, naming the entry
+/// A cached entry no gate names is refused, naming the entry
 /// and its address. Named by `ab`'s gate as `a·C{0}[1]`, the same entry
 /// validates.
 #[test]
@@ -1163,10 +1162,10 @@ fn a_column_read_only_by_cancelling_terms_is_refused() {
 /// The refusal beside them: `fingerprint_copy` added with `fingerprint3`'s gate
 /// left as the toy's is refused as named by no gate, at `C{1}[0]`.
 ///
-/// Kills L08 (a cached entry's operands not counted as read, so `L{1}[1]` is
-/// refused as never read) and L25 (a cached entry's operands expanded in the
-/// flat namespace, so its `L{1}` columns are not mapped to scratch and Law 4
-/// refuses the gate).
+/// Catches a cached entry's operands not counted as read, so that `L{1}[1]`
+/// is refused as never read, and a cached entry's operands expanded in the
+/// flat namespace, so that its `L{1}` columns are not mapped to scratch and
+/// Law 4 refuses the gate.
 #[test]
 fn a_column_read_through_a_cached_entry_of_list_one_is_read() {
     let mut linear_entry = toy();
@@ -1206,7 +1205,7 @@ fn a_column_read_through_a_cached_entry_of_list_one_is_read() {
 // Names, header and the other construction rules
 // ---------------------------------------------------------------------------
 
-/// Must-be-exact 14: names are non-empty `[a-z0-9_]` and injective across the
+/// Names are non-empty `[a-z0-9_]` and injective across the
 /// whole artifact. `a_0` is a legal rename. Refused: scratch slot `ab` renamed
 /// `a`, which a witness column already is; relation `define_ab` renamed
 /// `shifted_a`, which a cached entry already is; `A`; `masked-m`; and the empty
@@ -1238,13 +1237,13 @@ fn names_are_nonempty_lowercase_and_used_once() {
     assert_malformed(&a, "name \"\" is not a non-empty [a-z0-9_] string");
 }
 
-/// Must-be-exact 14: the name rules cover setup columns and virtual tables too.
+/// The name rules cover setup columns and virtual tables too.
 /// `s_0` and `row_index` are legal renames. Refused: the virtual table renamed
 /// `a`, which a witness column already is; the virtual table renamed `Row`; the
 /// setup column renamed `a`; and the setup column renamed `S`.
 ///
-/// Kills L12 (virtual-table names left out of the name check) and L13 (setup
-/// names left out): under either, that subtree's refusals validate.
+/// Catches virtual-table names, or setup names, left out of the name check:
+/// under either mutation, that subtree's refusals validate.
 #[test]
 fn setup_and_virtual_names_obey_the_name_rules() {
     let mut legal = toy();
@@ -1273,7 +1272,7 @@ fn setup_and_virtual_names_obey_the_name_rules() {
 /// legal name so the kind is the one thing wrong, is refused naming the kind;
 /// the toy's one entry validates.
 ///
-/// Kills L14 (the listed-twice check disabled), under which the duplicate
+/// Catches the listed-twice check disabled, under which the duplicate
 /// validates.
 #[test]
 fn a_virtual_table_listed_twice_is_refused() {
@@ -1289,7 +1288,7 @@ fn a_virtual_table_listed_twice_is_refused() {
 }
 
 /// `x − x·x = 0` on gate list 0, named `<name>_boolean`, as a gate and as its
-/// relation: what S15's selector rule asks of every lookup's selector.
+/// relation: what the selector rule asks of every lookup's selector.
 fn with_booleanity(a: &mut CircuitArtifact, x: PolyAddress, name: &str) {
     let gate = GateDef::Quadratic {
         constant: lit(0),
@@ -1309,8 +1308,8 @@ fn with_booleanity(a: &mut CircuitArtifact, x: PolyAddress, name: &str) {
 
 /// The toy with one lookup, `range`: `4·m − row − 1` on the timestamp channel
 /// under selector `s`, edited by `edit`. Gate list 0 gains a booleanity gate
-/// for every column the test ever selects on, since S15 refuses a selector
-/// without one.
+/// for every column the test ever selects on, since `validate` refuses a
+/// selector without one.
 fn toy_with_lookup(edit: fn(&mut LookupExpr)) -> CircuitArtifact {
     let mut lookup = LookupExpr {
         name: "range".into(),
@@ -1327,7 +1326,7 @@ fn toy_with_lookup(edit: fn(&mut LookupExpr)) -> CircuitArtifact {
     a
 }
 
-/// The lookup rules of `docs/spec/gkr.md` §4.2 (`docs/spec/memory.md` §7). A
+/// The lookup rules of `docs/spec/gkr.md` §4.2 (`docs/spec/lookup.md` §1). A
 /// lookup over a committed column and a listed virtual table, under a committed
 /// selector — `S`, `M` or `W` — validates, and so do two. Each rule broken alone is refused naming
 /// the lookup: a channel past `constants::lookup_channel`; a tuple of no
@@ -1466,7 +1465,7 @@ fn an_unknown_challenge_slot_is_refused() {
     );
 }
 
-/// Must-be-exact 14: the padding row names one value per committed column. Six
+/// The padding row names one value per committed column. Six
 /// values validate, whatever they are — whether they satisfy the relations is
 /// the checker's to say; five and seven are refused.
 #[test]
@@ -1549,8 +1548,8 @@ fn the_toy_inlines_to_the_committed_cache_free_compilation() {
 /// inlines to exactly the committed cache-free compilation with that one gate
 /// `AffineProduct { [(1, c)], 0 ; [(γ, a), (1, row)], 0 }`, which validates.
 ///
-/// Kills L19 (the right-factor branch emitting the left-factor spelling,
-/// `AffineProduct { C.terms, C.constant ; [(c, x)], 0 }`): the same
+/// Catches the right-factor branch emitting the left-factor spelling,
+/// `AffineProduct { C.terms, C.constant ; [(c, x)], 0 }`: the same
 /// polynomial, so it would still validate, but a different artifact.
 #[test]
 fn a_right_cached_factor_inlines_on_the_right() {

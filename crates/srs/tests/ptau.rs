@@ -1,10 +1,9 @@
 //! `.ptau` ingestion: the real ceremony file, the point-for-point differential
-//! against kat-gen's independent reader, and every rejection class S07
-//! must-be-exact 3 names.
+//! against kat-gen's independent reader, and every rejection class of
+//! `docs/spec/srs.md` §2.
 //!
 //! Every test here needs `assets/ptau/`, which is gitignored, and returns
-//! quietly when the file it wants is absent. What that costs is stated in the
-//! S07 handoff note: CI runs none of this.
+//! quietly when the file it wants is absent, so CI runs none of this.
 
 mod common;
 
@@ -34,7 +33,7 @@ fn vectors() -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 4 — the real ceremony file at power 24
+// The real ceremony file at power 24
 // ---------------------------------------------------------------------------
 
 /// The required capability: 2^24 G1 powers, the generators where they belong,
@@ -42,7 +41,7 @@ fn vectors() -> String {
 ///
 /// This reads 1 GiB of a 19 GB file and then runs two 2^24-point MSMs and a
 /// pairing, so it is the slowest test in the workspace by a wide margin. It is
-/// also the one that says the stage's headline capability works.
+/// also the one that says the real ceremony ingests.
 #[test]
 fn the_ceremony_file_ingests_at_power_24() {
     let Some(path) = common::ptau(24) else {
@@ -140,7 +139,7 @@ fn ceremony_identity(text: &str) -> &str {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 5 — the rejection classes
+// The rejection classes
 //
 // Each control is the real power-12 ceremony file with exactly one edit, so
 // what is being tested is the edit and never the scaffolding.
@@ -342,8 +341,7 @@ fn a_corrupted_point_is_rejected() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 4/5 — `validate` accepts the real thing and rejects a plausible
-// forgery
+// `validate` accepts the real thing and rejects a plausible forgery
 // ---------------------------------------------------------------------------
 
 /// A point that is perfectly valid and in the wrong place. `from_ptau` cannot

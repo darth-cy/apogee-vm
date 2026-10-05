@@ -21,7 +21,7 @@
 //! `fq12_final_exp` raises to `(q^12 - 1)/r` computed as an integer, **not**
 //! to whatever `ark_bn254::Bn254::final_exponentiation` returns. arkworks
 //! uses the Fuentes-Castañeda variant, which produces `f^(m d)` for a fixed
-//! `m = 2x(6x^2 + 3x + 1)` rather than `f^d`, and S06 requires the exact
+//! `m = 2x(6x^2 + 3x + 1)` rather than `f^d`, and `curve` computes the exact
 //! power. The relationship is asserted here rather than assumed, so a change
 //! in either direction is caught at generation time.
 
@@ -39,13 +39,13 @@ use crate::shared::{
 const FQ6_SEED: u64 = 20260913;
 const FQ12_SEED: u64 = 20260914;
 
-/// Acceptance 1 asks for at least a thousand random vectors per operation.
+/// Random vectors per operation.
 const RANDOM_VECTORS: usize = 1_000;
 /// Elements carried through every Frobenius power, on top of the edge set.
 const FROBENIUS_SAMPLES: usize = 12;
-/// Inputs to the exact `(q^12 - 1)/r` exponentiation. Not an Acceptance-1 op,
-/// and each one costs a 2,790-bit ladder on both sides, so this is a smaller
-/// corpus than the arithmetic above.
+/// Inputs to the exact `(q^12 - 1)/r` exponentiation. Each one costs a
+/// 2,790-bit ladder on both sides, so this is a smaller corpus than the
+/// arithmetic above.
 const FINAL_EXP_SAMPLES: usize = 200;
 
 // ---------------------------------------------------------------------------
@@ -349,9 +349,9 @@ fn fq12_kats() -> String {
         .chain((0..FINAL_EXP_SAMPLES).map(|_| next_fq12(&mut rng)))
     {
         let value = a.pow(&exponent);
-        // The output has order dividing r, and arkworks' own routine returns
-        // the fixed power of it that Must-be-exact 6 forbids. Both checked,
-        // so a change in either is caught here and not in a test.
+        // The output has order dividing r, and arkworks' own routine returns a
+        // fixed power of it rather than it. Both checked, so a change in
+        // either is caught here and not in a test.
         assert_eq!(
             value.pow(Fr::MODULUS.0),
             Fq12::one(),

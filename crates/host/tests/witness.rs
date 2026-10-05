@@ -1,6 +1,7 @@
-//! S25's recorder, against the committed mini-block fixture.
+//! The recorder, against the committed mini-block fixture.
 //!
-//! Acceptances 1, 2 and 3 live here. None of them touches the network:
+//! Its determinism, the native half of the differential and the
+//! witness-completeness controls live here. None of them touches the network:
 //! [`Rpc::cached`] refuses to, whatever `ETH_RPC_URL` says, so a machine with
 //! an endpoint configured runs the same test as a machine without one. The
 //! committed `rpc-cache/` directory is the snapshot they record against, and
@@ -8,10 +9,9 @@
 //! further blocks a refresh session checks are checked live and cached under
 //! `target/`, never committed.
 //!
-//! The guest halves are `#[ignore]`d, because they build a 2 MB `revm`
-//! image from source; CI asks for them by name, as it does for
-//! `crates/emulator/tests/revm.rs`. Everything that can be asserted against
-//! native revm alone runs in `cargo test --workspace`.
+//! The guest half is `tests/prove.rs`'s, `#[ignore]`d because it builds a 2 MB
+//! `revm` image from source. Everything that can be asserted against native
+//! revm alone runs here, in `cargo test --workspace`.
 
 use std::path::PathBuf;
 
@@ -91,7 +91,7 @@ fn the_fork_table_refuses_a_block_it_does_not_know() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 1 — recorder determinism
+// Recorder determinism
 // ---------------------------------------------------------------------------
 
 /// Record the same `(block, tx range)` twice against the cached snapshot; the
@@ -130,17 +130,17 @@ fn a1_the_recorder_is_deterministic() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 2 — the differential, native half
+// The differential, native half
 // ---------------------------------------------------------------------------
 
 /// Native revm over the recorded witness produces the committed journal.
 ///
-/// This is the half of acceptance 2 that needs no guest: the recorded witness
-/// is *complete enough* that `revm_block::run`, reading nothing but the
+/// This is the half of the differential that needs no guest: the recorded
+/// witness is *complete enough* that `revm_block::run`, reading nothing but the
 /// witness through the strict [`revm_block::WitnessDb`], reproduces what the
 /// recording computed while reading the live chain. The guest half —
-/// `a2_the_guest_agrees_with_native_revm` below — is the same claim through the
-/// emulator.
+/// `tests/prove.rs`'s `a4_the_mini_block_proves_and_verifies`, which holds the
+/// proved journal to the pinned one — is the same claim through the guest.
 #[test]
 fn a2_the_witness_alone_reproduces_the_journal() {
     let witness = BlockWitness::decode(&witness_bytes()).expect("the witness decodes");
@@ -163,16 +163,16 @@ fn the_journal_fits_a_public_window() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 3 — the witness-completeness negative control
+// The witness-completeness negative control
 // ---------------------------------------------------------------------------
 
 /// Delete one recorded storage slot and the run fails loudly.
 ///
 /// This is the test that makes every other claim about the witness worth
-/// something. Until S25 an absent slot read as zero and an absent account read
-/// as empty, so a witness with a slot deleted from it ran happily and committed
-/// a journal for a state nobody supplied — and since S-IO nothing binds the
-/// witness, so "nobody supplied" means "the prover chose". `WitnessDb` refuses
+/// something. Were an absent slot read as zero and an absent account as empty,
+/// a witness with a slot deleted from it would run happily and commit a journal
+/// for a state nobody supplied — and nothing binds the witness, so "nobody
+/// supplied" means "the prover chose". `WitnessDb` refuses
 /// instead, and this is the proof that the refusal reaches the execution rather
 /// than sitting unused in a type.
 ///
@@ -210,10 +210,10 @@ fn a3_a_deleted_slot_is_refused() {
 
 /// Delete one recorded account and the run fails loudly.
 ///
-/// The same control one level up. S24 read an absent account as empty, which is
-/// the more dangerous of the two defaults: a deleted contract reads as an EOA
-/// with no code, so a `CALL` into it succeeds trivially rather than running its
-/// code.
+/// The same control one level up. Reading an absent account as empty is the
+/// more dangerous of the two defaults: a deleted contract would read as an EOA
+/// with no code, so a `CALL` into it would succeed trivially rather than run
+/// its code.
 #[test]
 fn a3_a_deleted_account_is_refused() {
     let witness = BlockWitness::decode(&witness_bytes()).expect("the witness decodes");
@@ -244,15 +244,15 @@ fn a3_a_deleted_account_is_refused() {
 ///
 /// A **balance** is the right cell to move, and a storage slot is not. Every
 /// account the execution touches is in the output commitment's post-state
-/// summary with its balance and nonce verbatim (`docs/spec/revm-block.md`
-/// §2.2), so a one-wei change is always visible. A storage slot is not always:
+/// summary with its balance and nonce verbatim (`docs/spec/ethereum.md`
+/// §3), so a one-wei change is always visible. A storage slot is not always:
 /// on this very fixture, one of the thirty-seven recorded slots is read by the
 /// callee and then **overwritten unconditionally**, so its original value
 /// reaches nothing observable and changing it leaves the journal identical.
 /// That is a true fact about the workload rather than a gap in the binding, and
 /// it is worth stating rather than asserting away: **the mini mode's journal
 /// does not distinguish every witness**, only every witness the execution can
-/// tell apart. `docs/handoff/S25-block.md` records it.
+/// tell apart. `docs/spec/ethereum.md` §3 states it.
 #[test]
 fn a_changed_balance_changes_the_journal() {
     let witness = BlockWitness::decode(&witness_bytes()).expect("the witness decodes");

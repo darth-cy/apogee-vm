@@ -3,12 +3,12 @@
 //!
 //! Every execution-family circuit fixture in the repository is the artifact
 //! itself (`family`, `memory`, `lookup`, `gkr`). These cannot be: a delegation
-//! row is a whole permutation or a whole field operation over a frame the
-//! circuit decomposes to the bit, so the artifacts run to megabytes of wire
-//! form — keccak's was about 100 MB until S26d re-shaped it — orders of
-//! magnitude past the largest committed circuit, `atomics.bin`'s 102,965 bytes.
-//! What a fixture buys is a regeneration CI can diff, and a digest buys exactly
-//! that at a fraction of the size. The owner chose it at S21: commit the
+//! row is a wide computation over a frame — a keccak round, four SHA-256
+//! rounds, a Poseidon2 permutation, a 256-bit field operation, a third of a
+//! curve-point addition — so the artifacts run from half a megabyte to 2.4 MB
+//! of wire form, five to twenty-three times the largest committed circuit,
+//! `atomics.bin`'s 102,965 bytes. What a fixture buys is a regeneration CI can
+//! diff, and a digest buys exactly that at a fraction of the size: commit the
 //! SHA-256, diff that.
 //!
 //! So each file below is one line of shape plus one digest, and the matching
@@ -17,13 +17,11 @@
 //! only *that* something moved, and the counts beside it say what.
 //!
 //! Each height is the family's own default, and **the six do not share one**
-//! (`docs/spec/delegation.md` §9.1). A delegation family's rows are
+//! (`docs/spec/delegation.md` §9). A delegation family's rows are
 //! invocations, not halfwords, so its ceiling is the width of one row's
 //! circuit — and those widths differ by orders of magnitude. `FR_ARITH` is 142
 //! inner columns a row at `2^8`; `KECCAK_F` is 5,490 at `2^18`; `MOD_MUL` is
-//! 2,244, where `2^16` is 5.1 GB and is what takes a measured block from 1,048
-//! shards to 5. `SHA256_COMP` was 16,688 at `2^8` until S26e made a row four
-//! rounds, 2,802 at `2^18`.
+//! 2,244 at `2^16`; `SHA256_COMP`, four rounds a row, is 2,802 at `2^18`.
 
 use constants::family;
 use constraints::{ec_add, fr_arith, keccak, mod_mul, poseidon2, sha256, CircuitArtifact};
@@ -31,13 +29,11 @@ use test_support::{sha256, to_hex};
 
 use crate::write_vectors;
 
-/// A family's height, read off the frozen defaults rather than spelled.
+/// A family's height, read off the defaults rather than spelled.
 ///
 /// **What is asserted here is what is true of every delegation height, never a
-/// literal.** Until S26 this read `assert_eq!(vars, 8)`, which was a fact about
-/// the three families that existed and not a rule; raising `MOD_MUL` to `2^16`
-/// is what showed it up. What the four do share is the menu and Mercury's even
-/// variable count, and a digest pinned over a circuit built at some height the
+/// literal**: the heights differ, and what they share is the menu and Mercury's
+/// even variable count. A digest pinned over a circuit built at some height the
 /// prover will never use is the failure this guards.
 fn trace_vars(family: u32) -> u32 {
     let height = family::DEFAULT_HEIGHTS[family as usize];
@@ -59,12 +55,13 @@ fn trace_vars(family: u32) -> u32 {
 /// One fixture's line: the shape a reader wants and the digest CI diffs.
 fn line(name: &str, spec: &str, artifact: &CircuitArtifact) -> String {
     let bytes = artifact.to_bytes();
-    // `inner` is §1.2's: the width of every layer above the committed base
-    // layer, summed — so every gate list's output layer, `L1` included.
+    // `inner` is `docs/spec/circuits.md` §1's: the width of every layer above
+    // the committed base layer, summed — so every gate list's output layer,
+    // `L1` included.
     let inner: usize = artifact.layers.iter().map(|l| l.width as usize).sum();
     format!(
         "# the {name} delegation family's circuit, by SHA-256 of `artifact(n).to_bytes()`\n\
-         # docs/spec/delegation.md is normative; docs/spec/constraint-manifest.md \u{00a7}{spec} is the accounting\n\
+         # docs/spec/delegation-circuits.md \u{00a7}{spec} specifies it; docs/spec/circuits.md \u{00a7}1 lists its shape\n\
          # the artifact itself is megabytes, so what is committed is its digest\n\
          # n memory witness layers inner relations outputs bytes sha256\n\
          {n} {memory} {witness} {layers} {inner} {relations} {outputs} {len} {digest}\n",
@@ -87,7 +84,7 @@ fn fixtures() -> [(&'static str, String); 6] {
             "crates/constraints/tests/vectors/keccak.txt",
             line(
                 "KECCAK_F",
-                "12",
+                "2",
                 &keccak::artifact(trace_vars(family::KECCAK_F)),
             ),
         ),
@@ -95,7 +92,7 @@ fn fixtures() -> [(&'static str, String); 6] {
             "crates/constraints/tests/vectors/poseidon2.txt",
             line(
                 "POSEIDON2",
-                "13",
+                "3",
                 &poseidon2::artifact(trace_vars(family::POSEIDON2)),
             ),
         ),
@@ -103,7 +100,7 @@ fn fixtures() -> [(&'static str, String); 6] {
             "crates/constraints/tests/vectors/fr_arith.txt",
             line(
                 "FR_ARITH",
-                "14",
+                "4",
                 &fr_arith::artifact(trace_vars(family::FR_ARITH)),
             ),
         ),
@@ -111,7 +108,7 @@ fn fixtures() -> [(&'static str, String); 6] {
             "crates/constraints/tests/vectors/mod_mul.txt",
             line(
                 "MOD_MUL",
-                "18",
+                "5",
                 &mod_mul::artifact(trace_vars(family::MOD_MUL)),
             ),
         ),
@@ -119,17 +116,13 @@ fn fixtures() -> [(&'static str, String); 6] {
             "crates/constraints/tests/vectors/sha256.txt",
             line(
                 "SHA256_COMP",
-                "19",
+                "6",
                 &sha256::artifact(trace_vars(family::SHA256_COMP)),
             ),
         ),
         (
             "crates/constraints/tests/vectors/ec_add.txt",
-            line(
-                "EC_ADD",
-                "20",
-                &ec_add::artifact(trace_vars(family::EC_ADD)),
-            ),
+            line("EC_ADD", "7", &ec_add::artifact(trace_vars(family::EC_ADD))),
         ),
     ]
 }

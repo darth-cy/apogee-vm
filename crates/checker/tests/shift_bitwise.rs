@@ -1,5 +1,5 @@
-//! S18's `SHIFT_BITWISE` circuit (`docs/spec/shift-bitwise.md`), row by row,
-//! in ordinary CI.
+//! The `SHIFT_BITWISE` circuit (`docs/spec/shift-bitwise.md`), row by row, in
+//! ordinary CI.
 //!
 //! No forward pass over `2^20` rows: each row is built by hand from what the
 //! instruction computes — Rust's own `u32` and `i32` arithmetic, not the
@@ -9,14 +9,12 @@
 //! here to the tables themselves: a row's gated generic tuple to
 //! `program::lookup_tables`' entries, its gated decoder tuple to the table
 //! columns the row carries. The proofs of the same rows are
-//! `crates/prover/tests/alu.rs`' and `crates/checker/tests/tamper.rs`'.
+//! `crates/prover/tests/alu.rs`'.
 //!
-//! Acceptance 2 is here in full — its honest half as the shift-edge rows of
-//! [`honest_rows`], its negative half as the forgeries the truncation, the
-//! free shamt, the residue and the sign extension each admit — and so is
-//! acceptance 7, the AND table read over its whole domain with `or` and `xor`
-//! derived from it. Acceptance 6, that table against an independent
-//! recomputation over the ceremony's SRS, is
+//! The shift edges are here in full — their honest half as the shift-edge rows
+//! of [`honest_rows`], their negative half as the forgeries the truncation, the
+//! free shamt, the residue and the sign extension each admit. The AND table
+//! against an independent recomputation over the ceremony's SRS is
 //! `crates/program/tests/lookup_tables.rs`'.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -860,8 +858,8 @@ fn instruction_corpus() -> Vec<(u32, isa::Instr)> {
 // Honest rows
 // ---------------------------------------------------------------------------
 
-/// The catalogue of honest rows: every kind, the shift edges S18's acceptance
-/// 2 names, `rd = x0`, a compressed row, and the all-zero padding row.
+/// The catalogue of honest rows: every kind, the shift edges, `rd = x0`, a
+/// compressed row, and the all-zero padding row.
 fn honest_rows() -> Vec<(&'static str, Row)> {
     let mut out: Vec<(&'static str, Row)> = Vec::new();
     let mut push = |what: &'static str, r: Row| out.push((what, r));
@@ -888,7 +886,7 @@ fn honest_rows() -> Vec<(&'static str, Row)> {
         push(what, honest(Instr::new(bit, imm), a, b, 0x1111_1111));
     }
 
-    // Acceptance 2: shamt 0, 1 and 31, both directions and both operand
+    // The shift edges: shamt 0, 1 and 31, both directions and both operand
     // shapes; rs2 = 32 and 33, which truncate to 0 and 1; sra of a negative;
     // srai against srli on the same negative operand.
     for (what, bit, shamt) in [
@@ -1182,11 +1180,10 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         .set("rd_hi", f((and >> 16) as u64));
     cases.push(("an or answering with the AND", r, vec!["bitwise_out_rule"]));
 
-    // S14's control C8 on this frame: a padding row whose `rd` query rewrites
-    // a register after the program has exited. Nothing in the frame ties a
-    // query's mask to the row's pc mask, so the family's own mask rule is
-    // what refuses it — together with the address rule, the decoded `rd`
-    // being 0 on a row that decodes nothing.
+    // A padding row whose `rd` query rewrites a register after the program has
+    // exited. Nothing in the frame ties a query's mask to the row's pc mask, so
+    // the family's own mask rule is what refuses it — together with the address
+    // rule, the decoded `rd` being 0 on a row that decodes nothing.
     let mut r = Row::default();
     r.query("rd", 3, 10, 42, 43);
     r.set("rd_inv", f(10).inverse().expect("nonzero"))
@@ -1214,10 +1211,11 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     ));
 
     // Every gate this family adds is named by some row above. The frame's ten
-    // are S14's and covered by `crates/checker/tests/memory.rs`, and a
-    // booleanity gate is `every_booleanity_gate_refuses_a_value_of_two`'s, so
-    // the two are set aside; what is left is this family's own semantics, and
-    // a gate added with no forgery beside it fails here rather than silently.
+    // are `docs/spec/memory.md` §2.4's and covered by
+    // `crates/checker/tests/memory.rs`, and a booleanity gate is
+    // `every_booleanity_gate_refuses_a_value_of_two`'s, so the two are set
+    // aside; what is left is this family's own semantics, and a gate added with
+    // no forgery beside it fails here rather than silently.
     let named: Vec<&str> = cases
         .iter()
         .flat_map(|(_, _, want)| want.iter().copied())
@@ -1289,7 +1287,7 @@ fn every_booleanity_gate_refuses_a_value_of_two() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 2's negative half
+// The shift edges' negative half
 // ---------------------------------------------------------------------------
 
 /// The shift amount is bounded twice over, and this is the row that shows
@@ -1330,8 +1328,7 @@ fn an_untruncated_amount_is_refused_by_its_scaled_bound_and_the_table() {
     );
 }
 
-/// The byte keys are not free either, and this is the row an earlier draft of
-/// this circuit proved.
+/// The byte keys are not free either.
 ///
 /// The packed generic table holds three sub-tables in one channel
 /// (`docs/spec/lookup.md` §9), so a byte column outside `[0, 256)` does not
@@ -1556,15 +1553,11 @@ fn an_srai_carrying_srlis_answer_is_refused_by_se_rule_alone() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 7: the byte table
+// The guest: the shift edges in its trace, and the prover's own fill
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// The guest: the acceptance matrix in its trace, and the prover's own fill
-// ---------------------------------------------------------------------------
-
-/// `guests/alu`, decoded with all four of S18's execution families at `2^20`
-/// and every other family at `2^16`, as `crates/prover/tests/common` decodes
+/// `guests/alu`, decoded with all four of its execution families at `2^20` and
+/// every other family at `2^16`, as `crates/prover/tests/common` decodes
 /// it for its proof, and traced into an archive. The exit status is 96, the
 /// number of checks the guest made and passed.
 fn alu() -> (prover::Program, trace::TraceArchive) {
@@ -1585,8 +1578,9 @@ fn alu() -> (prover::Program, trace::TraceArchive) {
         params.heights[f as usize] = 1 << VARS;
     }
     let (tables, config) = program::decode_program(&image, &params).expect("the image decodes");
-    // Every family the image puts in the config is one S18 proves: an
-    // instruction of any other would put a family there that no circuit has.
+    // Only these four execution families: an instruction of any other would
+    // put that family in the config at `2^16`, a height no execution circuit
+    // has.
     let families: Vec<u32> = config.families.iter().map(|(f, _)| *f).collect();
     assert_eq!(
         families,
@@ -1679,7 +1673,7 @@ fn rv32(bit: u32, a: u32, src2: u32) -> u32 {
     }
 }
 
-/// S18's acceptance 2 read from the trace a proof is about
+/// The shift edges, read from the trace a proof is about
 /// (`crates/prover/tests/alu.rs` proves it): every one of the twelve
 /// instructions runs; each immediate shift runs at shamt 0, 1 and 31;
 /// `rs2 = 32` and `rs2 = 33` both run, shifting by 0 and by 1, which is what
@@ -1711,7 +1705,7 @@ fn the_guest_runs_the_acceptance_matrix() {
         }
     }
 
-    // Acceptance 2's edges, each read off the rows that ran.
+    // The edges, each read off the rows that ran.
     let shamts = |bit: u32| -> Vec<u32> {
         let mut v: Vec<u32> = rows
             .iter()

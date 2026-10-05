@@ -17,13 +17,13 @@ field.workspace = true
 # forward pass the cross-check runs.
 gkr.workspace = true
 poly.workspace = true
-# `TamperHarness` (S16): a statement re-proved through `prover` and one shard
-# verified through `verifier::verify_shard`, the one verification path.
+# `TamperHarness`: a statement re-proved through `prover`, and one shard or the
+# block verified through `verifier::verify_shard` or `verifier::verify_block`.
 gkr-verify.workspace = true
 program.workspace = true
 prover.workspace = true
 trace.workspace = true
-# S20's transcript-tape validator: `TranscriptEvent`, the global commit phase's
+# The transcript-tape validator: `TranscriptEvent`, the global commit phase's
 # absorb sequence as the checker renders and diffs it.
 transcript.workspace = true
 verifier.workspace = true
@@ -35,16 +35,16 @@ verifier-core.workspace = true
 # columns, then forwarded, reconciled and proved.
 emulator.workspace = true
 loader.workspace = true
-# S15 acceptance 1 and 3: the toy's witness and multiplicity columns are
+# `tests/logup.rs`: the toy's witness and multiplicity columns are
 # committed, and `g`/`beta` are drawn strictly after every absorb.
 pcs.workspace = true
 srs.workspace = true
 rayon.workspace = true
 curve.workspace = true
-# S17 acceptance 9: every jump/branch/slt instruction, built as an `Instr`,
-# routed through `program::row_kind` to its one mask bit.
+# The family suites' instructions, each built as an `Instr` and routed
+# through `program::row_kind` to its one mask bit.
 isa.workspace = true
-# The S13 base-layer binding: the proofs absorb `witness_digest` of the
-# committed columns first. S16 absorbs commitments instead.
+# The tests' base-layer binding: their proofs absorb `witness_digest` of the
+# committed columns first, where a shard proof absorbs commitments.
 sumcheck.workspace = true
 test-support.workspace = true

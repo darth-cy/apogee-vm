@@ -16,12 +16,10 @@ constraints.workspace = true
 gkr.workspace = true
 srs.workspace = true
 pcs.workspace = true
-# S25: the `prove` verb runs a real proving job and reads its per-stage timings
-# out of the prover itself -- since S-STREAM `prover::StreamingReport`'s four
-# clocks, where they were the `TraceArchive`'s five phase sections. Both are in
-# the default build. No cargo feature is enabled from here, and none may be: a
-# feature turned on from a dependency entry is on for every
-# `cargo build --workspace`, which is the whole hazard master anti-goal 1 names.
+# The `prove` verb runs a real proving job and reads its per-stage timings out
+# of the prover itself, `prover::StreamingReport`'s four clocks, which are in
+# the default build. No cargo feature is enabled from here: a feature turned on
+# from a dependency entry is on for every `cargo build --workspace`.
 host.workspace = true
 prover.workspace = true
 verifier-core.workspace = true

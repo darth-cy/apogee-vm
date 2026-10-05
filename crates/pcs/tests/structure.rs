@@ -1,5 +1,4 @@
-//! Acceptance 10: the structural claims, checked rather than asserted in a
-//! comment.
+//! The structural claims, checked rather than asserted in a comment.
 //!
 //! * **No transform larger than `2b` is reachable in `open`.** The type makes
 //!   this true — `fft::Domain::for_product(half)` is the only constructor and
@@ -17,8 +16,7 @@
 //!   transcript not at all, and the entry points differ only in whether they
 //!   execute the pairings or hand back their terms.
 //! * **The pairing-merge challenge is squeezed last and is what merges.**
-//!   Must-be-exact 4 pins the squeeze position. Since S09 the *use* is
-//!   observable — `rho` is the scalar of an accumulator entry, and
+//!   Its *use* is observable — `rho` is the scalar of an accumulator entry, and
 //!   `tests/accumulator.rs` pins all twelve against an independent replay — so
 //!   what is left here is the position, and that exactly one pairing check and
 //!   two MSMs exist to merge into.
@@ -121,7 +119,7 @@ fn the_only_transform_is_the_one_at_two_b() {
 /// The transcript schedule of one function of `text`, read out of the source
 /// as `(kind, tag)` pairs in order.
 ///
-/// This is `docs/spec/mercury.md` §5's and §11's tables, and the sides must
+/// This is `docs/spec/mercury.md` §3.2's and §5's tables, and the sides must
 /// produce them. Reading tags rather than whole lines keeps the test about the
 /// schedule and not about how a local is spelled.
 fn schedule(text: &str, function: &str) -> Vec<(&'static str, String)> {
@@ -159,7 +157,7 @@ fn schedule(text: &str, function: &str) -> Vec<(&'static str, String)> {
     out
 }
 
-/// `docs/spec/mercury.md` §5, transcribed. Sixteen steps, in this order.
+/// `docs/spec/mercury.md` §3.2, transcribed. Sixteen steps, in this order.
 const SCHEDULE: [(&str, &str); 16] = [
     ("absorb", "MERCURY_INSTANCE"),
     ("absorb", "COMMITMENT"),
@@ -179,15 +177,15 @@ const SCHEDULE: [(&str, &str); 16] = [
     ("squeeze", "PAIRING_MERGE"),
 ];
 
-/// `docs/spec/mercury.md` §11, transcribed. Three steps, before the opening.
+/// `docs/spec/mercury.md` §5, transcribed. Three steps, before the opening.
 const BATCH_SCHEDULE: [(&str, &str); 3] = [
     ("absorb", "COMMITMENT"),
     ("absorb", "EVALUATION_CLAIM"),
     ("squeeze", "MERCURY_BATCH"),
 ];
 
-/// Must-be-exact 4: the prover and the verification core run the one frozen
-/// schedule, and `rho` is the last thing either takes from the transcript.
+/// The prover and the verification core run the one schedule, and `rho` is
+/// the last thing either takes from the transcript.
 #[test]
 fn both_sides_run_the_frozen_schedule() {
     let expected: Vec<(&str, String)> = SCHEDULE
@@ -198,7 +196,7 @@ fn both_sides_run_the_frozen_schedule() {
         assert_eq!(
             schedule(text, function),
             expected,
-            "{function} must run docs/spec/mercury.md section 5's schedule"
+            "{function} must run docs/spec/mercury.md §3.2's schedule"
         );
     }
     // And the native core reaches the schedule only through the shared one, so
@@ -230,8 +228,8 @@ fn both_sides_run_the_frozen_schedule() {
     );
 }
 
-/// Must-be-exact 2: both sides of a batch run §11's preamble, and it is the
-/// only place a batch touches the transcript before the opening.
+/// Both sides of a batch run `docs/spec/mercury.md` §5's preamble, and it is
+/// the only place a batch touches the transcript before the opening.
 #[test]
 fn both_sides_run_the_frozen_batch_schedule() {
     let expected: Vec<(&str, String)> = BATCH_SCHEDULE
@@ -241,7 +239,7 @@ fn both_sides_run_the_frozen_batch_schedule() {
     assert_eq!(
         schedule(VERIFY, "batch_preamble"),
         expected,
-        "the batch preamble must run docs/spec/mercury.md section 11's schedule"
+        "the batch preamble must run docs/spec/mercury.md §5's schedule"
     );
     // Said against the source rather than against the constant above: the
     // batching challenge is the LAST thing the preamble takes, so a squeeze
@@ -279,7 +277,7 @@ fn both_sides_run_the_frozen_batch_schedule() {
     }
 }
 
-/// Must-be-exact 5: one verification path. Every transcript operation of a
+/// One verification path. Every transcript operation of a
 /// verification is in the core, so the four entry points cannot drift apart —
 /// there is nothing in them to drift.
 #[test]
@@ -341,7 +339,7 @@ fn the_merge_challenge_is_squeezed_last_and_spent_once() {
         "lib.rs must reach the pairing only through the accumulator"
     );
 
-    // Acceptance 9: one MSM per side, and no third.
+    // One MSM per side, and no third.
     let merge = body(ACCUMULATOR, "check_pairings");
     assert_eq!(
         merge.matches("msm(&").count(),
@@ -352,7 +350,7 @@ fn the_merge_challenge_is_squeezed_last_and_spent_once() {
 
 /// Where the per-check merge challenge comes from, read out of the source.
 ///
-/// `docs/spec/accumulator.md` §6 pins `nu` to a sponge seeded with the digest of
+/// `docs/spec/mercury.md` §6.3 pins `nu` to a sponge seeded with the digest of
 /// the accumulator's own words, and the powers of `nu` to the group weights. No
 /// black-box test can see any of that: a `discharge` that hard-codes `nu`, or
 /// digests the wrong grouping, or seeds the sponge with the words instead of
@@ -361,8 +359,8 @@ fn the_merge_challenge_is_squeezed_last_and_spent_once() {
 /// only list that could tell them apart is one whose balancing scalar is
 /// `-1/nu`, and that scalar is itself one of the words `nu` is derived from.
 ///
-/// So the derivation is pinned here, the same way and for the same reason S08
-/// pinned the pairing-merge challenge's use.
+/// So the derivation is pinned here, by reading the source, as the
+/// pairing-merge challenge's position is.
 /// `tests/accumulator.rs::a_predictable_merge_challenge_would_be_forgeable`
 /// covers the half that *is* observable: a guessable `nu` is forgeable.
 #[test]

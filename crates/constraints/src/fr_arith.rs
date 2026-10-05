@@ -1,11 +1,9 @@
 //! The `FR_ARITH` family's circuit: one `Fr` add, multiply or inverse a row,
 //! invoked by the `ecall::PRECOMPILE_FR_ARITH` ecall and never decoded.
 //!
-//! `docs/spec/delegation.md` §13 is normative. One invocation is one row and
-//! one row is one operation — `ops/row = 1`, which is the cost model the
-//! recursion guest's contraction is sized against — so the family needs no
-//! batch, no populated count and no no-op selector: a row is live or it is
-//! padding.
+//! `docs/spec/delegation-circuits.md` §4 specifies it. One invocation is one
+//! row and one row is one operation, so the family needs no batch, no
+//! populated count and no no-op selector: a row is live or it is padding.
 //!
 //! ```text
 //! frame     M[0..104]: cycle live base anchor_value, then 4 per word
@@ -20,10 +18,11 @@
 //!
 //! # What the three operations are
 //!
-//! The frame carries `field::Fr`'s **in-memory** representation (`§13.2`), so
-//! the element a frame value encodes is `x·R` where `x` is the mathematical
-//! value and `R = 2^256 mod p`. The delegation computes exactly what `Fr`'s
-//! own `Add`, `Mul` and `inverse` compute on those representatives:
+//! The frame carries `field::Fr`'s **in-memory** representation
+//! (`docs/spec/delegation-circuits.md` §4.1), so the element a frame value
+//! encodes is `x·R` where `x` is the mathematical value and `R = 2^256 mod p`.
+//! The delegation computes exactly what `Fr`'s own `Add`, `Mul` and `inverse`
+//! compute on those representatives:
 //!
 //! ```text
 //! add   out = a + b                 R is linear, so nothing is carried
@@ -35,7 +34,7 @@
 //! read on the representation the guest already holds. A mathematically
 //! canonical frame would be a second definition *and* would cost a Montgomery
 //! conversion per operand — about twice the software multiply the delegation
-//! replaces — which is the whole reason this encoding was chosen.
+//! replaces — which is the whole reason for this encoding.
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -208,8 +207,8 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
         enforcing.push(("opcode_rule".to_string(), d::linear(terms)));
     }
     // Exactly one operation a live row, none on a padding row. Two selectors
-    // at once would make the sum 2, which no value of `live` is: that is
-    // acceptance 7's "a row claiming two ops simultaneously is unprovable".
+    // at once would make the sum 2, which no value of `live` is, so a row
+    // claiming two ops at once is unprovable.
     {
         let mut terms: Vec<(Coeff, PolyAddress)> = (0..f::OPS.len())
             .map(|i| (d::lit(1), selector(i)))
@@ -345,7 +344,7 @@ fn witness_names() -> Vec<String> {
     out
 }
 
-/// The family carries **no lookup channel**: at a delegation height no range
+/// The family carries **no lookup channel**: at `2^8`, its height, no range
 /// channel's table fits, and every bound it makes is a bit decomposition with
 /// a booleanity gate (`docs/spec/delegation.md` §9).
 pub fn channels() -> Vec<ChannelSpec> {
@@ -353,9 +352,8 @@ pub fn channels() -> Vec<ChannelSpec> {
 }
 
 /// What the emitted artifact must be, counted on the artifact rather than on
-/// the vectors handed in (S21 must-be-exact 4): a gate built and then dropped
-/// on the way reaches no circuit and no test that reads the source would see
-/// it.
+/// the vectors handed in: a gate built and then dropped on the way reaches no
+/// circuit and no test that reads the source would see it.
 fn check_shape(a: &CircuitArtifact) {
     assert_eq!(a.memory.len(), MEMORY_COLUMNS, "fr_arith: M columns");
     assert_eq!(a.witness.len(), WITNESS_COLUMNS, "fr_arith: W columns");

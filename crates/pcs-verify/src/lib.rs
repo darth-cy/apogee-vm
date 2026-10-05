@@ -2,18 +2,18 @@
 //! The verifier half of Mercury: everything a verification computes that is
 //! not a curve operation.
 //!
-//! `docs/spec/mercury.md` §5 to §8 and §11, and `docs/spec/accumulator.md` §2,
-//! §3 and §5, are normative. `#![no_std]` + `alloc`: the recursion guest links
-//! this crate. `crates/pcs` is the `std` half — commit, open, point validation,
-//! the `cm*` MSM and the pairings — and re-exports everything public here, so a
-//! native verification and a guest's run one definition of the transcript
-//! schedule, the two derived values and the twelve accumulator terms.
+//! `docs/spec/mercury.md` §3.2 to §5, §6.1 and §6.3 specify it. `#![no_std]` +
+//! `alloc`: the recursion guest links this crate. `crates/pcs` is the `std`
+//! half — commit, open, point validation, the `cm*` MSM and the pairings — and
+//! verifies through this crate's functions, so a native verification and a
+//! guest's run one definition of the transcript schedule, the two derived
+//! values and the twelve accumulator terms.
 //!
 //! A point here is its 64-byte encoding, `crates/curve`'s uncompressed affine
 //! form, because that is all the transcript reads (`transcript::g1_limbs`).
 //! Nothing here checks that a point is on the curve: whoever spends a term
 //! does, and `pcs::discharge` does it for every entry it is handed
-//! (`docs/spec/accumulator.md` §4).
+//! (`docs/spec/mercury.md` §6.3).
 
 extern crate alloc;
 
@@ -51,10 +51,10 @@ pub enum PcsError {
     InvalidPoint { field: &'static str },
     /// The transcript produced `{z, 1/z, alpha}` with fewer than three distinct
     /// members, which leaves the BDFG20 batch undefined. Probability about
-    /// `2^-252`; `docs/spec/mercury.md` §7.
+    /// `2^-252`; `docs/spec/mercury.md` §3.4.
     DegenerateChallenge,
     /// A batch with no columns. There is no `cm*` and no `v*` to open, and no
-    /// statement to make. `docs/spec/mercury.md` §11.
+    /// statement to make. `docs/spec/mercury.md` §5.
     EmptyBatch,
     /// A batch's commitment list and the list paired with it differ in length:
     /// the columns of `batch_open`, the claimed values of a batch verification.
@@ -66,7 +66,7 @@ pub enum PcsError {
     /// not a length. `length` is how long the thing being read is and `at` is
     /// how far the counts got — in **entries** when the counts were handed in
     /// beside an entry list, in **words** when they were read off a word array,
-    /// which is why neither field names a unit. `docs/spec/accumulator.md` §3.
+    /// which is why neither field names a unit. `docs/spec/mercury.md` §6.3.
     MalformedAccumulator { length: usize, at: usize },
     /// The pairing check failed. There is one, so there is one variant.
     VerificationFailed,
@@ -103,7 +103,7 @@ pub fn check_num_vars(num_vars: usize) -> Result<u64, PcsError> {
 
 /// The shape rule of a batch of `k` commitments with `values` claimed values at
 /// a point of `num_vars` coordinates: at least one column, one value per
-/// commitment, and a Mercury instance. `docs/spec/mercury.md` §11.
+/// commitment, and a Mercury instance. `docs/spec/mercury.md` §5.
 pub fn check_batch(k: usize, values: usize, num_vars: usize) -> Result<(), PcsError> {
     if k == 0 {
         return Err(PcsError::EmptyBatch);
@@ -147,7 +147,7 @@ pub fn powers(x: Fr, k: usize) -> Vec<Fr> {
 /// Draw `z` under `MERCURY_Z`, taking the first squeeze that is not `reject`
 /// and squeezing again under the same tag while it is.
 ///
-/// `docs/spec/mercury.md` §7 pins `reject = 0`, so that `1/z` exists, and
+/// `docs/spec/mercury.md` §3.4 pins `reject = 0`, so that `1/z` exists, and
 /// [`challenge_z`] is that rule. The rejected value is a parameter because the
 /// loop is otherwise unreachable and so untestable: a transcript squeezes zero
 /// with probability about `2^-254`, and no test can wait for that. A test names
@@ -163,7 +163,7 @@ fn challenge_z_rejecting(tr: &mut Transcript, reject: Fr) -> Fr {
 }
 
 /// Draw `z`, resampling under the same tag while it is zero so that `1/z`
-/// exists. `docs/spec/mercury.md` §7.
+/// exists. `docs/spec/mercury.md` §3.4.
 pub fn challenge_z(tr: &mut Transcript) -> Fr {
     challenge_z_rejecting(tr, Fr::ZERO)
 }
@@ -172,7 +172,7 @@ pub fn challenge_z(tr: &mut Transcript) -> Fr {
 /// leave `Z_T` with a repeated root and the interpolation of `h` undefined.
 ///
 /// `z != 0` is already guaranteed by [`challenge_z`] and is repeated here so
-/// the predicate stands alone. `docs/spec/mercury.md` §7.
+/// the predicate stands alone. `docs/spec/mercury.md` §3.4.
 pub fn degenerate(alpha: Fr, z: Fr) -> bool {
     z == Fr::ZERO || z.square() == Fr::ONE || z == alpha || z * alpha == Fr::ONE
 }
@@ -231,8 +231,8 @@ pub fn derive_h_alpha(
 ///
 /// Every deferred relation in this protocol has the shape
 /// `e(A, [1]_2) = e(B, [x]_2)`, so a term is on the `A` side or the `B` side
-/// and there is no third possibility. **Frozen forever**, including the wire
-/// values: `G2One` is `0` and `G2X` is `1`. `pcs` re-exports it.
+/// and there is no third possibility. The wire values are `G2One` = `0` and
+/// `G2X` = `1`. `pcs` re-exports it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PairingSide {
     /// Pairs against `[1]_2` — a term of `A`.
@@ -242,7 +242,7 @@ pub enum PairingSide {
 }
 
 impl PairingSide {
-    /// The tag word this side is written as. `docs/spec/accumulator.md` §2.
+    /// The tag word this side is written as. `docs/spec/mercury.md` §6.1.
     pub fn word(self) -> Fr {
         match self {
             PairingSide::G2One => Fr::ZERO,
@@ -263,13 +263,13 @@ impl PairingSide {
 }
 
 /// The words one entry occupies: the side tag, the scalar, and the point's four
-/// `Fr` limbs. `6 * 32 = 192` bytes, for every entry, forever.
+/// `Fr` limbs. `6 * 32 = 192` bytes, for every entry.
 pub const ENTRY_WORDS: usize = 6;
 
 /// The entries one deferred Mercury verification emits.
 ///
 /// Ten `G2One` terms — the statement's commitment, the eight proof points in
-/// their frozen field order, and `[1]_1` — and two `G2X` terms. The count does
+/// their field order, and `[1]_1` — and two `G2X` terms. The count does
 /// not depend on `n`, and it does not depend on a batch's `k`, because a batch
 /// derives `cm*` before it reaches the verification core.
 pub const ENTRIES_PER_CHECK: usize = 12;
@@ -277,7 +277,7 @@ pub const ENTRIES_PER_CHECK: usize = 12;
 /// Entry `i`'s side, and which point it carries as an index into
 /// `[cm, h, q, g, s, d, pi_z, w, w_prime, [1]_1]` — the statement's commitment,
 /// the proof's eight points in field order, then the generator.
-/// `docs/spec/accumulator.md` §2's table, as the one definition both the native
+/// `docs/spec/mercury.md` §6.1's table, as the one definition both the native
 /// verifier and the recursion guest build their entries from.
 pub const ENTRY_POINTS: [(PairingSide, usize); ENTRIES_PER_CHECK] = [
     (PairingSide::G2One, 0),
@@ -295,7 +295,7 @@ pub const ENTRY_POINTS: [(PairingSide, usize); ENTRIES_PER_CHECK] = [
 ];
 
 /// One entry's six words: the side tag, the scalar, then the point's four
-/// transcript limbs, infinity as four sentinels. `docs/spec/accumulator.md` §3.
+/// transcript limbs, infinity as four sentinels. `docs/spec/mercury.md` §6.3.
 pub fn entry_words(side: PairingSide, scalar: Fr, point: &[u8; 64]) -> [Fr; ENTRY_WORDS] {
     let [x_lo, x_hi, y_lo, y_hi] = g1_limbs(point);
     [side.word(), scalar, x_lo, x_hi, y_lo, y_hi]
@@ -303,14 +303,15 @@ pub fn entry_words(side: PairingSide, scalar: Fr, point: &[u8; 64]) -> [Fr; ENTR
 
 /// The accumulator digest: Poseidon2 over the words of the entry list.
 ///
-/// The hash-binding rule, frozen once here and cited by every later stage: a
-/// proof that carries an accumulator binds it by absorbing exactly these words
-/// under `ACCUMULATOR_DIGEST` in a sponge of its own and squeezing once.
+/// The hash-binding rule: exactly these words, absorbed under
+/// `ACCUMULATOR_DIGEST` in a sponge of their own and squeezed once. It covers
+/// the count words, so it binds the grouping, and `pcs::discharge` draws its
+/// merge weight from it.
 ///
 /// The squeeze is a raw `sample`, **not** a `challenge_scalar`, for the reason
 /// `sumcheck::witness_digest`'s is: the tag frames a scalar message, and a
 /// challenge under the same tag would be one tag in two kinds.
-/// `docs/spec/accumulator.md` §5.
+/// `docs/spec/mercury.md` §6.3.
 pub fn accumulator_digest(words: &[Fr]) -> Fr {
     let mut sponge = Transcript::new();
     sponge.append_scalars(tags::ACCUMULATOR_DIGEST, words);
@@ -321,14 +322,14 @@ pub fn accumulator_digest(words: &[Fr]) -> Fr {
 // The verification's field side
 // ---------------------------------------------------------------------------
 
-/// The batch preamble's transcript half, `docs/spec/mercury.md` §11.1: absorb
+/// The batch preamble's transcript half, `docs/spec/mercury.md` §5: absorb
 /// the `k` commitments **as passed** as one message of `4k` limbs, then `u`
 /// followed by all `k` claimed values, then squeeze `rho`.
 ///
 /// Returns the weights `rho^0 .. rho^(k-1)` and `v* = sum_i rho^i v_i`. The
 /// caller owes `cm* = sum_i rho^i cm_i`: `pcs` computes it with an MSM, and a
 /// guest takes it as a hint whose correctness it defers
-/// (`docs/spec/accumulator.md` §8). [`check_batch`] runs first.
+/// (`docs/spec/recursion.md` §8.3). [`check_batch`] runs first.
 pub fn batch_preamble(cms: &[[u8; 64]], u: &[Fr], vs: &[Fr], tr: &mut Transcript) -> (Vec<Fr>, Fr) {
     append_g1_points(tr, tags::COMMITMENT, cms);
     let mut claim: Vec<Fr> = u.to_vec();
@@ -340,16 +341,16 @@ pub fn batch_preamble(cms: &[[u8; 64]], u: &[Fr], vs: &[Fr], tr: &mut Transcript
     (weights, v_star)
 }
 
-/// One Mercury verification's field side: `docs/spec/mercury.md` §5's schedule
-/// over the instance `(cm, u, v)` and a proof given as its eight points'
-/// encodings and its six values, both in field order; §7's challenge rule; the
-/// two derived values; and the BDFG20 batch at `z'`.
+/// One Mercury verification's field side: `docs/spec/mercury.md` §3.2's
+/// schedule over the instance `(cm, u, v)` and a proof given as its eight
+/// points' encodings and its six values, both in field order; §3.4's challenge
+/// rule; the two derived values; and the BDFG20 batch at `z'`.
 ///
-/// Returns the twelve scalars of `docs/spec/accumulator.md` §2 in entry order.
+/// Returns the twelve scalars of `docs/spec/mercury.md` §6.1 in entry order.
 /// Entry `i` pairs its scalar with the point [`ENTRY_POINTS`] names, so the
 /// relation the verifier would check is
 /// `e(sum of the G2One terms, [1]_2) = e(sum of the G2X terms, [x]_2)`. The
-/// ten `G2One` scalars sum to `A1 + rho A2` of §8.2 and the two `G2X` scalars
+/// ten `G2One` scalars sum to `A1 + rho A2` of §4 and the two `G2X` scalars
 /// to `B1 + rho B2`.
 pub fn scalars(
     cm: &[u8; 64],
@@ -416,7 +417,7 @@ pub fn scalars(
 
     // Check A is the fold identity at `z`; check B is the BDFG20 batch; `rho`
     // merges them, which is why every check-B term carries it and no check-A
-    // term does. `docs/spec/mercury.md` §8.2 and §8.3.
+    // term does. `docs/spec/mercury.md` §4.
     Ok([
         Fr::ONE,
         rho * c[1],
@@ -468,9 +469,8 @@ mod tests {
         assert!(MAX_NUM_VARS < u64::BITS as usize);
     }
 
-    /// Acceptance 5, and `docs/spec/mercury.md` §7's `z in F*` rule: a rejected
-    /// squeeze is discarded and the **next** squeeze under the same tag is
-    /// used.
+    /// `docs/spec/mercury.md` §3.4's `z in F*` rule: a rejected squeeze is
+    /// discarded and the **next** squeeze under the same tag is used.
     ///
     /// The rule rejects zero, which a sponge produces with probability about
     /// `2^-254`, so the loop is undrivable as written. Naming the rejected
@@ -517,7 +517,7 @@ mod tests {
         assert_eq!(plain.snapshot(), named.snapshot());
     }
 
-    /// `docs/spec/mercury.md` §7. The transcript reaches this with probability
+    /// `docs/spec/mercury.md` §3.4. The transcript reaches this with probability
     /// about `2^-252`, so it is the one predicate no end-to-end test can drive:
     /// it gets its negative control here.
     #[test]

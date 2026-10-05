@@ -1,9 +1,9 @@
-//! The byte layouts of `docs/spec/shard-proof.md` §9: little-endian integers,
+//! The byte layouts of `docs/spec/proof.md` §9: little-endian integers,
 //! canonical `Fr`s, opaque 64-byte `G1`s, `u32`-length-prefixed byte strings
 //! and lists.
 //!
-//! Public because the prover's phase snapshots (`docs/spec/shard-proof.md`
-//! §10) are written in the same primitives, and one set of them is enough.
+//! Public because the prover's phase snapshots (`docs/spec/streaming.md`
+//! §6) are written in the same primitives, and one set of them is enough.
 //!
 //! The reader is total: every refusal is an `Err`, and it reserves nothing an
 //! untrusted count asks for — a count is refused unless the bytes left could

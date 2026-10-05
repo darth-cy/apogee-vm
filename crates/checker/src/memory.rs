@@ -55,12 +55,12 @@ fn column(mut values: Vec<u64>, height: usize) -> MultilinearPoly {
 /// pass over the log.
 ///
 /// An event takes the first slot of its row still free whose space and slot are
-/// its own — the routing rule of `docs/spec/memory.md` §2.1, which is exact for
-/// every query but the three slot-2 register ones, and those fill in log order.
-/// A **delegation invocation's** frame access belongs to no cycle's row: it
-/// rides the requesting cycle at `constants::delegation::FRAME_DELTA` and is
-/// that family's row (`docs/spec/delegation.md` §4.1), so that one `(space, Δ)`
-/// pair is skipped by name and every other unmatched event panics.
+/// its own — the routing rule of `docs/spec/memory.md` §2.1, which is exact, no
+/// two queries sharing a space and a slot. A **delegation invocation's** frame
+/// access belongs to no cycle's row: it rides the requesting cycle at
+/// `constants::delegation::FRAME_DELTA` and is that family's row
+/// (`docs/spec/delegation.md` §4), so that one `(space, Δ)` pair is skipped by
+/// name and every other unmatched event panics.
 fn frame_rows(
     log: &MemoryEventLog,
     queries: &[usize],

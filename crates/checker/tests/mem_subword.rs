@@ -1,4 +1,4 @@
-//! S19's `MEM_SUBWORD` circuit — `lb`, `lh`, `lbu`, `lhu`, `sb`, `sh` — row by
+//! The `MEM_SUBWORD` circuit — `lb`, `lh`, `lbu`, `lhu`, `sb`, `sh` — row by
 //! row, in ordinary CI.
 //!
 //! No forward pass over `2^20` rows: each row is built by hand from what the
@@ -12,7 +12,7 @@
 //! trace are `crates/checker/tests/mem_fill.rs`', and the proofs are
 //! `crates/prover/tests/mem.rs`'.
 //!
-//! Acceptance 2 is here in full, as
+//! The splice is here in full, as
 //! [`the_splice_admits_exactly_one_witness_at_a_reduced_width`]: the width seam
 //! `mem_subword::splice_gates` called at one bit to a byte, and every candidate
 //! decomposition of every four-bit word enumerated through `gkr::eval_gate`
@@ -192,8 +192,8 @@ struct Instr {
     rs1: u32,
     rs2: u32,
     rd: u32,
-    /// The decoded immediate: the displacement, two's complement, as S11's
-    /// table holds it.
+    /// The decoded immediate: the displacement, two's complement, as the
+    /// decoded table holds it.
     imm: u32,
     compressed: bool,
 }
@@ -1274,12 +1274,12 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     r.set("pc_write_value", f(0x1008));
     cases.push(("an lbu jumping four ahead", r, vec!["next_pc_rule"]));
 
-    // S14's control C8 on this frame: a padding row whose `rd` query rewrites
-    // a register after the program has exited. Nothing in the frame ties a
-    // query's mask to the row's pc mask, so the family's own mask rule is what
-    // refuses it — together with the address rule, the decoded `rd` being 0 on
-    // a row that decodes nothing, and the value rule, which reads no kind bit
-    // there and so pins the written value to 0.
+    // A padding row whose `rd` query rewrites a register after the program has
+    // exited. Nothing in the frame ties a query's mask to the row's pc mask, so
+    // the family's own mask rule is what refuses it — together with the address
+    // rule, the decoded `rd` being 0 on a row that decodes nothing, and the
+    // value rule, which reads no kind bit there and so pins the written value
+    // to 0.
     let mut r = Row::default();
     r.query("rd", 3, 10, 42, 43);
     r.set("rd_inv", f(10).inverse().expect("nonzero"))
@@ -1311,11 +1311,11 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     ));
 
     // Every gate this family adds is named by some row above. The frame's
-    // thirteen are S14's and covered by `crates/checker/tests/memory.rs`, and
-    // a booleanity gate is `every_booleanity_gate_refuses_a_value_of_two`'s,
-    // so the two are set aside; what is left is this family's own semantics,
-    // and a gate added with no forgery beside it fails here rather than
-    // silently.
+    // thirteen are `docs/spec/memory.md` §2.4's and covered by
+    // `crates/checker/tests/memory.rs`, and a booleanity gate is
+    // `every_booleanity_gate_refuses_a_value_of_two`'s, so the two are set
+    // aside; what is left is this family's own semantics, and a gate added with
+    // no forgery beside it fails here rather than silently.
     let named: Vec<&str> = cases
         .iter()
         .flat_map(|(_, _, want)| want.iter().copied())
@@ -1521,7 +1521,7 @@ fn the_generic_key_stays_inside_its_sub_table() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 2: the splice at a reduced width
+// The splice at a reduced width
 // ---------------------------------------------------------------------------
 
 /// A gate over a map of column values.
@@ -1574,7 +1574,7 @@ fn solve(
     found
 }
 
-/// Acceptance 2: at a reduced width the splice admits exactly one witness.
+/// At a reduced width the splice admits exactly one witness.
 ///
 /// `mem_subword::splice_gates` is the seam the family's own gates come from,
 /// and this calls it at **one bit to a byte**: a word is then 4 bits, a "byte"
@@ -1740,7 +1740,7 @@ fn the_splice_admits_exactly_one_witness_at_a_reduced_width() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 2's negative half
+// The splice's negative half
 // ---------------------------------------------------------------------------
 
 /// A halfword access at an odd address is unprovable, and `half_aligned` is
@@ -1782,7 +1782,7 @@ fn a_halfword_at_an_odd_address_is_unprovable() {
 /// The row below loads `0x7f01` — two bytes — through a byte access, with
 /// `high` moved so that the splice still sums and `high`'s own pair still
 /// holds. `sub_range` accepts it. `sub_scaled`, which is `2^24·sub` on a byte
-/// row, does not fit a word, and the sign key `256·sub` no longer fits a
+/// row, does not fit a word, and the sign key `256·sub` does not fit a
 /// halfword either, so the packed table has no row for it.
 #[test]
 fn an_lbu_that_yields_more_than_a_byte_is_refused() {

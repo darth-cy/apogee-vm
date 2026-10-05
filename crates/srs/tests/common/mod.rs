@@ -9,7 +9,7 @@
 //! files are named `ppot_0080_<power>.ptau`. Every power is a prefix of the
 //! same ceremony, so a file here is interchangeable with a bigger one read at
 //! a smaller power — but it is *not* interchangeable with Hermez's, which has
-//! a different `tau`. See `docs/spec/srs.md` §2.
+//! a different `tau`. See `docs/spec/srs.md` §1.
 
 #![allow(dead_code)]
 

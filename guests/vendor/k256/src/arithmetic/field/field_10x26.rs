@@ -772,16 +772,16 @@ mod tests {
 
 // ---------------------------------------------------------------------------
 // apogee-vm's vendored change. `guests/vendor/README.md` is the account of it;
-// `docs/spec/delegation.md` §14 is the circuit and the ABI.
+// `docs/spec/delegation-circuits.md` §5 is the circuit, `delegation.md` the ABI.
 // ---------------------------------------------------------------------------
 
-/// apogee-vm, S26e: a field element as the delegation frames carry it, and
+/// apogee-vm: a field element as the delegation frames carry it, and
 /// back.
 ///
 /// `MOD_MUL` and `EC_ADD` both take a value as eight little-endian 32-bit
 /// words **below `p`**, which is what [`apogee::operand`] produces. Exposed so
 /// `projective.rs`' `EC_ADD` routing converts a coordinate in about 30 cycles
-/// where `to_bytes` and `from_bytes_unchecked` took 478 and 408: those
+/// where `to_bytes` and `from_bytes_unchecked` take 478 and 408: those
 /// normalize unconditionally and go through a big-endian byte array the frame
 /// does not want.
 #[cfg(target_arch = "riscv32")]
@@ -890,10 +890,10 @@ mod apogee {
     /// raw limb pattern of `p` is upstream's second representation of zero —
     /// `normalizes_to_zero`'s `z1` mask is exactly it — and the complete
     /// projective formulas produce it whenever a coordinate difference
-    /// vanishes. S26 skipped this test and reduced only to `2^256`, which is
-    /// what the operand bound now forbids: the cost is the `normalize` that
-    /// S26 measured at 0.6 million guest cycles on the pinned mini-block, and
-    /// it buys a frame whose meaning is a canonical field element.
+    /// vanishes. Reducing only to `2^256` is what the operand bound forbids:
+    /// reducing below `p` costs the `normalize`, measured at 0.6 million guest
+    /// cycles on the pinned mini-block, and it buys a frame whose meaning is
+    /// a canonical field element.
     pub(super) fn operand(x: &FieldElement10x26) -> [u32; 8] {
         if packable(x) && !bool::from(x.get_overflow()) {
             return pack(x);

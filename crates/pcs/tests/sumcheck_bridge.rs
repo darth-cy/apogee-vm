@@ -1,15 +1,15 @@
-//! Acceptance 4: the sumcheck-to-Mercury bridge, which is where the variable
-//! order gets reversed if it is going to be.
+//! The sumcheck-to-Mercury bridge, which is where the variable order gets
+//! reversed if it is going to be.
 //!
-//! S04's zerocheck reduces a gate to one claim: a point `r` and the columns'
-//! evaluations there. S08's Mercury opens a commitment at a point. Joining them
+//! The zerocheck reduces a gate to one claim: a point `r` and the columns'
+//! evaluations there. Mercury opens a commitment at a point. Joining them
 //! is the whole of what a shard proof does at its base layer, and the join has
 //! exactly one place to go wrong — the two crates must mean the same thing by
 //! "variable `j`".
 //!
 //! They do, and nothing here reverses anything. Sumcheck round `i` binds
 //! variable `i`, so `claim.point[j]` is variable `j`; `crates/poly` puts
-//! variable `j` at bit `j` of the index; and `docs/spec/mercury.md` §2 splits
+//! variable `j` at bit `j` of the index; and `docs/spec/mercury.md` §1 splits
 //! that index as `i + j*b` with `u1` the **first** `t` coordinates. So the
 //! reduced point is handed to `open` exactly as it comes out, and the value it
 //! returns is both the sumcheck's claimed evaluation and
@@ -36,8 +36,8 @@ use transcript::Transcript;
 /// SRS and large enough that a coordinate swap is not a coincidence.
 const NUM_VARS: usize = 8;
 
-/// `A * A - B` over inputs `[A, B]`: S04's gate, transcribed rather than
-/// imported, because this file is about the two crates agreeing.
+/// `A * A - B` over inputs `[A, B]`: the sumcheck's gate, transcribed rather
+/// than imported, because this file is about the two crates agreeing.
 fn square_gate() -> Gate {
     let a = PolyAddress(0);
     let b = PolyAddress(1);
@@ -72,7 +72,7 @@ fn witness(seed: u64) -> Vec<MultilinearPoly> {
     ]
 }
 
-/// Acceptance 4: prove a zerocheck, then open the committed column at the point
+/// Prove a zerocheck, then open the committed column at the point
 /// the zerocheck reduced to, on the same transcript both sides drive.
 #[test]
 fn a_reduced_sumcheck_claim_opens_at_its_own_point() {
@@ -220,10 +220,11 @@ fn a_reduced_claim_opens_every_column_as_one_batch() {
 /// The reduced point, from the proof's round messages.
 ///
 /// `prove_zerocheck` returns the proof, not the point, so a prover that needs
-/// the point replays S04's schedule to get it: the `n` eq-randomizers first,
-/// then each round's cubic absorbed and its challenge drawn. Round `i`'s
-/// challenge binds variable `i`, so the sequence *is* the point in variable
-/// order — which is the convention this whole file exists to check.
+/// the point replays the zerocheck's schedule to get it: the `n`
+/// eq-randomizers first, then each round's cubic absorbed and its challenge
+/// drawn. Round `i`'s challenge binds variable `i`, so the sequence *is* the
+/// point in variable order — which is the convention this whole file exists to
+/// check.
 ///
 /// Transcribed from `crates/sumcheck` rather than imported, so that a change to
 /// either side's schedule shows up here as a disagreement.

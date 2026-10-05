@@ -2,7 +2,7 @@
 //! base field — each four field cells of 64-bit limbs, lazily reduced —
 //! invoked by `ecall::PRECOMPILE_FQ_OP` and never decoded.
 //!
-//! `docs/spec/recursion.md` §6 is normative.
+//! `docs/spec/recursion.md` §6 specifies it.
 //!
 //! ```text
 //! frame     M[0..20]   cycle live base anchor_value, then 4 per word of [op, d, a, b]

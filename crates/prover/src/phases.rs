@@ -1,5 +1,5 @@
-//! The prover's phase snapshots and resume, `docs/spec/shard-proof.md` §10:
-//! the S12 trace archive's four later sections, their schemas, and `advance`,
+//! The prover's phase snapshots and resume, `docs/spec/streaming.md` §6:
+//! the trace archive's four later sections, their schemas, and `advance`,
 //! which fills them in order and reads back whatever an imported archive
 //! already holds.
 
@@ -19,7 +19,8 @@ use crate::{
     ProverError, ProverSetup, ProvingContext, ShardGkr,
 };
 
-/// A transcript snapshot's fixed size under `postcard`, S02's wire form.
+/// A transcript snapshot's fixed size under `postcard`, its wire form
+/// (`docs/spec/transcript.md` §3).
 const SNAPSHOT_BYTES: usize = 226;
 
 fn write_snapshot(w: &mut Writer, s: &TranscriptSnapshot) {
@@ -227,19 +228,18 @@ pub fn advance(
     // PostGkr. Shard proving is the block's one parallel step, and it starts
     // only after the global phase has closed: each task forks its transcript
     // from the same global state, builds its own slice of the archive, proves
-    // it and drops it, so the shards share no prover state, the schedule
-    // cannot reach a challenge, and the peak is one shard trace per worker.
-    // `map` over an indexed parallel iterator collects in order, so the result
-    // is statement order whatever the thread count
-    // (`docs/spec/block-proof.md` §5).
+    // it and drops it, so the shards share no prover state and the schedule
+    // cannot reach a challenge. `map` over an indexed parallel iterator
+    // collects in order, so the result is statement order whatever the thread
+    // count (`docs/spec/streaming.md` §5).
     let gkrs = match archive.content(Phase::PostGkr) {
         Some(bytes) => decode_gkrs(bytes).map_err(archive_error(Phase::PostGkr))?,
         None => {
             let since = Instant::now();
             let read_only: &TraceArchive = archive;
-            // **The peak-setting moment of a whole block.** One shard's
-            // forward pass per rayon worker lives at once here
-            // (`crates/prover/CLAUDE.md`), so a run that is about to be OOM
+            // **The peak-setting moment of a whole block.** Every shard rayon
+            // has started holds its forward pass here — a worker parked in a
+            // nested join may start another — so a run that is about to be OOM
             // killed is killed between this line and the one after it, and the
             // `begin` lines with no `done` name the shards that were in flight.
             dlog!(
@@ -323,7 +323,7 @@ pub fn advance(
     Ok(())
 }
 
-/// Prove one archived execution as a **block**: `docs/spec/block-proof.md` §5.
+/// Prove one archived execution as a **block**: `docs/spec/streaming.md` §6.
 ///
 /// `plan` is the execution's own shard plan and is checked against the
 /// archive's cycle profile — a plan for another execution is refused rather
@@ -332,9 +332,10 @@ pub fn advance(
 /// proved from its own forked transcript, and the five phase sections left in
 /// `archive`, so a killed run resumes to the same bytes.
 ///
-/// The two RAM window families run no cycles, so `plan` counts 0 for both;
-/// their shards — exactly one `INIT_TEARDOWN`, one `ZERO_WINDOWS` per touched
-/// window — are the statement's, `docs/spec/memory.md` §3.
+/// The window families run no cycles, so `plan` counts 0 for each; their
+/// shards — exactly one `INIT_TEARDOWN`, one `ZERO_WINDOWS` per touched
+/// window, one of each public window, one per advice window — are the
+/// statement's, `docs/spec/memory.md` §3 and `docs/spec/streaming.md` §4.
 pub fn prove_block(
     setup: &ProverSetup,
     archive: &mut TraceArchive,

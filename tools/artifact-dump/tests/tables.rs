@@ -1,4 +1,4 @@
-//! `artifact-dump tables`: acceptance 10.
+//! `artifact-dump tables`.
 //!
 //! The page must render for any ELF the loader and the decoder accept — not
 //! only the committed ones — and fail with the loader's or the decoder's named
@@ -22,15 +22,12 @@ fn loader_vector(name: &str) -> Vec<u8> {
     fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
 }
 
-/// The parameters this image's code fits in: the frozen defaults where they
-/// hold it, else the smallest uniform menu height that does.
+/// The parameters this image's code fits in: the defaults where they hold it,
+/// else the smallest uniform menu height that does.
 ///
 /// A table's rows are absolute pcs, one per halfword, so a family's height has
-/// to reach past its last instruction, and the defaults give atomics 2^16 rows
-/// — pc below `0x20000`. `guests/mod-mul-ops`' `.text` reaches pc `0x2161a`,
-/// so the defaults refuse it and it takes `2^18`. This
-/// test is about the page, not about the heights; `docs/handoff/S12-emulator.md`
-/// records the question the refusal raises.
+/// to reach past its last instruction. This test is about the page, not about
+/// the heights.
 fn fitting(elf: &[u8]) -> ProgramParams {
     let image = load_elf(elf).expect("a committed guest loads");
     let mut params = ProgramParams::defaults();
@@ -150,7 +147,7 @@ fn every_committed_guest_renders_and_the_listing_is_the_tables() {
     }
 }
 
-/// Acceptance 10: an ELF that is not a fixture.
+/// An ELF that is not a fixture renders.
 #[test]
 fn an_arbitrary_elf_renders() {
     let elf = elf_of(&[

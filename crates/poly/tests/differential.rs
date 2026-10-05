@@ -1,4 +1,4 @@
-//! Acceptance 2: `evaluate` against three independent oracles — the committed
+//! `evaluate` against three independent oracles — the committed
 //! `ark-poly` answers, a naive `eq_eval` sum, and `ark-poly` again in-process.
 //!
 //! The in-process arkworks check is what pins the variable-order and
@@ -137,7 +137,7 @@ fn naive_evaluate(p: &MultilinearPoly, point: &[Fr]) -> Fr {
 #[test]
 fn the_corpus_covers_what_it_claims() {
     let cases = load();
-    assert_eq!(cases.len(), 100, "acceptance 2 asks for 100 polys");
+    assert_eq!(cases.len(), 100, "the corpus is 100 polys");
     for name in ["u1", "u8", "u16", "u32", "fr"] {
         assert!(
             cases.iter().any(|c| c.backing == name),
@@ -152,7 +152,7 @@ fn the_corpus_covers_what_it_claims() {
     }
     assert!(
         cases.iter().all(|c| c.num_vars <= 12),
-        "acceptance 2 caps n"
+        "the corpus caps n at 12"
     );
 }
 

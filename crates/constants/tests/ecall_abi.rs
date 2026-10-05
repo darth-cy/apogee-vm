@@ -1,11 +1,10 @@
 //! `docs/spec/ecall-abi.md` is the ABI, and this holds it to `constants::ecall`.
 //!
-//! Acceptance 9 wants the single source of truth in code with the document
-//! checked against it. So the document's tables — the numbers and the ranges —
-//! are parsed here and compared to the constants, in both directions: a number
-//! in the document that is not a constant fails, and a constant the document
-//! does not mention fails too. There was a third table, the file descriptors;
-//! an Apogee guest has none since the POSIX layer was deleted.
+//! The single source of truth is in code, and the document is checked against
+//! it. So the document's tables — the numbers and the ranges — are parsed here
+//! and compared to the constants, in both directions: a number in the document
+//! that is not a constant fails, and a constant the document does not mention
+//! fails too.
 //!
 //! It also checks that `crates/guest-sdk` reaches those constants rather than
 //! spelling a number itself, because a shim with `93` written into it would
@@ -13,7 +12,7 @@
 //! copy of the ABI.
 //!
 //! An integration test rather than a unit test: `crates/constants` is
-//! `#![no_std]` and holds no code, and a test target is a separate crate that
+//! `#![no_std]` and holds no tests, and a test target is a separate crate that
 //! changes neither.
 
 use std::collections::BTreeMap;
@@ -82,7 +81,8 @@ fn the_document_and_the_constants_agree() {
     );
 }
 
-/// Every implemented number carries a nondeterminism class, per must-be-exact 7.
+/// Every implemented number carries a nondeterminism class
+/// (`docs/spec/ecall-abi.md` §3).
 #[test]
 fn every_implemented_number_is_classified() {
     let text = document();
@@ -158,7 +158,7 @@ fn the_ranges_are_above_linux_and_disjoint() {
 /// The guest memory map is written down three times. They must agree.
 ///
 /// `link.ld` is what the linker reads, `constants::guest_memory` is what
-/// `crates/loader` enforces, and `docs/spec/ecall-abi.md` section 7 is what a
+/// `crates/loader` enforces, and `docs/spec/ecall-abi.md` §6 is what a
 /// reader believes. A map that can disagree with itself is a map that will.
 #[test]
 fn the_memory_map_agrees_across_its_three_copies() {
@@ -217,8 +217,7 @@ fn the_memory_map_agrees_across_its_three_copies() {
             guest_memory::STACK_RESERVE.is_multiple_of(4096),
             "the stack's reserve is whole pages"
         );
-        // The value, not only its shape: ten documents say 8 MiB in prose, and
-        // the probe guest derives its own arithmetic from this constant, so
+        // The value, not only its shape: the documents say 8 MiB in prose, and
         // nothing else here would notice the number changing under them.
         assert!(
             guest_memory::STACK_RESERVE == 8 << 20,
@@ -236,8 +235,8 @@ fn the_shims_use_the_constants() {
     for name in [
         "ecall::EXIT",
         "ecall::PRECOMPILE_POSEIDON2",
-        // S21: the shim does not call this number directly — it reads it out
-        // of the declaration record it emits (`docs/spec/delegation.md` §7) —
+        // The shim does not call this number directly — it reads it out of
+        // the declaration record it emits (`docs/spec/delegation.md` §7) —
         // but the record is built from the constant, which is the same rule.
         "ecall::PRECOMPILE_KECCAK_F",
     ] {
@@ -259,9 +258,9 @@ fn the_shims_use_the_constants() {
     }
 }
 
-/// The emulator's dispatch — the zkVM's executor since S12 — reaches the same
-/// constants and spells none of the numbers, so the ABI has one source for
-/// both sides of every ecall. Must-be-exact 2 of S12.
+/// The emulator's dispatch — the zkVM's executor — reaches the same constants
+/// and spells none of the numbers, so the ABI has one source for both sides of
+/// every ecall.
 #[test]
 fn the_emulator_dispatches_on_the_constants() {
     let source = fs::read_to_string(repo_root().join("crates/emulator/src/lib.rs"))
@@ -281,7 +280,7 @@ fn the_emulator_dispatches_on_the_constants() {
     }
 }
 
-/// Master rule 8: the checker above must be able to fail.
+/// The checker above can fail.
 ///
 /// The parsers here are not trivial — `table_rows` drops a header by looking one
 /// line ahead, `document_table_of` picks the name cell by an all-caps heuristic
@@ -301,7 +300,7 @@ fn the_document_checker_can_fail() {
     let wrong = text.replace("| 93 | `EXIT`", "| 94 | `EXIT`");
     assert_ne!(
         wrong, text,
-        "the syscall table no longer spells EXIT that way"
+        "the syscall table does not spell EXIT that way"
     );
     assert_eq!(
         document_table_of(&wrong).get("EXIT"),
@@ -318,7 +317,7 @@ fn the_document_checker_can_fail() {
     let missing = text.replace("| 93 | `EXIT` | deterministic |", "");
     assert_ne!(
         missing, text,
-        "the syscall table no longer spells EXIT that way"
+        "the syscall table does not spell EXIT that way"
     );
     assert!(
         !document_table_of(&missing).contains_key("EXIT"),

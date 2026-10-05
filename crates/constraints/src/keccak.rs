@@ -1,18 +1,17 @@
 //! The `KECCAK_F` delegation family's circuit: **one Keccak round a row**, over
 //! the 51-word frame a delegation request handed over.
 //!
-//! `docs/spec/delegation.md` §6 is normative: the frame, the anchor, the three
-//! request-side zeroings, the five transformations and the two frame checks.
-//! This file is that document as data.
+//! `docs/spec/delegation-circuits.md` §2 specifies it: the frame, the anchor,
+//! the five transformations and the two frame checks. This file is that
+//! section as data.
 //!
-//! # What changed at S26d, and why
+//! # One round a row, and why
 //!
-//! S21's row was a **whole** keccak-f[1600] permutation: 1,600 boolean state
-//! columns, 24 seven-layer round blocks, 354,762 inner columns over 177 layers.
-//! All 24 rounds and all 1,600 bits coexisted horizontally, so the row could
-//! only be afforded at `2^8` — 256 permutations a shard — and five such shards
-//! were **97%** of a measured mini-block's proof bytes
-//! (`docs/spec/delegation.md` §9.1).
+//! A row that is a **whole** keccak-f[1600] permutation — 1,600 boolean state
+//! columns, 24 seven-layer round blocks, 354,762 inner columns over 177 layers
+//! — holds all 24 rounds and all 1,600 bits horizontally, so it can only be
+//! afforded at `2^8`, 256 permutations a shard, and such shards dominate a
+//! keccak-heavy block's proof bytes (`docs/spec/delegation.md` §9).
 //!
 //! This is the other trade. One row is one round, a permutation is 24
 //! consecutive invocations, and what glues them is the same thing that glues
@@ -25,7 +24,7 @@
 //! circuit** but the structural selectors: the committed unit is a **byte**, and
 //! every Boolean operation of the round is one obligation on the `XOR8` channel
 //! — a virtual table of the 65,536 triples `(a, b, a ^ b)`
-//! (`docs/spec/lookup.md` §14). `AND`, `ANDN` and `OR` are then *linear forms*
+//! (`docs/spec/lookup.md` §3). `AND`, `ANDN` and `OR` are then *linear forms*
 //! over the result, because `a & b = (a + b − (a ^ b)) / 2`, and so is a byte's
 //! rotation: masking a byte's top `s` bits is one XOR against a literal, and
 //! the rotated byte is a literal-weighted combination of the byte and its mask.
@@ -34,8 +33,8 @@
 //! relation is a lookup or a degree-≤2 enforcing gate over base columns, no
 //! relation produces an inner column, and the only inner columns in the whole
 //! artifact are the two memory product trees, the two channels' fraction trees
-//! and the halving phase. ~5,490 of them at `2^18` against 354,762, at 1,764
-//! committed columns against 3,764.
+//! and the halving phase. ~5,490 of them at `2^18` against the
+//! whole-permutation row's 354,762, at 1,764 committed columns against 3,764.
 //!
 //! ```text
 //! M[0]            cycle          the requesting cycle: the 51 frame writes ride
@@ -889,9 +888,8 @@ fn witness_names() -> Vec<String> {
 
 /// The shape, asserted on every artifact this module emits.
 ///
-/// S21's must-be-exact 4 read the same way and still applies: a bound that
-/// exists only in a comment is not a bound, and a name check is what an
-/// `assume_*` hypothesis cannot stand in for.
+/// A bound that exists only in a comment is not a bound, and a name check is
+/// what an `assume_*` hypothesis cannot stand in for.
 pub fn check_shape(a: &CircuitArtifact) {
     assert_eq!(a.memory.len(), MEMORY_COLUMNS, "keccak: M columns");
     assert_eq!(a.witness.len(), WITNESS_COLUMNS, "keccak: W columns");
@@ -929,7 +927,7 @@ pub fn check_shape(a: &CircuitArtifact) {
     // The number this circuit's cost turns on: 1,020 fractions plus the
     // table's is 1,021, and a fraction tree is padded to a power of two, so
     // 1,024 leaves. Four more obligations would double the tree and cost 4,096
-    // inner columns (`docs/spec/delegation.md` §6.5).
+    // inner columns (`docs/spec/delegation-circuits.md` §2.4).
     assert_eq!(xor8, 1_020, "keccak: the round's obligations");
     assert!(
         (xor8 + 1).next_power_of_two() == 1_024,

@@ -20,7 +20,7 @@
 //! The taxonomy stays small on purpose. XOR and AND are positional — a wide
 //! field says nothing extra about a byte's seventh bit — and `U16GetSign` is
 //! load-bearing in a way it was not over a small field: with a whole word in one
-//! column, its top bit is no longer a column that already exists, so every sign
+//! column, its top bit is not a column that already exists, so every sign
 //! comes from here. `ShiftPowers` has a row for each of the 32 shift amounts
 //! and for no other value, so it fixes `2^s` and its copower for an amount the
 //! shift family has already bounded (`docs/spec/shift-bitwise.md` §3.3).
@@ -122,7 +122,7 @@ pub fn zero_entry() -> [Fr; GENERIC_WIDTH] {
 
 /// The packed table's `GENERIC_WIDTH` commitments, in tuple order: what every
 /// verifying key carries, and its SRS digest covers
-/// (`docs/spec/jump-branch-slt.md` §6).
+/// (`docs/spec/lookup.md` §9).
 ///
 /// **One set at every height.** A Mercury commitment is the evaluation table
 /// read as coefficients (`docs/spec/mercury.md`), and every row of

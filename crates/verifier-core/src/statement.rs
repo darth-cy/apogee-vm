@@ -3,11 +3,11 @@
 //! transcript that turns a statement into the memory challenges and the digest
 //! every shard is seeded with.
 //!
-//! `VmConfig`, `ProgramIdentity`, `absorb_statement_descriptor`,
-//! `check_memory_windows` and the identity digest were S11's and S14's in
-//! `crates/program`, which re-exports or wraps each: they moved here so the
-//! verifier core, which is `#![no_std]`, implements statement binding once, for
-//! the prover and the verifier alike. `docs/spec/shard-proof.md` §1–§4.
+//! `crates/program` re-exports or wraps `VmConfig`, `ProgramIdentity`,
+//! `absorb_statement_descriptor`, `check_memory_windows` and the identity
+//! digest: they live here so the verifier core, which is `#![no_std]`,
+//! implements statement binding once, for the prover and the verifier alike.
+//! `docs/spec/proof.md` §1–§4.
 
 use alloc::vec::Vec;
 
@@ -77,7 +77,7 @@ impl VmConfig {
         }
     }
 
-    /// The frozen wire form: `u32` LE family count `k`, then `k` pairs of
+    /// The wire form: `u32` LE family count `k`, then `k` pairs of
     /// `u32` LE `(family, height)`, then `u32` LE `bytecode_size_words`.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(8 + 8 * self.families.len());
@@ -92,14 +92,14 @@ impl VmConfig {
 
     /// Decode, refusing anything [`VmConfig::to_bytes`] could not have written
     /// from a derived config: a wrong length, an unknown or out-of-order family,
-    /// a height off the menu, a family set without `INIT_TEARDOWN` or
-    /// `ZERO_WINDOWS` — which derivation puts in every config — or those two
-    /// at different heights. `None` rather than a panic.
+    /// a height off the menu, or a config [`window_height`] refuses — one
+    /// without `INIT_TEARDOWN`, `ZERO_WINDOWS`, `ADVICE_WINDOWS` or the two
+    /// public families, which derivation puts in every config, or with them at
+    /// the wrong heights. `None` rather than a panic.
     ///
-    /// The two init families are required to be *present*, not last. They
-    /// have the highest ids today, but `FamilyId`s are append-only and the
-    /// delegation families take ids above them, so a config holding one lists
-    /// it after both.
+    /// The window families are required to be *present*, not last: the
+    /// delegation and recursion families take ids above `INIT_TEARDOWN` and
+    /// `ZERO_WINDOWS`, so a config holding one lists it after both.
     pub fn from_bytes(bytes: &[u8]) -> Option<VmConfig> {
         let word = |i: usize| -> Option<u32> {
             Some(u32::from_le_bytes(
@@ -270,13 +270,15 @@ pub fn absorb_statement_descriptor(
     tr.append_scalars(tags::MEMORY_WINDOWS, &ids);
 }
 
-/// The verifier's RAM window rules over the statement, checked before the
-/// memory challenges (`docs/spec/memory.md` §3.5): `INIT_TEARDOWN` and
-/// `ZERO_WINDOWS` present at one height `h`; exactly one `INIT_TEARDOWN`
-/// shard; one window id per `ZERO_WINDOWS` shard; the ids strictly increasing;
-/// every id in `[1, 2^29 / h - 1]`. `ZERO_WINDOWS` shard `i` is window
-/// `windows[i]`, so together they give every RAM word exactly one init row.
-/// The error names the rule broken.
+/// The verifier's window rules over the statement, checked before the memory
+/// challenges (`docs/spec/memory.md` §3.5): [`window_height`]'s, which give
+/// the one height `h`; exactly one `INIT_TEARDOWN` shard; one window id per
+/// `ZERO_WINDOWS` shard; the ids strictly increasing; every id in
+/// `[1, 2^29 / h - 1]`; exactly one shard of each public family; the advice
+/// windows below the top of the address space; and the field windows within
+/// the `2^32` cells. `ZERO_WINDOWS` shard `i` is window `windows[i]`, so
+/// together they give every RAM word exactly one init row. The error names
+/// the rule broken.
 ///
 /// `config` is one derivation produced or [`VmConfig::from_bytes`] decoded —
 /// families strictly ascending, heights on the menu — and nothing here checks
@@ -360,8 +362,8 @@ impl ProgramIdentity {
 
 /// The identity digest over given setup commitments, each a 64-byte canonical
 /// `G1` encoding. It needs no SRS and no curve: this is what a verifying-key
-/// loader recomputes. A fresh typed transcript absorbs, in this frozen order
-/// (`docs/spec/memory.md` §6.2):
+/// loader recomputes. A fresh typed transcript absorbs, in this order
+/// (`docs/spec/program.md` §8):
 ///
 /// 1. `PROGRAM_IDENTITY`: `code_version`, one scalar;
 /// 2. `VM_CONFIG`: the family ids, their heights, `bytecode_size_words`;
@@ -394,17 +396,17 @@ pub fn identity_digest(
     ProgramIdentity(tr.sample())
 }
 
-/// The SRS digest, `docs/spec/shard-proof.md` §3: a fresh typed transcript
+/// The SRS digest, `docs/spec/proof.md` §3: a fresh typed transcript
 /// absorbs the 320-byte `SrsVerifier` encoding — `g1_gen ‖ g2_gen ‖ g2_tau`,
-/// S07's layout — as one `SRS_VERIFIER` bytes message, then, since S17, the
-/// packed generic table's three commitments as one `GENERIC_TABLE` message of
-/// twelve limbs; the digest is one raw squeeze, as `io_digest`'s is. Raw,
+/// `docs/spec/srs.md` §5's layout — as one `SRS_VERIFIER` bytes message, then
+/// the packed generic table's three commitments as one `GENERIC_TABLE` message
+/// of twelve limbs; the digest is one raw squeeze, as `io_digest`'s is. Raw,
 /// because a challenge under a bytes tag would be one tag in two kinds.
 ///
 /// Both are constants of the ceremony — the table's commitments are the same
 /// at every height — so one trusted digest pins the points every pairing reads
-/// and the table every generic lookup reads (`docs/spec/jump-branch-slt.md`
-/// §6).
+/// and the table every generic lookup reads (`docs/spec/proof.md`
+/// §3).
 pub fn srs_digest(
     verifier: &[u8; 320],
     generic_table: &[[u8; 64]; constants::generic_table::WIDTH],
@@ -419,11 +421,11 @@ pub fn srs_digest(
 // The statement's shards and its transcript
 // ---------------------------------------------------------------------------
 
-/// The time window every shard binds at S16: the whole clock, `[0, 2^38)`.
-/// `docs/spec/shard-proof.md` §4.
+/// The time window a window family's shard claims: the whole clock,
+/// `[0, 2^38)`. `docs/spec/proof.md` §8.
 pub const TRIVIAL_TS_WINDOW: [u64; 2] = [0, 1 << TS_BITS];
 
-/// A statement's shards in statement order, `docs/spec/shard-proof.md` §1.2:
+/// A statement's shards in statement order, `docs/spec/proof.md` §1.2:
 /// `INIT_TEARDOWN`'s, then `ZERO_WINDOWS`', then every other family's,
 /// ascending, each family's shards ascending. `(family, shard index)`.
 ///
@@ -476,12 +478,13 @@ pub struct GlobalTranscript {
     pub digest: Fr,
 }
 
-/// The global transcript, `docs/spec/shard-proof.md` §2, G1 to G11: run
+/// The global transcript, `docs/spec/proof.md` §2, G1 to G11: run
 /// identically by the prover's global commit phase and by the verifier. Every
 /// field of `statement` is absorbed but two: `memory_roots`, computed after the
-/// challenges and bound by each shard's own proof, and `exit_status`, bound only
-/// by `reduce_shard`'s step 10, which holds it to `x10`'s final value in the
-/// boundary G9 absorbs. A caller that skips step 10 has not bound the status.
+/// challenges and bound by each shard's own proof, and `exit_status`, bound
+/// only by step 10b, `verify_global_memory`, which holds it to `x10`'s final
+/// value in the boundary G9 absorbs. A caller that skips step 10b has not
+/// bound the status.
 ///
 /// `statement` must be consistent with `vk`: one shard count per config family
 /// and one commitment list per statement shard. The verifier checks that first
@@ -539,7 +542,7 @@ pub(crate) fn global_transcript(
     }
 }
 
-/// A shard transcript through its lookup challenges, `docs/spec/shard-proof.md`
+/// A shard transcript through its lookup challenges, `docs/spec/proof.md`
 /// §4, S1 to S4: the seed, the time window, the witness commitments, then `g`
 /// and `β`. Returns the transcript and the two challenges.
 pub fn shard_transcript(
@@ -606,7 +609,7 @@ pub fn shard_window(family: u32, index: u32, windows: &[u32], trace_vars: u32) -
 }
 
 /// The external challenges shard `(family, index)`'s circuit reads,
-/// `docs/spec/shard-proof.md` §4: slots 1 to 4 from `memory`; for a window
+/// `docs/spec/proof.md` §4: slots 1 to 4 from `memory`; for a window
 /// family, the derived slot 5 at [`shard_window`]'s window, over RAM or, for
 /// `FIELD_WINDOWS`, over the field memory; then the LogUp slots from `g`, `β`
 /// and the circuit. Panics as [`shard_window`] does.
@@ -673,7 +676,8 @@ mod tests {
                 (family::ZERO_WINDOWS, 1),
                 (family::ADD_SUB_LUI_AUIPC, 0),
                 (family::ADD_SUB_LUI_AUIPC, 1),
-                // S-IO's three, in the same ascending tail as any other family.
+                // The public pair, in the same ascending tail as any other
+                // family; `ADVICE_WINDOWS` has no shard here.
                 (family::PUBLIC_INPUT, 0),
                 (family::PUBLIC_OUTPUT, 0),
             ]

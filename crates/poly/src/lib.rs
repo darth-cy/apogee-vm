@@ -1,7 +1,7 @@
 #![no_std]
 //! Multilinear polynomials over `Fr`, with small-type backing and a lazy lift.
 //!
-//! # The index convention (frozen)
+//! # The index convention
 //!
 //! A polynomial in `n` variables is a table of `2^n` evaluations over the
 //! boolean hypercube `{0,1}^n`. **Variable `j` is bit `j` of the index**, so
@@ -14,7 +14,7 @@
 //! becomes the new variable 0, so binding `r_0, r_1, ...` in order fixes the
 //! variables in order and leaves `evaluate(&[r_0, r_1, ...])` in the last cell.
 //!
-//! Every later circuit stage builds on that convention. It is checked against
+//! Every circuit builds on that convention. It is checked against
 //! arkworks' `DenseMultilinearExtension` in `tests/differential.rs`, which
 //! agrees on both halves of it.
 //!

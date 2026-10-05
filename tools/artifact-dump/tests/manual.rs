@@ -11,8 +11,7 @@
 //! holds to account. `dump.rs` proves the tool agrees with `crates/loader`;
 //! `crates/loader/tests/layout.rs` proves the committed images are host
 //! loadable; neither notices when the *procedure a person is told to follow*
-//! stops working, or when a guest is added and the manual keeps naming the
-//! three it used to have.
+//! stops working, or when a guest is added and the manual does not name it.
 //!
 //! The guest list is read out of `guests/Cargo.toml` rather than written down
 //! here, so this cannot go stale by omission: a guest that exists is a guest
@@ -32,8 +31,8 @@ fn repo_root() -> PathBuf {
 
 /// The guests with no committed ELF, which the two rules below therefore skip.
 ///
-/// **`revm-block` is S24's workload**, and it is the one guest whose ELF is not
-/// worth committing. It is 2.2 MB at `--release` and 7.8 MB at `debug`, where
+/// **`revm-block` is the Ethereum block workload**, and its ELF is not worth
+/// committing. It is 2.2 MB at `--release` and 7.8 MB at `debug`, where
 /// it expands to 1.88 million instruction slots — so a committed fixture would
 /// be 1.7 times the largest one the repository has, the walkthrough below would
 /// render two full instruction listings of it per run, and every suite that
@@ -41,7 +40,6 @@ fn repo_root() -> PathBuf {
 /// `cargo test --workspace`. Nothing is derived from its bytes but its
 /// identity, which needs the ceremony and is checked from a from-source build
 /// instead (`crates/emulator/tests/revm.rs`, `crates/prover/tests/revm.rs`).
-/// The owner's decision, S24; `docs/handoff/S24-revm.md` records it.
 ///
 /// **`recursion` is the recursion guest**, exempt for the same reason: it links
 /// `verifier-core`, `gkr-verify` and the circuit registry, nothing is derived
@@ -106,8 +104,8 @@ fn guest_members() -> Vec<String> {
 ///
 /// The command is the manual's, typed out: `cargo build --target
 /// riscv32imac-unknown-none-elf`, run from the guest's own directory, with the
-/// target, the runner and the two linker flags coming from
-/// `guests/.cargo/config.toml` and nothing coming from here.
+/// target and the two linker flags coming from `guests/.cargo/config.toml` and
+/// nothing coming from here.
 ///
 /// This is a near-copy of `crates/loader/tests/common/mod.rs`'s `build`, and it
 /// is a copy on purpose: a test module belongs to its crate, and the alternative

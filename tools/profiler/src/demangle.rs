@@ -1,5 +1,5 @@
-//! Rust symbol demangling, both mangling schemes, written here because master
-//! anti-goal 6 makes `rustc-demangle` an eight-lines-yourself dependency.
+//! Rust symbol demangling, both mangling schemes, written here rather than taken
+//! from `rustc-demangle`: the workspace takes no dependency for a convenience.
 //!
 //! `guests/revm-block` carries **both** forms — 1,154 legacy and 139 v0, the v0
 //! ones being the precompiled sysroot crates, `core` and `compiler_builtins` —
@@ -23,7 +23,7 @@
 //! Classification never depends on this: a crate and module name appears as a
 //! literal ASCII substring in **both** manglings, so
 //! `crate::categories::classify` would reach the same answer on the raw symbol
-//! (`docs/spec/profiling.md` §3).
+//! (`docs/tools.md` §2.2).
 
 /// `name` as a reader wants it, or `name` itself if it is not mangled.
 pub fn demangle(name: &str) -> String {

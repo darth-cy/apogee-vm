@@ -1,7 +1,8 @@
 //! The guest image, as a host program loader sees it.
 //!
-//! `crates/loader` reads an ELF the way the zkVM will: it takes `p_vaddr` and
-//! `p_memsz` and lays the bytes into a flat RAM window where every address is
+//! `crates/loader` reads an ELF the way the zkVM will: of a program header it
+//! takes `p_type`, `p_offset`, `p_vaddr`, `p_filesz`, `p_memsz` and the `PF_X`
+//! bit, and lays the bytes into a flat RAM where every address is
 //! addressable by construction. A host program loader does something
 //! narrower. It `mmap`s exactly the segments the
 //! program headers declare, page by page, with exactly the permissions each
@@ -9,13 +10,12 @@
 //!
 //! That difference is invisible to every other suite here, and it is a real
 //! difference: an image can load perfectly under the zkVM's rules and be
-//! unrunnable, or unloadable, under a host's. It happened. The layout S10 first
-//! shipped put `__stack_top` at the top of the RAM window with no segment
-//! declaring it, so the guest's first stack write hit unmapped memory and died
-//! on a signal before `main` ran; and it let `.bss` share a page with
-//! `.rodata`, which a host loader refuses outright rather than mapping a
-//! read-only page writable. [`the_layout_that_failed_in_ci_is_rejected`] pins
-//! both.
+//! unrunnable, or unloadable, under a host's: `__stack_top` at the top of RAM
+//! with no segment declaring it, so the guest's first stack write hits
+//! unmapped memory and dies on a signal before `main` runs; or `.bss` sharing
+//! a page with `.rodata`, which a host loader refuses outright rather than
+//! mapping a read-only page writable. [`the_layout_that_failed_in_ci_is_rejected`]
+//! pins both.
 //!
 //! **This is a property of the image, not of any executor.** Program headers
 //! that do not describe the memory the program needs are wrong whoever reads
@@ -210,7 +210,7 @@ fn check(elf: &[u8], name: &str) {
     let sym = |k: &str| {
         *syms
             .get(k)
-            .unwrap_or_else(|| panic!("{name} has no {k} -- link.ld freezes the name"))
+            .unwrap_or_else(|| panic!("{name} has no {k} -- link.ld defines the name"))
             as u64
     };
 
@@ -278,7 +278,7 @@ fn every_committed_guest_is_host_loadable() {
 ///
 /// Stated separately from [`check`] because it is the specific claim that the
 /// heap and the stack are one contiguous writable region growing toward each
-/// other, which is what the memory map in `docs/spec/ecall-abi.md` section 7
+/// other, which is what the memory map in `docs/spec/ecall-abi.md` §6
 /// promises and what the bump allocator assumes.
 #[test]
 fn the_heap_and_the_stack_share_one_writable_segment() {
@@ -316,7 +316,7 @@ fn the_heap_and_the_stack_share_one_writable_segment() {
     }
 }
 
-/// The exact layout that failed in CI, rejected.
+/// The exact layout a host loader killed, rejected.
 ///
 /// A negative control, and a regression pin: these are the real program headers
 /// of the ELFs that a host loader killed, transcribed. Without the assertions

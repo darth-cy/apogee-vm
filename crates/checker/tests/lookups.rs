@@ -1,4 +1,4 @@
-//! The lookup element, `docs/spec/memory.md` §7. `check_laws` holds every
+//! The lookup element, `docs/spec/lookup.md` §1. `check_laws` holds every
 //! lookup to the rules of `docs/spec/gkr.md` §4.2 with code of its own, and
 //! agrees with `CircuitArtifact::validate` on every mutant below: 7 lawful — an
 //! `M`, a `W` and an `S` selector and the `range16` channel among them — and 31
@@ -467,7 +467,7 @@ fn an_evaluator_reporting_everything_fails_the_same_cases() {
 // The selector's booleanity, and the LogUp checkers' negative controls
 // ---------------------------------------------------------------------------
 
-/// S15's selector rule, on the checker's side: `check_laws` refuses a lookup
+/// The selector rule, on the checker's side: `check_laws` refuses a lookup
 /// whose selector gate list 0 does not hold to `x − x·x = 0`, and `validate`
 /// agrees. Kills a `holds_booleanity` that returns true for anything — without
 /// which the rule would be enforced once, not twice.
@@ -501,7 +501,7 @@ fn a_selector_without_a_booleanity_gate_is_refused_by_both() {
 /// `checker::check_lookup_discharge`'s negative controls, the twins of
 /// `constraints/tests/lookup.rs`' — an obligation nothing discharges, and one
 /// two columns discharge. Kills a check that returns `Ok` whatever it is
-/// handed, which is what master rule 8 asks of every checker.
+/// handed.
 #[test]
 fn the_discharge_cross_check_refuses_an_unconsumed_and_a_doubled_obligation() {
     for (label, toy) in selectable_toys() {
@@ -520,8 +520,8 @@ fn the_discharge_cross_check_refuses_an_unconsumed_and_a_doubled_obligation() {
     }
 
     // A column that is two lookups' denominator needs a circuit whose gate list
-    // 0 has denominators at all, which the S13 toy does not: S15's combined toy
-    // with one of its lookups duplicated.
+    // 0 has denominators at all, which the toy does not: the combined lookup
+    // toy, with one of its lookups duplicated.
     let mut doubled = lookup_toy();
     assert_eq!(check_lookup_discharge(&doubled, &[]), Ok(()));
     let mut twin = doubled.lookups[0].clone();
@@ -537,15 +537,15 @@ fn the_discharge_cross_check_refuses_an_unconsumed_and_a_doubled_obligation() {
     );
 }
 
-/// S15's combined toy, the one committed circuit whose gate list 0 carries
-/// lookup denominators.
+/// The combined lookup toy, `lookup_toy.bin`: a committed circuit whose gate
+/// list 0 carries lookup denominators.
 fn lookup_toy() -> CircuitArtifact {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../constraints/tests/vectors/lookup_toy.bin"
     );
     let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
-    CircuitArtifact::from_bytes(&bytes).expect("the S15 toy decodes")
+    CircuitArtifact::from_bytes(&bytes).expect("the lookup toy decodes")
 }
 
 /// `checker::check_channel_roots`' negative control: a root pair that is not the

@@ -1,5 +1,5 @@
-//! S19's `ATOMICS` circuit (`docs/spec/memory-ops.md`), row by row, in
-//! ordinary CI.
+//! The `ATOMICS` circuit (`docs/spec/memory-ops.md`), row by row, in ordinary
+//! CI.
 //!
 //! No forward pass over `2^20` rows: each row is built by hand from what the
 //! instruction computes — Rust's own `u32` and `i32` arithmetic, not the
@@ -11,10 +11,11 @@
 //! columns the row carries. The same family's fill over `guests/mem`'s real
 //! trace is `crates/checker/tests/mem_fill.rs`'.
 //!
-//! Acceptance 5 is here as rows — the four min/max kinds over the one operand
-//! pair where the signed and the unsigned orderings disagree, each answer
-//! proved and the other refused by the gap's range pair — and so is the byte-key
-//! hole S18 found, which this family inherits together with the AND table.
+//! The sign boundary is here as rows — the four min/max kinds over the one
+//! operand pair where the signed and the unsigned orderings disagree, each
+//! answer proved and the other refused by the gap's range pair — and so is the
+//! unbounded byte key (`docs/spec/shift-bitwise.md` §3.3), which this family
+//! inherits together with the AND table.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -466,16 +467,16 @@ fn the_registry_holds_the_family() {
     assert_eq!(at_19.artifact, atomics::artifact(19));
 }
 
-/// The layout is `docs/spec/memory-ops.md` §6's and the gates and lookups are
-/// its §6.2 and §6.5, by name and in order. The lists are literal because only
-/// a literal list catches a silent reordering: a column's position is what the
-/// fill writes to and what a verifying key commits, and a lookup's position is
-/// what `beta`'s derived powers weight.
+/// The layout, the gates and the lookups are `docs/spec/memory-ops.md` §6's, by
+/// name and in order. The lists are literal because only a literal list catches
+/// a silent reordering: a column's position is what the fill writes to and what
+/// a verifying key commits, and a lookup's position is what `beta`'s derived
+/// powers weight.
 #[test]
 fn the_layout_and_the_gates_are_the_spec() {
     let a = artifact();
     // Five queries — and `ram` and `rd` both sit at Δ 3, in different address
-    // spaces, which is why this family fills all four of S14's slots.
+    // spaces, which is why this family fills all four in-cycle slots.
     assert_eq!(
         a.memory,
         names(&[
@@ -1172,8 +1173,8 @@ fn every_row_kind_satisfies_every_gate_and_every_bound() {
         assert_eq!(violated(&a, &r), (none(), none(), none()), "{what}");
     }
 
-    // The catalogue really is every kind, and each of the rows the stage's
-    // acceptance names is really the shape it claims.
+    // The catalogue really is every kind, and each named row is really the
+    // shape it claims.
     let rows = honest_rows();
     for bit in 0..11u32 {
         let column = name("kind", mnemonic(bit));
@@ -1396,8 +1397,8 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     r.set("pc_write_value", f(0x1008));
     cases.push(("an amoadd jumping four ahead", r, vec!["next_pc_rule"]));
 
-    // S14's control C8 on this frame, which has a RAM query as well as an
-    // `rd` one. A padding row storing 42 into a stack word after the program
+    // The padding-row forgeries on this frame, which has a RAM query as well as
+    // an `rd` one. A padding row storing 42 into a stack word after the program
     // has exited: nothing in the frame ties a query's mask to the row's pc
     // mask, so the family's own mask rule refuses it — together with the
     // address rule, the word index being 0 on a row that decodes nothing, and
@@ -1410,7 +1411,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         r,
         vec!["ram_mask_rule", "ram_addr_rule", "ram_value_rule"],
     ));
-    // And the register half of C8: a padding row zeroing x10.
+    // And the register half: a padding row zeroing x10.
     let mut r = Row::default();
     r.query("rd", 3, 10, 42, 0);
     r.set("rd_inv", f(10).inverse().expect("nonzero"));
@@ -1435,10 +1436,11 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     ));
 
     // Every gate this family adds is named by some row above. The frame's
-    // eleven are S14's and covered by `crates/checker/tests/memory.rs`, and a
-    // booleanity gate is `every_booleanity_gate_refuses_a_value_of_two`'s, so
-    // the two are set aside; what is left is this family's own semantics, and
-    // a gate added with no forgery beside it fails here rather than silently.
+    // eleven are `docs/spec/memory.md` §2.4's and covered by
+    // `crates/checker/tests/memory.rs`, and a booleanity gate is
+    // `every_booleanity_gate_refuses_a_value_of_two`'s, so the two are set
+    // aside; what is left is this family's own semantics, and a gate added with
+    // no forgery beside it fails here rather than silently.
     let named: Vec<&str> = cases
         .iter()
         .flat_map(|(_, _, want)| want.iter().copied())
@@ -1581,7 +1583,7 @@ fn each_table_lookup_is_the_one_that_refuses_its_row() {
 
     // The decoder. A row reading x6 where the instruction at its pc names x5:
     // the address rule holds, because the query moved with the claim, and the
-    // decoded tuple no longer matches any row of the table.
+    // decoded tuple matches no row of the table.
     let mut r = row("amoadd");
     r.set("decoded_rs1", f(6)).set("rs1_addr", f(6));
     assert_eq!(
@@ -1592,11 +1594,11 @@ fn each_table_lookup_is_the_one_that_refuses_its_row() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 5: the sign boundary
+// The sign boundary
 // ---------------------------------------------------------------------------
 
-/// Acceptance 5. `0x7fffffff` and `0x80000000` are the one pair the signed and
-/// the unsigned orderings disagree about, and the four min/max kinds answer
+/// `0x7fffffff` and `0x80000000` are the one pair the signed and the unsigned
+/// orderings disagree about, and the four min/max kinds answer
 /// four different ways:
 ///
 /// ```text
@@ -1837,7 +1839,7 @@ fn a_misaligned_atomic_is_unprovable() {
     );
 
     // The rounded-down one: the row then touches the aligned word, and the
-    // value it claims to have read the address from no longer matches.
+    // value it claims to have read the address from does not match.
     let mut r = base;
     r.set("rs1_read_value", f(misaligned as u64))
         .set("rs1_write_value", f(misaligned as u64));
@@ -1860,7 +1862,7 @@ fn a_misaligned_atomic_is_unprovable() {
 /// a guest that branched on it could see a failure there and success here. That
 /// is the conformance deviation and nothing compares it: what would catch it if
 /// it mattered is a guest whose committed output depended on spurious failure,
-/// and compiled code has none (`docs/spec/memory-ops.md` §6.6).
+/// and compiled code has none (`docs/spec/memory-ops.md` §6).
 #[test]
 fn sc_w_always_succeeds() {
     let a = artifact();

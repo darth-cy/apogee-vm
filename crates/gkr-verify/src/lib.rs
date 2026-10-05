@@ -3,7 +3,7 @@
 //! the layer sumcheck's verifier, and `verify`, which reduces a circuit's
 //! output claims to claims about its committed base columns.
 //!
-//! `docs/spec/gkr.md` §5 is normative. `#![no_std]` + `alloc`: the recursion
+//! `docs/spec/gkr.md` §5 specifies it. `#![no_std]` + `alloc`: the recursion
 //! guest links this crate. `crates/gkr` is the prover half and re-exports
 //! everything here.
 
@@ -36,7 +36,7 @@ pub use memory::{
 /// Named external challenge slots, `slot -> Fr`, with slots from
 /// `constants::challenge_slot`. The caller supplies them on both sides; a
 /// verifier takes its values from its own transcript replay or global phase,
-/// never from a proof. Open: later stages add slots, not fields.
+/// never from a proof. A new challenge is a new slot, not a new field.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExternalChallenges {
     /// Sorted by slot, one entry per slot.
@@ -222,7 +222,7 @@ pub fn virtual_at_row(kind: VirtualKind, row: usize) -> Fr {
         // The `XOR8` table's three columns: the row index's low byte, its next
         // byte, and their XOR. At a height of `2^16` rows or more the table is
         // exactly the 65,536 triples `(a, b, a ^ b)`, each once per `2^16`
-        // rows (`docs/spec/lookup.md` §14).
+        // rows (`docs/spec/lookup.md` §3).
         VirtualKind::Xor8A => Fr::from_u64((row as u64) & 0xff),
         VirtualKind::Xor8B => Fr::from_u64(((row as u64) >> 8) & 0xff),
         VirtualKind::Xor8Out => Fr::from_u64(((row as u64) & 0xff) ^ (((row as u64) >> 8) & 0xff)),
@@ -640,10 +640,10 @@ pub fn verify_sumcheck(claim: Fr, rounds: &[[Fr; 4]], t: &mut Transcript) -> Opt
 /// The artifact is the circuit part of a verifying key: the verifier's own
 /// data, not the prover's. `verify` assumes it has passed
 /// [`CircuitArtifact::validate`] and does not check it again, because
-/// validation belongs to a key, once, not to every proof. The routine that
-/// loads a verifying key does not exist yet; the stage that introduces
-/// `VerifyingKey` must call `validate` there. On an artifact that breaks a law
-/// `verify`'s answer means nothing: it may panic, and it may accept.
+/// validation belongs to a key, once, not to every proof:
+/// `verifier_core::VerifyingKey::check` runs it wherever a key is built or
+/// loaded. On an artifact that breaks a law `verify`'s answer means nothing: it
+/// may panic, and it may accept.
 pub fn verify(
     artifact: &CircuitArtifact,
     proof: &GkrProof,

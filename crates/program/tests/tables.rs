@@ -1,6 +1,5 @@
 //! The decoded tables: padding, the fall-through pc, the table length, the
-//! field masks and the extra-mask encoding. Acceptance 6 and 7, must-be-exact
-//! 3 and 5.
+//! field masks and the extra-mask encoding.
 
 mod common;
 
@@ -16,14 +15,14 @@ use program::{
 };
 
 /// The one committed guest with no compressed instruction. `guests/shards`
-/// assembles under `.option norvc` throughout — S20's shard-cut demo wants
+/// assembles under `.option norvc` throughout — a shard-cut demo wants
 /// uniform four-byte instructions so its pc arithmetic is obvious — so it has
 /// no RVC code to interleave and no `pc + 2` fall-through. Every other guest
 /// has both, and the exception is held *exact* below rather than skipped: the
 /// counts it is missing must be zero, not merely unchecked.
 const NO_RVC: &str = "shards";
 
-/// Acceptance 6: a scan of every exported column of every table proves that
+/// A scan of every exported column of every table proves that
 /// every row that is not one of the family's live instructions is
 /// `MINUS_ONE` in every field, and that no live row is the padding row — or
 /// all zeros.
@@ -118,7 +117,7 @@ fn every_row_that_is_not_live_is_padding_in_every_field() {
     }
 }
 
-/// Acceptance 7: every live row's `next_pc` is `pc + 2` or `pc + 4`, as the
+/// Every live row's `next_pc` is `pc + 2` or `pc + 4`, as the
 /// loader's halfword map says the instruction's length is.
 #[test]
 fn next_pc_is_the_fall_through_the_encoding_implies() {
@@ -156,13 +155,13 @@ fn next_pc_is_the_fall_through_the_encoding_implies() {
     }
 }
 
-/// Must-be-exact 3: every table is exactly its family's `VmConfig` height, an
+/// Every table is exactly its family's `VmConfig` height, an
 /// even variable count, and exports at that length.
 ///
-/// Two guests, because the default heights are no longer one band: `fib`
-/// carries the seven execution families and the two window ones, and
-/// `keccak-test` carries a delegation family beside them, whose default is the
-/// menu's new `2^8` (`docs/spec/delegation.md` §9). A delegation family is
+/// Two guests, because the default heights are not one band: `fib`
+/// carries execution families and the window ones, and
+/// `keccak-test` carries a delegation family beside them, whose default is
+/// `2^18` (`docs/spec/delegation.md` §9). A delegation family is
 /// invoked, never decoded, so its table is empty — but it is still exactly its
 /// height, liveness bitset and all.
 #[test]
@@ -192,12 +191,11 @@ fn every_table_is_exactly_its_config_height() {
         }
         // Two ends of the menu, named so neither guest's pass is vacuous: the
         // widest execution table at 2^22, and — for the guest that declares one
-        // — the delegation table at its own height, which since S26d is `2^16`
-        // and not `2^8`: one keccak row is one round, so `RANGE16`'s table and
-        // `XOR8`'s each need sixteen variables — that is the **floor**, and the
+        // — the delegation table at its own height: `RANGE16`'s table and
+        // `XOR8`'s each need sixteen variables — that is the **floor** — and the
         // family is at `2^18`, two rungs above it, so that a stateless block's
-        // keccak load is fewer, fatter shards (`docs/spec/delegation.md` §6.5,
-        // §9.2).
+        // keccak load is fewer, fatter shards (`docs/spec/delegation-circuits.md`
+        // §2.4, `docs/spec/delegation.md` §9).
         let alu = tables.family(family::ADD_SUB_LUI_AUIPC).unwrap();
         assert_eq!(alu.height, 1 << 22, "{name}");
         match tables.family(family::KECCAK_F) {
@@ -219,7 +217,7 @@ fn every_table_is_exactly_its_config_height() {
     }
 }
 
-/// Must-be-exact 3: the table must be strictly taller than the row after its
+/// The table must be strictly taller than the row after its
 /// last live row, or derivation fails loudly naming the pc.
 #[test]
 fn a_table_that_cannot_hold_its_program_fails_loudly() {
@@ -258,8 +256,8 @@ fn a_table_that_cannot_hold_its_program_fails_loudly() {
 /// shorter table's height is padding there, not an error and not a panic.
 /// With the two init families at 2^20 rows, and atomics held to 2^16, every row
 /// above a table's height reads as not live. Atomics is given that height
-/// explicitly since S19, which raised its default to `2^20`, the timestamp
-/// channel's floor: the mechanism is the height's, not the default's.
+/// explicitly, its default being `2^20`, the timestamp channel's floor: the
+/// mechanism is the height's, not the default's.
 #[test]
 fn code_above_a_shorter_familys_table_is_padding_there() {
     let addi = 0x0000_0013;
@@ -299,7 +297,7 @@ fn code_above_a_shorter_familys_table_is_padding_there() {
     assert_eq!(atomics.get(0, (far / 2) as usize), None);
 }
 
-/// Must-be-exact 5: `bytecode_size_words` is an explicit input, and a program
+/// `bytecode_size_words` is an explicit input, and a program
 /// above it fails loudly. The span ends at the last file-backed byte: fib's
 /// heap-and-stack reservation lies above it with no file bytes and counts for
 /// nothing.
@@ -441,9 +439,9 @@ fn parameters_off_the_menu_and_unknown_versions_are_refused() {
     ));
 }
 
-/// The per-family field masks, frozen. `funct3` is bit 6 and no family keeps
-/// it; mul/div and the atomics have no immediate; the two window families and
-/// the delegation family have no decoded table at all, so their tuple is empty
+/// The per-family field masks, pinned. `funct3` is bit 6 and no family keeps
+/// it; mul/div and the atomics have no immediate; the window families and the
+/// delegation families have no decoded table at all, so their tuple is empty
 /// and their mask 0 — a delegation family is invoked, never decoded
 /// (`docs/spec/delegation.md` §1).
 ///
@@ -514,7 +512,7 @@ fn every_row_kind_is_one_hot_and_names_exactly_one_mnemonic() {
             && bit == extra_mask::add_sub_lui_auipc::SYSTEM)
             .then(|| table.get(column(RowField::Imm), row).unwrap());
         let mnemonic = instr.mnemonic();
-        // The frozen assignment, written out rather than read from `row_kind`.
+        // The assignment, written out rather than read from `row_kind`.
         let (_, want_family, want_bit, want_code) = *KINDS
             .iter()
             .find(|k| k.0 == mnemonic)
@@ -552,7 +550,7 @@ fn every_row_kind_is_one_hot_and_names_exactly_one_mnemonic() {
     }
 }
 
-/// The frozen row kinds, as `crates/program/CLAUDE.md` tabulates them:
+/// The row kinds, as `docs/spec/program.md` §4 and §6 tabulate them:
 /// `(mnemonic, family, extra-mask bit, system code)`. Numbers, not constant
 /// names, so a renumbered constant fails here too.
 const KINDS: [(&str, FamilyId, u32, Option<u32>); 59] = [

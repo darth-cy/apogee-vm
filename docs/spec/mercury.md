@@ -1,553 +1,304 @@
-# Mercury: the multilinear polynomial commitment scheme
+# Mercury
 
-Frozen as of S08 for the single-polynomial case, and as of S09 for the batching
-of §11. Changing anything here is a protocol-version change.
+Every committed column is opened with Mercury (Eagen and Gabizon, ePrint 2025/385), finished by
+the batched KZG opening of BDFG20 (Boneh, Drake, Fisch and Gabizon, ePrint 2020/081). This page
+pins what the papers leave open, and adds a batch of `k` columns at one point and the deferred
+form the recursion tree folds. `crates/pcs` is the prover, the curve side and the pairings;
+`crates/pcs-verify`, `no_std`, is the verifier's field side, which the recursion guest links.
 
-Normative sources: **Mercury**, Eagen and Gabizon, ePrint 2025/385, whose §6 is
-the protocol; and **BDFG20**, Boneh, Drake, Fisch and Gabizon, ePrint 2020/081,
-whose §4 (in the "cleaned up" form of §4.1) is the batched-KZG finish. Both are
-in `docs/publication/`. Where this document pins something those papers leave
-implicit — the variable order, the transcript schedule, the BDFG20 challenge
-positions, the `z != 0` rule, the point encoding — **this document is the
-authority**, and §6 in particular is normative for S09 and the recursion
-stages.
+## 1. Parameters and the variable split
 
-Implementation: `crates/pcs`. Depends on `docs/spec/transcript.md` for the
-duplex and its typed framing, and on `docs/spec/srs.md` for the SRS and the
-underlying KZG.
+`n = 2^{2t}` evaluations with `1 ≤ t ≤ 27`, `b = 2^t = √n`, `s = 2t` variables; `u ∈ Fr^s` is the
+opening point and `v` the claimed value. `pcs_verify::check_num_vars` refuses every other variable
+count (`PcsError::UnsupportedNumVars`) and never pads, which is why every trace height is an even
+power of two ([program.md](program.md) §7). The ceiling, `pcs_verify::MAX_NUM_VARS = 54`, is where
+`Fr`'s 2-adicity of 28 runs out of the `2b`-th roots of unity §3.1 needs, and it keeps `2^{|u|}` in
+range for a `u` the verifier is handed.
 
----
-
-## 1. Parameters and notation
-
-| Symbol | Meaning |
-| --- | --- |
-| `n = 2^(2t)` | the number of evaluations; `t >= 1` |
-| `b = 2^t` | `sqrt(n)`; every polynomial but `f`, `q` and `H` has `O(b)` coefficients |
-| `s = 2t` | the number of variables |
-| `f` | the multilinear being opened, as its `n` evaluations over `{0,1}^s` |
-| `u = (u1, u2)` | the opening point, `u1, u2` in `Fr^t` |
-| `v` | the claimed value `fhat(u)` |
-
-`n` must be an **even** power of two, at least `2^2` and at most `2^54`. An odd
-variable count is rejected, never padded; `n = 1` is rejected too, because
-`b = 1` leaves `S` and the degree check with no room to exist. The supported
-heights include the master prompt's trace-height menu
-`{2^16, 2^18, 2^20, 2^22}`.
-
-The upper bound is `2t <= 2 * (FR_TWO_ADICITY - 1) = 54`, from the `2b`-th root
-of unity §3.2 needs, and it is checked on all three entry points rather than
-assumed. It is far above any instance that can exist — no SRS this repository
-reads holds more than `2^30` powers — but a verifier is handed `u` by its
-caller, and `1 << u.len()` is a shift that must not be allowed to run off the
-end of a machine word: with `overflow-checks` on that is a panic out of a
-verifier, and with them off it is a silently wrong `n`. Rejecting the shape is
-one comparison; not rejecting it is two behaviours.
-
-A univariate polynomial is a dense coefficient vector, little-endian in the
-degree: `c[i]` multiplies `X^i`. `F_<d[X]` is the set of polynomials with fewer
-than `d` coefficients.
-
-## 2. The variable-order convention — frozen
-
-**This is the integration bug this specification exists to prevent.**
-
-`f`'s evaluation table is read directly as a coefficient vector: the evaluation
-at index `k` is the coefficient of `X^k`. Under `crates/poly`'s frozen index
-convention, variable `j` is bit `j` of the index, so the evaluation at
-`y = (y_0, ..., y_(s-1))` sits at `index = sum_j y_j 2^j`.
-
-Split the index as `k = i + j*b` with `0 <= i, j < b`. Then:
-
-- **`i` is the low `t` bits** of the index — the *least* significant digit, as
-  Mercury §3.1 states — and `j` the high `t`.
-- **`u1` is the FIRST `t` coordinates** of `u`, that is `u_0 .. u_(t-1)`: the
-  variables that pair with `i`.
-- **`u2` is the LAST `t` coordinates**, `u_t .. u_(s-1)`: the variables that
-  pair with `j`.
-
-Writing `f_{i,j}` for the evaluation at `i + j*b` and `f_i(X)` for the
-polynomial with coefficients `(f_{i,0}, ..., f_{i,b-1})`,
+The evaluation table is read as coefficients, and variable `m` is bit `m` of an index
+([primitives.md](primitives.md) §6). Write an index `i + j·b` with `i` the low `t` bits, as
+Mercury §3.1 does; its evaluation is the coefficient of `X^{i+j·b}`. The point splits the same way:
+**`u1`** is its first half, `u_0..u_{t−1}`, and pairs with `i`; **`u2`** is `u_t..u_{2t−1}` and
+pairs with `j`.
 
 ```text
-    f(X) = sum_{i<b} X^i f_i(X^b) = sum_{i<b} sum_{j<b} f_{i,j} X^(i + j*b)
+f(X) = Σ_{i<b} X^i·f_i(X^b),    f_i(X) = Σ_{j<b} f_{i+j·b}·X^j
+f̂(u) = Σ_{i,j<b} eq(i, u1)·eq(j, u2)·f_{i+j·b}
 ```
 
-and `eq((w1,w2), (u1,u2)) = eq(w1,u1) eq(w2,u2)` splits the same way.
+`pcs::open` returns what `poly::MultilinearPoly::evaluate` gives at `u`, and a verifier handed the
+two halves swapped rejects.
 
-A commitment is therefore **exactly** the univariate KZG commitment of the
-evaluation table taken as coefficients: `com(f) = [f(x)]_1`. There is no
-separate Mercury commitment scheme.
+## 2. Commitment
 
-The consequence a caller must not get wrong: `open` returns the same value
-`poly::MultilinearPoly::evaluate(u)` does, and a verifier handed `u1` and `u2`
-the other way round rejects.
+`pcs::commit` returns `[f(x)]_1` for §1's `f(X)`, an MSM over the first `n` SRS powers: exactly the
+KZG commitment of the evaluation table read as coefficients (`srs::kzg::kzg_commit`), with no second
+scheme behind it. It refuses an SRS of fewer than `n` powers (`SrsTooSmall`). A column backed by
+`U1`, `U8`, `U16` or `U32` (`poly::PolyBacking`) is widened to `u32` and committed through
+`curve::msm::msm_small_u32`, never lifted to `Fr`; an `Fr` backing goes through `curve::msm::msm`.
 
-## 3. Notation for the protocol's polynomials
+The map from a table to its commitment is `Fr`-linear, which §5 uses, and a zero coefficient adds
+nothing: a column extended by zero rows keeps its commitment. So the generic table's commitments
+serve every height that holds the table ([lookup.md](lookup.md) §9), and `pcs::commit_stack`
+commits a recursion stack without building it.
 
-| Name | Definition | Coefficients | Sent as |
+## 3. The opening protocol
+
+### 3.1 The polynomials
+
+| | definition | coefficients | sent as |
 | --- | --- | --- | --- |
-| `h` | `sum_{i<b} eq(i, u1) f_i(X)` | `b` | `h = [h(x)]_1` |
-| `q`, `g` | `f(X) = (X^b - alpha) q(X) + g(X)`, `g` in `F_<b[X]` | `n - b`, `b` | `q`, `g` |
-| `P_u` | `sum_{i<b} eq(i, u) X^i` | `b` | not sent |
-| `S` | the symmetrized inner-product witness of §3.2 below | `b - 1` | `s = [S(x)]_1` |
-| `D` | `X^(b-1) g(1/X)`, i.e. `g`'s coefficients reversed | `b` | `d = [D(x)]_1` |
-| `H` | `(f(X) - (z^b - alpha) q(X) - g_z) / (X - z)` | `n - 1` | `pi_z` |
-| `W`, `W'` | the two BDFG20 elements of §6 | `b - 1` each | `w`, `w_prime` |
+| `h` | `Σ_i eq(i, u1)·f_i(X)`; its `X^j` coefficient is `f̂(u1, j)` | `b` | `h` |
+| `q`, `g` | `f = (X^b − α)·q + g`, so `g = Σ_i f_i(α)·X^i` | `n − b`, `b` | `q`, `g` |
+| `S` | the symmetrized witness below | `b − 1` | `s` |
+| `D` | `X^{b−1}·g(1/X)`: `g` reversed | `b` | `d` |
+| `H` | `(f − (z^b − α)·q − g_z)/(X − z)` | `n − 1` | `pi_z` |
+| `W`, `W′` | §3.3 | `b − 1` each | `w`, `w_prime` |
 
-`h`'s coefficient of `X^j` is `fhat(u1, j)` with `j` read little-endian in
-binary, so `h` is the restriction of `fhat` to its last `t` variables.
+`P_u(X) = Σ_{i<b} eq(i, u)·X^i = Π_{m<t}(u_m·X^{2^m} + 1 − u_m)`, so `⟨P_u, g⟩ = ĝ(u)` for `g` of
+fewer than `b` coefficients (Mercury §4.2). The prover uses its coefficients, `poly::eq_table(u)`;
+the verifier evaluates the product in `O(t)`.
 
-`P_u` has two equal descriptions, and the protocol uses both: its coefficient
-vector is `poly::eq_table(u)`, which the prover uses, and
-
-```text
-    P_u(X) = prod_{k<t} ( u_k X^(2^k) + 1 - u_k )
-```
-
-which the verifier evaluates in `O(t)` operations. `<P_u, g> = ghat(u)` for any
-`g` in `F_<b[X]`.
-
-### 3.1 The fold — Mercury §5
-
-`g_i = f_i(alpha)`, and `q(X) = sum_{i<b} X^i q_i(X^b)` where
-`f_i(X) = q_i(X)(X - alpha) + f_i(alpha)`. The `b` divisions are `O(n)` field
-operations in total and need no transform of any size.
-
-Two consequences the protocol rests on: `ghat(u1) = h(alpha)`, and
-`hhat(u2) = fhat(u) = v`.
-
-### 3.2 The symmetrized witness `S` — Mercury §4.1 and §4.2
-
-`S` is the unique polynomial satisfying, as a rational identity,
+The fold (Mercury §5) divides every `f_i` by `X − α`, `b` Horner divisions advanced together in
+one pass over the rows, with no transform. Then `ĝ(u1) = h(α)` and `ĥ(u2) = f̂(u) = v`, and one
+`S` proves both inner products (Mercury §4.1), the left side's constant coefficient being
+`2·(⟨g, P_u1⟩ + γ·⟨h, P_u2⟩)`:
 
 ```text
-    g(X) P_u1(1/X) + g(1/X) P_u1(X)
-  + gamma ( h(X) P_u2(1/X) + h(1/X) P_u2(X) )
-  = 2( h(alpha) + gamma v ) + X S(X) + (1/X) S(1/X)
+g(X)·P_u1(1/X) + g(1/X)·P_u1(X) + γ·(h(X)·P_u2(1/X) + h(1/X)·P_u2(X))
+    = 2·(h(α) + γ·v) + X·S(X) + S(1/X)/X
 ```
 
-Both inner products are proven at once: the constant coefficient of the left
-side is `2(<g,P_u1> + gamma <h,P_u2>) = 2(ghat(u1) + gamma hhat(u2))`, so a
-`gamma` drawn after `g` and `h` are committed batches the two claims
-`ghat(u1) = h(alpha)` and `hhat(u2) = v` at a soundness cost of `1/|Fr|`.
+`S` is coefficients `b..2b−2` of `X^{b−1}` times the left side, computed with four forward
+transforms of size `2b` and one inverse; no transform in an opening is larger
+(`crates/pcs/src/fft.rs`, over `constants::FR_TWO_ADIC_ROOT_OF_UNITY`).
 
-Multiplying by `X^(b-1)` makes it a polynomial identity of degree `2b - 2`:
+### 3.2 The transcript schedule
 
-```text
-    T(X) = g(X) rev(P_u1)(X) + rev(g)(X) P_u1(X)
-         + gamma ( h(X) rev(P_u2)(X) + rev(h)(X) P_u2(X) )
-```
+`pcs::open` and `pcs_verify::scalars` run this Fiat–Shamir schedule step for step. A point or a
+list of points is one message ([transcript.md](transcript.md) §4).
 
-where `rev` reverses a length-`b` coefficient vector, and then
-`T[b-1] = 2(h(alpha) + gamma v)`, `T[b+k] = S[k]` for `k < b - 1`, and `T` is
-symmetric: `T[k] = T[2b-2-k]`.
-
-`T` is computed with **four size-`2b` forward transforms and one inverse**, and
-no transform anywhere in an opening exceeds `2b` — that is the ceiling, and it
-is a property of the constructor rather than of a convention: the only way to
-build a domain is `for_product(half)`, which builds size `2 * half`, and the
-only call passes `b`. The reversal costs no second product, because for `A, B`
-in `F_<b[X]`,
-
-```text
-    rev_(2b-1)( A * rev_b(B) ) = rev_b(A) * B
-```
-
-so with `R = g * rev(P_u1) + gamma * h * rev(P_u2)` — the four operands
-transformed, one pointwise combination in the evaluation domain, one inverse
-transform — `T = R + rev(R)`, and the symmetry is structural rather than
-something to check for.
-
-The transform is a radix-2 Cooley-Tukey over the `2b`-th root of unity in
-`Fr`'s two-adic subgroup. `Fr`'s 2-adicity is 28
-(`constants::FR_TWO_ADICITY`), and `constants::FR_TWO_ADIC_ROOT_OF_UNITY` is
-`5^((p-1)/2^28)`, a generator of the order-`2^28` subgroup; the `2^k`-th root
-is that constant squared `28 - k` times. This caps `n` at `2^54`, far above
-anything an SRS this repository reads can commit to.
-
-## 4. G1 transcript absorption — a transcript addendum, frozen
-
-`docs/spec/transcript.md` deliberately has no G1 form; this is it, and it is an
-**additive** extension of that document's typed layer, implemented in
-`crates/pcs` as `append_g1` / `append_g1_list`.
-
-An affine G1 point absorbs as **four `Fr` limbs**:
-
-```text
-    [ x_lo, x_hi, y_lo, y_hi ]
-```
-
-where a coordinate's canonical 32-byte little-endian encoding (`curve::Fq`'s
-`to_bytes`) is split at byte 16, and each half is zero-extended to 32 bytes and
-read as a canonical `Fr`. `x_lo` and `y_lo` are the bottom 128 bits; `x_hi` and
-`y_hi` are the top 126. Every limb is below `2^128 < p`, so every limb is a
-canonical `Fr` with no reduction.
-
-The **point at infinity** absorbs four copies of
-`constants::G1_INFINITY_SENTINEL`, which is `2^128`. That value cannot be any
-real point's limb, because every limb is strictly below `2^128` — the
-non-collision is a property of the split, not of the curve equation, so it
-holds even for a claimed point that is not on the curve.
-
-`append_g1(tr, tag, p)` is one typed message of 4 limbs.
-`append_g1_list(tr, tag, ps)` is **one** typed message of `4k` limbs for `k`
-points — not `k` messages. `append_g1(tr, tag, p)` is exactly
-`append_g1_list(tr, tag, &[p])`. The typed framing's length field is what keeps
-a `k`-point list apart from any other list and from `k` separate messages, so
-S09's commitment-list absorption is `append_g1_list` and nothing else.
-
-This binds the **claimed** limbs. On-curve and subgroup validation is a
-separate obligation of the verifier; see §8.
-
-## 5. The transcript schedule — frozen
-
-Every challenge in an opening comes from `docs/spec/transcript.md`'s duplex,
-under the tags below. `open` and `verify` run this schedule identically and
-leave the transcript in the same state, so an opening composes inside a larger
-transcript.
-
-| # | Operation | Tag | Message |
+| # | | tag | message |
 | --- | --- | --- | --- |
-| 1 | absorb | `MERCURY_INSTANCE` | 1 scalar: `n` |
-| 2 | absorb | `COMMITMENT` | `append_g1` of `cm` |
-| 3 | absorb | `EVALUATION_CLAIM` | `s + 1` scalars: `u_0 .. u_(s-1)`, then `v` |
-| 4 | absorb | `PCS_OPENING` | `append_g1` of `h` |
-| 5 | **squeeze** | `MERCURY_ALPHA` | `alpha` |
-| 6 | absorb | `PCS_OPENING` | `append_g1_list` of `[q, g]` |
-| 7 | **squeeze** | `MERCURY_GAMMA` | `gamma` |
-| 8 | absorb | `PCS_OPENING` | `append_g1_list` of `[s, d]` |
-| 9 | **squeeze** | `MERCURY_Z` | `z`, resampled per §7 |
-| 10 | absorb | `PCS_OPENING` | 6 scalars: `g_z, g_1/z, h_z, h_1/z, s_z, s_1/z` |
-| 11 | absorb | `PCS_OPENING` | `append_g1` of `pi_z` |
-| 12 | **squeeze** | `BDFG_BATCH` | `delta` |
-| 13 | absorb | `PCS_OPENING` | `append_g1` of `w` |
-| 14 | **squeeze** | `BDFG_POINT` | `z_prime` |
-| 15 | absorb | `PCS_OPENING` | `append_g1` of `w_prime` |
-| 16 | **squeeze** | `PAIRING_MERGE` | `rho` |
+| 1 | absorb | `MERCURY_INSTANCE` | `n` |
+| 2 | absorb | `COMMITMENT` | `cm`, as passed: `open` never recommits it |
+| 3 | absorb | `EVALUATION_CLAIM` | `u_0..u_{s−1}`, then `v` |
+| 4 | absorb | `PCS_OPENING` | `h` |
+| 5 | squeeze | `MERCURY_ALPHA` | `α` |
+| 6 | absorb | `PCS_OPENING` | `[q, g]` |
+| 7 | squeeze | `MERCURY_GAMMA` | `γ` |
+| 8 | absorb | `PCS_OPENING` | `[s, d]` |
+| 9 | squeeze | `MERCURY_Z` | `z`, by §3.4's rule |
+| 10 | absorb | `PCS_OPENING` | `g_z, g_{1/z}, h_z, h_{1/z}, s_z, s_{1/z}`, one message |
+| 11 | absorb | `PCS_OPENING` | `pi_z`, before `δ` although the batch does not read it |
+| 12 | squeeze | `BDFG_BATCH` | `δ` |
+| 13 | absorb | `PCS_OPENING` | `w` |
+| 14 | squeeze | `BDFG_POINT` | `z′` |
+| 15 | absorb | `PCS_OPENING` | `w_prime` |
+| 16 | squeeze | `PAIRING_MERGE` | `ρ`, after all eight points and six values |
 
-Rules this schedule obeys, each load-bearing:
+The prover draws `ρ` too and discards it, so both sides leave the transcript in one state and an
+opening composes inside a larger transcript, the shard transcript ([proof.md](proof.md) §4).
 
-1. **`cm` is absorbed as passed.** `open` never recommits `f`; a commitment
-   that does not match the witness produces a proof that fails.
-2. **The six values are one message.** They are sent together, so they are
-   framed together.
-3. **Every proof element is absorbed before the challenge that could be chosen
-   to defeat it.** In particular `pi_z` is absorbed at step 11, before `delta`,
-   even though the BDFG20 batch does not read it.
-4. **`rho` is squeezed last**, after all eight `G1` elements and all six values.
-   Merging two pairing relations under a challenge drawn before either side was
-   fixed would be unsound.
-5. **The prover squeezes `rho` too**, and discards it, so that a transcript
-   shared with later messages advances identically on both sides.
+### 3.3 The BDFG20 batch
 
-## 6. BDFG20 — pinned
+Mercury §6 step 4(e) leaves the batched KZG opening to BDFG20 §4. The point set is
+`T = {z, 1/z, α}`, and the four polynomials are batched in this order, which fixes the power of
+`δ` each carries (`pcs_verify::bdfg::items`, which both sides read):
 
-Mercury §6 step 4(e) says only "a batched KZG opening proof as described in
-Section 4 of [BDFG20]". This section is the pin; it is normative for S09 and
-the recursion stages.
-
-The point set is `T = {z, 1/z, alpha}`, three **distinct** points (§7). Four
-polynomials are batched, **in this order**, which fixes the power of `delta`
-each carries:
-
-| `i` | polynomial | commitment | `S_i` | `Z_{T \ S_i}` | `r_i` |
-| --- | --- | --- | --- | --- | --- |
-| 0 | `g` | `g` | `{z, 1/z}` | `X - alpha` | interpolates `(z, g_z), (1/z, g_1/z)` |
-| 1 | `h` | `h` | `{z, 1/z, alpha}` | `1` | interpolates `(z, h_z), (1/z, h_1/z), (alpha, h_alpha)` |
-| 2 | `S` | `s` | `{z, 1/z}` | `X - alpha` | interpolates `(z, s_z), (1/z, s_1/z)` |
-| 3 | `D` | `d` | `{z}` | `(X - 1/z)(X - alpha)` | the constant `D_z` |
-
-`r_i` is the Lagrange interpolation through those points, of degree `< |S_i|`.
-`h_alpha` and `D_z` are **derived, not sent** — see §7 — so both sides build
-the same `r_i`.
-
-**The linearization and the two proof elements.**
+| `i` | `f_i` | `S_i` | `Z_{T∖S_i}` | `r_i` interpolates |
+| --- | --- | --- | --- | --- |
+| 0 | `g` | `{z, 1/z}` | `X − α` | `g_z`, `g_{1/z}` |
+| 1 | `h` | `{z, 1/z, α}` | `1` | `h_z`, `h_{1/z}`, `h_α` |
+| 2 | `S` | `{z, 1/z}` | `X − α` | `s_z`, `s_{1/z}` |
+| 3 | `D` | `{z}` | `(X − 1/z)(X − α)` | `D_z` |
 
 ```text
-    F(X)  = sum_i delta^i * Z_{T \ S_i}(X) * ( f_i(X) - r_i(X) )
-    W     = [ (F / Z_T)(x) ]_1                                     (proof element)
-
-    L(X)  = sum_i delta^i * Z_{T \ S_i}(z') * ( f_i(X) - r_i(z') )
-            - Z_T(z') * (F / Z_T)(X)
-    W'    = [ (L(x) / (x - z')) ]_1                                (proof element)
+F(X) = Σ_i δ^i·Z_{T∖S_i}(X)·(f_i(X) − r_i(X))                          W  = [(F/Z_T)(x)]_1
+L(X) = Σ_i δ^i·Z_{T∖S_i}(z′)·(f_i(X) − r_i(z′)) − Z_T(z′)·(F/Z_T)(X)    W′ = [(L/(X − z′))(x)]_1
 ```
 
-`Z_T` divides `F` exactly when every `r_i` interpolates its `f_i` over `S_i`,
-because `Z_{T \ S_i} * Z_{S_i} = Z_T`; `L(z') = F(z') - Z_T(z') (F/Z_T)(z') = 0`
-always. Both divisions are exact and a prover asserts it rather than assuming
-it.
+Both divisions are exact for an honest prover, and `open` asserts it
+(`pcs_verify::bdfg::{quotient, linearization}`).
 
-**The verifier's accumulation.**
+### 3.4 Challenges and derived values
+
+Mercury draws `z ∈ F*`; here `z` is drawn again under `MERCURY_Z` while it is zero
+(`pcs_verify::challenge_z`). `T` needs three distinct points, so both sides refuse with
+`PcsError::DegenerateChallenge` when `z² = 1`, `z = α` or `z·α = 1` (`pcs_verify::degenerate`):
+probability about `2^−252`, and a loss of completeness only. The recursion tape draws `z` once and
+asserts all four conditions (`verifier_core::tape::mercury_scalars`).
+
+The verifier is not sent `h(α)` or `D(z)`: it derives them, as Mercury §6 step 4(c) does
+(`pcs_verify::derive_h_alpha`), and the prover builds the batch around the same derived values.
 
 ```text
-    Fpt = sum_i delta^i Z_{T \ S_i}(z') * cm_i
-        - [ sum_i delta^i Z_{T \ S_i}(z') * r_i(z') ]_1
-        - Z_T(z') * W
+D_z = z^{b−1}·g_{1/z}
+h_α = (g_z·P_u1(1/z) + g_{1/z}·P_u1(z) + γ·(h_z·P_u2(1/z) + h_{1/z}·P_u2(z) − 2v)
+       − z·s_z − s_{1/z}/z) / 2
 ```
 
-and the batch holds when `e(Fpt + z' W', [1]_2) = e(W', [x]_2)`.
+Opening `D` at `z` to `D_z` is the degree check on `g` (Mercury §4.3); opening `h` at `α` to `h_α`
+is §3.1's identity at `z`.
 
-Every polynomial in the batch has fewer than `b` coefficients, so `W` and `W'`
-are `O(b)` work; the verifier spends 7 scalar multiplications here and 2 more
-on §7's check A.
+## 4. The proof and the verifier's checks
 
-## 7. Challenges, degeneracy, and the derived values
-
-**`z` is in `F*`.** `z` is squeezed under `MERCURY_Z`; **while it is zero it is
-squeezed again under the same tag**, so `1/z` exists. The probability of even
-one resample is about `2^-254`.
-
-**Degeneracy.** `T = {z, 1/z, alpha}` must have three distinct members, or
-`Z_T` has a repeated root and `r_1` is not determined. Both `open` and `verify`
-reject — with `PcsError::DegenerateChallenge`, deterministically and on the
-same input — when any of
+`pcs::MercuryProof` is eight points and six values. Its field order is its byte order and its
+transcript order, and `to_bytes` writes `pcs::PROOF_BYTES = 704` bytes for every `n` and `k`:
 
 ```text
-    z = 0     z^2 = 1     z = alpha     z * alpha = 1
+h  q  g  s  d  pi_z  w  w_prime                 8 × 64 bytes, G1 uncompressed (primitives.md §3)
+g_z  g_inv_z  h_z  h_inv_z  s_z  s_inv_z        6 × 32 bytes, canonical Fr (primitives.md §1)
 ```
 
-holds. The total probability is about `2^-252`, and the four conditions are
-checked rather than assumed because the alternative is a division by zero.
-This is a **completeness** gap, not a soundness one: an honest prover fails to
-produce a proof, and no dishonest prover gains anything. Closing it would mean
-resampling `z` until the set is non-degenerate; that is a protocol change and
-is deliberately not made here, because the stage prompt pins the rule as
-resample-on-zero.
+`from_bytes` returns `None` unless every point decodes through `curve::G1Affine::from_bytes`
+(canonical and on the curve; G1's cofactor is 1) and every value through `field::Fr::from_bytes`.
 
-**The two derived values.** The verifier does not receive `h(alpha)` or `D(z)`;
-it computes them, and the prover computes them the same way so that the batch
-is built around identical values:
+Two relations are checked, each written `e(A, [1]_2) = e(B, [x]_2)` so that both G2 arguments are
+SRS constants: the fold identity at `z` (Mercury §6 step 4(f), its `z` term moved into G1) and the
+BDFG20 batch (BDFG20 §4.1). They merge under `ρ` into one `curve::pairing::pairing_check` of two
+pairs:
 
 ```text
-    D_z = z^(b-1) * g_1/z
-
-    h_alpha = ( g_z P_u1(1/z) + g_1/z P_u1(z)
-              + gamma ( h_z P_u2(1/z) + h_1/z P_u2(z) - 2v )
-              - z s_z - (1/z) s_1/z ) / 2
+A1 = cm − (z^b − α)·q − g_z·[1]_1 + z·pi_z                  B1 = pi_z
+A2 = Σ_i c_i·cm_i − K·[1]_1 − Z_T(z′)·w + z′·w_prime        B2 = w_prime
+     cm_i = g, h, s, d    c_i = δ^i·Z_{T∖S_i}(z′)    K = Σ_i c_i·r_i(z′)
+     Z_T(z′) = (z′ − z)(z′ − 1/z)(z′ − α)
+accept iff  e(A1 + ρ·A2, [1]_2)·e(−(B1 + ρ·B2), [x]_2) = 1
 ```
 
-The first is the degree check of Mercury §4.3; the second is §3.2's identity
-solved for `h(alpha)` at `X = z`. Both are then *enforced* by the BDFG20 batch,
-which opens `h` at `alpha` to `h_alpha` and `D` at `z` to `D_z`.
+If either relation is false the merged one holds for at most one `ρ`, and `ρ` follows every proof
+element. The verifier reads three SRS points, `srs::SrsVerifier`'s `[1]_1`, `[1]_2` and `[x]_2`,
+and does no G2 arithmetic.
 
-## 8. The proof, the pairing checks, and the verifier's obligations
+`pcs::verify` refuses, in order: a `u` whose length is not an instance's (§1), before anything is
+absorbed (`UnsupportedNumVars`); a proof point or `cm` off the curve (`InvalidPoint`), checked
+again because a proof built in memory has met no decoder; a degenerate `T`
+(`DegenerateChallenge`); a failed pairing check (`VerificationFailed`), which does not say which
+relation failed.
 
-### 8.1 Shape and serialization — frozen
+## 5. Batching `k` columns at one point
 
-A proof is **8 `G1` points and 6 `Fr` values**, in this field order, with no
-options and no data-dependent lengths:
+Not in the papers. `k` commitments to columns of one size, opened at one point `u`, are one
+Mercury instance with one proof (`pcs::batch_open`, `pcs::batch_verify`); a shard proof's opening
+is one such batch ([proof.md](proof.md) §5). Three steps precede §3.2's sixteen
+(`pcs_verify::batch_preamble`):
 
-```text
-    h, q, g, s, d, pi_z, w, w_prime,
-    g_z, g_inv_z, h_z, h_inv_z, s_z, s_inv_z
-```
-
-Serialized, that is the eight points in `crates/curve`'s uncompressed affine
-form (64 bytes each, `x || y`, canonical little-endian per coordinate, all-zero
-for infinity) followed by the six values in `Fr`'s canonical 32-byte
-little-endian form: **704 bytes, for every `n`**. Decoding runs every point
-through `G1Affine::from_bytes` and every value through `Fr::from_bytes`, so a
-decoded proof is already known to hold canonical, on-curve, in-subgroup points.
-
-### 8.2 The two relations, both in `e(A, [1]_2) = e(B, [x]_2)` form
-
-The fold identity at `z` (Mercury §6 step 4(f)), with the `z` term moved into
-G1 so both G2 arguments are SRS constants:
-
-```text
-    A1 = cm - (z^b - alpha) q - g_z [1]_1 + z * pi_z        B1 = pi_z
-```
-
-The BDFG20 batch (§6):
-
-```text
-    A2 = Fpt + z' * w_prime                                 B2 = w_prime
-```
-
-### 8.3 The merge
-
-With `rho` from schedule step 16, the verifier accepts iff
-
-```text
-    e( A1 + rho A2, [1]_2 ) * e( -(B1 + rho B2), [x]_2 ) == 1
-```
-
-one `curve::pairing::pairing_check` with two pairs. If either relation fails,
-the merged one holds for at most a single `rho`, and `rho` was drawn after
-every proof element was absorbed. Computing the two relations separately is
-equally acceptable provided `rho` is still squeezed where §5 puts it, because
-S09 is handed this shape either way.
-
-The verifier reads exactly three SRS points — `[1]_1`, `[1]_2`, `[x]_2`, that
-is `srs::SrsVerifier` — and does no G2 arithmetic beyond passing those two.
-
-### 8.4 Obligations
-
-1. Reject any `u` whose length is not `2t` for `1 <= t <= 27`, before absorbing
-   anything.
-2. Check that every one of the eight proof points, **and the commitment the
-   statement names**, is on the curve and in the order-`r` subgroup, before any
-   of them is used. A proof built in memory has not been through
-   `from_bytes`, so `verify` cannot assume the decoder ran.
-3. Draw `z` by §7's rule and reject a degenerate challenge set.
-4. Never accept on a failed pairing, and never distinguish which relation
-   failed: the merge makes that unavailable, deliberately.
-
-## 9. Cost
-
-| Prover | |
-| --- | --- |
-| field operations | `O(n)`: one pass for `h`, one interleaved pass of `b` Horner divisions for `q` and `g`, one for `H`'s numerator and its division |
-| transforms | four size-`2b` forward and one inverse; **nothing larger than `2b`** |
-| scalar multiplications | `2n + O(b)`: `n - b` for `q`, `n - 1` for `pi_z`, and `b`, `b`, `b-1`, `b`, `b-1`, `b-1` for `h`, `g`, `s`, `d`, `w`, `w'` |
-| commitment | one MSM of size `n`, which for a `U1`/`U8`/`U16`/`U32` column goes through `curve::msm::msm_small_u32` on the widened integers and is never lifted to `Fr` |
-
-| Verifier | |
-| --- | --- |
-| field operations | `O(t) = O(log n)`: two `P_u` product formulas at two points each, `z^b`, and the `O(1)` interpolations |
-| group operations | about 12 scalar multiplications in G1, and **2 pairings** |
-
-## 10. Security
-
-Knowledge soundness in the AGM under Q-DLOG, with a trusted powers-of-tau SRS
-(`docs/spec/srs.md`). Mercury's own analysis bounds the Schwartz-Zippel term at
-`6n/|Fr|` and each batching challenge at `1/|Fr|`; the pairing merge of §8.3
-adds one more `1/|Fr|`, and §11's column batching adds `(k-1)/|Fr|` for a batch
-of `k` columns. On BN254 that is roughly 100 to 103 bits of security, and no
-claim beyond that is made anywhere. Every one of those terms is dominated by
-`6n/|Fr|` for any `k` a shard can hold.
-
-**Not hiding, no zero knowledge.** Mercury is not a hiding commitment and this
-implementation adds no blinding. Nothing in this protocol may be described as
-zero-knowledge.
-
-**SRS substitution is not detected.** `docs/spec/srs.md` §4: the SRS digest was
-dropped, so nothing binds a proof to a particular SRS. That is a repository-wide
-gap, not a Mercury one, and it is recorded here because a Mercury proof is the
-first artifact that would carry the binding. S16 narrowed the gap and S17 extended
-the narrowing: a statement now absorbs a digest of the `SrsVerifier` and the packed
-generic table's three commitments (`docs/spec/shard-proof.md` §3), which a verifier
-takes from a trusted channel. The powers remain unbound except through the pairing
-check.
-
----
-
-## 11. Batching `k` columns at one point — frozen as of S09
-
-This argument is not in the paper. `k` commitments to **same-size** columns,
-opened at **one** point `u`, become a single Mercury instance.
-
-`crates/pcs`: `batch_open`, `batch_verify`, `batch_verify_deferred`.
-
-### 11.1 The schedule
-
-Three steps, before the opening of §5 begins.
-
-| # | Operation | Tag | Message |
+| # | | tag | message |
 | --- | --- | --- | --- |
-| B1 | absorb | `COMMITMENT` | `append_g1_list` of `cm_0 .. cm_(k-1)`: **one** message of `4k` limbs |
-| B2 | absorb | `EVALUATION_CLAIM` | `s + k` scalars: `u_0 .. u_(s-1)`, then `v_0 .. v_(k-1)` |
-| B3 | **squeeze** | `MERCURY_BATCH` | `rho` |
+| B1 | absorb | `COMMITMENT` | `cm_0..cm_{k−1}`, as passed, one message of `4k` limbs |
+| B2 | absorb | `EVALUATION_CLAIM` | `u_0..u_{s−1}`, then `v_0..v_{k−1}` |
+| B3 | squeeze | `MERCURY_BATCH` | `ρ` |
 
-Then `cm* = sum_i rho^i cm_i` and `v* = sum_i rho^i v_i`, and §5's sixteen steps
-run on the instance `(cm*, u, v*)`.
+The opening then runs on `(cm*, u, v*)`, with `cm* = Σ_i ρ^i·cm_i` and `v* = Σ_i ρ^i·v_i`.
 
-Rules this schedule obeys, each load-bearing:
+- `ρ` follows every commitment and every claimed value. Column `i` carries `ρ^i`, column 0
+  carrying 1, so a reordered or shortened list is a different statement.
+- The list is one message, so its length `4k` fixes `k`, and then `s` from B2's `s + k` scalars:
+  the absorbed stream is injective.
+- `ρ = 0` is not redrawn: it checks column 0 alone, and is one of the roots the bound below
+  counts.
+- A batch of one is a different transcript from a bare opening; their proofs do not interchange.
 
-1. **`rho` is squeezed only after all `k` commitments AND all `k` claimed values
-   are absorbed.** A prover that could choose any of them after seeing `rho` can
-   choose them to cancel.
-2. **The commitments are absorbed as passed**, in list order, and `cm*` is
-   derived from those same points. Index `i` carries `rho^i`, so index `0`
-   carries `1`: reordering the list is a different statement.
-3. **The commitment list is one length-delimited message.** The typed layer's
-   length field is `4k`, which is what makes `k` recoverable and therefore makes
-   the absorbed stream injective: `k` from the first message's length, then
-   `s = (s + k) - k` from the second's. Nothing else pins `k`, so splitting that
-   message, or dropping its length, would break injectivity — and dropping one
-   commitment while claiming `k - 1` would then be free.
-4. **`rho` is *not* resampled on zero.** `rho = 0` collapses the batch to
-   column 0 alone: `cm* = cm_0`, `v* = v_0`, and columns `1 .. k-1` go
-   unchecked. That is a **soundness** event, not a completeness one — an honest
-   prover still produces a proof that verifies — and it is already counted: it
-   is precisely the case `E(0) = 0` in §11.2, one of the at most `k - 1` roots
-   the `(k-1)/|Fr|` bound is over. Resampling would remove one root out of
-   `k - 1` and change nothing else, so it is not worth a rule. Contrast §7,
-   where `z = 0` must be resampled because the protocol divides by `z` and there
-   is no proof at all without an inverse.
-5. `rho` here is the **column-batching** challenge, under `MERCURY_BATCH`. §8.3's
-   `rho` is the pairing-merge challenge, under `PAIRING_MERGE`. The two never
-   appear in the same expression: by the time the merge challenge is drawn, the
-   batch has already become one instance.
+The batch is sound: by §2's linearity `cm*` commits to `f* = Σ_i ρ^i·f_i`, and evaluation at `u`
+is linear, so `v* − f̂*(u) = Σ_i (v_i − f̂_i(u))·ρ^i`, a polynomial in `ρ` of degree at most
+`k − 1` fixed before `ρ` is drawn. A false claim survives with probability at most `(k − 1)/|Fr|`.
 
-A `k = 1` batch is therefore **not** the same transcript as a bare single
-opening, and the two are not interchangeable: a proof made by one is rejected by
-the other's verifier. That is correct — they are different statements — and
-`crates/pcs/tests/vectors/mercury_batch.txt` pins the `k = 1` bytes.
+The prover builds `f*` as one `Fr` column and opens it once; mixed sizes are refused
+(`MixedColumnSizes`). The verifier refuses an empty list (`EmptyBatch`) or a value count that
+differs (`BatchLengthMismatch`), checks every `cm_i` on the curve before summing, derives `cm*` by
+a `k`-point MSM and runs §4 on it. `pcs::batch_open_stacked` opens recursion stacks at `u ‖ r`
+([recursion.md](recursion.md) §1.3); `batch_open` is it at `r = []`, one column a stack.
 
-### 11.2 The lemma
+## 6. Deferred verification and the accumulator
 
-**Setup.** Let `f_0 .. f_(k-1)` be multilinears on the same `s = 2t` variables,
-`cm_i = com(f_i) = [f_i(x)]_1` in the sense of §2, `u` a point, and `v_i` the
-claimed values. Let `rho` be drawn after every `cm_i` and every `v_i` is fixed.
-Put
+### 6.1 The twelve entries
+
+Deferring a verification runs every check of §4 but the pairing and keeps the relation's terms:
+twelve `pcs::AccumulatorEntry { side, scalar, point }`, `side` a `pcs::PairingSide`, `G2One` for
+`[1]_2` or `G2X` for `[x]_2`. The points are `[cm, h, q, g, s, d, pi_z, w, w_prime, [1]_1]`, as
+`pcs_verify::ENTRY_POINTS` indexes them, and the scalars are `pcs_verify::scalars`'s, in §4's
+notation:
+
+| # | side | point | scalar | # | side | point | scalar |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | `G2One` | `cm` | `1` | 6 | `G2One` | `pi_z` | `z` |
+| 1 | `G2One` | `h` | `ρ·c_1` | 7 | `G2One` | `w` | `−ρ·Z_T(z′)` |
+| 2 | `G2One` | `q` | `−(z^b − α)` | 8 | `G2One` | `w_prime` | `ρ·z′` |
+| 3 | `G2One` | `g` | `ρ·c_0` | 9 | `G2One` | `[1]_1` | `−(g_z + ρ·K)` |
+| 4 | `G2One` | `s` | `ρ·c_2` | 10 | `G2X` | `pi_z` | `1` |
+| 5 | `G2One` | `d` | `ρ·c_3` | 11 | `G2X` | `w_prime` | `ρ` |
+
+The `G2One` terms sum to `A1 + ρ·A2` and the `G2X` terms to `B1 + ρ·B2`; entry 9 carries both
+relations' `[1]_1`, and entry 2 is zero exactly when `z^b = α`, which is legal. A batch derives
+`cm*` first, so entry 0 is `cm*` and a check is `ENTRIES_PER_CHECK = 12` entries whatever `k`.
+`pcs::verify` and `pcs::batch_verify` spend the entries at once; `pcs::verify_deferred` and
+`pcs::batch_verify_deferred` return them.
+
+### 6.2 What uses it
+
+- Base verification pairs: `crates/verifier` runs `pcs::batch_verify` for each shard, and no
+  `ShardProof` or `BlockProof` carries an entry.
+- The recursion tree folds. A shard's tape computes the twelve scalars over field cells
+  (`verifier_core::tape::mercury_scalars`), `cm*` being a hint; the node folds them with the batch
+  check `cm* = Σ_i ρ^i·cm_i` ([recursion.md](recursion.md) §8.3), and one pairing check at the top
+  discharges every shard's ([recursion.md](recursion.md) §9). Natively, `host::recursion` runs
+  `pcs::batch_verify_deferred` on each shard for its `cm*`.
+- Nothing else: `pcs::verify_deferred`, §6.3's word form, `pcs::accumulator_digest` and
+  `pcs::discharge` are called only by `crates/pcs`'s tests and `tools/kat-gen`.
+
+### 6.3 The word form and `discharge`
+
+A list is grouped into deferred checks, `checks[j]` being group `j`'s entry count, and written as
+canonical `Fr` words (`pcs::accumulator_words`, inverse `pcs::accumulator_from_words`):
 
 ```text
-    f* = sum_i rho^i f_i        cm* = sum_i rho^i cm_i        v* = sum_i rho^i v_i
+group:  count  entry_0 .. entry_{count−1}
+entry:  side  scalar  x_lo  x_hi  y_lo  y_hi       side 0 = G2One, 1 = G2X; ENTRY_WORDS = 6
 ```
 
-**Claim.** `cm*` is a Mercury commitment to `f*`, and if `v_i != fhat_i(u)` for
-some `i`, then `v* != fhat*(u)` for all but at most `k - 1` values of `rho`.
-
-**Proof.** The first half is KZG's homomorphism. A commitment is
-`[f(x)]_1` for the polynomial whose coefficients are the evaluation table (§2),
-and the map from a table to that group element is `Fr`-linear, so
-`sum_i rho^i [f_i(x)]_1 = [(sum_i rho^i f_i)(x)]_1 = com(f*)`. Reading an
-evaluation table as coefficients is itself linear, so `f*`'s table is the same
-combination of the `f_i` tables, and `f*` is a multilinear on the same `s`
-variables.
-
-For the second half, multilinear evaluation at a fixed `u` is linear too:
-`fhat*(u) = sum_i rho^i fhat_i(u)`. So
+A word is 32 bytes, so an entry is 192, and the limbs are the point's transcript form
+([transcript.md](transcript.md) §4). There is no header, so two lists concatenate into a list whose
+checks keep their groups. Decoding refuses a count of `2^64` or more or one that overruns, a side
+other than 0 or 1, a limb of `2^128` or more other than the sentinel, a partial sentinel, the
+all-zero quadruple (infinity has one spelling), and a point that is not canonical or not on the
+curve. The digest is the words as one `ACCUMULATOR_DIGEST` message in a fresh sponge, then a raw
+`sample`; covering the count words, it binds the grouping.
 
 ```text
-    v* - fhat*(u) = sum_i (v_i - fhat_i(u)) rho^i = E(rho)
+discharge(vsrs, entries, checks):
+  every entry's point on the curve, before anything else
+  ν = fresh sponge: absorb ACCUMULATOR_DIGEST [digest], challenge ACCUMULATOR_MERGE
+  A = Σ_j ν^j·(group j's G2One terms)      B = Σ_j ν^j·(group j's G2X terms)
+  accept iff e(A, [1]_2)·e(−B, [x]_2) = 1
 ```
 
-where `E` is a polynomial in `rho` of degree at most `k - 1` whose coefficients
-were all fixed before `rho` was drawn. If any claim is wrong, `E` is not the zero
-polynomial, and Schwartz-Zippel gives at most `k - 1` roots in `Fr`. The batching
-therefore adds **at most `(k-1)/|Fr|`** to the soundness error, on top of the
-single opening's own. ∎
+An entry's point is a claim: absorption binds only its limbs, and an entry built in memory has met
+no decoder. The weight keeps the checks apart: at weight 1, two checks with equal and opposite
+errors pass together, and weighted, a false group passes only where `ν` is a root of a nonzero
+polynomial of degree below the group count. `ν` is a function of the words because `discharge`
+takes no transcript. An empty list discharges.
 
-**The hypothesis a verifier cannot check.** The lemma needs each `f_i` to have
-fewer than `n` coefficients — the same precondition §10's knowledge soundness
-already places on the single instance, transported unchanged, since degree is
-subadditive under a linear combination. `batch_open` enforces it by construction
-(`MixedColumnSizes` rejects columns of different sizes, `UnsupportedNumVars`
-rejects a size that is not `2^(2t)`), but `batch_verify` sees only commitments and
-cannot check it: a commitment is a group element and carries no degree. It is a
-**caller obligation**, discharged wherever the commitments come from — for a
-shard proof, by the fixed trace heights of the `VmConfig`.
+## 7. Cost and security
 
-### 11.3 The prover
+| | |
+| --- | --- |
+| prover, field | `O(n)`: a pass for `h`, the fold, `H`'s division; `S` in `O(b log b)` |
+| prover, MSMs | `2n + 5b − 4` scalar multiplications: `q` `n − b`, `pi_z` `n − 1`, `h`, `g`, `d` `b` each, `s`, `w`, `w_prime` `b − 1` each. A commitment is one more MSM of `n` |
+| batch of `k` | `k` multiply-adds a coefficient for `f*` and a `k`-point MSM for `cm*`, then one opening |
+| verifier | `O(t)` field operations, MSMs of ten points and of two (and of `k`), one two-pair pairing check |
+| measured | `n = 2^22`: commit 1.30 s, open 2.89 s. 16 columns of `2^20`: a batch opens in 1.01 s and verifies in 4.8 ms, 16 single openings take 9.79 s and 62 ms. 18-core Apple M5 Pro; `bench mercury`, `bench mercury-batch` |
 
-`f*` is **materialised into one column** before the opening, combining rows in
-parallel: `open` makes several passes over its polynomial, and recombining `k`
-columns lazily inside it would multiply `k` into every one of them. The
-combination is indexed and exact, so the result does not depend on the thread
-count or the scheduling.
+Knowledge soundness holds in the algebraic group model under q-DLOG (Mercury §6, BDFG20 §4), with
+Fiat–Shamir over the Poseidon2 transcript in the random-oracle model and an SRS whose `x` nobody
+knows ([srs.md](srs.md) §3). The statistical terms are Schwartz–Zippel over `α`, `z` and `z′`, of
+order a committed polynomial's degree over `|Fr|`, a few `1/|Fr|` for `γ`, `δ` and the merge `ρ`,
+`(k − 1)/|Fr|` for a batch and the group count over `|Fr|` for `ν`: each is below `2^−220` for
+every instance in use, and the level is BN254's ([architecture.md](../architecture.md) §4).
+Nothing is hiding and nothing is blinded.
 
-`batch_open` never recommits: `cm*` is derived from the commitments it was
-handed, so a commitment that does not match its column produces a proof that
-fails, exactly as §5's rule 1 arranges for the single case.
-
-### 11.4 Cost
-
-One `k`-point MSM for `cm*`, `k` multiply-adds per coefficient for `f*`, and then
-**one** opening — so a batch is `2n + O(sqrt n)` scalar multiplications however
-many columns it holds, against `k(2n + O(sqrt n))` for `k` separate openings. The
-proof is one `MercuryProof`: 704 bytes, not `704k`. Verification is one
-`batch_verify`, which is the single verifier plus one `k`-point MSM and `k`
-scalar multiply-adds.
+Mercury's SRS has exactly `n` powers; here one SRS serves every size, so a prover can commit to a
+polynomial of degree `n` or more, and no degree bound is checked. None is needed: Mercury §6's
+argument goes through with its Schwartz–Zippel terms over that degree, and the opening at `u` is
+the multilinear extension of the polynomial's first `n` coefficients. A commitment binds that
+truncation, which is linear, so §5's argument holds for it too.

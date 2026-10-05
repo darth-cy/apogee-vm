@@ -1,5 +1,5 @@
-//! S-IO's public values and advice: the parts that can be checked without a
-//! proof, and the negative control for each.
+//! Public values and advice: the parts that can be checked without a proof,
+//! and the negative control for each.
 //!
 //! The expensive half — a real statement, tampered, refused by class — is
 //! `crates/prover/tests/public_io.rs`, `#[ignore]`d for size. What is here is
@@ -214,7 +214,7 @@ fn the_journals_family_has_no_init_column() {
     assert_eq!(
         journal.artifact.to_bytes(),
         zero_window_artifact(vars).to_bytes(),
-        "the journal's circuit is no longer ZERO_WINDOWS'"
+        "the journal's circuit is not ZERO_WINDOWS'"
     );
     assert_eq!(
         journal.artifact.memory.len(),
@@ -240,8 +240,7 @@ fn the_journals_family_has_no_init_column() {
 /// None of the three families has an enforcing gate, a lookup or a channel,
 /// and none has a setup column: each is two leaves and a product tree, degree
 /// 1 throughout (`docs/spec/public-values.md` §4). A family that grew one
-/// would owe a manifest entry and a soundness argument neither this stage nor
-/// its spec page gives it.
+/// would owe a soundness argument its spec page does not give it.
 #[test]
 fn the_three_families_are_two_leaves_and_a_product_tree() {
     for (id, vars) in [
@@ -304,7 +303,7 @@ fn the_window_rules_take_an_honest_statement() {
     assert_eq!(check_memory_windows(&config(h), &counts(0, 0), &[]), Ok(()));
 }
 
-/// Each of the three new rules refuses what it is for, by name
+/// Each of the three rules refuses what it is for, by name
 /// (`docs/spec/public-values.md` §2 and §4).
 #[test]
 fn the_window_rules_refuse_each_of_their_controls() {
@@ -393,9 +392,9 @@ fn a_config_without_the_new_families_is_refused() {
         4 * (1u64 << 16) >= public_end,
         "2^16 is the smallest window height that does hold them"
     );
-    // And it really is the smallest on the menu: `2^12` joined at S-STREAM
-    // for the public windows themselves, and a window family there would
-    // reach `0x4000`, short of where the public windows end.
+    // And it really is the smallest on the menu: `2^12` is on it for the
+    // public windows themselves, and a window family there would reach
+    // `0x4000`, short of where the public windows end.
     for &h in &family::HEIGHT_MENU {
         assert_eq!(
             4 * (h as u64) >= public_end,

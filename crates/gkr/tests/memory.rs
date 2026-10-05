@@ -34,14 +34,14 @@ use sumcheck::{absorb_witness_digest, witness_digest};
 use test_support::Rng;
 use transcript::Transcript;
 
-/// The query table, by **global query id**: pc, rs1, rs2, load, ram, rd, and —
-/// S21's last role — deleg, a delegation request's mirror, in the keccak
-/// family's own address space 4 (`docs/spec/delegation.md` §5.1).
+/// The query table, by **global query id**: pc, rs1, rs2, load, ram, rd, and
+/// deleg, a delegation request's mirror, in the keccak family's own address
+/// space 4 (`docs/spec/delegation.md` §5.1).
 /// No family holds all seven.
 const SPACE: [u64; 7] = [3, 1, 1, 2, 2, 1, 4];
 const DELTA: [u64; 7] = [0, 1, 2, 2, 3, 3, 3];
 
-/// The query ids, in the table's frozen order.
+/// The query ids, in the table's order.
 const PC: usize = 0;
 const RS1: usize = 1;
 const RS2: usize = 2;
@@ -57,8 +57,7 @@ const READ_ONLY: [usize; 3] = [RS1, RS2, LOAD];
 /// §2.1's table written out, with `deleg` on the family that owns ecall rows
 /// (`docs/spec/delegation.md` §5.1). Widths 5, 4, 6 and 5: the ones that are
 /// not powers of two carry constant-1 pad leaves, and only the 4-wide one
-/// carries none. `ADD_SUB_LUI_AUIPC` was eight wide, and so padless, until the
-/// POSIX layer took `arg1`, `arg2` and its transfer row's `ram` away.
+/// carries none.
 const FAMILIES: [(u32, &[usize]); 7] = [
     (family::ADD_SUB_LUI_AUIPC, &[PC, RS1, RS2, RD, DELEG]),
     (family::JUMP_BRANCH_SLT, &[PC, RS1, RS2, RD]),
@@ -517,7 +516,7 @@ fn frame_columns(queries: &[usize], rng: &mut Rng) -> Vec<Vec<Fr>> {
 /// unpadded gate list 0 are proven. Then row 0's `rd` write, at address 0, is
 /// set to 5: the self-check names `rd_write_masked` and `verify` rejects at
 /// transition 0. `rd`'s **slot** is its position in that family's own ascending
-/// list — the last one for every family but `ADD_SUB_LUI_AUIPC`, where S21's
+/// list — the last one for every family but `ADD_SUB_LUI_AUIPC`, where the
 /// `deleg` query follows it — so it is looked up rather than assumed.
 #[test]
 fn every_frame_proves_and_verifies_and_rejects_a_write_to_x0() {

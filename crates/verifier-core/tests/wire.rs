@@ -1,4 +1,4 @@
-//! The core's wire forms, `docs/spec/shard-proof.md` §9, and a key's load
+//! The core's wire forms, `docs/spec/proof.md` §9, and a key's load
 //! rules, §7.2: every value round-trips byte for byte, and every refusal is an
 //! `Err` naming what it refused — never a panic.
 
@@ -69,10 +69,10 @@ fn the_layouts_are_the_specs() {
     assert_eq!(&b[24..56], &proof.global_digest.to_bytes());
     // The count is `shell`'s witness commitment list, which is
     // `ADD_SUB_LUI_AUIPC`'s width and grows by one `is_deleg_t` selector per
-    // registered delegation family (`docs/spec/delegation.md` §10). **Derived,
-    // because this test is about the layout and not the width**: it was the
-    // literal 33 and S26c's two families made it 35. What pins the width itself
-    // is `crates/checker/tests/add_sub.rs`' column list, which names every
+    // registered delegation family (`docs/spec/delegation.md` §3). **Derived,
+    // because this test is about the layout and not the width**, which moves
+    // with every family registered. What pins the width itself is
+    // `crates/checker/tests/add_sub.rs`' column list, which names every
     // selector; what this line pins is that the count sits at offset 56 and that
     // the commitments follow it, which is the only thing §9 says here.
     let w = proof.witness_commitments.len();
@@ -91,16 +91,15 @@ fn the_layouts_are_the_specs() {
 
     let public = statement();
     let b = public.to_bytes();
-    // input (4 + 3), output (4), status, counts (4 + 24 — six families since
-    // S-IO), windows (4), then the 64 boundary scalars: x10's value is scalar
-    // 33 + 9.
+    // input (4 + 3), output (4), status, counts (4 + 24 — six families),
+    // windows (4), then the 64 boundary scalars: x10's value is scalar 33 + 9.
     let boundary = 7 + 4 + 4 + (4 + 4 * 6) + 4;
     assert_eq!(u32::from_le_bytes(b[11..15].try_into().unwrap()), 42);
     assert_eq!(
         &b[boundary + 32 * 42..boundary + 32 * 43],
         &Fr::from_u64(42).to_bytes()
     );
-    // Four shards: the init window, add/sub, and S-IO's two public windows,
+    // Four shards: the init window, add/sub, and the two public windows,
     // whose memory widths are 3 and 2 (`docs/spec/public-values.md` §4).
     assert_eq!(
         b.len(),
@@ -115,7 +114,7 @@ fn the_layouts_are_the_specs() {
             + 4 * 64
     );
 
-    // The key: the header up to the circuits, S17's generic table three raw
+    // The key: the header up to the circuits, the generic table's three raw
     // points between the SRS's verifier points and the digest over both.
     let key = jbs_vk();
     let b = key.to_bytes();
@@ -247,7 +246,7 @@ fn the_readers_refuse_rather_than_panic() {
         Err("a boundary value is not below 2^32")
     );
 
-    // Both keys, S17's with its family reading the generic table.
+    // Both keys, `jbs_vk`'s with its family reading the generic table.
     for honest in [vk(), jbs_vk()] {
         // Every truncation of everything before the circuits, and one cut in
         // every 97 bytes of the circuits; a trailing byte.
@@ -273,7 +272,7 @@ fn the_readers_refuse_rather_than_panic() {
         // every bit of one byte in every 1009 of the circuits. A flip in the
         // counts and lengths up front is where a reader would over-read or
         // over-allocate; anywhere else a digest or the registry's bytes no
-        // longer match — the generic table's included, since S17's SRS digest
+        // longer match — the generic table's included, since the SRS digest
         // covers it.
         let header_flips = (0..header).map(|byte| (byte, byte % 8));
         let circuit_flips = (header..key.len())
@@ -287,7 +286,7 @@ fn the_readers_refuse_rather_than_panic() {
                 "byte {byte} bit {bit} flipped still loads"
             );
         }
-        // Every bit of the generic table, the bytes S17 added.
+        // Every bit of the generic table.
         let table = header - 32 - 3 * 64;
         for byte in table..table + 3 * 64 {
             for bit in 0..8 {
@@ -311,7 +310,7 @@ fn the_readers_refuse_rather_than_panic() {
 /// `constraints::wire`'s. Every other key fixture here names only `V[range19]`,
 /// `V[range16]` and setup columns, so a wrong arm for tags 4, 5 or 6 would pass
 /// every one of them and make a verifying key for any program that hashes
-/// unloadable (`docs/spec/lookup.md` §14, `docs/spec/delegation.md` §6).
+/// unloadable (`docs/spec/lookup.md` §3, `docs/spec/delegation-circuits.md` §2).
 #[test]
 fn a_key_carrying_the_xor8_channel_round_trips() {
     let key = common::keccak_vk();
@@ -364,7 +363,7 @@ fn a_key_that_breaks_a_load_rule_is_refused() {
     let mut k = honest.clone();
     k.srs_verifier[0] ^= 1;
     cases.push(("the SRS digest is not the digest", k));
-    // S17: the generic table under the same digest.
+    // The generic table, under the same digest.
     let mut k = honest.clone();
     k.generic_table[2][5] ^= 1;
     cases.push(("the SRS digest is not the digest", k));
@@ -407,7 +406,7 @@ fn a_key_that_breaks_a_load_rule_is_refused() {
     let mut k = honest.clone();
     k.setup_commitments.pop();
     cases.push(("not one setup list per config family", k));
-    // S17's family reads the generic table: identity's seven setup
+    // `JUMP_BRANCH_SLT` reads the generic table: identity's seven setup
     // commitments are its first seven setup columns, the table the last
     // three, so a setup list of ten — the table carried as a family's own —
     // is refused, and so is one of six.
@@ -435,7 +434,7 @@ fn a_key_that_breaks_a_load_rule_is_refused() {
     }
 
     // A key whose config names a family its circuits do not: add/sub's
-    // circuit under a config of S17's family alone, whose circuit exists.
+    // circuit under a config of `JUMP_BRANCH_SLT` alone, whose circuit exists.
     let mut k = honest.clone();
     k.config = VmConfig {
         families: {
@@ -453,9 +452,10 @@ fn a_key_that_breaks_a_load_rule_is_refused() {
     );
 }
 
-/// The SRS digest is §3's recipe: one `SRS_VERIFIER` bytes message, then, since
-/// S17, the generic table as one `GENERIC_TABLE` message of twelve limbs, in a
-/// fresh sponge and one raw squeeze — and it moves with every byte of both.
+/// The SRS digest is `docs/spec/proof.md` §3's recipe: one `SRS_VERIFIER` bytes
+/// message, then the generic table as one `GENERIC_TABLE` message of twelve
+/// limbs, in a fresh sponge and one raw squeeze — and it moves with every byte
+/// of both.
 #[test]
 fn the_srs_digest_is_the_documented_recipe() {
     let bytes = [5u8; 320];

@@ -16,8 +16,9 @@
 //!   later rule or to `valid`.
 //! - the smallest valid input, and every undecodable one, each a different way
 //!   an SSZ body or its schema id is not a stateless input.
-//! - by name, the cases S-STATELESS's four conformance fixes were found by:
-//!   the validator as it stood before each fix refuses its case.
+//! - by name, the cases that pin `docs/spec/ethereum.md` §4.4's three rules,
+//!   each one where following reth gives a result other than the spec's: a
+//!   validator without the rule refuses its case.
 //!
 //! A release appears twice over, as blockchain and as engine fixtures with the
 //! same inputs; a case is kept once, under its first name. **The group refuses
@@ -41,10 +42,10 @@ const SUBSET: &str = "crates/host/tests/vectors/zkevm-subset.json";
 /// sizes instead.
 const MAX_CASE_BYTES: usize = 1 << 16;
 
-/// The cases the fixes were found by, each named by its test and parameters.
+/// The cases that pin those rules, each named by its test and parameters.
 const NAMED: [&str; 5] = [
     // A coinbase that is a contract no transaction calls: its code is not in
-    // the witness, and a database that loaded code with every account refused
+    // the witness, and a database that loads code with every account refuses
     // the block for it.
     "test_fill_stack[fork_Amsterdam-blockchain_test_from_state_test--g0]",
     // A deletion that collapses a branch before a write repopulates it, in a

@@ -252,8 +252,8 @@ pub(crate) fn pairing_check(pairs: &[(&[u8], &[u8])]) -> Result<bool, Precompile
 ///
 /// `read_g1_point` and `encode_g1_point` are the same functions
 /// [`g1_point_add`] calls, which is the whole point of putting this here: a
-/// malformed point, a coordinate at or above the modulus and the `(0, 0)`
-/// encoding of infinity are all refused by exactly the code that refuses them
+/// malformed point and a coordinate at or above the modulus are refused, and
+/// the `(0, 0)` encoding of infinity read, by exactly the code that does so
 /// on the host. Nothing about the precompile's contract moves.
 #[cfg(target_arch = "riscv32")]
 pub(crate) fn g1_point_add_delegated(

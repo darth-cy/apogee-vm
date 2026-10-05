@@ -4,12 +4,12 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# The fixture for the `EC_ADD` delegation (`docs/spec/delegation.md` §16).
+# The fixture for the `EC_ADD` delegation (`docs/spec/delegation-circuits.md` §7).
 #
-# Three dependencies and three kinds of check. `guest-sdk` is the shim, called
-# by name over frames this guest writes itself, once per curve: that is the
-# ABI's test, and the only place the three-group schedule is driven at the frame
-# level. `k256` and `ark-bn254` are the oracles, one per curve, asked for from
+# Three dependencies, besides `ark-ff`'s and `ark-ec`'s traits, and three kinds
+# of check. `guest-sdk` is the shim, called by name over frames this guest
+# writes itself, once per curve: that is the ABI's test, and the only place the
+# three-group schedule is driven at the frame level. `k256` and `ark-bn254` are the oracles, one per curve, asked for from
 # crates.io and answered by `guests/vendor` through the workspace's
 # `[patch.crates-io]` — and `k256` is the seam's test besides, its
 # `ProjectivePoint::add` being the very formula the circuit implements.
@@ -18,7 +18,7 @@ publish.workspace = true
 # precomputed tables, leaving the curve arithmetic. `ark-bn254` keeps its
 # default `curve` feature, which is what `G1Affine` is gated behind. Selecting
 # an upstream crate's features in a dependency entry is not a cargo feature of
-# ours (`crates/prover/tests/one_feature.rs`).
+# ours.
 [dependencies]
 guest-sdk.workspace = true
 k256 = { version = "0.13.4", default-features = false, features = ["arithmetic"] }

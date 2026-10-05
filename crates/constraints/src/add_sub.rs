@@ -3,9 +3,9 @@
 //! delegation request per registered delegation type
 //! (`docs/spec/delegation.md` §5).
 //!
-//! `docs/spec/shard-proof.md` §8 is normative: the columns, the gates, the
-//! lookups and the argument. This file is that section as data, assembled by
-//! S15's `memory::frame_with_channels_artifact` beside S14's frame.
+//! `docs/spec/add-sub.md` specifies it: the columns, the gates, the lookups
+//! and the argument. This file is that page as data, assembled by
+//! `memory::frame_with_channels_artifact` beside the memory frame.
 //!
 //! ```text
 //! frame     M[0..26], W[0..8]: pc rs1 rs2 rd deleg at slots 0..5
@@ -48,8 +48,8 @@ const DELEGATIONS: [(u32, u32, u8, usize); constants::delegation::TYPES.len()] =
 const TYPES: usize = DELEGATIONS.len();
 
 /// How many the **base format**'s circuit knows, and so how many request
-/// selectors [`artifact`] commits: frozen, which is what keeps every base key's
-/// bytes while the registry grows. [`recursion_artifact`] knows all [`TYPES`]
+/// selectors [`artifact`] commits: fixed, so a base key's bytes do not depend
+/// on the registry rows past them. [`recursion_artifact`] knows all [`TYPES`]
 /// (`docs/spec/recursion.md` §1.2).
 const BASE_TYPES: usize = constants::delegation::BASE_TYPES;
 const _: () = assert!(BASE_TYPES <= TYPES);
@@ -57,7 +57,7 @@ const _: () = assert!(BASE_TYPES <= TYPES);
 // The ecall numbers this family proves are pairwise distinct and each in its
 // ABI range, so `ecall_is_exit` and the per-type number gates **partition** its
 // ecall rows rather than two of them holding on one row
-// (`docs/spec/delegation.md` §2). Distinctness is what makes the partition:
+// (`docs/spec/delegation.md` §3). Distinctness is what makes the partition:
 // two selectors set at once would need `a7` to be two numbers at the same time.
 // No gate spells a number — each reads `constants::ecall` through the registry
 // above, the one place an ecall number lives. A `const` assertion rather than a
@@ -186,8 +186,7 @@ pub const IS_DELEGATION: [PolyAddress; BASE_TYPES] = [
     is_delegation(4),
     is_delegation(5),
 ];
-/// The keccak-f request selector, S21's `IS_KECCAK`, now the first of
-/// [`IS_DELEGATION`].
+/// The keccak-f request selector, the first of [`IS_DELEGATION`].
 pub const IS_KECCAK: PolyAddress = IS_DELEGATION[0];
 /// `W[28]`, the base format's [`wrap`].
 pub const WRAP: PolyAddress = wrap(BASE_TYPES);
@@ -308,14 +307,14 @@ fn names(list: &[&str]) -> Vec<String> {
     list.iter().map(|s| s.to_string()).collect()
 }
 
-/// The family's circuit over `2^trace_vars` rows, `docs/spec/shard-proof.md`
-/// §8. `trace_vars` is at least 19, the timestamp channel's width, which the
+/// The family's circuit over `2^trace_vars` rows, `docs/spec/add-sub.md`.
+/// `trace_vars` is at least 19, the timestamp channel's width, which the
 /// assembly refuses below; a Mercury opening needs it even as well.
 ///
 /// Panics if the family's frame is not the five queries this file addresses,
-/// or if any obligation count is not §8.3's — 16 timestamp (two a query, and
-/// S21's `deleg` is the eighth), 4 `RANGE16`, 1 decoder — and on every refusal
-/// of the assembly.
+/// or if any obligation count is not `docs/spec/add-sub.md` §3's — 10
+/// timestamp (two a query, `deleg` the fifth of five), 4 `RANGE16`, 1 decoder
+/// — and on every refusal of the assembly.
 pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     build(trace_vars, BASE_TYPES)
 }
@@ -603,7 +602,7 @@ fn build(trace_vars: u32, types: usize) -> CircuitArtifact {
     enforcing.push(("pc_wrap_boolean".into(), booleanity(pc_wrap)));
     // next_pc + 2^32·pc_wrap = decoded_next_pc, or HALT_PC on the exit row.
     // A delegation request is not an exit: its next_pc is the fall-through,
-    // so `is_exit = is_ecall - is_keccak` is what carries the sentinel.
+    // so `is_exit = is_ecall - Σ is_deleg_t` is what carries the sentinel.
     enforcing.push(("next_pc_rule".into(), {
         let mut linear = vec![
             (lit(1), next_pc),
@@ -649,9 +648,8 @@ fn build(trace_vars: u32, types: usize) -> CircuitArtifact {
             channels: channels_at(types),
         },
     );
-    // Every obligation is built above and then handed over, so a count is
-    // what shows none was dropped on the way (S14 must-be-exact 5, S15's
-    // per-channel form).
+    // Every obligation is built above and then handed over, so a count per
+    // channel is what shows none was dropped on the way.
     for (channel, want) in [
         (lookup_channel::TIMESTAMP, 2 * QUERIES.len()),
         (lookup_channel::RANGE16, 4),

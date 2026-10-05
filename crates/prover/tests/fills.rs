@@ -4,40 +4,27 @@
 //! This is the cheap half of what a delegation shard's proof would show, and
 //! it is here because the expensive half is `#[ignore]`d.
 //!
-//! **Two of these are themselves `#[ignore]`d since S26c, and for memory rather
-//! than time.** `MOD_MUL` and `EC_ADD` are at `2^16` — `RANGE16`'s table
-//! needs sixteen variables — so a fill of either is its full committed width over
-//! 65,536 rows, and `EC_ADD`'s width is 1,420. **Measured at S26c**, when
-//! `KECCAK_F` was one permutation a row at `2^8` — 3,764 committed columns over
-//! 256 rows, so a couple of megabytes and no contribution to either figure: the
-//! four remaining tests were 1.72 GiB and 1.73 s, and all six **19.1 GiB** in
-//! 6.18 s. Neither figure has been re-measured since, and the keccak fill is
-//! what moved under both — 0.52 GiB at S26d's `2^16` and **2.08 GiB** at the
-//! `2^18` this file's `common::KECCAK_VARS` takes now, which is 2.08 GiB the
-//! four did not carry before. Do not add that to the 19.1: a peak is a maximum,
-//! the deferred run is `--test-threads=1`, and under `--ignored` the keccak fill
-//! is not in it at all. The two that
-//! cost that are a dev-server run (root `CLAUDE.md`'s deferred list). What still
-//! holds those two circuits in ordinary CI is `crates/checker/tests/{mod_mul,ec_add}.rs`,
+//! **Two of these are themselves `#[ignore]`d, for memory rather than time.**
+//! `MOD_MUL` and `EC_ADD` are at `2^16` — `RANGE16`'s table needs sixteen
+//! variables — so a fill of either is its full committed width over 65,536
+//! rows, and `EC_ADD`'s width is 1,420: the two peaked at 19.1 GiB. What holds
+//! those two circuits in ordinary CI is `crates/checker/tests/{mod_mul,ec_add}.rs`,
 //! which evaluate the same gates row-locally at the same height from witnesses
 //! derived independently of any fill — so the *circuits* stay covered and it is
 //! the *fill* that does not, which is this file's own subject and worth being
-//! plain about. `prove_shard` reads
-//! the fill's columns back by address through `BaseLayer::get`, so a fill that
-//! writes one address twice silently drops a column and leaves another unset,
-//! and `gkr_part` panics on `"a witness column"` at the far end of a 113-second
-//! proof with nothing said about which one.
+//! plain about. `prove_shard` reads the fill's columns back by address through
+//! `BaseLayer::get`, so a fill that writes one address twice silently drops a
+//! column and leaves another unset, and `gkr_part` panics on
+//! `"a witness column"` at the far end of a 113-second proof with nothing said
+//! about which one.
 //!
 //! The way that happens is a shared builder and a family that lays its columns
 //! out differently. Two builders serve the six delegation families —
-//! `prover::fill::delegation_frame` for the three that decompose into bits and
-//! `delegation_frame_range16` for the three that range-check through `RANGE16` —
-//! and both write the frame's own witness columns at `W[0]`. S21's `keccak` was
-//! the one exception, putting its 1,600 state bits first and its frame's bits at
-//! `W[1600]`, which is why the bit builder carried a `witness_base` offset until
-//! S26d re-shaped that family. What replaces the offset is the invariant below:
-//! **every** delegation frame's witness columns start at `W[0]`. Nothing about
-//! the addresses depends on what the guest computed, so one invocation of each is
+//! `prover::fill::delegation_frame` for the two that decompose into bits and
+//! `delegation_frame_range16` for the four that range-check through `RANGE16` —
+//! and both write the frame's own witness columns at `W[0]`: **every**
+//! delegation frame's witness columns start at `W[0]`. Nothing about the
+//! addresses depends on what the guest computed, so one invocation of each is
 //! as decisive as a full shard.
 
 use constants::family;
@@ -77,9 +64,9 @@ fn addresses(out: &[(PolyAddress, poly::MultilinearPoly)]) -> (Vec<u32>, Vec<u32
 /// the witness subtree and are **not the fill's**: `prover`'s shard-column
 /// assembly appends them with `trace::build_multiplicities`, after the fill and
 /// over the tuples the fill wrote. A caller passes
-/// `WITNESS_COLUMNS - channels().len()` for a family that carries a channel,
-/// which since S26c is `MOD_MUL` and `EC_ADD` and since S26d `KECCAK_F` too —
-/// and that family carries **two**, so the subtraction is not always one.
+/// `WITNESS_COLUMNS - channels().len()` for a family that carries a channel —
+/// `KECCAK_F`, `MOD_MUL`, `SHA256_COMP` and `EC_ADD` — and `KECCAK_F` and
+/// `SHA256_COMP` carry **two**, so the subtraction is not always one.
 fn covers(program: &Program, archive: &trace::TraceArchive, family: u32, m: usize, w: usize) {
     let name = program::family_name(family);
     let height = program
@@ -99,17 +86,15 @@ fn covers(program: &Program, archive: &trace::TraceArchive, family: u32, m: usiz
     assert_eq!(witness, (0..w as u32).collect::<Vec<_>>(), "{name}'s W");
 }
 
-/// S21's family, re-shaped at S26d: one round a row, 1,556 witness columns and
-/// not a bit among them. The regression this guards is the same as the other
-/// five's — a column the circuit declares and the fill never writes is a
+/// `KECCAK_F`: one round a row, 1,556 witness columns and not a bit
+/// decomposition among them. The regression this guards is the same as the
+/// other five's — a column the circuit declares and the fill never writes is a
 /// `gkr_part` panic at the far end of a proof — and this family has the most
 /// blocks to get wrong: nine byte-wide stages, a 24-column one-hot selector and
 /// a four-column round constant, one of which (`rho_mask`) is 22 lanes and not
 /// 25.
 ///
-/// **It subtracts `channels().len()` since S26d**, like `MOD_MUL`'s and
-/// `EC_ADD`'s below: this family carried no channel until then, so the
-/// unsubtracted constant was right and is not any more.
+/// **It subtracts `channels().len()`**, like `MOD_MUL`'s and `EC_ADD`'s below.
 #[test]
 fn the_keccak_fill_covers_its_circuit_exactly() {
     let program = common::keccak_program();
@@ -123,7 +108,8 @@ fn the_keccak_fill_covers_its_circuit_exactly() {
     );
 }
 
-/// S23's two, whose frames start at `W[0]` and whose own columns sit above.
+/// `POSEIDON2` and `FR_ARITH`, whose frames start at `W[0]` and whose own
+/// columns sit above.
 #[test]
 fn the_recursion_fills_cover_their_circuits_exactly() {
     let program = common::recursion_program();
@@ -144,14 +130,14 @@ fn the_recursion_fills_cover_their_circuits_exactly() {
     );
 }
 
-/// S26's, whose frame also starts at `W[0]` and whose quotient, borrow chain and
-/// carries sit above four values' bits.
+/// `MOD_MUL` and `EC_ADD`, whose frames also start at `W[0]` and whose
+/// quotients, borrow chains and carries sit above.
 ///
-/// It is the one delegation fill that computes a column the execution never
-/// recorded — the quotient — so "covers its circuit exactly" is also the check
-/// that `mod_mul_witness` wrote every carry it was supposed to.
+/// Their fills compute columns the execution never recorded — the quotient
+/// and the carries — so "covers its circuit exactly" is also the check that
+/// `mod_mul_witness` wrote every carry it was supposed to.
 #[test]
-#[ignore = "DEFERRED: fills two 2^16 delegation shards -- EC_ADD alone is 1,420 committed columns over 65,536 rows. With `every_delegation_fill_satisfies_every_gate` the file peaked at 19.1 GiB when that was measured at S26c, above what a GitHub runner has"]
+#[ignore = "fills two 2^16 delegation shards -- EC_ADD alone is 1,420 committed columns over 65,536 rows. With `every_delegation_fill_satisfies_every_gate` the file peaked at 19.1 GiB, above what a GitHub runner has"]
 fn the_mod_mul_and_ec_add_fills_cover_their_circuits_exactly() {
     let program = common::mod_mul_program();
     let archive = common::mod_mul_archive(&program);
@@ -173,14 +159,13 @@ fn the_mod_mul_and_ec_add_fills_cover_their_circuits_exactly() {
     );
 }
 
-/// **Every gate holds on the fill's own columns**, for each of the three
-/// delegation families whose fill S26 and S26c wrote.
+/// **Every gate holds on the fill's own columns**, for `MOD_MUL` and `EC_ADD`.
 ///
 /// `covers` above is set equality over addresses, and a permutation is
 /// invisible to it: swap two values in the fill's list and every column is
 /// still written exactly once, at an address the circuit has, with a value
 /// that belongs to another column. That failure surfaces as
-/// `LayerInconsistency { layer }` from a deferred proof, naming nothing.
+/// `LayerInconsistency { layer }` from a proof, naming nothing.
 ///
 /// This is the fast test that catches it, and the mutations it is here for are
 /// specific: a value index renumbered against the circuit's own `VALUES`, a
@@ -191,14 +176,13 @@ fn the_mod_mul_and_ec_add_fills_cover_their_circuits_exactly() {
 /// one. None of those is visible to `covers`, to `checker`'s hand-built
 /// witness, or to anything else in ordinary CI.
 ///
-/// **`EC_ADD` is here because its fill was wrong and this is what says so.**
-/// S26c wrote it against a `below_modulus` gate that read `b_7 = enable`, so a
-/// non-reading value's chain was filled with zeros; the gate is
-/// `enable·(1 - b_7) = 0` and the chain's sixteen `canonical` gates are
-/// ungated, so the zeros satisfy them only where `v = m`. Nothing in the
-/// executor, the guests or the shape tests could see it.
+/// **`EC_ADD` is here because a fill that writes zeros for a value its row does
+/// not read is wrong, and this is what says so.** The `below_modulus` gate is
+/// `enable·(1 - b_7) = 0`, but the chain's sixteen `canonical` gates are
+/// ungated, so zeros satisfy them only where `v = m`. Nothing in the executor,
+/// the guests or the shape tests can see it.
 #[test]
-#[ignore = "DEFERRED: same two 2^16 fills; the sampled row evaluation is cheap and the fills are not. See the sibling test's note"]
+#[ignore = "same two 2^16 fills; the sampled row evaluation is cheap and the fills are not. See the sibling test's note"]
 fn every_delegation_fill_satisfies_every_gate() {
     let program = common::mod_mul_program();
     let archive = common::mod_mul_archive(&program);
@@ -219,13 +203,11 @@ fn every_delegation_fill_satisfies_every_gate() {
 
 /// `SHA256_COMP`'s fill: every address of its `2^18` circuit exactly once.
 ///
-/// S26c's whole-compression row was at `2^8`, where a forward pass over the
-/// filled shard was 137 MB and this test ran one. S26e's four-round row is at
-/// `2^18`, where a pass is the ~23 GB a deferred suite pays, so this is the
-/// address check the other channel-carrying families get, and the values are
-/// `crates/checker/tests/sha256.rs`' — which evaluates the fill's own columns,
-/// multiplicities included, against every gate and every obligation, row by
-/// row, over this same guest's trace.
+/// At `2^18` a forward pass is ~23 GB, so this is the address check the other
+/// channel-carrying families get, and the values are `crates/checker/tests/
+/// sha256.rs`' — which evaluates the fill's own columns, multiplicities
+/// included, against every gate and every obligation, row by row, over this
+/// same guest's trace.
 #[test]
 fn the_sha256_fill_covers_its_circuit_exactly() {
     let program = common::sha256_program();
@@ -243,10 +225,10 @@ fn the_sha256_fill_covers_its_circuit_exactly() {
 ///
 /// **Why a sample and not a forward pass.** `MOD_MUL` and `EC_ADD` carry the
 /// `RANGE16` channel and both take that channel's `2^16` floor as their height
-/// (`docs/spec/delegation.md` §10.3), and `gkr::forward` over one is 4.6 GB and
-/// 18.3 GB respectively — deferred-suite figures, in a suite whose whole point
-/// is to be fast. A relation is **row-local**, so evaluating rows is the same
-/// statement per row at a few megabytes.
+/// (`docs/spec/delegation.md` §9), and `gkr::forward` over one is 4.6 GB and
+/// 18.3 GB respectively, in a suite whose whole point is to be fast. A
+/// relation is **row-local**, so evaluating rows is the same statement per row
+/// at a few megabytes.
 ///
 /// The rows chosen are the first `head` and the last `tail`, which is where the
 /// mutations this test exists for live: a renumbered value index, a chain
@@ -368,19 +350,20 @@ fn sampled_rows_hold(
 /// **Every** delegation frame's witness columns start at `W[0]`, which is what
 /// lets one builder per range convention serve every family without an offset.
 ///
-/// This is the S26d replacement for `the_frame_witness_base_is_per_family`: that
-/// test pinned `keccak`'s frame bits sitting at `W[1600]`, the one exception, and
-/// the offset parameter that existed for it alone is deleted. The mutation this
-/// catches is the one that matters now — a later delegation family putting its
-/// own columns before the frame's, which the shared builder would silently
-/// overwrite.
+/// The mutation this catches is a delegation family putting its own columns
+/// before the frame's, which the shared builder would silently overwrite.
 ///
-/// The three bit-decomposing families' frames start with a gap **bit**; the three
-/// that range-check through `RANGE16` start with a gap **chunk**.
+/// The two bit-decomposing families' frames start with a gap **bit**;
+/// `MOD_MUL`'s, `EC_ADD`'s and `KECCAK_F`'s, which range-check through
+/// `RANGE16`, start with a gap **chunk**.
 #[test]
 fn every_frame_witness_block_starts_at_zero() {
     for a in [p2_circuit::gap_bit(0, 0), fa_circuit::gap_bit(0, 0)] {
-        assert_eq!(a, PolyAddress::Witness(0), "S23's frames start at W[0]");
+        assert_eq!(
+            a,
+            PolyAddress::Witness(0),
+            "POSEIDON2's and FR_ARITH's frames start at W[0]"
+        );
     }
     for a in [
         mm_circuit::gap_chunk(0, 0),

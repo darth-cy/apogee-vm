@@ -102,7 +102,7 @@ fn one_serializes_as_non_montgomery() {
     );
     assert_eq!(Fr::ZERO.to_bytes(), [0u8; 32]);
 
-    // p - 1 on the wire, computed from the frozen modulus limbs.
+    // p - 1 on the wire, computed from the modulus limbs.
     let mut minus_one = limbs_to_bytes(&FR_MODULUS);
     minus_one[0] -= 1;
     assert_eq!(Fr::MINUS_ONE.to_bytes(), minus_one);
@@ -233,7 +233,7 @@ fn batch_inverse_boundary_shapes() {
 }
 
 // ---------------------------------------------------------------------------
-// `from_hex`: the source-literal form for frozen constant tables.
+// `from_hex`: the source-literal form for constant tables.
 //
 // Big-endian, `0x`-prefixed, exactly 64 lowercase digits — the order `Debug`
 // prints and the order upstream tables are written in, deliberately not the

@@ -1,4 +1,4 @@
-//! Acceptance 1 and 9: the committed fixture for one fixed seeded 10-variable
+//! The committed fixture for one fixed seeded 10-variable
 //! polynomial, replayed byte-exact, and the negative control that proves the
 //! replay can fail.
 //!
@@ -246,7 +246,7 @@ fn replay_evaluations(k: &Kats) -> Result<(), String> {
             return Err(format!("evaluation {case} disagrees with the fixture"));
         }
     }
-    // Must-be-exact 3: reading never lifts.
+    // Reading never lifts.
     if p.backing() != &PolyBacking::U32(k.source.clone()) {
         return Err("evaluate mutated the backing".to_string());
     }
@@ -263,7 +263,7 @@ fn replay_eq_tables(k: &Kats) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 1
+// The committed fixture
 // ---------------------------------------------------------------------------
 
 /// A fixture that quietly shrank would satisfy every replay below without
@@ -275,7 +275,7 @@ fn the_committed_fixture_covers_what_it_claims() {
     assert_eq!(k.source.len(), 1024);
     assert_eq!(k.challenges.len(), 10);
     assert_eq!(k.bind.len(), 10);
-    assert_eq!(k.results.len(), 20, "acceptance 1 asks for 20 points");
+    assert_eq!(k.results.len(), 20, "the fixture evaluates at 20 points");
     assert_eq!(k.eq.len(), 7, "eq_table on prefixes 0..=6");
     assert!(
         k.source.iter().any(|v| *v > u32::MAX / 2),
@@ -326,7 +326,7 @@ fn eq_table_matches_eq_eval_over_the_whole_cube() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 9: the negative control
+// The negative control
 // ---------------------------------------------------------------------------
 
 /// One flipped digit anywhere in the file — in an expected value or in an input

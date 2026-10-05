@@ -696,7 +696,7 @@ pub fn halves(limbs: &[u64; 4]) -> [Fr; 2] {
 // ---------------------------------------------------------------------------
 
 /// Which of the accumulator's two MSMs a point goes to: `A`, paired with
-/// `[1]_2`, or `B`, with `[x]_2` (`docs/spec/accumulator.md` §2).
+/// `[1]_2`, or `B`, with `[x]_2` (`docs/spec/mercury.md` §6.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
     A,

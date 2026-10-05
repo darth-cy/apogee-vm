@@ -1,6 +1,6 @@
 //! The elliptic-curve addition circuit, gate by gate.
 //!
-//! `docs/spec/delegation.md` §16 is what this suite restates: the 97-word
+//! `docs/spec/delegation-circuits.md` §7 is what this suite restates: the 97-word
 //! frame, the six-way (curve, group) selector, the anchor's two tuples, and the
 //! nine reductions' shared identity `A·B + C·D + 1024·m² = q·m + out` with every
 //! frame value and every `out` below `m`.
@@ -9,7 +9,7 @@
 //! evaluated alone through `checker::violated_relations`, its row-local scratch
 //! computed by `gkr::gate_values`, exactly as `tests/mod_mul.rs` does and for
 //! the same reason — this family carries the `RANGE16` channel
-//! (`docs/spec/delegation.md` §10.3), whose table needs sixteen variables, so
+//! (`docs/spec/delegation.md` §9), whose table needs sixteen variables, so
 //! the circuit exists only at `2^16` and a whole-shard forward pass is
 //! impossible.
 //!
@@ -39,8 +39,8 @@
 //! all six families and already proved refused at block level over four of
 //! them in `tests/tamper.rs` — including `MOD_MUL`, which also carries a lookup
 //! channel, so even that combination is not new. A fifth replay would be the
-//! same mutation set at another re-proof in the slowest deferred suite, which
-//! the root `CLAUDE.md`'s test rule exists to refuse.
+//! same mutation set at the cost of another re-proof in the slowest suite: cost
+//! without information.
 
 use constants::ec_add as f;
 use constants::{challenge_slot, guest_memory, memory as mem};
@@ -295,7 +295,7 @@ struct Slot {
     out_word: usize,
 }
 
-/// Group `g`'s three slots, transcribed from `docs/spec/delegation.md` §16.
+/// Group `g`'s three slots, transcribed from `docs/spec/delegation-circuits.md` §7.
 ///
 /// **`D` carries the sign.** Slot 0 of group 2 is `xy·ym − byz3·xz`, and the
 /// identity has one shape for every group, so the minus rides `D` — which is
@@ -1026,8 +1026,8 @@ fn the_circuit_keeps_every_rule() {
 
 #[test]
 fn it_is_the_one_delegation_family_with_a_channel() {
-    // `docs/spec/delegation.md` §10.3's amendment, as an assertion: this family
-    // and `MOD_MUL` carry `RANGE16` at `2^16`, and the other four carry none.
+    // `docs/spec/delegation.md` §9's table, as an assertion: this family
+    // carries `RANGE16` alone, and its floor is that table's `2^16`.
     let channels = c::channels();
     assert_eq!(channels.len(), 1);
     assert_eq!(
@@ -1398,8 +1398,7 @@ fn a_padding_row_holds_and_a_live_one_next_to_it_does_too() {
 #[test]
 fn a_height_moves_only_the_halving_layers() {
     // A delegation family's height adds one halving list per variable and
-    // changes no gate (`docs/spec/delegation.md` §9.2), which is what made
-    // `MOD_MUL`'s raise a re-pin and not a redesign.
+    // changes no gate (`docs/spec/delegation.md` §9).
     let lo = c::artifact(VARS);
     let hi = c::artifact(VARS + 2);
     let d = (hi.trace_vars - lo.trace_vars) as usize;

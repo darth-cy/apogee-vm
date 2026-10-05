@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-//! S-IO's guest: the whole public-values architecture in one small program.
+//! The public-values guest: the whole architecture in one small program.
 //!
 //! ```text
 //! bulk data               -> ADVICE          prover-supplied, bound by nothing
@@ -10,8 +10,8 @@
 //!
 //! It issues **no ecall but `EXIT`**: `public_input`, `advice` and `commit` are
 //! ordinary loads and stores (`docs/spec/public-values.md`). That is the whole
-//! I/O model — there are no descriptors, no streams and no I/O syscall to
-//! contrast it with any more — and this guest is the smallest program that uses
+//! I/O model — there are no descriptors, no streams and no I/O syscall —
+//! and this guest is the smallest program that uses
 //! all three of its regions at once.
 //!
 //! # What it does, and why that shape

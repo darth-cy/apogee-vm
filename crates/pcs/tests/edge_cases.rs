@@ -1,8 +1,8 @@
-//! Acceptance 6: the committed `z^b = alpha` instance.
+//! The committed `z^b = alpha` instance.
 //!
-//! Must-be-exact 3(b) says `z^b = alpha` is legal and must verify, because the
-//! `(z^b - alpha) q` term vanishes. No honest run reaches it — `alpha` is
-//! squeezed four steps before `z`, so the coincidence has probability about
+//! `z^b = alpha` is legal and must verify, because the `(z^b - alpha) q` term
+//! vanishes. No honest run reaches it — `alpha` is squeezed four steps before
+//! `z`, so the coincidence has probability about
 //! `2^-254` — and `Fr` has no `b`-th root to grind toward. So the instance is
 //! **harness-constructed**: `tools/kat-gen` picks `z`, *defines* `alpha := z^b`,
 //! and builds every polynomial from its definition. Nothing bypasses the
@@ -107,7 +107,7 @@ fn parse(text: &str) -> Result<Kat, String> {
 }
 
 /// The whole check, as one fallible routine so a corrupted fixture has
-/// something to fail (master rule 8).
+/// something to fail.
 fn replay(text: &str) -> Result<Vec<AccumulatorEntry>, String> {
     let kat = parse(text)?;
     if kat.tau != Fr::from_hex(common::TOY_TAU).expect("the toy tau is canonical") {
@@ -136,7 +136,7 @@ fn replay(text: &str) -> Result<Vec<AccumulatorEntry>, String> {
         return Err("the claim is not fhat(u)".to_string());
     }
 
-    // The two values `docs/spec/mercury.md` §7 derives rather than receives,
+    // The two values `docs/spec/mercury.md` §3.4 derives rather than receives,
     // recomputed from the six sent evaluations and checked against the ones the
     // harness read straight off the polynomials.
     let (h_alpha, d_z) = common::derived(&kat.u, kat.v, &kat.proof, &c);
@@ -157,7 +157,7 @@ fn replay(text: &str) -> Result<Vec<AccumulatorEntry>, String> {
     Ok(entries)
 }
 
-/// Acceptance 6: the committed instance passes every verifier equation.
+/// The committed instance passes every verifier equation.
 #[test]
 fn the_committed_z_pow_b_equals_alpha_instance_verifies() {
     let entries = replay(KAT).expect("the committed instance verifies");
@@ -174,7 +174,7 @@ fn the_committed_z_pow_b_equals_alpha_instance_verifies() {
     assert_eq!(zeros, vec![2], "only the q term vanishes");
 }
 
-/// Master rule 8: the replayer must be able to fail.
+/// The replayer must be able to fail.
 #[test]
 fn a_corrupted_z_pow_b_fixture_is_rejected() {
     let body: String = KAT
@@ -245,6 +245,6 @@ fn flip_first_digit(token: &str) -> String {
 fn the_committed_file_is_the_pinned_one() {
     assert_eq!(
         to_hex(&sha256(KAT.as_bytes())),
-        "febc285030af9992629cefcbefb0819205d591e310d7c2d6347ddda523565549"
+        "fdf5183bb1aab3dd87b33d6a83d5b41c5a65af9f8bc6c5be38405978e8dbc72a"
     );
 }

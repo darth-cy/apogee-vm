@@ -1,5 +1,5 @@
-//! Acceptance 1 and 2: the protocol round trip, the differential against S07's
-//! KZG commitment, and the menu heights.
+//! The protocol round trip, the differential against `srs`'s KZG commitment,
+//! and the menu heights.
 
 mod common;
 
@@ -8,10 +8,9 @@ use srs::kzg::kzg_commit;
 use test_support::Rng;
 use transcript::Transcript;
 
-/// Acceptance 1: commit, open and verify at `n = 2^16` over a random `f` and a
-/// random `u`, the opened value is `MultilinearPoly::evaluate(u)`, and the
-/// commitment is exactly S07's KZG commitment of the evaluation table read as
-/// coefficients.
+/// Commit, open and verify at `n = 2^16` over a random `f` and a random `u`,
+/// the opened value is `MultilinearPoly::evaluate(u)`, and the commitment is
+/// exactly `srs::kzg::kzg_commit` of the evaluation table read as coefficients.
 #[test]
 fn the_round_trip_holds_at_two_to_the_sixteen() {
     let srs = common::toy_srs(16);
@@ -52,11 +51,10 @@ fn the_round_trip_holds_at_two_to_the_sixteen() {
     );
 }
 
-/// Acceptance 2 in CI: every even height the toy SRS can reach cheaply,
-/// including the smallest menu height and the smallest even one above it.
-/// (`2^12` joined the menu at S-STREAM for the public-value families; the
-/// list below predates it and is a list of variable counts, not of menu
-/// entries, so it is unaffected.)
+/// The menu heights in CI: every even height the toy SRS can reach cheaply,
+/// including the smallest menu height and the smallest even one above it. The
+/// list is of variable counts, not of menu entries, so it does not hold the
+/// menu's `2^12`.
 #[test]
 fn every_small_even_height_round_trips() {
     let srs = common::toy_srs(18);
@@ -77,7 +75,7 @@ fn every_small_even_height_round_trips() {
     }
 }
 
-/// Acceptance 2 in full: the master's height menu, over the real ceremony.
+/// The height menu from `2^16` up, over the real ceremony.
 /// Needs `assets/ptau/ppot_0080_24.ptau`; returns quietly without it.
 #[test]
 fn every_menu_height_round_trips_over_the_ceremony() {

@@ -1,18 +1,18 @@
 #![no_std]
 #![no_main]
-//! S23's guest: `field::Fr` arithmetic and `transcript::poseidon2_permute`,
-//! checked in-guest against values the same two crates compute on the host.
+//! `field::Fr` arithmetic and `transcript::poseidon2_permute`, checked
+//! in-guest against values the same two crates compute on the host.
 //!
 //! It is the fixture for both delegation families
-//! (`docs/spec/delegation.md` §12 and §13). Under `crates/emulator` every `Fr`
+//! (`docs/spec/delegation-circuits.md` §3 and §4). Under `crates/emulator` every `Fr`
 //! multiply, add and inverse becomes an `FR_ARITH` invocation and the
 //! permutation a `POSEIDON2` one; on an executor with no circuit the same
 //! ecalls answer `-ENOSYS` and the software paths inside `field` and
 //! `transcript` run instead. **The values are the same either way** — they are
-//! the same code — which is what acceptances 1 and 2 ask of the fallback.
+//! the same code — which is the property the fallback exists to have.
 //!
-//! It calls no shim by name. That is the point: `S26`'s verifier guest will
-//! write ordinary `Fr` arithmetic, and this guest is the evidence that
+//! It calls no shim by name. That is the point: a guest writes ordinary
+//! `Fr` arithmetic, and this guest is the evidence that
 //! ordinary `Fr` arithmetic is what the delegations accelerate.
 //!
 //! # Input, advice and the journal

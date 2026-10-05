@@ -10,7 +10,7 @@ loader.workspace = true
 # The RAM window, printed in the report so a reader can place the segments
 # without opening another file.
 constants.workspace = true
-# The frozen wire form. Taken with no features, exactly as `crates/loader`'s
+# The wire form. Taken with no features, exactly as `crates/loader`'s
 # own tests take it, so what this writes is the encoding those tests exercise.
 postcard.workspace = true
 # sha256 and hex, for the digests that pin an artifact to its ELF.

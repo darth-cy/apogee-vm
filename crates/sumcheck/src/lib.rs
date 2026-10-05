@@ -7,7 +7,7 @@
 //! A [`Gate`] `G` is a sum of terms `coef * x_a * x_b`, where `x_a` and `x_b`
 //! name input columns and the second factor is optional. Every column is a
 //! multilinear polynomial in the same `n` variables, so `G` has degree at most
-//! **2 in each variable** — the ceiling the master prompt fixes.
+//! **2 in each variable**, the degree ceiling (`docs/spec/primitives.md` §7).
 //!
 //! The zerocheck claim is `G(y) = 0 for every y in {0,1}^n`. It is discharged
 //! as the sumcheck
@@ -26,7 +26,7 @@
 //! `n / |Fr|` fraction of `Fr^n` — with `r` modelled as uniform, which is the
 //! Fiat–Shamir assumption the transcript carries.
 //!
-//! # The transcript script (frozen)
+//! # The transcript script
 //!
 //! Prover and verifier drive the transcript with the same typed messages in the
 //! same order; no challenge is ever passed out of band.
@@ -44,15 +44,15 @@
 //!
 //! # What this does not do
 //!
-//! Nothing here checks `final_evals` against a commitment: the Mercury PCS
-//! arrives in a later stage. [`verify_zerocheck`] returns the
-//! [`SumcheckClaim`] and the caller discharges the openings.
+//! Nothing here checks `final_evals` against a commitment: that is an opening,
+//! and the caller's. [`verify_zerocheck`] returns the [`SumcheckClaim`] and the
+//! caller discharges the openings.
 //!
 //! Be precise about what that leaves open. The last-layer check constrains one
 //! field element — `G(final_evals)` — so many different `final_evals` satisfy
 //! it, and a prover is free to choose among them. What ties them to the actual
-//! columns is an opening, and until there is one the only binding on the
-//! witness is the digest, which is a hash and not a commitment.
+//! columns is an opening, and without one the only binding on the witness is
+//! the digest, which is a hash and not a commitment.
 
 extern crate alloc;
 
@@ -70,7 +70,7 @@ use transcript::Transcript;
 /// The identifier of a polynomial.
 ///
 /// In production proving there is one registry mapping addresses to columns;
-/// a gate names its inputs by address rather than holding them. This stage has
+/// a gate names its inputs by address rather than holding them. This crate has
 /// no registry — [`prove_zerocheck`] takes the columns positionally, in the
 /// gate's declaration order — so the address is carried, checked for
 /// duplicates, and otherwise inert.
@@ -141,9 +141,8 @@ impl Gate {
         })
     }
 
-    /// The number of declared inputs. Deliberately not public: the frozen API
-    /// is the stage's list, and a caller building a gate already knows its
-    /// arity.
+    /// The number of declared inputs. Deliberately not public: a caller
+    /// building a gate already knows its arity.
     fn arity(&self) -> usize {
         self.inputs.len()
     }
@@ -452,7 +451,7 @@ pub fn verify_zerocheck(
         point.push(c);
     }
 
-    // Absorbed before the check, and before any challenge a later stage draws:
+    // Absorbed before the check, and before any challenge drawn after it:
     // the values are never trusted silently.
     t.append_scalars(transcript_tags::SUMCHECK_FINAL_EVALS, &proof.final_evals);
     if eq_eval(&r, &point) * gate.evaluate(&proof.final_evals) != claim {

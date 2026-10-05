@@ -51,18 +51,18 @@ pub const DECLARING_GUESTS: [(&str, &[u32]); 9] = [
     ("keccak-unused", &[family::KECCAK_F]),
     ("recursion-ops", &[family::POSEIDON2, family::FR_ARITH]),
     ("recursion-unused", &[family::POSEIDON2, family::FR_ARITH]),
-    // S26's fixture declares **two** families since S26c and neither is one of
-    // S23's: it does secp256k1 arithmetic through `k256` and no `field::Fr`
-    // arithmetic at all, so the two S23 records are unreachable and the linker
-    // drops them. `EC_ADD` joined `MOD_MUL` when S26c patched `k256`'s
-    // `ProjectivePoint`, which this guest's group checks reach — the guest's
-    // own source names neither shim. That is static detachment saying
-    // something (`docs/spec/delegation.md` §7).
+    // The `MOD_MUL` fixture declares **two** families and neither is
+    // `POSEIDON2` or `FR_ARITH`: it does secp256k1 arithmetic through `k256`
+    // and no `field::Fr` arithmetic at all, so those two records are
+    // unreachable and the linker drops them. `EC_ADD` is there because the
+    // vendored `k256` patches `ProjectivePoint`, which this guest's group
+    // checks reach — the guest's own source names no `EC_ADD` shim. That is
+    // static detachment saying something (`docs/spec/delegation.md` §7).
     ("mod-mul-ops", &[family::MOD_MUL, family::EC_ADD]),
-    // S26c's two fixtures. `sha256-ops` names the SHA-256 shim and nothing
-    // else; `ec-ops` names the EC_ADD shim and reaches `MOD_MUL` besides,
-    // through the same `k256` and `ark-bn254` field arithmetic its oracles run
-    // on.
+    // The `SHA256_COMP` and `EC_ADD` fixtures. `sha256-ops` names the SHA-256
+    // shim and nothing else; `ec-ops` names the EC_ADD shim and reaches
+    // `MOD_MUL` besides, through the same `k256` and `ark-bn254` field
+    // arithmetic its oracles run on.
     ("sha256-ops", &[family::SHA256_COMP]),
     ("ec-ops", &[family::MOD_MUL, family::EC_ADD]),
 ];
@@ -77,7 +77,7 @@ pub const PINS: [(&str, &str); 3] = [
     ),
     (
         "identity.txt",
-        "f4f7891739e2f3681519bf11bcd64f0608e2665dac19b9b5c8202dc6ba81d8cd",
+        "605bc8d2f4b7bfce5b75aba668faf30cc5219718a0738ebe16e6e11a46e24210",
     ),
     (
         "generic_table.txt",
@@ -131,20 +131,19 @@ pub fn instructions(image: &ProgramImage) -> Vec<(u32, u32, bool)> {
 
 /// Every family at the smallest menu height a *decoded* table can take.
 ///
-/// Since S21 the menu opens with `2^8` — among the delegation families now
-/// `POSEIDON2`'s and `FR_ARITH`'s rather than `KECCAK_F`'s or `SHA256_COMP`'s,
-/// which take `2^18`, and S-IO's two public families pin the entry anyway: a
-/// delegation family's rows are invocations, not halfwords, so 256 rows is a
-/// sensible table there and no guest's code fits in 256 halfwords anywhere else
+/// The menu opens with `2^8` — among the delegation families `POSEIDON2`'s and
+/// `FR_ARITH`'s, `KECCAK_F` and `SHA256_COMP` taking `2^18` — and then `2^12`,
+/// the two public-value families' pinned height: a delegation family's rows
+/// are invocations, not halfwords, so 256 rows is a sensible table there, and
+/// no guest's code fits in a table that short anywhere else
 /// (`docs/spec/delegation.md` §9). The floor for an instruction table is
-/// therefore the menu's *third* entry since S-STREAM put `2^12` at index 1 for
-/// the two public-value families, and the tests below spell that height out in
-/// their own arithmetic — pc `0x1fffe` is row 65535 — so it is asserted here
-/// rather than left to an index. A 2^16 table is cheap enough to export in
-/// full, and every committed guest but `mod-mul-ops` fits in one.
+/// therefore the menu's *third* entry, and the tests below spell that height
+/// out in their own arithmetic — pc `0x1fffe` is row 65535 — so it is asserted
+/// here rather than left to an index. A 2^16 table is cheap enough to export
+/// in full, and every committed guest but `mod-mul-ops` fits in one.
 pub fn smallest() -> ProgramParams {
     let height = family::HEIGHT_MENU[2];
-    assert_eq!(height, 1 << 16, "the menu's third entry is no longer 2^16");
+    assert_eq!(height, 1 << 16, "the menu's third entry is not 2^16");
     ProgramParams {
         heights: [height; family::COUNT as usize],
         ..ProgramParams::defaults()
@@ -156,7 +155,7 @@ pub fn smallest() -> ProgramParams {
 /// A table's rows are absolute pcs, one per halfword, so a family's height has
 /// to reach past its last instruction — and the heights are per family, which
 /// makes the *smallest* family's the binding one. `guests/mod-mul-ops`' `.text`
-/// reaches pc `0x21d3a`, which `smallest()` (2^16 rows, pc below `0x20000`)
+/// reaches pc `0x45be6`, which `smallest()` (2^16 rows, pc below `0x20000`)
 /// cannot hold and `2^18` can. A test that is not *about* the heights takes
 /// the ones that fit.
 pub fn fitting(image: &ProgramImage) -> ProgramParams {
@@ -205,7 +204,7 @@ pub fn ptau() -> PathBuf {
     assert!(
         path.exists(),
         "{} is absent. The identity tests need PSE's ceremony file, contribution \
-         80, power 24; docs/handoff/S07-msm-srs-kzg.md has the download command.",
+         80, power 24 (docs/spec/srs.md §1).",
         path.display()
     );
     path
@@ -257,11 +256,12 @@ pub fn build(name: &str, slot: &str) -> Vec<u8> {
 
 /// The same, at `profile` — `debug` or `release`.
 ///
-/// `guests/Cargo.toml` pins both profiles to the same semantics and they differ
-/// only in `opt-level`, which is exactly what makes the second one worth
-/// building here: S21's declaration record is kept by **reachability**, and at
-/// `opt-level = 3` LLVM will fold a constant read into an immediate and drop
-/// the record unless something stops it (`docs/spec/delegation.md` §7).
+/// `guests/Cargo.toml` pins both profiles to the same semantics; they differ in
+/// `opt-level` — and in dependencies' debug assertions — which is exactly what
+/// makes the second one worth building here: a declaration record is kept by
+/// **reachability**, and at `opt-level = 3` LLVM will fold a constant read into
+/// an immediate and drop the record unless something stops it
+/// (`docs/spec/delegation.md` §7).
 pub fn build_profile(name: &str, slot: &str, profile: &str) -> Vec<u8> {
     let guest_dir = root().join("guests").join(name);
     let target_dir = std::env::temp_dir().join(format!("apogee-program-{slot}-{name}"));

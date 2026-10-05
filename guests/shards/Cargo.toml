@@ -9,6 +9,6 @@ publish.workspace = true
 # zeroes `.bss` with a store loop -- would pull in a memory family and a
 # `ZERO_WINDOWS` shard the demo does not want. It is its own `_start`, written
 # in the instructions of two families, add/sub/lui/auipc and jump/branch/slt,
-# and the one ecall S16 proves. `guests/.cargo/config.toml` supplies the target
-# and the frozen linker script.
+# and `EXIT`. `guests/.cargo/config.toml` supplies the target and the linker
+# script.
 [dependencies]

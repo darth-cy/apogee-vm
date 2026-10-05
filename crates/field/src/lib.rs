@@ -200,7 +200,7 @@ impl Fr {
     /// The multiplicative identity.
     pub const ONE: Fr = Fr(FR_R);
 
-    /// `p - 1`. Also the decoded-table padding sentinel from S11 on.
+    /// `p - 1`. Also the decoded-table padding sentinel.
     pub const MINUS_ONE: Fr = Fr(MINUS_ONE_MONTGOMERY);
 
     /// Lift a `u64`. Always in range: `2^64 < p`.
@@ -261,7 +261,7 @@ impl Fr {
     /// Decode a source-literal hex constant: `0x` followed by exactly 64
     /// lowercase hex digits, read **big-endian**.
     ///
-    /// This is the form frozen constant tables are written in — the order
+    /// This is the form constant tables are written in — the order
     /// [`Debug`] prints, and the order upstream tables such as the Poseidon2
     /// round constants use, so a vendored table diffs against its source by
     /// eye. It is deliberately *not* the little-endian byte order of
@@ -313,7 +313,7 @@ impl Fr {
     /// [`to_bytes`]'s — the limbs are always reduced below `p` — but of a
     /// *different* element: of `self · R`, where `R = 2^256 mod p`, rather
     /// than of `self`. It exists for one caller, the Fr-arithmetic delegation
-    /// of `docs/spec/delegation.md` §13, whose frame carries operands in this
+    /// of `docs/spec/delegation-circuits.md` §4.1, whose frame carries operands in this
     /// form precisely so that crossing it costs no Montgomery conversion.
     /// Everything that is not that delegation uses [`to_bytes`].
     ///
@@ -388,7 +388,7 @@ pub fn batch_inverse(xs: &mut [Fr]) {
 
 /// The guest-target backend: `Fr`'s arithmetic, delegated.
 ///
-/// `docs/spec/delegation.md` §13. The frame carries operands in **this**
+/// `docs/spec/delegation-circuits.md` §4.1. The frame carries operands in **this**
 /// representation — the four Montgomery limbs, little-endian, which
 /// [`Fr::to_memory_bytes`] writes — precisely so that crossing it costs no
 /// conversion, and the three operations the circuit proves are the three this
@@ -397,9 +397,9 @@ pub fn batch_inverse(xs: &mut [Fr]) {
 /// below it — which is this crate's own, so the delegated path and the
 /// fallback are one definition rather than two held equal by a test.
 ///
-/// Selected by `#[cfg(target_arch = "riscv32")]` alone. There is no cargo
-/// feature here and there must not be: the workspace has one build
-/// configuration (master anti-goal 1), and the guest target is not the host.
+/// Selected by `#[cfg(target_arch = "riscv32")]` alone, not by a cargo
+/// feature: the workspace has one build configuration, and the guest target
+/// is not the host.
 #[cfg(target_arch = "riscv32")]
 mod delegated {
     use super::Fr;

@@ -1,4 +1,4 @@
-//! The proving debug log, `docs/spec/debug-info.md`. The whole file is behind
+//! The proving debug log, `docs/tools.md` §3. The whole file is behind
 //! the feature, so a default `cargo test --workspace` compiles none of it; CI
 //! runs it a second time with `--features debug-info`.
 //!
@@ -7,11 +7,11 @@
 //! `--features debug-info --lib` for them. What belongs *here* is the pair of
 //! properties no unit test can reach:
 //!
-//! - the **grep markers** `docs/spec/debug-info.md` §8 tells a reader to search
+//! - the **grep markers** `docs/tools.md` §3 tells a reader to search
 //!   for are the ones the builders actually emit, so the documented recipe keeps
 //!   working when a line is reworded;
-//! - the feature **changes no proof byte**, which is `#[ignore]`d with the rest
-//!   of the deferred suites because the only honest way to show it is to prove
+//! - the feature **changes no proof byte**, which is `#[ignore]`d with the
+//!   other proving suites because the only honest way to show it is to prove
 //!   one statement twice.
 #![cfg(feature = "debug-info")]
 
@@ -23,7 +23,7 @@ mod common;
 
 /// **The documented greps keep working.**
 ///
-/// `docs/spec/debug-info.md` §8 hands a reader two commands, and they are the
+/// `docs/tools.md` §3 hands a reader greps like these, and they are the
 /// whole interface for "what went wrong in this run":
 ///
 /// ```console
@@ -119,11 +119,11 @@ fn a_circuit_inventory_carries_what_a_later_failure_is_read_against() {
 
 /// **Every marker the documented grep looks for exists in the sources.**
 ///
-/// `docs/spec/debug-info.md` §8 and the root `CLAUDE.md` both hand a reader one
-/// `grep -E` alternation, and four of its markers come from `format!` strings in
-/// `src/lib.rs` and `src/fill.rs` rather than from a builder a unit test can
-/// call: a scan's verdict fires only on the failure it is looking for, and no
-/// cheap fixture produces a guest that aborted or a frame that disagrees.
+/// `docs/tools.md` §3 hands a reader `grep -E` alternations, and six of their
+/// markers come from `format!` strings in `src/lib.rs` and `src/fill.rs`
+/// rather than from a builder a unit test can call: a scan's verdict fires only
+/// on the failure it is looking for, and no cheap fixture produces a guest that
+/// aborted or a frame that disagrees.
 ///
 /// So they are pinned where they are written. The mutation this catches is the
 /// one the spec calls the worst failure mode a debugging tool has — a line
@@ -153,9 +153,9 @@ fn every_documented_grep_marker_is_in_the_sources() {
     ] {
         assert!(
             sources.contains(marker),
-            "the documented grep in docs/spec/debug-info.md §8 looks for {marker:?} and no \
-             source emits it any more: either restore the marker or update the recipe in \
-             the spec AND the root CLAUDE.md"
+            "the documented grep in docs/tools.md §3 looks for {marker:?} and no \
+             source emits it: either restore the marker or update the recipe in \
+             docs/tools.md"
         );
     }
 
@@ -163,26 +163,22 @@ fn every_documented_grep_marker_is_in_the_sources() {
     for marker in ["begin h=", "gkr done", "open begin", "open done"] {
         assert!(
             sources.contains(marker),
-            "the begin/done pairing in docs/spec/debug-info.md §2 counts {marker:?}"
+            "the begin/done pairing in docs/tools.md §3 counts {marker:?}"
         );
     }
 }
 
-/// **The feature changes no proof byte.** S16's statement proved twice in the
-/// one build, once with `APOGEE_DEBUG=off` and once at `deep` — which runs
+/// **The feature changes no proof byte.** The add/sub statement proved twice in
+/// the one build, once with `APOGEE_DEBUG=off` and once at `deep` — which runs
 /// `gkr::self_check` over every shard and scans every frame — and the two blocks
 /// compared on the wire. This is the property that makes it safe to build the
-/// prover with the feature on and believe the result. It was the direct
-/// analogue of `tests/metrics.rs`'s `a_metered_block_is_the_block_prove_block_makes`;
-/// that suite went with the `metrics` feature at S-STREAM, so this is now the
-/// only test in the repository making the claim, which is one more reason it
-/// stays.
+/// prover with the feature on and believe the result.
 ///
 /// `set_var` is sound here on edition 2021 and this is the only test in the
 /// binary that touches the environment, so the two runs cannot race a reader.
 ///
-/// Deferred: it proves the S16 statement twice, about 8.6 GB a time, and the
-/// `deep` run adds a self-check pass per shard.
+/// `#[ignore]`d: it proves the add/sub statement twice, about 8.6 GB a time,
+/// and the `deep` run adds a self-check pass per shard.
 #[test]
 #[ignore]
 fn a_logged_block_is_the_block_the_prover_makes() {

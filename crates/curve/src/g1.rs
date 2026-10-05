@@ -198,7 +198,7 @@ impl G1Projective {
 
     /// `madd-2007-bl`, the mixed addition that takes `Z2 = 1` as given.
     ///
-    /// The hot path of the MSM a later stage builds on. Same two `H == 0`
+    /// The hot path of the MSM. Same two `H == 0`
     /// branches as [`G1Projective::add`].
     pub fn add_affine(&self, other: &G1Affine) -> G1Projective {
         if other.infinity {

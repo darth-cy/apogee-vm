@@ -3,7 +3,7 @@
 //! gate from those layers so a broken gate is caught before proving; and the
 //! backward pass, which proves the output claims down to claims about the base.
 //!
-//! `docs/spec/gkr.md` is normative. The verifier half is `crates/gkr-verify`,
+//! `docs/spec/gkr.md` specifies it. The verifier half is `crates/gkr-verify`,
 //! re-exported here whole, so `gkr::verify` and `gkr::GkrProof` are its. Every
 //! gate is evaluated through a `gkr_verify::ResolvedList`, the resolution
 //! `gate_values` and `summand` go through, so the same `G` serves the forward
@@ -12,7 +12,7 @@
 //! Per-row work — a gate list's rows, a round's row pairs — is split over
 //! rayon. Field arithmetic is exact, so no split and no reduction order can
 //! change a value. Nothing is allocated per row, per row pair or per node:
-//! each rayon task owns its buffers and overwrites them (`crates/gkr/CLAUDE.md`).
+//! each rayon task owns its buffers and overwrites them.
 //!
 //! Nothing here checks its inputs at run time. The artifact is assumed to have
 //! passed `CircuitArtifact::validate` where its key is loaded, and the base, the
@@ -20,8 +20,8 @@
 //! shape. Soundness is `verify`'s alone — a cheating prover runs none of this
 //! code — so a malformed input can only cost the honest prover: a panic when a
 //! missing column or slot is read, or a proof or base claims that fail
-//! downstream. The shape checks this crate used to run are kept, uncalled, as
-//! debugging aids: `check_slots` and the functions beside it.
+//! downstream. Shape checks are kept, uncalled, as debugging aids:
+//! `check_slots` and the functions beside it.
 
 use std::sync::Arc;
 
@@ -425,8 +425,9 @@ pub fn self_check(
 /// It is what closes the distance between cause and symptom. A wrong fill, a
 /// frame value at or above its modulus, a gated conclusion written
 /// `b = enable` where it had to be `enable · (1 − b) = 0`, all reach a reader
-/// today as one layer number; each of them reaches a reader through this as a
-/// named relation whose `live` column is 1 and whose borrow column is 0.
+/// of `verify`'s error as one layer number; each of them reaches a reader
+/// through this as a named relation whose `live` column is 1 and whose borrow
+/// column is 0.
 ///
 /// **Recomputes exactly one row**, so it costs nothing worth measuring and may
 /// be called on any failure. It finds the failing gate itself rather than
@@ -437,7 +438,7 @@ pub fn self_check(
 ///
 /// Compiled unconditionally, and called from `prover`'s `debug-info` build.
 /// `crates/gkr/tests/explain.rs` is what keeps it honest in the default build,
-/// master anti-goal 1's hazard being a configuration nobody exercises.
+/// which every run exercises.
 pub fn explain_self_check(
     artifact: &CircuitArtifact,
     values: &LayerValues,
@@ -711,8 +712,8 @@ fn interpolation_constants() -> [Fr; 3] {
 
 /// The ascending coefficients of the cubic through `(i, v[i])`, `i = 0..4`:
 /// Newton's forward differences, `g(X) = v0 + d1·X + d2·X(X-1)/2 +
-/// d3·X(X-1)(X-2)/6`, expanded — S04's `interpolate_cubic`, which is private to
-/// `crates/sumcheck`.
+/// d3·X(X-1)(X-2)/6`, expanded — the sumcheck's `interpolate_cubic`, which is
+/// private to `crates/sumcheck`.
 fn interpolate_cubic(v: &[Fr; 4], c: &[Fr; 3]) -> [Fr; 4] {
     let [inv2, inv3, inv6] = *c;
     let d1 = v[1] - v[0];

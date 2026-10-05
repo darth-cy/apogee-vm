@@ -1,5 +1,5 @@
-//! Acceptance 4, 6, 7 and 8: the index convention, bind/evaluate consistency,
-//! the eq machinery, and every loud error.
+//! The index convention, bind/evaluate consistency, the eq machinery, and
+//! every loud error.
 
 mod common;
 
@@ -9,7 +9,7 @@ use poly::{eq_eval, eq_table, MultilinearPoly, PolyBacking};
 use test_support::Rng;
 
 // ---------------------------------------------------------------------------
-// Acceptance 7: the index convention, pinned by a literal
+// The index convention, pinned by a literal
 // ---------------------------------------------------------------------------
 
 /// `get(0b011)` reads the evaluation at `y0 = 1, y1 = 1, y2 = 0`. The table is
@@ -49,7 +49,7 @@ fn the_index_convention_is_little_endian() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 4: binding every variable is evaluating
+// Binding every variable is evaluating
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -86,7 +86,7 @@ fn binding_every_variable_equals_evaluate() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 6: the eq machinery
+// The eq machinery
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -108,8 +108,8 @@ fn the_eq_machinery_agrees_with_itself() {
         assert_eq!(eq_eval(&r, &other), eq_eval(&other, &r), "eq is symmetric");
 
         // The table is the multilinear extension of `eq_eval`, off the cube as
-        // well as on it — which is the property later stages lean on when they
-        // treat `eq` as a virtual column.
+        // well as on it — which is the property the GKR engine leans on when it
+        // treats `eq` as a virtual column.
         let table_poly = MultilinearPoly::new(PolyBacking::Fr(table));
         assert_eq!(table_poly.evaluate(&other), eq_eval(&r, &other));
     }
@@ -121,7 +121,7 @@ fn the_eq_machinery_agrees_with_itself() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 8: every loud error
+// Every loud error
 // ---------------------------------------------------------------------------
 
 #[test]

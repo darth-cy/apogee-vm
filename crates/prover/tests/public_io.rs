@@ -1,17 +1,15 @@
-//! S-IO's acceptance over the real statement: `guests/public-io` proved and
-//! verified, with its witness in the advice region, its commitment in the
-//! public input and its result in the journal.
+//! `guests/public-io` proved and verified, with its witness in the advice
+//! region, its commitment in the public input and its result in the journal.
 //!
-//! This is the end-to-end evidence for `docs/spec/public-values.md` — the
-//! first statement in the repository whose public input and public output are
-//! **bound to the execution**. What can be checked without a proof is
+//! This is the end-to-end evidence for `docs/spec/public-values.md`: a
+//! statement whose public input and public output are **bound to the
+//! execution**. What can be checked without a proof is
 //! `crates/checker/tests/public_values.rs` and runs in ordinary CI; what is
 //! here needs one.
 //!
 //! **Every test is `#[ignore]`d, and runs by name with `--include-ignored
 //! --test-threads=1`**: the guest's execution families are `2^20` rows, the
-//! timestamp channel's floor. Master rule 7; the command is in
-//! `.github/workflows/ci.yml` under `# DEFERRED:`.
+//! timestamp channel's floor, and CI does not run them.
 
 mod common;
 
@@ -45,13 +43,13 @@ fn verify(setup: &ProverSetup, block: &BlockProof) -> Result<(), VerifyError> {
     verify_block(&vk, block, block.statement())
 }
 
-/// Acceptance 1: the whole architecture, end to end.
+/// The whole architecture, end to end.
 ///
 /// The guest reads a commitment out of the **public input**, checks the
 /// **advice** against it, and publishes its result in the **journal** — and the
 /// proof binds the first and the last while binding nothing at all about the
-/// second. It issues no ecall but `EXIT`, which is what makes it provable at
-/// all.
+/// second. It issues no ecall but `EXIT`: all three are memory, reached with
+/// ordinary loads and stores (`docs/spec/public-values.md` §1).
 #[test]
 #[ignore = "a 2^20 statement; run with --include-ignored --test-threads=1"]
 fn a1_the_public_values_are_bound_and_the_advice_is_not() {
@@ -79,8 +77,8 @@ fn a1_the_public_values_are_bound_and_the_advice_is_not() {
     assert_eq!(block.shard_count(family::ADVICE_WINDOWS), 1);
 }
 
-/// Acceptance 3: **step 10c is what holds the claimed bytes to the committed
-/// column**, isolated from the transcript.
+/// **Step 10c is what holds the claimed bytes to the committed column**,
+/// isolated from the transcript.
 ///
 /// The global phase is derived from the honest statement and handed to
 /// `verify_shard_local` beside a statement whose public values differ, so step

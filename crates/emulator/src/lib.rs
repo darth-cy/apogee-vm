@@ -7,9 +7,9 @@
 //! difference between the two: neither path has its own copy of the
 //! semantics.
 //!
-//! `docs/spec/execution-trace.md` is the frozen convention the recorder
-//! follows — timestamps, slots, the x0 rule, the ecall frame.
-//! `crates/emulator/CLAUDE.md` is the design record.
+//! `docs/spec/execution-trace.md` specifies the convention the recorder
+//! follows — timestamps, slots, the x0 rule, the ecall frame — and, in §10,
+//! the emulator itself; `docs/spec/delegation.md` §6 its delegation side.
 //!
 //! # Semantics, in one paragraph
 //!
@@ -19,7 +19,7 @@
 //! requires an `sc.w` without a valid reservation to fail, so this is a
 //! conformance deviation — never a soundness one, since the verifier still
 //! knows exactly which program ran, and the circuits share the semantics
-//! (`docs/spec/memory-ops.md` §6.5). A halfword or word access at an address
+//! (`docs/spec/memory-ops.md` §6). A halfword or word access at an address
 //! that is not a multiple of its width, and any access outside the
 //! addressable regions, is a fatal guest error, never rotated, split or
 //! emulated. So is `ebreak`, and so is a pc that is not the start of an
@@ -52,9 +52,7 @@ use trace::{
 ///
 /// Both are *memory*. There is no third field and no stream: an Apogee guest
 /// has no file descriptors, so there is nothing a host could hand it that is
-/// neither of these two. It had four fields until the POSIX layer was deleted
-/// — `stdin` and `hint` were served over `read`, which was never a provable
-/// ecall, so a guest reading either was a guest no proof covered.
+/// neither of these two.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuestIo {
     pub input: Vec<u8>,
@@ -94,7 +92,9 @@ pub enum EmuError {
     /// A halfword or word access at an address that is not a multiple of
     /// its width.
     Misaligned { pc: u32, addr: u32, width: u32 },
-    /// A data access, or a byte an ecall would move, outside the RAM window.
+    /// A data access outside the addressable regions — RAM, the two public
+    /// windows, and the advice words the host supplied — or a delegation frame
+    /// not wholly in RAM.
     OutOfBounds { pc: u32, addr: u32 },
     /// Cycle `cycle`'s timestamps would pass the 38-bit clock.
     ClockOverflow { cycle: u64 },
@@ -125,13 +125,14 @@ pub enum EmuError {
     /// a program whose declaration and whose code disagree.
     DelegationFamilyAbsent { pc: u32, number: u32 },
     /// A delegation's frame does not describe a call its family can answer:
-    /// an operation code outside the legal set, or a value that is not a
-    /// canonical `Fr`.
+    /// a selector, operation code, round or group word outside the legal set,
+    /// an operand that is not a canonical `Fr` or not below the selected
+    /// modulus, or a recursion family's cells that hold no legal operand.
     ///
-    /// Fatal, and it has to be: the circuit refuses both — the opcode by its
-    /// selector sum, a non-canonical value by its borrow chain — so an
+    /// Fatal, and it has to be: the circuit has no witness for any of them —
+    /// a code by its one-hot selectors, an operand by its borrow chain — so an
     /// execution the emulator let through here would be one no proof could
-    /// cover (`docs/spec/delegation.md` §13).
+    /// cover (`docs/spec/delegation.md` §6).
     DelegationFrame { pc: u32, detail: &'static str },
 }
 
@@ -162,7 +163,7 @@ impl fmt::Display for EmuError {
             ),
             EmuError::OutOfBounds { pc, addr } => write!(
                 f,
-                "data access outside the RAM window at pc {pc:#010x}: address {addr:#010x}"
+                "data access outside addressable memory at pc {pc:#010x}: address {addr:#010x}"
             ),
             EmuError::ClockOverflow { cycle } => write!(
                 f,
@@ -207,7 +208,7 @@ fn poseidon2_frame(old: &[u32]) -> Vec<u32> {
 ///
 /// The three operations are `Fr`'s own `Add`, `Mul` and `inverse`, with
 /// `inverse(0) = 0` in place of `None`, which is this delegation's convention
-/// (`docs/spec/delegation.md` §13).
+/// (`docs/spec/delegation-circuits.md` §4).
 fn fr_arith_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
     let operand = |first: usize| -> Result<Fr, EmuError> {
         Fr::from_memory_bytes(&value_bytes(old, first)).ok_or(EmuError::DelegationFrame {
@@ -217,9 +218,9 @@ fn fr_arith_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
     };
     let a = operand(fr_arith::A_WORD)?;
     let b = operand(fr_arith::B_WORD)?;
-    // The result's words are read and thrown away, but they must still be a
-    // canonical `Fr`: the circuit decomposes every frame value it names, and
-    // the words it writes are the ones its canonicity gates bind.
+    // The result's words are read and thrown away, and nothing constrains
+    // what they held: the circuit's canonicity gates bind the words it
+    // writes there, not the ones it reads.
     let out = match old[fr_arith::OPCODE_WORD] {
         fr_arith::OP_ADD => a + b,
         fr_arith::OP_MUL => a * b,
@@ -241,7 +242,7 @@ fn fr_arith_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
 ///
 /// **Schoolbook, in `u64` lanes, and long division by shift-and-subtract.** No
 /// Montgomery form and no reciprocal: the circuit proves `a*b = q*m + out` with
-/// `out < m` and nothing else (`docs/spec/delegation.md` §14), so the executor
+/// `out < m` and nothing else (`docs/spec/delegation-circuits.md` §5), so the executor
 /// computes exactly that and the two agree by definition rather than by a
 /// shared trick.
 ///
@@ -251,7 +252,7 @@ fn fr_arith_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
 /// `b < m` chains would reject it, and long division would happily return the
 /// right answer, so without the refusal here a guest runs clean and the
 /// failure surfaces as an anonymous layer inconsistency inside a block proof
-/// hours later. `docs/spec/delegation.md` §4's rule is that an execution this
+/// hours later. `docs/spec/delegation.md` §6's rule is that an execution this
 /// refuses is one no proof could have covered, and these are three of them.
 fn mod_mul_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
     let limb = |first: usize, k: usize| old[first + k] as u64;
@@ -356,7 +357,7 @@ pub fn sha256_call(
 
 /// One `SHA256_COMP` invocation over the 25-word frame, in place.
 ///
-/// **This family can refuse a frame since S26e**, as `KECCAK_F` can: a group
+/// **This family can refuse a frame**, as `KECCAK_F` can: a group
 /// word at or above 16 has no one-hot selector in the circuit, so an executor
 /// that answered it would produce a trace no honest prover could prove. Every
 /// other word is a legal working variable or schedule word. The group word is
@@ -475,10 +476,10 @@ fn scale_mod(k: u32, a: &Wide, m: &Wide) -> Wide {
 ///
 /// Frame word 0 selects the curve **and** the group; the three invocations of
 /// one addition go in ascending group order, and the intermediates each leaves
-/// in words 49..97 are what the next reads. `docs/spec/delegation.md` §16.
+/// in words 49..97 are what the next reads. `docs/spec/delegation-circuits.md` §7.
 ///
-/// **Every bad frame is refused by name**, which is `docs/spec/delegation.md`
-/// §14.3's lesson: the reduction answers correctly for operands below `2^256`,
+/// **Every bad frame is refused by name** (`docs/spec/delegation.md` §6): the
+/// reduction answers correctly for operands below `2^256`,
 /// so without the refusals a guest with an unreduced coordinate runs clean and
 /// the only thing that fails is a gate — anonymously, hours into a block proof.
 fn ec_add_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
@@ -714,7 +715,7 @@ pub fn run(image: &ProgramImage, io: &GuestIo) -> Result<Execution, EmuError> {
 ///
 /// `tables` and `config` must be one `program::decode_program` of `image`:
 /// every cycle is routed to the family whose table claims its pc, so a pc no
-/// table claims — impossible after S11's partition — panics, as does a
+/// table claims — impossible under the family partition — panics, as does a
 /// `config` that describes other families than `tables`.
 pub fn trace_run(
     image: &ProgramImage,
@@ -762,10 +763,10 @@ pub fn trace_run(
 
 /// One completed shard's rows, handed back as soon as the family's buffer fills.
 ///
-/// `index` is the shard index `docs/spec/block-proof.md` §5.1 gives it — rows
+/// `index` is the shard index `docs/spec/streaming.md` §4 gives it — rows
 /// `[index·h, min((index+1)·h, len))` of the family's buffer — so a streaming
 /// run's shards are the same shards `trace::plan_shards` counts and the same
-/// cut every family fill has made since S16.
+/// cut every family fill makes.
 pub struct ShardChunk {
     pub family: FamilyId,
     pub index: u32,
@@ -927,8 +928,8 @@ enum Fetch {
 ///
 /// `delegation` is the invocation a delegation request made, if any: the
 /// family, the frame base, and one `(address, old, new)` per frame word in
-/// frame order. It is not a role — 50 frame words do not fit eight — and it is
-/// the invocation's row, not the requesting cycle's
+/// frame order. It is not a role — up to 97 frame words do not fit eight — and
+/// it is the invocation's row, not the requesting cycle's
 /// (`docs/spec/delegation.md` §4).
 struct Cycle {
     queries: [Option<(u32, u32, u32)>; 8],
@@ -1046,8 +1047,7 @@ impl<'a> Machine<'a> {
         // layout, shared with the prover's column builder and the verifier's
         // check, so the three cannot drift. A zero word is skipped, as advice
         // is below: a page that was never written reads 0 anyway, and the
-        // window is 4,096 words since S-STREAM where it was 256, nearly all
-        // of them padding on a real input.
+        // window is 4,096 words, nearly all of them padding on a real input.
         for (y, word) in program::public_io_words(&io.input).iter().enumerate() {
             if *word != 0 {
                 machine.set_word(guest_memory::PUBLIC_INPUT_ORIGIN + 4 * y as u32, *word);
@@ -1117,8 +1117,7 @@ impl<'a> Machine<'a> {
         }
     }
 
-    /// One instruction: one cycle, or for a `read`/`write` ecall one cycle
-    /// per word moved and then the ecall's own.
+    /// One instruction: one cycle.
     fn step(&mut self) -> Result<(), EmuError> {
         let pc = self.pc;
         let (instr, compressed) = self.fetch(pc)?;
@@ -1196,7 +1195,8 @@ impl<'a> Machine<'a> {
     }
 
     /// The word a `width`-byte access at `addr` touches, refusing a
-    /// misaligned access and one outside the RAM window.
+    /// misaligned access and one outside the addressable regions: RAM, the
+    /// two public windows, and the advice words the host supplied.
     fn data_word(&self, pc: u32, addr: u32, width: u32) -> Result<u32, EmuError> {
         if !addr.is_multiple_of(width) {
             return Err(EmuError::Misaligned { pc, addr, width });
@@ -1212,12 +1212,12 @@ impl<'a> Machine<'a> {
 
     /// Read the `words`-word frame at `base`, checking the two frame rules of
     /// `docs/spec/delegation.md` §4, and nothing else checks them: the base is
-    /// word-aligned, and the whole frame lies inside the RAM window. Both are
+    /// word-aligned, and the whole frame lies in RAM. Both are
     /// fatal guest errors, as a misaligned load is — the circuit refuses the
     /// same two, so an execution this refuses is one no proof could cover. The
     /// bound is computed in `u64` because `base + frame bytes` wraps a `u32`
-    /// at the top of the window, and a wrapped comparison passes a check it
-    /// should fail.
+    /// at the top of the address space, and a wrapped comparison passes a
+    /// check it should fail.
     fn delegation_frame(&mut self, pc: u32, base: u32, words: usize) -> Result<Vec<u32>, EmuError> {
         if !base.is_multiple_of(4) {
             return Err(EmuError::Misaligned {
@@ -1255,8 +1255,8 @@ impl<'a> Machine<'a> {
     /// Execute delegation family `family` over the frame at `base`, in place.
     ///
     /// The one dispatch: every delegation number reaches it, and a family with
-    /// no arm here is a `DELEGATIONS` row nobody implemented, which is a build
-    /// error rather than a silent `-ENOSYS`.
+    /// no arm here is a `DELEGATIONS` row nobody implemented, which panics at
+    /// its first call rather than answering a silent `-ENOSYS`.
     fn delegate(&mut self, family: FamilyId, pc: u32, base: u32) -> Result<Delegated, EmuError> {
         let words =
             program::delegation_frame_words(family).expect("the caller matched a delegation");
@@ -1848,9 +1848,7 @@ impl<'a> Machine<'a> {
     /// (`docs/spec/memory.md` §5).
     ///
     /// Every ecall a guest may issue takes exactly one argument and moves no
-    /// bytes, so an ecall is one cycle. It was not always: `read` and `write`
-    /// brought a **transfer cycle** per word they moved, and both those calls
-    /// and that machinery went with the POSIX layer.
+    /// bytes, so an ecall is one cycle.
     fn ecall(&mut self, instr: Instr, pc: u32, fall: u32) -> Result<(), EmuError> {
         let mut row = Cycle::new();
         let number = self.read(&mut row, Role::Rs1, 17);
@@ -1863,7 +1861,7 @@ impl<'a> Machine<'a> {
             // A delegation call: the frame base is its one argument, read as
             // the ABI table says, and the frame is permuted in place. The
             // invocation is not a cycle of its own — it rides this one, at
-            // `delegation::FRAME_DELTA` (`docs/spec/delegation.md` §4.1).
+            // `delegation::FRAME_DELTA` (`docs/spec/delegation.md` §4).
             n if program::delegation_family(n).is_some() => {
                 let family = program::delegation_family(n).expect("just matched");
                 let base = self.read(&mut row, Role::Rs2, 10);
@@ -1903,15 +1901,15 @@ impl<'a> Machine<'a> {
 /// **One round** of keccak-f[1600] over the state as 25 little-endian lanes,
 /// lane `5y + x` at index `x + 5y`.
 ///
-/// The reference round, written from `docs/spec/delegation.md` §6 and the two
-/// tables of `constants::keccak`. Since S26d this — not the whole permutation —
-/// is what one delegation invocation performs, so it is the function the
+/// The reference round, written from `docs/spec/delegation-circuits.md` §2 and the two
+/// tables of `constants::keccak`. This — not the whole permutation — is what
+/// one delegation invocation performs, so it is the function the
 /// `KECCAK_F` circuit is checked against. `crates/guest-sdk` carries its own
 /// copy for the software fallback — the two are held bit-identical by
 /// `crates/emulator/tests/keccak.rs` and both to `tiny-keccak` — because the
-/// SDK builds only for the guest target and is not a workspace member, and a
-/// crate whose only purpose was to be shared by two callers would be the
-/// abstraction the master's anti-goals refuse.
+/// SDK builds only for the guest target and is not a workspace member, and
+/// sharing one copy would take a crate whose only purpose was to be shared by
+/// two callers.
 ///
 /// Panics on a `round` at or above `constants::keccak::ROUNDS`: there is no
 /// round constant for it, and the circuit has no selector for it either.
@@ -1947,8 +1945,8 @@ pub fn keccak_round(lanes: &mut [u64; keccak::LANES], round: usize) {
 
 /// keccak-f[1600]: [`keccak_round`] twenty-four times.
 ///
-/// No longer what one invocation does — a guest issues 24 of them and the frame
-/// chains them — but still the function every oracle compares against, and the
+/// Not what one invocation does — a guest issues 24 of them and the frame
+/// chains them — but the function every oracle compares against, and the
 /// one `guest_sdk`'s software fallback computes.
 pub fn keccak_f(lanes: &mut [u64; keccak::LANES]) {
     for round in 0..keccak::ROUNDS {
@@ -1959,7 +1957,7 @@ pub fn keccak_f(lanes: &mut [u64; keccak::LANES]) {
 /// One `KECCAK_F` invocation: the round the frame's word 0 names, applied to the
 /// state in words `STATE_WORD..`, written back in place.
 ///
-/// **This family can refuse a frame**, as `MOD_MUL`, `EC_ADD` and, since S26e,
+/// **This family can refuse a frame**, as `MOD_MUL`, `EC_ADD` and
 /// `SHA256_COMP` can: a round at or above 24 has no one-hot selector in the
 /// circuit, so an executor that answered it would produce a trace no honest
 /// prover could prove. The round word is written back unchanged; the guest's own
@@ -2087,7 +2085,7 @@ impl<'a> Recorder<'a> {
         // An invocation's frame accesses ride this cycle at
         // `delegation::FRAME_DELTA`, which is 0, so they follow the pc query
         // and precede the row's roles: the log is in timestamp order
-        // (`docs/spec/delegation.md` §4.1).
+        // (`docs/spec/delegation.md` §4).
         let mut invocation: Vec<Query> = Vec::new();
         let mut accesses: Vec<Option<Access>> = Vec::new();
         if let Some((_, _, frame, extra)) = &queries.delegation {
@@ -2199,7 +2197,7 @@ impl<'a> Recorder<'a> {
     /// Hand `traces.families[at]` away if it has just reached its height, so a
     /// partial buffer never holds more than `height - 1` rows at a record
     /// boundary — which is what makes a shard's rows exactly the cut
-    /// `docs/spec/block-proof.md` §5.1 defines, with nothing to split.
+    /// `docs/spec/streaming.md` §4 defines, with nothing to split.
     ///
     /// A whole-run recorder flushes nothing: `Keep::Whole` is the archive's
     /// input and holds every row.
@@ -2298,7 +2296,7 @@ impl<'a> Recorder<'a> {
     ///
     /// By family id rather than by position: a delegation family is in the
     /// decoded tables — with an empty table, claiming nothing — but its buffer
-    /// is a `DelegationTrace`, so the two lists no longer line up by index.
+    /// is a `DelegationTrace`, so the two lists do not line up by index.
     fn owner(&self, pc: u32, instr: Instr) -> FamilyId {
         let row = (pc / 2) as usize;
         let mut owners = self
@@ -2655,7 +2653,7 @@ mod tests {
     ///
     /// Without these the long division answers correctly, the guest exits
     /// clean, and the only thing that fails is a gate — anonymously, inside a
-    /// block proof. `docs/spec/delegation.md` §14.
+    /// block proof. `docs/spec/delegation-circuits.md` §5.
     #[test]
     fn mod_mul_refuses_a_frame_no_proof_could_cover() {
         let frame = |code: u32, a: [u32; 8], b: [u32; 8]| -> Vec<u32> {

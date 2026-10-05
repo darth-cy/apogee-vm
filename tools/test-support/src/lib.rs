@@ -2,16 +2,15 @@
 //! a seeded RNG, SHA-256, and the hex codec that turns a digest or a field
 //! element into the text a committed vector file holds.
 //!
-//! Master rule 11 pins every committed fixture by hash and wants fixtures that
-//! regenerate byte for byte, so every crate that writes or reads one needs the
-//! same three things. This crate is where they live, once.
+//! Every committed fixture is pinned by hash and regenerates byte for byte, so
+//! every crate that writes or reads one needs the same three things. This crate
+//! is where they live, once.
 //!
-//! **It has no dependencies, and must never acquire any.** That is what lets
-//! `tools/transcript-ref` — the reference oracle, deliberately outside the
-//! workspace so its Plonky3 and `zkhash` graphs cannot unify a feature into
-//! `crates/field` — link it without linking anything of ours that it is
-//! supposed to be checking. `no_dependencies` below is the executable form of
-//! that rule.
+//! **It has no dependencies.** That is what lets the reference oracles,
+//! `tools/transcript-ref` and `tools/stateless-ref` — deliberately outside the
+//! workspace so their dependency graphs cannot unify a feature into its
+//! crates — link it without linking anything of ours that they are supposed to
+//! be checking. `no_dependencies` below holds it to that.
 
 // ---------------------------------------------------------------------------
 // Deterministic RNG
@@ -60,8 +59,8 @@ impl Rng {
         b
     }
 
-    /// One byte per draw. Deliberately wasteful of the stream, and frozen that
-    /// way: the committed transcript cases were generated with it.
+    /// One byte per draw. Deliberately wasteful of the stream: the committed
+    /// transcript cases are drawn with it, so a change moves them.
     pub fn next_bytes(&mut self, n: usize) -> Vec<u8> {
         (0..n).map(|_| self.next_u64() as u8).collect()
     }

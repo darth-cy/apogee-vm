@@ -1,5 +1,5 @@
-//! Acceptance 3 and the rest of the instance validation: every rejection is an
-//! error, and none of them is a panic.
+//! The instance validation: every rejection is an error, and none of them is a
+//! panic.
 //!
 //! Mercury is defined for `n = 2^(2t)`. This crate never pads to reach it and
 //! never truncates to fit, so an instance that is not one is refused at the
@@ -133,7 +133,7 @@ fn too_few_powers_is_an_error() {
 /// The `U1` backing's bitset commits to the same point as the `Fr` lift of the
 /// same bits, and the four narrow backings agree with `Fr` on a common table.
 ///
-/// Must-be-exact 10 routes `U1`/`U8`/`U16`/`U32` through the small-scalar MSM
+/// `commit` routes `U1`/`U8`/`U16`/`U32` through the small-scalar MSM
 /// and only `Fr` through the general one; that they agree is what makes the
 /// dispatch invisible.
 #[test]
@@ -223,7 +223,7 @@ fn every_backing_commits_to_the_same_point() {
     }
 }
 
-/// Must-be-exact 4: `open` absorbs the commitment it is **passed** and never
+/// `open` absorbs the commitment it is **passed** and never
 /// recommits `f`.
 ///
 /// The discriminator is that two different commitments must give two different

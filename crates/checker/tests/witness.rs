@@ -1,4 +1,4 @@
-//! Acceptance 8: the witness-row evaluator. A satisfying row of the toy passes,
+//! The witness-row evaluator. A satisfying row of the toy passes,
 //! and perturbing any single committed cell, the row index, or any scratch cell
 //! by one reports exactly the relations that cell feeds, by name.
 //!

@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
-//! `guests/mem`: the fixture for S19's three families, hand-written so that its
-//! image holds their instructions and nothing else's.
+//! `guests/mem`: the fixture for the three memory-op families, hand-written so
+//! that its image holds their instructions and nothing else's.
 //!
 //! # What it covers
 //!

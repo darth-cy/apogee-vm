@@ -2,7 +2,7 @@
 //!
 //! Two entry points, and they never dispatch into one another:
 //! [`msm`] always runs the general 254-bit path, and [`msm_small_u32`] is the
-//! only way into the small-scalar path. S03 backs trace columns with `u8`,
+//! only way into the small-scalar path. `poly` backs trace columns with `u8`,
 //! `u16` and `u32`, so the small case is the prover's common one and it is
 //! worth its own code rather than a branch inside the general one.
 //!
@@ -107,7 +107,7 @@ pub fn msm_small_u32(bases: &[G1Affine], scalars: &[u32]) -> Result<G1Projective
 ///
 /// arkworks' heuristic verbatim — `3` below 32 points, `ln(n) + 2` above it,
 /// with the natural log done in integers as `log2(n) * 69 / 100`. Copying the
-/// rule rather than inventing one is what makes the S07 acceptance-9 benchmark
+/// rule rather than inventing one is what makes the benchmark against arkworks
 /// a comparison of implementations rather than of window choices.
 fn window_bits(n: usize) -> usize {
     if n < 32 {

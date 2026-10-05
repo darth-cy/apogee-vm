@@ -261,12 +261,12 @@ pub trait Crypto: Send + Sync + Debug {
     /// Compute SHA-256 hash
     ///
     /// apogee-vm: on the guest target this is the `SHA256_COMP` delegation --
-    /// the padding and the block loop in `guest_sdk::sha256`, one ecall a
-    /// 64-byte block, and a bit-identical software compression behind the same
+    /// the padding and the block loop in `guest_sdk::sha256`, sixteen ecalls
+    /// a 64-byte block, and a bit-identical software compression behind the same
     /// signature. The **default body is patched rather than a second `Crypto`
     /// impl installed**: installing one kills LLVM's devirtualization of
     /// `crypto()` and retains 870 kB of otherwise-dead BLS12-381 and KZG code
-    /// (`guests/vendor/README.md`).
+    /// (`docs/spec/ethereum.md` §1).
     #[inline]
     fn sha256(&self, input: &[u8]) -> [u8; 32] {
         #[cfg(target_arch = "riscv32")]

@@ -1,5 +1,5 @@
-//! Acceptance 7, and the prover's side of cached entries: the cached and
-//! cache-free compilations of the toy are the same circuit — same shape, same
+//! The prover's side of cached entries: the cached and cache-free
+//! compilations of the toy are the same circuit — same shape, same
 //! forward values, the same proof byte for byte — and a degree-2 cached entry,
 //! which cannot be inlined, is evaluated at every round node rather than bound
 //! as a table.

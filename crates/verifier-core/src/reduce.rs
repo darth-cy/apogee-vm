@@ -1,13 +1,13 @@
 //! `reduce_shard`: a shard proof reduced to the one Mercury opening it still
-//! owes, or refused. `docs/spec/shard-proof.md` §6, steps 1 to 11, in order.
+//! owes, or refused. `docs/spec/proof.md` §6, steps 1 to 11, in order.
 //!
-//! Since S20 the steps are split at the fork in three public parts, so a block
-//! pays for everything that depends on the statement alone once instead of
-//! once per shard: [`derive_global_phase`] is steps 1 to 3 and the replay,
+//! The steps are split at the fork in three public parts, so a block pays for
+//! everything that depends on the statement alone once instead of once per
+//! shard: [`derive_global_phase`] is steps 1 to 3 and the replay,
 //! [`verify_shard_local`] is steps 4 to 11 but the memory argument's statement
 //! half, and [`verify_global_memory`] is that half — step 10b, the boundary
-//! and the cross-shard root product. `reduce_shard` is their composition and
-//! its order, its classes and its answers are S16's, unchanged.
+//! and the cross-shard root product. `reduce_shard` is their composition, and
+//! keeps §6's order, classes and answers.
 
 use alloc::vec::Vec;
 
@@ -41,12 +41,12 @@ pub struct GlobalChallenges {
     pub digest: Fr,
 }
 
-/// The statement's checks and the global transcript, `docs/spec/shard-proof.md`
+/// The statement's checks and the global transcript, `docs/spec/proof.md`
 /// §6 steps 1 to 3 and §2: the statement is one `vk` describes, its window
 /// rules hold, its per-shard lists line up, and then G1 to G11 are replayed.
 ///
-/// **Run once per statement**, by the prover's global commit phase and by
-/// `verify_block`; `verify_shard` runs it for its one shard.
+/// **Run once per statement**, by `verify_block`; `verify_shard` runs it for
+/// its one shard. The prover runs the transcript alone, `global_commit`.
 pub fn derive_global_phase(
     vk: &VerifyingKey,
     public: &PublicInputs,
@@ -122,7 +122,7 @@ pub fn derive_global_phase(
 }
 
 /// One shard against a statement whose global phase is already derived,
-/// `docs/spec/shard-proof.md` §6 steps 4 to 11: its time window, its seeding,
+/// `docs/spec/proof.md` §6 steps 4 to 11: its time window, its seeding,
 /// its shape, its circuit, its channels and the memory argument's **shard
 /// half**, then the opening claim its caller owes.
 ///
@@ -149,7 +149,7 @@ pub fn verify_shard_local(
     // 4. The time window is a window: `[start, end)` inside the clock. Which
     //    windows a *block* admits — ordered and disjoint within a cycle-owning
     //    family — is `crate::check_ts_windows`, which needs every shard and so
-    //    is `verify_block`'s (`docs/spec/block-proof.md` §4).
+    //    is `verify_block`'s (`docs/spec/proof.md` §8).
     let [start, end] = proof.ts_window;
     if start > end || end > 1 << TS_BITS {
         return Err(statement(
@@ -264,8 +264,8 @@ pub fn verify_shard_local(
     //      journal cannot be pre-loaded at timestamp 0 instead, because that
     //      family's init leaf is a literal 0 with no column to choose.
     //      The column is named by **address** and not by position: a base
-    //      claim carries the `PolyAddress` it is a claim about, so a future
-    //      artifact that reordered its columns fails here loudly instead of
+    //      claim carries the `PolyAddress` it is a claim about, so an artifact
+    //      that reordered its columns would fail here loudly instead of
     //      quietly comparing the wrong one.
     let public_value = match proof.family {
         // `M[2] init_value`: the window's contents at timestamp 0.
@@ -359,7 +359,7 @@ pub fn stack_values(values: &[Fr], memory: usize, witness: usize, r: &[Fr]) -> V
     out
 }
 
-/// The memory argument's **statement half**, `docs/spec/shard-proof.md` §6
+/// The memory argument's **statement half**, `docs/spec/proof.md` §6
 /// step 10b and `docs/spec/memory.md` §4.2: the boundary is in range and names
 /// the exit status, and the read/write root product reconciles over every
 /// shard of every family in the statement, against the boundary's two factors.
@@ -405,12 +405,13 @@ pub fn verify_global_memory(
 }
 
 /// Reduce `proof` to its opening claim, or refuse it with the class of the
-/// first check that fails, `docs/spec/shard-proof.md` §6.
+/// first check that fails, `docs/spec/proof.md` §6.
 ///
 /// The one no_std entry point for a single shard. `verifier::verify_shard` is
-/// this followed by the opening; nothing else verifies a shard. `vk` has
-/// passed its load (`VerifyingKey::check`); nothing `proof` or `public`
-/// carries makes this panic.
+/// this followed by the opening; a block runs the three parts instead, with
+/// [`verify_shard_local`] per shard. `vk` has passed its load
+/// (`VerifyingKey::check`); nothing `proof` or `public` carries makes this
+/// panic.
 pub fn reduce_shard(
     vk: &VerifyingKey,
     proof: &ShardProof,
@@ -419,9 +420,9 @@ pub fn reduce_shard(
     let global = derive_global_phase(vk, public)?;
     let claim = verify_shard_local(vk, &global, proof, public)?;
     // Step 10b, at step 10's place in the order: step 11 builds the claim and
-    // cannot fail, so running the statement half after it returns is the same
-    // first failure, with the same class and the same message, as S16's
-    // single step 10 was.
+    // cannot fail, so running the statement half after it returns gives the
+    // same first failure, with the same class and the same message, as running
+    // it before step 11.
     verify_global_memory(vk, &global, public)?;
     Ok(claim)
 }

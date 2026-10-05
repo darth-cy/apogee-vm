@@ -1,6 +1,6 @@
 //! The Ethereum field-multiplication circuit, gate by gate.
 //!
-//! `docs/spec/delegation.md` §14 is what this suite restates: the 25-word
+//! `docs/spec/delegation-circuits.md` §5 is what this suite restates: the 25-word
 //! frame, the four-way modulus selector, the anchor's two tuples, the
 //! schoolbook identity `a·b = q·m + out` with `a`, `b` and `out` all below
 //! `m`, and the 32-bit bound on every limb that crosses the frame.
@@ -10,20 +10,20 @@
 //! row-local scratch computed by `gkr::gate_values`, exactly as
 //! `crates/checker/tests/add_sub.rs` does.
 //!
-//! **There is no forward pass here, and since S26c there cannot be.** This
-//! family carries the `RANGE16` channel (`docs/spec/delegation.md` §10.3),
-//! whose table needs sixteen variables, so its circuit cannot be built at the
-//! reduced height a whole-shard forward pass would need — `family_circuit`
-//! returns `None` below `2^16`. Evaluating one row of the real `2^16` circuit
-//! is both cheaper and a stronger statement than a forward pass over a toy
-//! height ever was. Nothing here shares a line with
-//! `crates/prover`'s fill or with `crates/emulator`'s executor: the operands,
-//! the product, the quotient, the remainder and every carry are computed here
-//! from `u128` primitives, so a circuit that stated anything but `a·b mod m`
-//! would reject an honest witness. The moduli themselves are
-//! `constants::mod_mul::MODULI`, because the circuit's whole point since S26b
-//! is that those four numbers and no others are what it multiplies modulo;
-//! `crates/constants/tests/moduli.rs` is what holds them to an outside oracle.
+//! **There is no forward pass here, and there cannot be.** This family carries
+//! the `RANGE16` channel (`docs/spec/delegation.md` §9), whose table needs
+//! sixteen variables, so its circuit cannot be built at the reduced height a
+//! whole-shard forward pass would need — `family_circuit` returns `None` below
+//! `2^16`. Evaluating one row of the real `2^16` circuit is both cheaper and a
+//! stronger statement than a forward pass over a toy height would be. Nothing
+//! here shares a line with `crates/prover`'s fill or with `crates/emulator`'s
+//! executor: the operands, the product, the quotient, the remainder and every
+//! carry are computed here from `u128` primitives, so a circuit that stated
+//! anything but `a·b mod m` would reject an honest witness. The moduli
+//! themselves are `constants::mod_mul::MODULI`, because the circuit's whole
+//! point is that those four numbers and no others are what it multiplies
+//! modulo; `crates/constants/tests/moduli.rs` is what holds them to an outside
+//! oracle.
 //!
 //! Every negative control corrupts one cell of an otherwise honest witness, or
 //! supplies an honest witness for a claim the circuit must refuse, and names
@@ -281,7 +281,7 @@ fn witness(live: &[Invocation]) -> Vec<(PolyAddress, MultilinearPoly)> {
         });
     }
     // The gap, `4·cycle + FRAME_DELTA − 0 − 1`, as two RANGE16 chunks a word:
-    // since S26c this family range-checks rather than decomposing into bits.
+    // this family range-checks rather than decomposing into bits.
     for j in 0..f::FRAME_WORDS {
         for c in 0..constraints::delegation::GAP_CHUNKS {
             let values = (0..ROWS)
@@ -415,8 +415,8 @@ fn witness(live: &[Invocation]) -> Vec<(PolyAddress, MultilinearPoly)> {
     out
 }
 
-/// The memory challenges, and — since S26c — the channel's `g` and the `beta`
-/// powers its tuple positions read.
+/// The memory challenges, and the channel's `g` and the `beta` powers its
+/// tuple positions read.
 fn challenges_for(a: &CircuitArtifact) -> ExternalChallenges {
     let mut ch = ExternalChallenges::new();
     for (slot, value) in [
@@ -505,8 +505,7 @@ fn witness_row(
 /// The relation the corrupted row must break, or a panic saying nothing did.
 ///
 /// Every row this suite builds is evaluated, so a corruption on any of them is
-/// found; the first violation in relation order is returned, which is what the
-/// old whole-circuit `self_check` reported too.
+/// found; the first violation in relation order is returned.
 fn refusal(a: &CircuitArtifact, columns: Vec<(PolyAddress, MultilinearPoly)>) -> String {
     for row in 0..ROWS {
         let violated =
@@ -604,7 +603,7 @@ fn the_circuit_validates_and_keeps_the_memory_rule() {
     assert!(a.setup.is_empty());
     assert!(
         !a.lookups.is_empty(),
-        "since S26c this family's bounds are obligations, not bit decompositions"
+        "this family's bounds are obligations, not bit decompositions"
     );
     assert_eq!(
         constraints::lookup::check_discharge(&a, &mod_mul::channels()),
@@ -619,7 +618,7 @@ fn the_circuit_validates_and_keeps_the_memory_rule() {
     assert_eq!(checker::check_padding(&a), Ok(()));
 }
 
-/// **Acceptance: the circuit computes `a·b mod m` for every selector.**
+/// **The circuit computes `a·b mod m` for every selector.**
 ///
 /// The witness is built from `u128` arithmetic in this file and from nothing the
 /// prover or the executor owns. If the circuit stated any other relation — a
@@ -639,8 +638,8 @@ fn an_honest_witness_satisfies_every_gate() {
 // ---------------------------------------------------------------------------
 
 /// A wrong result is caught by the limb identity, not by anything softer: the
-/// product and the quotient are unchanged, so the first position whose sum no
-/// longer divides is the one that names it.
+/// product and the quotient are unchanged, so the first position whose sum does
+/// not divide is the one that names it.
 #[test]
 fn a_changed_result_word_is_refused() {
     let a = mod_mul::artifact(VARS);
@@ -798,16 +797,15 @@ fn a_result_not_below_the_modulus_is_refused() {
 /// An operand at or above the modulus: the operand's own chain refuses it, and
 /// nothing else does.
 ///
-/// **This is S26b's new statement and the one the vendored `k256` patch has to
-/// respect.** `a = m` is not a corner case: `m`'s raw limb pattern is
-/// upstream's second representation of zero, and a lazily reduced field
-/// element that is congruent to zero reaches a multiply as exactly that. The
-/// twin here is therefore an *honest* witness of `m · b mod m = 0` — the
-/// quotient is `b`, the result is 0, every limb is bounded, every carry
-/// divides and `out < m` holds — so the only thing left to refuse it is the
-/// operand's own chain.
+/// **This is the statement the vendored `k256` patch has to respect.** `a = m`
+/// is not a corner case: `m`'s raw limb pattern is upstream's second
+/// representation of zero, and a lazily reduced field element that is congruent
+/// to zero reaches a multiply as exactly that. The twin here is therefore an
+/// *honest* witness of `m · b mod m = 0` — the quotient is `b`, the result is
+/// 0, every limb is bounded, every carry divides and `out < m` holds — so the
+/// only thing left to refuse it is the operand's own chain.
 ///
-/// What it buys is not soundness, which S26 had without it, but **totality**:
+/// What it buys is not soundness, which holds without it, but **totality**:
 /// with `a, b < m` the honest quotient is below `m` and so fits its eight
 /// limbs, which makes every frame the circuit accepts one a prover can fill.
 #[test]
@@ -843,7 +841,7 @@ fn an_operand_not_below_the_modulus_is_refused() {
     }
 }
 
-/// A changed quotient limb: the identity no longer divides.
+/// A changed quotient limb: the identity does not divide.
 #[test]
 fn a_changed_quotient_is_refused() {
     let a = mod_mul::artifact(VARS);
@@ -872,12 +870,11 @@ fn a_changed_carry_is_refused() {
 /// The 32-bit limb bound — without which the limb identity is an `Fr` equation
 /// rather than an integer one — **lives in the channel, not in a gate**.
 ///
-/// Until S26c a limb's bound was its 32-bit decomposition and `a_word0` was the
-/// gate carrying it. Now it is the halfword pair of `docs/spec/memory.md` §7,
-/// and the halfword column is read by **nothing but its own two obligations**:
-/// no gate anywhere names it. So a wrong halfword breaks no relation at all and
-/// is refused by the `RANGE16` channel alone — which is precisely the statement
-/// that the bound moved rather than vanished.
+/// A limb's bound is the halfword pair of `docs/spec/memory.md` §7, and the
+/// halfword column is read by **nothing but its own two obligations**: no gate
+/// anywhere names it. So a wrong halfword breaks no relation at all and is
+/// refused by the `RANGE16` channel alone — which is precisely the statement
+/// that the bound lives in the channel.
 ///
 /// `checker::violated_lookups` is the native reading of that obligation, the
 /// same statement LogUp proves.
@@ -983,7 +980,7 @@ fn two_moduli_at_once_is_refused() {
 /// A modulus limb that is not the selected literal: `m_limb{k}_rule`.
 ///
 /// The eight `m` columns are the only place the modulus exists in the witness,
-/// and nothing about them is a frame word any more. Without this gate a prover
+/// and nothing about them is a frame word. Without this gate a prover
 /// would choose the modulus freely and the selector would be decoration.
 #[test]
 fn a_modulus_limb_that_is_not_the_selected_literal_is_refused() {
@@ -993,9 +990,8 @@ fn a_modulus_limb_that_is_not_the_selected_literal_is_refused() {
     assert_eq!(refusal(&a, bad), "m_limb3_rule");
 }
 
-/// The shape `docs/spec/constraint-manifest.md` §18 accounts for, at the family's
-/// **own** height — not `VARS`, which the rest of this file shrinks to eight rows
-/// so a forward pass fits an ordinary test.
+/// The shape `docs/spec/circuits.md` §1 and `docs/spec/delegation-circuits.md`
+/// §5 account for, at the family's own height.
 ///
 /// A digest that moves says only *that* something moved; these numbers say what.
 /// `crates/constraints/tests/vectors/mod_mul.txt` carries the same counts beside
@@ -1008,13 +1004,13 @@ fn the_shape_is_the_manifests() {
     assert_eq!(
         1u32 << a.trace_vars,
         constants::family::DEFAULT_HEIGHTS[constants::family::MOD_MUL as usize],
-        "the manifest's row is the height the prover actually builds"
+        "this is the height the prover actually builds"
     );
     assert_eq!(a.memory.len(), mod_mul::MEMORY_COLUMNS, "M");
     assert_eq!(a.witness.len(), mod_mul::WITNESS_COLUMNS, "W");
     assert!(a.setup.is_empty(), "no setup column");
-    // Since S26c: one virtual table, one channel, and the obligations that
-    // replaced 3,143 bit columns (`docs/spec/delegation.md` §10.3).
+    // One virtual table, one channel, and its obligations
+    // (`docs/spec/delegation.md` §9).
     assert_eq!(a.virtuals.len(), 1, "V[range16]");
     assert_eq!(mod_mul::channels().len(), 1, "one channel, RANGE16");
     assert_eq!(a.lookups.len(), 274, "obligations");
@@ -1024,7 +1020,8 @@ fn the_shape_is_the_manifests() {
         "the two memory roots and the channel's pair"
     );
 
-    // `lists (row-wise + halving)` and `top`, §1.2's columns.
+    // The gate lists: `docs/spec/circuits.md` §1's row-wise ones, then one
+    // halving list a variable.
     assert_eq!(a.layers.len(), 26, "gate lists");
     let halving = a.layers.iter().filter(|l| l.halving).count();
     assert_eq!(halving, 16, "one halving list per trace variable");
@@ -1034,13 +1031,11 @@ fn the_shape_is_the_manifests() {
     assert_eq!(inner, 2_244, "inner columns");
     assert_eq!(a.relations.len(), 2_369, "relations");
 
-    // The `enforcing (d1/d2)` split. An enforcing relation is one with no
+    // The enforcing relations by degree. An enforcing relation is one with no
     // output, and **its degree is 1 exactly when no term multiplies two
     // columns** — which in this family means exactly `GateDef::Linear`, every
     // other gate here carrying either a `live` factor or a real product.
     //
-    // Since S26c the 3,416 booleanity gates are gone with the bit
-    // decompositions they accompanied: 3,502 enforcing relations become 125.
     // The degree-1 half is the 17 `writes_back_w`, `selector_rule`,
     // `one_modulus_a_live_row`, the 8 `m_limb{k}_rule`, the 24 `*_canonical`
     // and the 3 `*_below_modulus`; the degree-2 half is the 4
@@ -1061,29 +1056,27 @@ fn the_shape_is_the_manifests() {
     assert_eq!(a.to_bytes().len(), 550_391, "wire bytes");
 }
 
-/// What a height does and does not move — the property the manifest's repeated
-/// rows exist to show.
+/// What a height does and does not move (`docs/spec/circuits.md` §1).
 ///
-/// A family's row in `docs/spec/constraint-manifest.md` §1.2 appears once per
-/// height the repository builds, and across two such rows `committed`,
-/// `enforcing` and `lookups` are **identical**. A height is `trace_vars`, and
-/// the only thing it changes is how many halving lists sit above the row-wise
-/// ones: each carries one node per output, so `lists` grows by `Δn` and `inner`
-/// by `outputs · Δn`, and nothing else moves at all.
+/// Across two heights `committed`, `enforcing` and `lookups` are **identical**.
+/// A height is `trace_vars`, and the only thing it changes is how many halving
+/// lists sit above the row-wise ones: each carries one node per output, so
+/// `lists` grows by `Δn` and `inner` by `outputs · Δn`, and nothing else moves
+/// at all.
 ///
-/// **The two heights are now `2^16` and `2^18`**: `2^8` is not one this family
-/// can be built at since S26c, because `RANGE16`'s table needs sixteen
-/// variables and `family_circuit` returns `None` below that.
+/// **The two heights are `2^16` and `2^18`**: `2^8` is not one this family can
+/// be built at, because `RANGE16`'s table needs sixteen variables and
+/// `family_circuit` returns `None` below that.
 ///
-/// S26 raised this family from `2^8` to `2^16`, and this is what says the raise
-/// was a height and not a circuit change wearing a height's clothes.
+/// This is what says a height is a height and not a circuit change wearing a
+/// height's clothes.
 #[test]
 fn a_height_moves_only_the_halving_layers() {
     let lo = mod_mul::artifact(16);
     let hi = mod_mul::artifact(18);
     assert!(
         constraints::family_circuit(constants::family::MOD_MUL, 8).is_none(),
-        "2^8 is not a height this family can be built at since S26c"
+        "2^8 is not a height this family can be built at"
     );
     let d = (hi.trace_vars - lo.trace_vars) as usize;
 

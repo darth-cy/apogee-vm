@@ -18,7 +18,7 @@ rayon.workspace = true
 transcript.workspace = true
 
 [dev-dependencies]
-# The S13 base-layer binding: tests absorb `witness_digest` of the committed
-# columns before proving and verifying. S16 absorbs commitments instead.
+# The tests' base-layer binding: they absorb `witness_digest` of the committed
+# columns before proving and verifying, where a shard proof absorbs commitments.
 sumcheck.workspace = true
 test-support.workspace = true

@@ -16,10 +16,10 @@
 //! time into a heap buffer and appended to the journal from it, so the echo is
 //! a real allocation and a real copy rather than a slice handed straight on.
 //!
-//! **This guest cannot run without an advice region.** Asking for advice a run
-//! was not given is a fatal executor error rather than an empty slice
-//! (`docs/spec/public-values.md` §6), so a run of this guest supplies advice —
-//! possibly zero bytes of it, which is a region whose length word is 0.
+//! **This guest cannot run without advice.** Asking for advice a run was not
+//! given is a fatal executor error rather than an empty slice, and zero bytes
+//! of advice make no region (`docs/spec/public-values.md` §6), so a run of
+//! this guest supplies at least one byte.
 //!
 //! # The journal
 //!
@@ -85,7 +85,7 @@ fn main() {
         "the heap did not hand back what it was given"
     );
 
-    // The delegation and the software twin, behind one frozen signature. On an
+    // The delegation and the software twin, behind one signature. On an
     // executor with the circuit both reach it; on one without, both take the
     // software path inside `transcript`. The states agree either way, which is
     // the property the fallback exists to have.
@@ -100,11 +100,11 @@ fn main() {
     }
     assert_eq!(
         state, want,
-        "the delegated permutation is not the S02 permutation"
+        "the delegated permutation is not the software permutation"
     );
 }
 
-/// The precompile's software twin: the frozen S02 permutation, over the same
+/// The delegation's software twin: `transcript`'s permutation, over the same
 /// 96-byte canonical little-endian state the ecall takes.
 fn software_poseidon2(bytes: &mut [u8; 96]) {
     let mut state = [Fr::ZERO; 3];

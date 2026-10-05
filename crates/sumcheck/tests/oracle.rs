@@ -1,15 +1,15 @@
-//! Acceptance 5: an independent computation of the round polynomials.
+//! An independent computation of the round polynomials.
 //!
 //! Nothing here calls the prover's round machinery, its interpolation, or
 //! `Gate::evaluate`. Each round polynomial is recomputed from the definition —
 //! a direct sum over the remaining cube of `eq(r, y) * G(y)`, with `G` written
-//! out by hand and every column read through `MultilinearPoly::evaluate`, the
-//! S03 routine that was checked against arkworks. Four values at four distinct
+//! out by hand and every column read through `MultilinearPoly::evaluate`,
+//! which `crates/poly` checks against arkworks. Four values at four distinct
 //! nodes determine a cubic, so matching there is matching coefficient for
 //! coefficient.
 //!
-//! The stage asks for round 0 at `n <= 4`. Every round is checked instead: it
-//! is the same code and strictly more coverage.
+//! Every round is checked, at `n <= 4`, not round 0 alone: it is the same
+//! code and strictly more coverage.
 
 mod common;
 
@@ -20,7 +20,7 @@ use field::Fr;
 use poly::{eq_eval, MultilinearPoly};
 use sumcheck::{prove_zerocheck, verify_zerocheck, witness_digest, Gate};
 
-/// The two formulas under test, written out as the stage writes them —
+/// The two formulas under test, written out by hand —
 /// including `A * (B + C)` unexpanded, where the gate carries the expansion
 /// `A*B + A*C`. A transcription error in either direction shows up here.
 enum Formula {
@@ -54,7 +54,7 @@ fn naive_round_value(
         point.push(x);
         for j in 0..rest {
             // Variable `bound.len() + 1 + j` is bit `j` of `y`, matching the
-            // frozen index convention.
+            // index convention.
             point.push(if (y >> j) & 1 == 1 { Fr::ONE } else { Fr::ZERO });
         }
         let values: Vec<Fr> = columns.iter().map(|c| c.evaluate(&point)).collect();
@@ -81,7 +81,7 @@ fn check_every_round(gate: &Gate, formula: &Formula, columns: &[MultilinearPoly]
     let claim = verify_zerocheck(gate, n, &proof, &mut verifier)
         .expect("the oracle only checks honest proofs");
 
-    // `r` is replayed from the frozen script; the challenges come from the
+    // `r` is replayed from the script; the challenges come from the
     // verifier's own output, not from the prover.
     let r = eq_randomizers(digest, n);
 

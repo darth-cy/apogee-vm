@@ -1,11 +1,9 @@
 //! **The mini-block gate**: the pinned real-mainnet mini-block, proved and
 //! verified, and the tamper twin that says what the proof binds.
 //!
-//! S25's acceptances 4 and 5. Both are `#[ignore]`d and CI asks for them by
-//! name, for the two reasons every proving suite in this repository is: they
-//! build a 2 MB `revm` image from source, and they prove a statement whose
-//! shards are `2^20` rows each. §7 of `docs/handoff/S25-block.md` carries the
-//! measurements.
+//! Both are `#[ignore]`d and run by name, for the two reasons every proving
+//! suite in this repository is: they build a 2 MB `revm` image from source,
+//! and they prove a statement whose shards are `2^20` rows each.
 //!
 //! # What a mini-block proof says, exactly
 //!
@@ -96,14 +94,10 @@ fn io() -> emulator::GuestIo {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 4 — the mini-block gate
+// The mini-block gate
 // ---------------------------------------------------------------------------
 
 /// Prove the mini-block fixture and get `verify` Ok.
-///
-/// The gate the stage's testing ladder names, and the thing everything else in
-/// this stage waited on: *"Do not attempt the full block before the mini-block
-/// gate passes."*
 #[test]
 #[ignore = "builds the revm guest from source and proves a 2^20 statement"]
 fn a4_the_mini_block_proves_and_verifies() {
@@ -119,9 +113,9 @@ fn a4_the_mini_block_proves_and_verifies() {
     );
     host::verify(&setup.vk, &proven.block).expect("the block verifies");
 
-    // The statement carries the journal, which is the whole point of S-IO: a
-    // verifier reads the block's result off the proof rather than being told
-    // it.
+    // The statement carries the journal, which is the whole point of public
+    // values: a verifier reads the block's result off the proof rather than
+    // being told it.
     assert_eq!(
         proven.block.statement().output,
         proven.journal,
@@ -183,7 +177,7 @@ fn a4_a_claimed_journal_that_is_not_the_proved_one_is_refused() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 5 — the tamper twin
+// The tamper twin
 // ---------------------------------------------------------------------------
 
 /// One corrupted witness cell, argument-pinned.

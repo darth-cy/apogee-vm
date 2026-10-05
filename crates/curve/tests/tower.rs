@@ -291,7 +291,7 @@ fn frobenius_is_a_ring_homomorphism() {
 // Equality is not vacuous
 // ---------------------------------------------------------------------------
 
-/// S05 found that a suite can be silently emptied by an equality that always
+/// A suite can be silently emptied by an equality that always
 /// says yes. `Fq6` and `Fq12` derive `PartialEq`, but nothing else here ever
 /// asserts two of them are *different*, so this does.
 #[test]

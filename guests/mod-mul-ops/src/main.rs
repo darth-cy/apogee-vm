@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
-//! S26's guest for the `MOD_MUL` delegation, specialized at S26b: Ethereum
-//! field multiplication over four fixed moduli, checked four ways in one
+//! The guest for the `MOD_MUL` delegation: Ethereum field
+//! multiplication over four fixed moduli, checked four ways in one
 //! binary.
 //!
 //! # The four halves, and why each
@@ -14,10 +14,10 @@
 //! the thing it checks.
 //!
 //! **The software path, run rather than reserved.** §2 of
-//! `docs/spec/delegation.md` requires a caller to have one, and S26 chose
-//! `u64` moduli precisely so that path could be a single `u128` expression.
-//! A fixed-modulus family has no such exit: every selectable modulus is 256
-//! bits, so the fallback is [`soft_mul_mod`], a schoolbook multiply and a
+//! `docs/spec/delegation.md` requires a caller to have one, and here it
+//! cannot be a single `u128` expression, as it can for a 64-bit modulus:
+//! every selectable modulus is 256 bits, so the fallback is
+//! [`soft_mul_mod`], a schoolbook multiply and a
 //! shift-and-subtract division. Rather than leave forty lines nothing ever
 //! runs, this guest runs **both** paths on every ABI check and compares —
 //! which makes the fallback a live differential oracle against
@@ -48,8 +48,8 @@
 //!
 //! # Input, advice and the journal
 //!
-//! Unused. `EXIT` and `PRECOMPILE_MOD_MUL` are this guest's only ecalls, which
-//! is what keeps it provable.
+//! Unused. `EXIT`, `PRECOMPILE_MOD_MUL` and, through `k256`'s points,
+//! `PRECOMPILE_EC_ADD` are this guest's only ecalls, which keeps it provable.
 //!
 //! # The result
 //!

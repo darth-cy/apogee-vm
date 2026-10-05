@@ -1,6 +1,6 @@
-//! Acceptance 5: every law validator passes both committed toys and rejects a
-//! hand-built artifact breaking its law, naming that law — and the mutants that
-//! break one law are shown to pass the others, so each failure is attributable.
+//! Every law validator passes both committed toys and rejects a hand-built
+//! artifact breaking its law, naming that law — and the mutants that break one
+//! law are shown to pass the others, so each failure is attributable.
 //!
 //! The same mutants drive a differential test against `constraints`' own
 //! construction-time check, `CircuitArtifact::validate`, which shares no code
@@ -167,7 +167,7 @@ fn mutants() -> Vec<Mutant> {
         Mutant {
             // L{2}[0] is then read by no gate, which `validate` refuses beside
             // the laws. A halving gate reading some other column of its own
-            // layer is lawful since S15; reading two layers down is not.
+            // layer is lawful; reading two layers down is not.
             only_laws: false,
             ..m(
                 "list 2 reads L{1}[0], two layers down, gate and relation alike",

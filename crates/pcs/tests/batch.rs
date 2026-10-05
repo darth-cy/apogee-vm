@@ -1,5 +1,4 @@
-//! Acceptance 1, 2, 3 and 7, and Must-be-exact 6: batching `k` columns opened
-//! at one point.
+//! Batching `k` columns opened at one point.
 //!
 //! The batch is one Mercury instance, not `k` of them: `cm* = sum rho^i cm_i`
 //! and `f* = sum rho^i f_i` go through one ordinary opening, and what the
@@ -76,7 +75,7 @@ impl Batch {
     }
 }
 
-/// Acceptance 1: eight random `2^16` columns at one random point.
+/// Eight random `2^16` columns at one random point.
 #[test]
 fn a_batch_of_eight_round_trips_at_two_to_the_sixteen() {
     let it = batch(16, 8, 0x5009_0001);
@@ -101,7 +100,7 @@ fn a_batch_of_eight_round_trips_at_two_to_the_sixteen() {
     it.check(&it.cms, &vs, &proof).expect("batch_verify");
 }
 
-/// Acceptance 3: a batch of one verifies. It is **not** the same transcript as
+/// A batch of one verifies. It is **not** the same transcript as
 /// a bare single opening, and the two are not interchangeable: a `k = 1` batch
 /// absorbs the commitment list and squeezes `rho` before the opening begins.
 #[test]
@@ -128,7 +127,7 @@ fn a_batch_of_one_verifies_and_is_not_a_single_opening() {
     );
 }
 
-/// Acceptance 2: the witness twin, and the three binding twins.
+/// The witness twin, and the three binding twins.
 #[test]
 fn every_batch_twin_is_rejected() {
     let it = batch(8, 4, 0x5009_0004);
@@ -202,9 +201,9 @@ fn every_batch_twin_is_rejected() {
     );
 }
 
-/// Acceptance 7: the zero polynomial commits to the point at infinity, whose
-/// wire form is S05's all-zero 64 bytes, and it opens and verifies — alone and
-/// inside a batch.
+/// The zero polynomial commits to the point at infinity, whose wire form is
+/// the curve's all-zero 64 bytes, and it opens and verifies — alone and inside
+/// a batch.
 #[test]
 fn the_zero_polynomial_commits_to_infinity_and_opens() {
     let num_vars = 8;
@@ -284,7 +283,7 @@ fn the_zero_polynomial_commits_to_infinity_and_opens() {
     );
 }
 
-/// Acceptance 7's negative control: a corrupted infinity encoding does not
+/// The negative control: a corrupted infinity encoding does not
 /// decode, on every wire a G1 point crosses.
 #[test]
 fn a_corrupted_infinity_encoding_does_not_decode() {
@@ -318,7 +317,7 @@ fn a_corrupted_infinity_encoding_does_not_decode() {
     );
 }
 
-/// Must-be-exact 6: every degenerate batch input is an error, and none of them
+/// Every degenerate batch input is an error, and none of them
 /// is a panic. `k = 0`, mismatched list lengths, and mixed column sizes.
 #[test]
 fn degenerate_batch_inputs_are_errors() {
@@ -451,12 +450,13 @@ fn aliased_and_mismatched_columns_behave() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 3 — the committed batch schedule
+// The committed batch schedule
 // ---------------------------------------------------------------------------
 
 /// The `k = 1` fixture, replayed. Every byte of the proof, and the terminal
 /// sponge state past it, comes back from the committed instance — so a change
-/// to §11's preamble, its tags or its encodings shows up here.
+/// to `docs/spec/mercury.md` §5's preamble, its tags or its encodings shows up
+/// here.
 fn replay_batch_kat(text: &str) -> Result<(), String> {
     let mut tau = None;
     let mut num_vars = None;
@@ -550,17 +550,17 @@ fn replay_batch_kat(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Acceptance 3: the committed `k = 1` batch replays byte for byte.
+/// The committed `k = 1` batch replays byte for byte.
 #[test]
 fn the_committed_batch_replays() {
     replay_batch_kat(BATCH_KAT).expect("the committed batch replays");
     assert_eq!(
         to_hex(&sha256(BATCH_KAT.as_bytes())),
-        "a211203ceb980ee9689516486a0e46d88a253433368505f242a3cbf4b774576f"
+        "400d1e93c764ec14a0b4ce9cf91a6769c0e314541f28a00a308939d0ee0d508c"
     );
 }
 
-/// Master rule 8: the replayer must be able to fail.
+/// The replayer must be able to fail.
 #[test]
 fn a_corrupted_batch_fixture_is_rejected() {
     let body: String = BATCH_KAT

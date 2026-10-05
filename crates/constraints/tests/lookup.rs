@@ -1,7 +1,7 @@
 //! The LogUp channels as data: the committed toy pinned, the discharge rule and
-//! its negative controls (acceptance 11), the channel construction refusals,
-//! the copower-pairing assertion, and the wire form of the new gate shape and
-//! the new virtual kinds.
+//! its negative controls, the channel construction refusals, the
+//! copower-pairing assertion, and the wire form of `TreeCross` and the range
+//! tables' virtual kinds.
 //!
 //! Every test here builds artifacts, never columns, so the toy's `2^20` rows
 //! are a number and nothing is materialized. `crates/checker/tests/logup.rs` is
@@ -53,12 +53,12 @@ fn toy() -> CircuitArtifact {
 /// The channels the toy actually carries, ascending: the order its multiplicity
 /// columns, its `ChannelSpec`s and its output root pairs all take.
 ///
-/// **Not `lookup_channel::COUNT`.** S15's toy is one family's shape, and
+/// **Not `lookup_channel::COUNT`.** The toy is one family's shape, and
 /// `tools/kat-gen/src/lookup.rs`'s `TOY_CHANNELS` declares the four
-/// `JUMP_BRANCH_SLT` carries; `XOR8` is `KECCAK_F`'s alone (S26d). Sizing this
-/// fixture off the global count would ask it for a root pair and a `TreeCross`
-/// per halving list on a channel it has no lookup, no table and no multiplicity
-/// column for.
+/// `JUMP_BRANCH_SLT` carries; `XOR8` is the byte-level delegation families'.
+/// Sizing this fixture off the global count would ask it for a root pair and a
+/// `TreeCross` per halving list on a channel it has no lookup, no table and no
+/// multiplicity column for.
 fn toy_channels(a: &CircuitArtifact) -> Vec<u32> {
     let mut channels: Vec<u32> = a.lookups.iter().map(|l| l.channel).collect();
     channels.sort_unstable();
@@ -119,10 +119,10 @@ fn the_committed_toy_is_a_circuit_that_discharges_every_lookup() {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance 11: the discharge cross-check's negative controls
+// The discharge cross-check's negative controls
 // ---------------------------------------------------------------------------
 
-/// Acceptance 11. An obligation nothing discharges, and one two columns
+/// An obligation nothing discharges, and one two columns
 /// discharge, are each refused naming the lookup or the column. The honest twin
 /// beside them is the committed toy.
 #[test]
@@ -449,7 +449,7 @@ fn toy_specs() -> Vec<ChannelSpec> {
 /// Each refusal below breaks one rule of it.
 ///
 /// The witness layout is `value, flag, gen_a, gen_b`, then the two multiplicity
-/// columns last, as S15 must-be-exact 5 requires.
+/// columns last, as `docs/spec/lookup.md` §7 requires.
 const VALUE: u32 = FRAME_WITNESS;
 const FLAG: u32 = FRAME_WITNESS + 1;
 const GEN_A: u32 = FRAME_WITNESS + 2;
@@ -565,7 +565,7 @@ fn a_lookup_whose_channel_no_spec_declares_is_refused() {
 /// whatever a caller adds, so an empty channel list is a circuit every
 /// obligation of which is undischarged — the one shape where the discharge rule
 /// has the most to say and, were it run only for circuits that declare a
-/// channel, the one shape it would never be asked of. S14's bare
+/// channel, the one shape it would never be asked of. The bare
 /// `frame_artifact` is the one artifact that legitimately carries obligations
 /// without a channel, and it does not come through here.
 #[test]
@@ -716,8 +716,8 @@ fn each_range_channel_names_its_virtual_table() {
 ///
 /// Why the selector is half the check: on a row the direct bound's selector
 /// switches off and the scaled one's does not, the direct bound is vacuous and
-/// the scaled bound is back to bounding nothing. S17 matched an obligation on
-/// its expression alone and left that open; S18 closed it.
+/// the scaled bound is back to bounding nothing. Matching an obligation on its
+/// expression alone would leave that open.
 #[test]
 fn a_copower_scaled_column_needs_its_own_direct_range_check() {
     let a = toy();

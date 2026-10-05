@@ -2,7 +2,7 @@
 //! computes: each guest's journal recomputed here from its inputs, so every
 //! check runs everywhere with no second executor to install.
 //!
-//! Acceptance 11 (a misaligned access is a named fatal error in both paths) is
+//! The check that a misaligned access is a named fatal error in both paths is
 //! here, and so is the check that `opcodes` really executes every instruction
 //! it claims to.
 
@@ -32,7 +32,7 @@ fn fib_commits_the_recorded_value() {
 }
 
 // ---------------------------------------------------------------------------
-// S-IO: the public values and the advice region, executed
+// The public values and the advice region, executed
 // ---------------------------------------------------------------------------
 
 /// The public input `guests/public-io` reads for `advice`: the advice's length
@@ -141,8 +141,8 @@ fn a_public_input_too_long_for_its_window_is_refused_by_name() {
     );
 }
 
-/// Must-be-exact 12: one core. The tracing path is the plain path plus a
-/// recorder, so both report the same execution, bit for bit.
+/// One core: the tracing path is the plain path plus a recorder, so both
+/// report the same execution, bit for bit.
 #[test]
 fn run_and_trace_run_are_one_execution() {
     for name in TRACED {
@@ -420,7 +420,7 @@ fn opcodes_executes_every_instruction() {
     assert_eq!(instr_at(&t.image, pc).mnemonic(), "ebreak");
 }
 
-/// Acceptance 11: each misaligned access — `lw`, `sw`, `lh`, `sh`, `lr.w`,
+/// Each misaligned access — `lw`, `sw`, `lh`, `sh`, `lr.w`,
 /// `sc.w`, `amoadd.w` — is the named fatal error in `run` and in
 /// `trace_run`, at the instruction that made it, and `trace_run` hands back
 /// no trace.
@@ -474,7 +474,7 @@ fn the_recorded_public_input_is_what_the_host_supplied() {
 }
 
 // ---------------------------------------------------------------------------
-// S21: the keccak corpus
+// The keccak corpus
 // ---------------------------------------------------------------------------
 
 /// `guests/keccak-test`'s corpus source: byte `i` is `(31i + 7) mod 256`.
@@ -528,7 +528,7 @@ fn keccak_guest_digests() -> Vec<[u8; 32]> {
         .collect()
 }
 
-/// Acceptance 3, the host half: every digest `guests/keccak-test` checks
+/// The host half: every digest `guests/keccak-test` checks
 /// itself against is `tiny-keccak`'s, re-derived here from the reference
 /// rather than copied.
 ///
@@ -555,7 +555,7 @@ fn the_keccak_corpus_digests_are_the_references() {
     }
 }
 
-/// Acceptance 3, the delegation half: the guest runs on the emulator, whose
+/// The delegation half: the guest runs on the emulator, whose
 /// ecall performs the permutation, and exits 6 — one per corpus entry.
 ///
 /// `guests/keccak-unused` links the shim and never calls it, so it makes no
@@ -575,7 +575,7 @@ fn keccak_test_checks_its_corpus_under_the_delegation_ecall() {
 }
 
 // ---------------------------------------------------------------------------
-// S23: the two recursion delegations
+// The `POSEIDON2` and `FR_ARITH` delegations
 // ---------------------------------------------------------------------------
 
 /// The `KAT_OUT` literal in `guests/recursion-ops/src/main.rs`, read out of
@@ -600,7 +600,7 @@ fn recursion_guest_kat() -> Vec<String> {
     out
 }
 
-/// Acceptance 2's pin: the state `guests/recursion-ops` checks itself against
+/// The pin: the state `guests/recursion-ops` checks itself against
 /// is `transcript::poseidon2_permute`'s, re-derived here rather than copied.
 ///
 /// The guest compares in-guest and exits 9, so a wrong literal would make the
@@ -624,7 +624,7 @@ fn the_recursion_guests_kat_is_the_transcripts() {
     }
 }
 
-/// Acceptances 1 and 2, the delegated half: the guest runs on the emulator,
+/// The delegated half: the guest runs on the emulator,
 /// whose two ecalls perform the arithmetic and the permutation, and exits 9 —
 /// one per check.
 ///
@@ -695,20 +695,20 @@ fn mod_mul_ops_routes_every_vendored_patch_through_the_ecall() {
         "only {} invocations: no vendored patch is routing",
         trace.len()
     );
-    // Above one `2^8` shard, which is what makes the `MOD_MUL` fixture in
-    // `crates/prover/tests/common` multi-shard — the only coverage this
-    // family's anchor pairing and last-shard padding rows have.
+    // Above one `2^8` shard. The `MOD_MUL` fixture in
+    // `crates/prover/tests/common` proves this family at `2^16`, its floor:
+    // one shard, mostly padding rows.
     assert!(
         trace.len() > 256,
-        "{} invocations, so the 2^8 fixture would be one shard",
+        "{} invocations fit one 2^8 shard",
         trace.len()
     );
     // The equality is the part that separates the three seams: each
     // contributes a different amount, so any one of them falling back moves
     // this number and nothing else in the suite would notice.
-    // 1,567 until S26c, when `guests/vendor/k256`'s `ProjectivePoint` patch
-    // moved this guest's group arithmetic — twelve field multiplies an
-    // addition — out of `MOD_MUL` and into `EC_ADD`.
+    // `guests/vendor/k256`'s `ProjectivePoint` patch keeps this guest's group
+    // arithmetic — twelve field multiplies an addition — out of `MOD_MUL`: it
+    // goes to `EC_ADD`.
     assert_eq!(trace.len(), 1_443, "the pinned invocation count");
 
     // And the other side of that same move, on the trace already in hand.
@@ -716,7 +716,7 @@ fn mod_mul_ops_routes_every_vendored_patch_through_the_ecall() {
     // **This assertion lives here because it is free here.** It belongs with
     // the `EC_ADD` counts in `the_new_families_are_invoked_the_pinned_number_of_times`,
     // which is `#[ignore]`d for memory — and it is the one of those counts that
-    // cannot be given up, because `mod-mul-ops` names **neither** shim and
+    // cannot be given up, because `mod-mul-ops` names no `EC_ADD` shim and
     // reaches `EC_ADD` through the patched `ProjectivePoint` alone. It is
     // therefore the only thing in ordinary CI that can see that patch still
     // routing: 13 point operations at three invocations each. Tracing this
@@ -766,7 +766,7 @@ fn recursion_ops_invokes_both_families() {
 }
 
 // ---------------------------------------------------------------------------
-// S26c's two fixtures
+// The `SHA256_COMP` and `EC_ADD` fixtures
 // ---------------------------------------------------------------------------
 
 /// `sha256-ops` checks itself: the `SHA256_COMP` frame ABI against FIPS
@@ -774,9 +774,9 @@ fn recursion_ops_invokes_both_families() {
 /// digests at every length that moves the Merkle-Damgård padding — each of
 /// those also against `sha2`, an unpatched crates.io implementation and the
 /// only one in that comparison which is not this repository's. Exit 13, one
-/// per check but the first: since S26e the ABI is checked by one raw
-/// four-round call against FIPS 180-4's appendix, its window, and a whole
-/// sixteen-call compression.
+/// per check but the first: the ABI is checked by one raw four-round call
+/// against FIPS 180-4's appendix, its window, and a whole sixteen-call
+/// compression.
 #[test]
 fn sha256_ops_checks_itself_under_the_delegation_ecall() {
     let execution = run(&image("sha256-ops"), &io(&[])).unwrap();
@@ -808,16 +808,16 @@ fn ec_ops_checks_itself_under_the_delegation_ecall() {
     assert!(execution.io.output.is_empty(), "it commits nothing");
 }
 
-/// The invocation counts of S26c's two families, and — for `EC_ADD` — the one
-/// thing that can see whether the `k256` projective patch still routes.
+/// The invocation counts of `SHA256_COMP` and `EC_ADD`, and — for `EC_ADD` —
+/// the one thing that can see whether the `k256` projective patch still routes.
 ///
 /// `ec-ops` names the `EC_ADD` shim itself, so its count cannot distinguish a
-/// live patch from a dead one; `mod-mul-ops` names neither shim and reaches
-/// both through `k256` alone, which is what makes its two counts the seam's
-/// test. Every number here is a pin over a build: when the guest or a vendored
-/// crate changes, re-derive it rather than accepting it.
+/// live patch from a dead one; `mod-mul-ops` names no `EC_ADD` shim and
+/// reaches the family through `k256` alone, which is what makes its count the
+/// seam's test. Every number here is a pin over a build: when the guest or a
+/// vendored crate changes, re-derive it rather than accepting it.
 #[test]
-#[ignore = "DEFERRED: four traced executions, two of them `ec-ops`, peak 23.9 GiB             and 118 s -- above what a GitHub runner has, so it reclaims the job"]
+#[ignore = "four traced executions, two of them `ec-ops`: peak 23.9 GiB and 118 s, above what a GitHub runner has"]
 fn the_new_families_are_invoked_the_pinned_number_of_times() {
     let counts: Vec<(&str, &str, usize)> = [
         ("sha256-ops", constants::family::SHA256_COMP),
@@ -837,16 +837,16 @@ fn the_new_families_are_invoked_the_pinned_number_of_times() {
     // Every one of these is derivable by hand from the guest's source, which
     // is what makes it a pin and not a recording:
     //
-    // - `sha256-ops` makes 529 calls since S26e, a compression being sixteen:
+    // - `sha256-ops` makes 529 calls, a compression being sixteen:
     //   one raw call and two whole compressions by name through the frame ABI,
     //   33, and 31 blocks through `guest_sdk::sha256`, 496 — 11 for the seven
     //   padding-boundary lengths, 2 for the two-block vector, 16 for the
     //   1,000-byte message and 2 for the last one-byte-difference check.
     // - `ec-ops` performs 27 point operations: 20 of its own additions and 7
-    //   inside its `k256` oracle, which since S26c is itself delegated. Three
+    //   inside its `k256` oracle, which is itself delegated. Three
     //   invocations each.
     // - `mod-mul-ops` performs 13, all of them inside `k256` — its own source
-    //   names no shim at all, which is what makes its count the projective
+    //   names no `EC_ADD` shim, which is what makes its count the projective
     //   patch's only test.
     assert_eq!(
         counts,

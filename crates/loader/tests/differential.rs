@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 
 use loader::{load_elf, Slot};
 
-/// Acceptance 4: the loader's listing is the disassembler's, at every address.
+/// The loader's listing is the disassembler's, at every address.
 #[test]
 fn objdump_agrees_instruction_for_instruction() {
     for name in ["fib", "rvc-dense", "amm"] {
@@ -121,7 +121,7 @@ fn every_compressed_form_expands_to_its_uncompressed_twin() {
     }
 }
 
-/// Must-be-exact 5, stated directly: a compressed instruction occupies two
+/// The address rule, stated directly: a compressed instruction occupies two
 /// bytes after expansion, exactly as it did before.
 #[test]
 fn addresses_are_never_compacted() {
@@ -150,7 +150,7 @@ fn addresses_are_never_compacted() {
     }
 }
 
-/// Acceptance 5: every symbol `nm` reports is the address of an instruction.
+/// Every symbol `nm` reports is the address of an instruction.
 #[test]
 fn every_symbol_address_is_an_instruction() {
     let image = load_elf(&common::bytes("rvc-dense.elf")).expect("the fixture loads");
@@ -171,7 +171,7 @@ fn every_symbol_address_is_an_instruction() {
     }
 }
 
-/// Acceptance 4's required corpus, asserted on the *expanded* words rather than
+/// The required compressed forms, asserted on the *expanded* words rather than
 /// on a second decoder: a compressed slot whose expansion is `lw rd, imm(x2)`
 /// was a `c.lwsp`, and so on down the list.
 #[test]
@@ -204,7 +204,7 @@ fn the_fixture_covers_the_required_compressed_forms() {
     ] {
         assert!(
             seen.contains(required),
-            "the RVC-dense fixture no longer covers {required}"
+            "the RVC-dense fixture does not cover {required}"
         );
     }
 }
@@ -249,8 +249,8 @@ fn paired_regions() -> (Vec<common::Expanded>, Vec<common::Expanded>) {
     )
 }
 
-/// Master rule 11: the committed fixtures are what they were when the digests
-/// were written down.
+/// The committed fixtures are what they were when the digests were written
+/// down.
 #[test]
 fn committed_fixtures_match_their_pins() {
     for (name, want) in common::PINS {

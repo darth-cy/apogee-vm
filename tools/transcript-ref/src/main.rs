@@ -3,7 +3,7 @@
 //!
 //!     cargo run --manifest-path tools/transcript-ref/Cargo.toml
 //!
-//! This is the *second implementation* the stage requires. It links the Plonky3
+//! This is the transcript's *second implementation*. It links the Plonky3
 //! Poseidon2 permutation and the HorizenLabs `RC3` constants, and it implements
 //! `docs/spec/transcript.md` from the spec text — the duplex, the typed layer,
 //! the byte encoding — without ever touching `crates/transcript`. Everything the
@@ -13,7 +13,7 @@
 //!
 //! * `poseidon2_perm.txt`   — permutation known-answer vectors.
 //! * `transcript_cases.txt` — replayable transcript scripts with expected output.
-//! * `io_digest.txt`        — the public I/O digest, `docs/spec/ecall-abi.md` §6.
+//! * `io_digest.txt`        — the public I/O digest, `docs/spec/public-values.md` §5.
 //!
 //! Deterministic: same revisions in, byte-identical files out, so a refresh is
 //! run-and-diff. CI runs exactly that.
@@ -40,12 +40,12 @@ const ZKHASH_REV: &str = "055bde3f4782731ba5f5ce5888a440a94327eaf3";
 /// RNG crate's stream staying stable across versions.
 const SEED: u64 = 20260907;
 
-/// Random permutation vectors, on top of the structured ones. The stage asks
-/// for at least 100 in total.
+/// Random permutation vectors, on top of the eight structured ones: 128 in
+/// all.
 const RANDOM_PERMUTATIONS: usize = 120;
 
 // ---------------------------------------------------------------------------
-// Frozen numbers, transcribed from the spec rather than imported.
+// Numbers transcribed from the spec rather than imported.
 //
 // `constants::transcript_tags` holds the same values in the repository, and
 // `crates/transcript/tests/duplex.rs` looks each name up there when it
@@ -156,7 +156,7 @@ fn reference_permutation() -> Poseidon2Bn254<3> {
 // ---------------------------------------------------------------------------
 // The duplex, written out from the spec text.
 //
-// Spec sections 5, 6 and 7, transcribed from the prose rather than imported —
+// Spec section 2, transcribed from the prose rather than imported —
 // which is what makes the committed vectors a check on the specification and
 // not only on Plonky3.
 // ---------------------------------------------------------------------------
@@ -178,7 +178,7 @@ impl SpecDuplex {
         }
     }
 
-    /// Spec section 7. Overwrite absorption; an absorb of `n > 0` elements
+    /// Spec section 2. Overwrite absorption; an absorb of `n > 0` elements
     /// zero-fills the rest of the rate and adds `n` to the capacity; a step with
     /// nothing pending is a pure squeeze and does neither.
     fn duplexing(&mut self) {
@@ -201,7 +201,7 @@ impl SpecDuplex {
         self.output.extend_from_slice(&self.state[..RATE]);
     }
 
-    /// Spec section 5.
+    /// Spec section 2.
     fn observe(&mut self, x: Bn254) {
         self.output.clear();
         self.input.push(x);
@@ -210,7 +210,7 @@ impl SpecDuplex {
         }
     }
 
-    /// Spec section 6. Challenges leave the rate from the end.
+    /// Spec section 2. Challenges leave the rate from the end.
     fn sample(&mut self) -> Bn254 {
         if !self.input.is_empty() || self.output.is_empty() {
             self.duplexing();
@@ -222,12 +222,12 @@ impl SpecDuplex {
 // ---------------------------------------------------------------------------
 // The driver.
 //
-// Spec sections 5-7 are also exactly Plonky3's `DuplexChallenger` at width 3 and
+// Spec section 2 is also exactly Plonky3's `DuplexChallenger` at width 3 and
 // rate 2, so every raw operation runs through both and must agree: the committed
 // values come from the spec transcription above, and the reference type confirms
 // each one as it is produced. A disagreement fails the generator, and therefore
-// CI. Sections 9, 10 and 11 — the framing — are this protocol's own and have no
-// upstream counterpart, so they are written out once.
+// CI. Section 3 — the framing — is this protocol's own and has no upstream
+// counterpart, so it is written out once.
 // ---------------------------------------------------------------------------
 
 type Challenger = DuplexChallenger<Bn254, Poseidon2Bn254<3>, 3, RATE>;
@@ -245,13 +245,13 @@ impl Duplex {
         }
     }
 
-    /// Spec section 5.
+    /// Spec section 2.
     fn observe(&mut self, x: Bn254) {
         self.spec.observe(x);
         self.reference.observe(x);
     }
 
-    /// Spec section 6.
+    /// Spec section 2.
     fn sample(&mut self) -> Bn254 {
         let from_spec = self.spec.sample();
         let from_reference: Bn254 = self.reference.sample();
@@ -262,7 +262,7 @@ impl Duplex {
         from_spec
     }
 
-    /// Spec section 9.
+    /// Spec section 3.
     fn append_scalars(&mut self, tag_name: &str, xs: &[Bn254]) {
         self.observe(from_u64(tag(tag_name)));
         self.observe(from_u64(xs.len() as u64));
@@ -271,7 +271,7 @@ impl Duplex {
         }
     }
 
-    /// Spec section 10. 31-byte little-endian chunks, the last zero-padded.
+    /// Spec section 3. 31-byte little-endian chunks, the last zero-padded.
     fn append_bytes(&mut self, tag_name: &str, bytes: &[u8]) {
         self.observe(from_u64(tag(tag_name)));
         self.observe(from_u64(bytes.len() as u64));
@@ -282,7 +282,7 @@ impl Duplex {
         }
     }
 
-    /// Spec section 11.
+    /// Spec section 3.
     fn challenge(&mut self, tag_name: &str) -> Bn254 {
         self.observe(from_u64(tag(tag_name)));
         self.sample()
@@ -357,7 +357,7 @@ fn cases() -> Vec<(String, Vec<Op>)> {
     let a = next_fr(&mut rng);
     let b = next_fr(&mut rng);
 
-    // The stage's cases A-E.
+    // Cases A-E: the raw duplex at its smallest.
     let mut v: Vec<(String, Vec<Op>)> = vec![("A".into(), vec![Op::Observe(f(1)), Op::Sample])];
     v.push((
         "B".into(),
@@ -540,8 +540,8 @@ fn write_permutations() {
     let mut out = provenance("poseidon2_perm v1 -- width-3 BN254 Poseidon2 known-answer vectors");
     out.push_str(
         "# perm <in0> <in1> <in2> <out0> <out1> <out2>\n\
-         # The first vector is the stage's [0, 1, 2] KAT; then structured inputs,\n\
-         # then random ones.\n\n",
+         # The first vector is the [0, 1, 2] KAT of docs/spec/transcript.md\n\
+         # section 1; then structured inputs, then random ones.\n\n",
     );
 
     let minus_one = Bn254::ZERO - Bn254::ONE;
@@ -602,10 +602,10 @@ fn write_cases() {
 // ---------------------------------------------------------------------------
 // The public I/O digest.
 //
-// S10 freezes it as exactly two typed byte messages and one raw squeeze, in a
-// sponge of its own: `docs/spec/ecall-abi.md` section 6. Transcribed here from
-// that text, over the reference duplex, so the committed values do not come
-// from `crates/transcript`.
+// Exactly two typed byte messages and one raw squeeze, in a sponge of its own:
+// `docs/spec/public-values.md` section 5. Transcribed here from that text, over
+// the reference duplex, so the committed values do not come from
+// `crates/transcript`.
 // ---------------------------------------------------------------------------
 
 fn io_digest(input: &[u8], output: &[u8]) -> Bn254 {
@@ -617,17 +617,18 @@ fn io_digest(input: &[u8], output: &[u8]) -> Bn254 {
 
 fn write_io_digest() {
     let mut out =
-        provenance("io_digest v1 -- the public I/O digest over the fd 0 and fd 1 streams");
+        provenance("io_digest v1 -- the public I/O digest over the public input and output");
     out.push_str(
         "# io <name> <input|-> <output|-> <digest>\n\
          #\n\
          # Streams are lowercase hex, `-` for empty. The digest is one canonical\n\
          # little-endian Fr.\n\
          #\n\
-         # The cases come in three groups: the four shapes acceptance 10 names,\n\
-         # the chunk boundaries either side of 31 bytes, and three pairs that\n\
-         # differ in exactly one way -- swapped streams, an appended zero byte,\n\
-         # one flipped bit -- so the file itself shows each digest moving.\n\n",
+         # The cases come in three groups: four shapes (both empty, input only,\n\
+         # output only, several chunks each), the chunk boundaries either side of\n\
+         # 31 bytes, and three pairs that differ in exactly one way -- swapped\n\
+         # streams, an appended zero byte, one flipped bit -- so the file itself\n\
+         # shows each digest moving.\n\n",
     );
 
     let ascending = |n: usize| -> Vec<u8> { (0..n).map(|i| (i as u8).wrapping_mul(31)).collect() };

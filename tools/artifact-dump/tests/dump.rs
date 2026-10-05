@@ -1,6 +1,6 @@
 //! What the dump promises, held to `crates/loader`.
 //!
-//! The tool's whole claim is that the file it writes is the frozen wire form
+//! The tool's whole claim is that the file it writes is the loader's wire form
 //! and that the page it prints describes that file. Both are checked here
 //! against the loader itself rather than against a recorded expectation, so a
 //! change to either side has to agree with the other to pass.
@@ -47,7 +47,7 @@ fn the_artifact_is_exactly_the_loaders_wire_form() {
         assert_eq!(
             dumped.artifact,
             wire_form(&image),
-            "{name}: the exported bytes are not the frozen wire form"
+            "{name}: the exported bytes are not the loader's wire form"
         );
         let back: ProgramImage = postcard::from_bytes(&dumped.artifact)
             .unwrap_or_else(|e| panic!("{name}: the artifact does not parse: {e}"));
@@ -165,7 +165,7 @@ fn a_refused_elf_produces_no_artifact() {
 
 /// Slots that are not code are folded into one line, and the fold is exact.
 ///
-/// No committed guest reaches this path — with the frozen linker script `.text`
+/// No committed guest reaches this path — with the SDK's linker script `.text`
 /// is the lowest loaded segment, so the slot span is all code — so the fixture
 /// is built here: a read-only segment below an executable one leaves a gap of
 /// slots that are addresses in the image and not instructions.

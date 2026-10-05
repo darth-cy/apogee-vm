@@ -1,7 +1,7 @@
 //! Every way the loader refuses, exercised against a committed fixture.
 //!
-//! Master rule 8 wants a negative control for every checker. A loader is
-//! nothing but checkers, so this file is the list: one fixture per refusal,
+//! Every checker has a negative control, and a loader is nothing but
+//! checkers, so this file is the list: one fixture per refusal,
 //! each one a named deviation from `minimal.elf`, which loads.
 //!
 //! The fixtures are hand-built rather than compiled, because no RV32 toolchain
@@ -12,13 +12,13 @@ mod common;
 
 use loader::{load_elf, LoaderError};
 
-/// Acceptance 6(a): a reserved `c.addi4spn`, refused with the pc named.
+/// A reserved `c.addi4spn`, refused with the pc named.
 ///
-/// The all-zero halfword used to be the other case here and is not any more:
-/// it is a *defined*-illegal encoding rather than an unclaimed one, LLVM emits
-/// it as padding for unreachable blocks, and the sweep now records it as
+/// The all-zero halfword is not a case here: it is a *defined*-illegal
+/// encoding rather than an unclaimed one, LLVM emits it as padding for
+/// unreachable blocks, and the sweep records it as
 /// [`loader::Slot::NonInstruction`]. `image.rs` holds that behaviour, over the
-/// `zero_halfword` fixtures this file used to own.
+/// `zero_halfword` fixtures.
 #[test]
 fn illegal_compressed_encodings_are_refused_with_the_pc() {
     let cases: [(&str, u16); 1] = [("reserved_addi4spn.elf", 0x0008)];
@@ -38,7 +38,7 @@ fn illegal_compressed_encodings_are_refused_with_the_pc() {
     }
 }
 
-/// Acceptance 6(b): a `Zcmp`-shaped halfword, refused with the pc named.
+/// A `Zcmp`-shaped halfword, refused with the pc named.
 #[test]
 fn a_zcmp_encoding_is_refused_with_the_pc() {
     match load_elf(&common::synthetic("zcmp.elf")) {
@@ -58,8 +58,7 @@ fn a_zcmp_encoding_is_refused_with_the_pc() {
     }
 }
 
-/// Acceptance 6(c), and the rest of must-be-exact 8: dynamic, relocatable and
-/// non-RV32 files, each with its own name.
+/// Dynamic, relocatable and non-RV32 files, each with its own name.
 #[test]
 fn dynamic_relocatable_and_non_rv32_files_are_refused() {
     assert!(
