@@ -1,413 +1,171 @@
-# The Poseidon2 duplex transcript
+# The transcript
 
-Frozen as of S02. Every challenge in this protocol is drawn through this
-construction; changing anything here is a protocol-version change.
+Every challenge in the protocol is drawn from a Poseidon2 duplex sponge over `Fr` through a typed
+message layer. This page specifies the permutation, the sponge, the framing, a G1 point's transcript
+form and every tag. Implementation: `crates/transcript`, `#![no_std]`.
 
-Implementation: `crates/transcript`. Reference implementation (the oracle that
-produces every committed vector): `tools/transcript-ref`, which transcribes this
-document over Plonky3's Poseidon2 with the HorizenLabs `RC3` constants, and
-never links `crates/transcript`. Sections 5, 6 and 7 are also exactly Plonky3's
-`DuplexChallenger` at width 3 and rate 2, and the oracle runs both on every
-operation and asserts they agree, so the committed vectors check the text below
-*and* the reference type. Sections 8 to 13 are this protocol's own and have no
-upstream counterpart.
+## 1. The Poseidon2 permutation
 
----
+Width 3 over `Fr`, S-box `x^5`, 4 full rounds, 56 partial rounds (S-box on lane 0 only), 4 full
+rounds. The round constants are `RC3` of HorizenLabs/poseidon2,
+`plain_implementations/src/poseidon2/poseidon2_instance_bn256.rs` at commit
+`055bde3f4782731ba5f5ce5888a440a94327eaf3`.
 
-## 1. Field and permutation parameters
+```text
+E(s) = s + (s₀+s₁+s₂)·(1,1,1)                 circ(2, 1, 1)
+I(s) = s + (s₀+s₁+s₂)·(1,1,1) + (0,0,s₂)      1 + diag(1, 1, 2)
 
-Poseidon2 over `Fr`, the BN254 scalar field.
+poseidon2_permute(s):
+  s ← E(s)
+  RC3 rows 0–3:    s_i ← (s_i + c_i)^5, every lane;   s ← E(s)
+  RC3 rows 4–59:   s₀ ← (s₀ + c₀)^5;                  s ← I(s)
+  RC3 rows 60–63:  s_i ← (s_i + c_i)^5, every lane;   s ← E(s)
 
-| Parameter | Value |
-| --- | --- |
-| State width `t` | 3 |
-| Rate `r` | 2 (lanes 0 and 1) |
-| Capacity | 1 (lane 2) |
-| S-box | `x -> x^5` |
-| Full rounds `R_F` | 8, split 4 initial and 4 terminal |
-| Partial rounds `R_P` | 56 |
-| Partial-round S-box lane | 0 |
-
-This is the established width-3 BN254 Poseidon2 instance from the Poseidon2
-paper (ePrint 2023/323), Table 1, `(n, t, d) = (256, 3, 5)`.
-
-## 2. Round constants
-
-The 64 rounds' constants are the upstream `RC3` table of
-<https://github.com/HorizenLabs/poseidon2>, file
-`plain_implementations/src/poseidon2/poseidon2_instance_bn256.rs`, at commit
-`055bde3f4782731ba5f5ce5888a440a94327eaf3` — the same table Plonky3 checks its
-BN254 Poseidon2 against.
-
-`RC3` is 64 rows of 3 constants. Rows `0..4` are the initial full rounds and
-rows `60..64` the terminal full rounds, both using all three lanes; rows
-`4..60` are the partial rounds and use lane 0 only, with zero in lanes 1 and 2
-upstream.
-
-`constants` stores exactly the entries the permutation reads, split by phase:
-`POSEIDON2_RC3_INITIAL` (`[[&str; 3]; 4]`), `POSEIDON2_RC3_INTERNAL`
-(`[&str; 56]`), `POSEIDON2_RC3_TERMINAL` (`[[&str; 3]; 4]`). The literals are
-copied from upstream character for character — `0x` plus 64 lowercase hex
-digits, big-endian — so the vendored table diffs against its source by eye.
-The vendored tables are checked by the permutation vectors rather than against a
-separate dump of `RC3`: every constant is read on every permutation call, so a
-single wrong digit changes the output for essentially every input and fails both
-the `[0,1,2]` KAT and all 128 committed vectors in
-`crates/transcript/tests/poseidon2.rs`.
-
-`field::Fr::from_hex` decodes them, at runtime, on every permutation call: `Fr`
-has no compile-time constructor, and giving it one would have meant editing the
-S01 multiplier. The measured cost is **1.76x** on the permutation: 4667 ns with
-the decode already done, 8201 ns as shipped.
-
-## 3. The permutation
-
-`poseidon2_permute(state: &mut [Fr; 3])`:
-
-```
-external_matrix(state)
-for rc in RC_INITIAL:                       # 4 rounds
-    for lane in 0..3: state[lane] = (state[lane] + rc[lane])^5
-    external_matrix(state)
-for rc in RC_INTERNAL:                      # 56 rounds
-    state[0] = (state[0] + rc)^5
-    internal_matrix(state)
-for rc in RC_TERMINAL:                      # 4 rounds
-    for lane in 0..3: state[lane] = (state[lane] + rc[lane])^5
-    external_matrix(state)
+poseidon2_permute([0, 1, 2])₀ = 0x0bb61d24daca55eebcb1929a82650f328134334da98ea4f847f760054f4a3033
 ```
 
-At width 3 the two linear layers are:
+`constants::POSEIDON2_RC3_INITIAL`, `_INTERNAL` and `_TERMINAL` hold the 80 entries read
+(upstream's partial rows are zero in lanes 1 and 2) as upstream's big-endian hex literals, character
+for character, decoded by `Fr::from_hex` on every call. They are pinned through the permutation, by
+the oracle's 128 vectors (§2), each of which reads every constant.
 
-- **external** — multiplication by the circulant matrix
-  `[[2,1,1],[1,2,1],[1,1,2]]`, i.e. add the state sum to every lane;
-- **internal** — multiplication by `1 + diag(1,1,2) = [[2,1,1],[1,2,1],[1,1,3]]`.
+On `riscv32`, `poseidon2_permute` is one `POSEIDON2` delegation call over the lanes' canonical
+bytes, falling back to these rounds when the executor answers `-ENOSYS`
+([delegation.md](delegation.md) §10).
 
-Note the external linear layer applied *before* the first round: this is the
-Poseidon2 initial matrix multiplication, not an off-by-one.
+## 2. The duplex sponge
 
-## 4. Sponge state
+```text
+state  [Fr; 3]   lanes 0, 1 the rate, lane 2 the capacity; zero in Transcript::new()
+input  [Fr; 2]   absorbed, not yet permuted: 0 or 1 pending between operations
+output [Fr; 2]   squeezed, not yet handed out: 0 to 2
 
-```
-state:      [Fr; 3]   lanes 0,1 are the rate; lane 2 is the capacity
-input:      [Fr; 2]   absorbed, not yet permuted
-input_len:  0 or 1    between operations; momentarily 2 inside `observe`
-output:     [Fr; 2]   squeezed, not yet handed out
-output_len: 0, 1 or 2
-```
-
-`Transcript::new()` sets every lane and length to zero. Absorbing the protocol
-preamble is the caller's job, through the typed layer.
-
-**Canonicalisation invariant.** Lanes at or past a buffer's length are always
-zero, and no squeezed material outlives an absorb (§5). The duplex never reads
-either, so this costs nothing and makes the state — and therefore the §12
-snapshot — a deterministic function of the operation sequence: replay the same
-script and get the same bytes.
-
-It does *not* say that any two transcripts with the same challenge future have
-equal snapshots. When input is pending the rate lanes are already dead, so
-states that differ only there behave identically; reaching such a pair through
-the API would take a capacity collision, but a hand-built snapshot can simply
-be one.
-
-**The input buffer is never full between operations.** `observe` duplexes the
-moment the rate fills, so `input_len` is 0 or 1 whenever a caller can see the
-transcript. `output_len` has no such bound: an `observe` that completes an
-absorb leaves both squeezed lanes waiting.
-
-## 5. `observe` — raw absorb
-
-```
-observe(x):
-    output = [0, 0]; output_len = 0     # any buffered output is now stale
-    input[input_len] = x; input_len += 1
-    if input_len == 2: duplex()
+observe(x):  output ← []; input.push(x); if |input| = 2: duplex()
+sample():    if |input| > 0 or |output| = 0: duplex(); return output.pop()
+duplex():    n ← |input|; state[0..n] ← input; input ← []
+             if n > 0: state[n..2] ← 0; state[2] += n
+             poseidon2_permute(state); output ← [state[0], state[1]]
 ```
 
-Dropping the buffered output is not what makes a challenge depend on the
-material absorbed before it — §6's guard already forces a fresh permutation
-whenever input is pending, and an absorb that filled the rate refilled the
-output on its way through. What it buys is that the sponge state is a function
-of the operation sequence alone, which is what makes §12's snapshots canonical.
+- Absorption overwrites the rate. A short absorb zero-fills the rest of it and adds its length to
+  the capacity, so `[a]` and `[a, 0]` differ; with nothing pending, a duplex is a pure squeeze and
+  does neither.
+- Squeezed lanes leave from the end: the first `sample` after an absorb is `state[1]`, the second
+  `state[0]`, and a third permutes again.
+- `observe` drops unread output and lanes past a buffer's length stay zero, which moves no
+  challenge and makes the state a function of the operation sequence alone.
 
-## 6. `sample` — raw squeeze
+This is Plonky3's `DuplexChallenger` at width 3 and rate 2. The vectors `crates/transcript` is
+tested against come from `tools/transcript-ref`, which shares no code with it: Plonky3's Poseidon2
+keyed with zkhash's own `RC3`, and a transcription of this section and §3 run beside that type,
+agreeing with it on every squeeze. The recursion format replays the same sponge over field cells,
+one `P2_FIELD` row a duplex step ([recursion.md](recursion.md) §4).
 
-```
-sample() -> Fr:
-    if input_len > 0 or output_len == 0: duplex()
-    output_len -= 1
-    x = output[output_len]; output[output_len] = 0
-    return x
-```
+## 3. Typed messages
 
-Challenges leave the rate **from the end**: the first challenge after an absorb
-is `state[1]`, the second is `state[0]`.
-
-## 7. `duplex` — one sponge step
-
-```
-duplex():
-    n = input_len
-    for i in 0..n: state[i] = input[i]; input[i] = 0
-    input_len = 0
-    if n > 0:                           # an absorb
-        for i in n..2: state[i] = 0     # zero pad
-        state[2] += n                   # absorb-length tag, into the capacity
-    permute(state)                      # a pure squeeze does neither of the above
-    output = [state[0], state[1]]; output_len = 2
+```text
+append_scalars(tag, xs):  observe(tag); observe(|xs|); observe(x) for x in xs
+append_scalar(tag, x)  =  append_scalars(tag, [x])
+append_bytes(tag, b):     observe(tag); observe(|b|); observe(c) for each 31-byte chunk c of b,
+                          zero-padded to 32 bytes, read little-endian
+challenge_scalar(tag):    observe(tag); return sample()
 ```
 
-Three properties are load-bearing:
+The length, the scalar count or for bytes the byte count, delimits a message: `"abc"` and `"abc\0"`
+are each one chunk, below `2^248 < p`, and differ. A challenge absorbs its tag, so it always comes
+from a fresh permutation.
 
-- **Overwrite absorption.** Absorbed elements replace the rate; they are not
-  added to it.
-- **Zero pad and length tag.** A short absorb zero-fills the rest of the rate
-  and adds the absorbed count to the capacity. Without the length tag, `[a]` and
-  `[a, 0]` would collide; the tag is what separates transcript cases D and E.
-- **A pure squeeze is not an absorb.** With nothing pending, the rate is left
-  alone and nothing is added to the capacity — the state is simply permuted
-  again. This is what a third consecutive `sample` does.
+The framing carries no kind, so each tag names exactly one of scalars, bytes or a challenge (§5):
+a tag of two kinds would make `append_bytes(T, b"")` and `append_scalars(T, [])` the same `T, 0`.
+So every digest — program identity, the SRS digest, `transcript::io_digest`,
+`sumcheck::witness_digest`, `pcs::accumulator_digest` — is a fresh sponge of typed messages ended
+by a raw `sample()`, never by a challenge under one of its message tags.
 
-## 8. Tags
+`snapshot()` captures the state and both buffers, and `Transcript::restore` resumes the same
+challenge stream. Its postcard form is 226 bytes, `state[3]`, `input[2]`, `input_len: u8`,
+`output[2]`, `output_len: u8`, each `Fr` canonical; decoding refuses `input_len ≥ 2`,
+`output_len > 2` and a nonzero lane past either length. The archived path's phase files hold the
+global transcript, and each shard's after its GKR pass, in this form ([streaming.md](streaming.md)
+§6). A shard transcript is no restored global sponge but a fresh one whose first message carries
+the global state digest ([proof.md](proof.md) §4).
 
-`Tag = u64`. Values live only in `constants::transcript_tags`, are sequential
-from 1, and are never renumbered or reused. `0` is not a tag, so an
-uninitialised value can never be a valid message.
+Each typed operation appends `Absorb { tag, n_scalars }` (payload elements: scalars, or chunks) or
+`Challenge { tag }` to `event_log()`. Raw `observe` and `sample` are not logged, the log never
+feeds the sponge and a snapshot omits it; `checker::tape` holds the global transcript's log to the
+order G1–G11 ([tools.md](../tools.md) §4).
 
-| Name | Value | Kind |
-| --- | --- | --- |
-| `PROTOCOL_SUITE` | 1 | scalars |
-| `PUBLIC_INPUTS` | 2 | bytes |
-| `COMMITMENT` | 3 | scalars |
-| `SUMCHECK_ROUND` | 4 | scalars |
-| `SUMCHECK_CHALLENGE` | 5 | challenge |
-| `EVALUATION_CLAIM` | 6 | scalars |
-| `PCS_OPENING` | 7 | scalars |
-| `WITNESS_DIGEST` | 8 | scalars |
-| `SUMCHECK_FINAL_EVALS` | 9 | scalars |
-| `MERCURY_INSTANCE` | 10 | scalars |
-| `MERCURY_ALPHA` | 11 | challenge |
-| `MERCURY_GAMMA` | 12 | challenge |
-| `MERCURY_Z` | 13 | challenge |
-| `BDFG_BATCH` | 14 | challenge |
-| `BDFG_POINT` | 15 | challenge |
-| `PAIRING_MERGE` | 16 | challenge |
-| `MERCURY_BATCH` | 17 | challenge |
-| `ACCUMULATOR_DIGEST` | 18 | scalars |
-| `ACCUMULATOR_MERGE` | 19 | challenge |
-| `PUBLIC_INPUT_STREAM` | 20 | bytes |
-| `PUBLIC_OUTPUT_STREAM` | 21 | bytes |
-| `PROGRAM_IDENTITY` | 22 | scalars |
-| `VM_CONFIG` | 23 | scalars |
-| `SHARD_COUNTS` | 24 | scalars |
-| `GKR_OUTPUTS` | 25 | scalars |
-| `GKR_OUTPUT_POINT` | 26 | challenge |
-| `GKR_BATCH` | 27 | challenge |
-| `GKR_LAYER_CLAIMS` | 28 | scalars |
-| `GKR_CHILD` | 29 | challenge |
-| `MEMORY_WINDOWS` | 30 | scalars |
-| `MEMORY_BOUNDARY` | 31 | scalars |
-| `PROGRAM_ENTRY` | 32 | scalars |
-| `LOOKUP_CHALLENGE` | 33 | challenge |
-| `SRS_DIGEST` | 34 | scalars |
-| `SRS_VERIFIER` | 35 | bytes |
-| `MEMORY_GROUP` | 36 | scalars |
-| `MEMORY_CHALLENGE` | 37 | challenge |
-| `GLOBAL_STATE_DIGEST` | 38 | challenge |
-| `SHARD_SEED` | 39 | scalars |
-| `SHARD_TS_WINDOW` | 40 | scalars |
-| `GENERIC_TABLE` | 41 | scalars |
+## 4. G1 points
 
-Tag 41 is S17's, `docs/spec/shard-proof.md` §3 and `docs/spec/jump-branch-slt.md` §6.
-`GENERIC_TABLE` frames the packed generic table's three commitments, the verifying key's
-one triple, as one message of twelve limbs, four a point in the frozen split of
-`docs/spec/mercury.md` §4. It is absorbed only inside the SRS digest's sponge, right
-after `SRS_VERIFIER` and before the raw squeeze. The global transcript never absorbs it:
-the table reaches a statement through the digest, which `SRS_DIGEST` carries.
+A point is absorbed as four `Fr` limbs of its 64-byte encoding `x ‖ y`
+([primitives.md](primitives.md) §3), with no curve arithmetic (`transcript::g1_limbs`):
 
-Tags 34 to 40 are S16's, and `docs/spec/shard-proof.md` §2 to §4 is normative for
-all seven. `SRS_DIGEST` frames the statement's SRS digest, absorbed right after the
-protocol suite message; `SRS_VERIFIER` frames the 320-byte `SrsVerifier` inside the
-digest's own sponge, whose raw squeeze is the digest, as `io_digest`'s is. Since S17 that
-sponge absorbs one more message, tag 41's, before the squeeze.
-`MEMORY_GROUP` opens each family's memory-column group with `[family, shard
-count]`; the group's lists follow under `COMMITMENT`. `MEMORY_CHALLENGE` draws the
-four global memory challenges, separated by position, and `GLOBAL_STATE_DIGEST` the
-digest every shard is seeded with. `SHARD_SEED` and `SHARD_TS_WINDOW` are the first
-two messages of every shard transcript. S16 also gave `PROTOCOL_SUITE`,
-`PUBLIC_INPUTS` and `PROGRAM_IDENTITY` their statement messages, each in its
-existing kind: the suite message carries `PROTOCOL_VERSION`, the public-inputs
-message the 32 canonical bytes of the I/O digest, and the identity message the
-program identity.
-
-Tag 33 is S15's, `docs/spec/lookup.md` §2: a shard's two LogUp challenges, `g`
-then `β`, separated by position.
-
-Tags 30 to 32 are S14's, and `docs/spec/memory.md` §6 is normative for all
-three. `MEMORY_WINDOWS` frames the statement's RAM window list, absorbed right
-after `SHARD_COUNTS`; `MEMORY_BOUNDARY` frames the 64 register and pc boundary
-scalars, absorbed after every memory-column commitment and before the memory
-challenges; `PROGRAM_ENTRY` frames the entry pc inside the program-identity
-sponge, after `VM_CONFIG`.
-
-Tags 25 to 29 are S13's, and what each frames is fixed by the backward pass's
-schedule in `docs/spec/gkr.md` §5.2: the claimed output tables, the top-layer
-point, the per-transition claim batch, the claimed values a transition leaves
-on the layer it reads, and the child-line point of a halving transition. One tag
-per role, as S08 did, so a transcript's event log says which role each message
-played. A layer sumcheck's rounds keep S04's `SUMCHECK_ROUND` and
-`SUMCHECK_CHALLENGE`, in their existing kinds.
-
-Tags 22 to 24 are S11's, and S14 amended both uses (`docs/spec/memory.md` §6).
-`PROGRAM_IDENTITY` opens the program-identity sponge with its one scalar, the
-code version; `VM_CONFIG` frames the static `VmConfig` — the family ids
-ascending, then their heights, then `bytecode_size_words` — and `SHARD_COUNTS`
-frames one per-proof shard count per family of that config. Those two and
-`MEMORY_WINDOWS` are the **statement descriptor**, always absorbed as three
-adjacent messages in that order. The identity sponge absorbs `VM_CONFIG`, then
-`PROGRAM_ENTRY`, then one `COMMITMENT` message per family, each one list of
-four-limb points in the existing kind: an instruction family's decoded-table
-column commitments; `INIT_TEARDOWN`'s one, the image column's; `ZERO_WINDOWS`'
-empty list. The squeeze that ends the identity sponge is a raw `sample`.
-`docs/spec/memory.md` §6.2 is normative for the recipe.
-
-Tags 20 and 21 are S10's, and they exist as a pair. They are the two domain tags
-of the **public I/O digest**: `transcript::io_digest` absorbs the statement's
-public **input** under the first and its public **output** — the journal — under
-the second, in a sponge of its
-own, and squeezes once. Two tags rather than one is exactly what makes swapping
-two unequal streams change the digest. Both frame byte messages, so the byte
-encoding of §10 supplies the packing and the byte length supplies the length,
-which is what keeps `x` and `x || 0x00` apart. The squeeze that ends that sponge
-is a raw `sample`, not a `challenge_scalar`, for the reason `ACCUMULATOR_DIGEST`'s
-is. `docs/spec/ecall-abi.md` §6 is normative for the recipe.
-
-Tags 17 to 19 are S09's. `MERCURY_BATCH` is the challenge that batches `k`
-column commitments opened at one point into a single Mercury instance, drawn
-after every commitment and every claimed value is absorbed
-(`docs/spec/mercury.md` §11). `ACCUMULATOR_DIGEST` frames the words of a
-deferred-pairing accumulator in the separate sponge that digests them, and
-`ACCUMULATOR_MERGE` is the per-check RLC weight a discharge draws from a sponge
-seeded with that digest (`docs/spec/accumulator.md` §5 and §6).
-
-S09 also gave `COMMITMENT` and `EVALUATION_CLAIM` new messages in their existing
-kind: a batch absorbs its commitment list under the first as one message of `4k`
-limbs, and `u` followed by all `k` claimed values under the second.
-
-`ACCUMULATOR_DIGEST` is used twice, in the same kind both times, exactly as
-`WITNESS_DIGEST` is: it frames the words absorbed by the sponge that produces the
-digest, and it frames the single scalar that carries the digest into the sponge
-`ACCUMULATOR_MERGE` is drawn from. The squeeze that ends the first sponge is a
-raw `sample`, **not** a `challenge_scalar`, for the same reason.
-
-Tags 10 to 16 are S08's, and what each frames is fixed by
-`docs/spec/mercury.md` §5's schedule. `MERCURY_INSTANCE` frames one scalar, the
-opening's `n`. The other six are the six challenges of one Mercury opening, one
-tag each rather than one tag separated by position, because that document pins a
-squeeze position *and* a tag for every one of them.
-
-S08 also gave three existing tags new messages, all in their existing kind: a
-Mercury opening absorbs its commitment under `COMMITMENT`, its point and claimed
-value under `EVALUATION_CLAIM`, and every proof element and evaluation under
-`PCS_OPENING`. A G1 point reaches all three as four `Fr` limbs — the addendum in
-`docs/spec/mercury.md` §4 — so all three stay scalar-kind.
-
-**One tag, one message kind.** The typed layer frames a message as
-`tag, length, payload...` and nothing more, so injectivity of the absorbed
-stream rests on each tag naming exactly one kind. Reusing a tag across kinds
-would make `append_bytes(T, b"")` and `append_scalars(T, &[])` absorb the same
-stream. Later stages append to the table; they must not reuse.
-
-`SUMCHECK_CHALLENGE` covers every challenge a sumcheck draws — the `n`
-eq-randomizers that fix the zerocheck's equality polynomial, then the per-round
-challenge for the round just absorbed. Those are two roles of one kind, and they
-are separated by their fixed position in the protocol's script rather than by
-their tag.
-
-`WITNESS_DIGEST` is used twice, in the same kind both times: it frames the
-messages absorbed by the separate sponge that produces the digest, and it frames
-the single scalar that carries the digest into the protocol transcript. The
-squeeze that ends that sponge is a raw `sample`, **not** a `challenge_scalar`,
-precisely because a challenge under the same tag would be one tag in two kinds.
-See `crates/sumcheck`.
-
-## 9. `append_scalar`, `append_scalars` — scalar messages
-
-```
-append_scalars(tag, xs):
-    observe(tag)
-    observe(xs.len())
-    for x in xs: observe(x)
-
-append_scalar(tag, x) = append_scalars(tag, [x])
+```text
+[ x[0..16], x[16..32], y[0..16], y[16..32] ]   each half read little-endian, below 2^128 < p
+[ S, S, S, S ]                                 the 64 zero bytes of infinity; S = 2^128
 ```
 
-The length is what makes `append_scalars(T, [a, b])` differ from
-`append_scalar(T, a); append_scalar(T, b)`: the first absorbs `T, 2, a, b`, the
-second `T, 1, a, T, 1, b`.
+A coordinate is an `Fq` element and `q > p`, hence the halves. `S` is
+`constants::G1_INFINITY_SENTINEL`: no 16-byte half reaches `2^128`, so the limbs determine the 64
+bytes whether or not they encode a point on the curve. The absorber never refuses; a point is
+validated where it is decoded, before a pairing reads it.
 
-## 10. `append_bytes` — byte messages
+`transcript::append_g1_points(tr, tag, points)` absorbs `k` points as one message of `4k` limbs,
+never `k` messages, so the framed length binds `k`. `pcs::append_g1_list` is it over
+`G1Affine::to_bytes`, and `pcs::append_g1` a list of one.
 
-```
-append_bytes(tag, bytes):
-    observe(tag)
-    observe(bytes.len())
-    for chunk in bytes.chunks(31):
-        observe(chunk, zero-padded to 32 bytes, read little-endian)
-```
+## 5. Tags
 
-31 bytes is `< 2^248 < p`, so every chunk is a canonical field element. The
-trailing chunk is zero-padded, so the **byte** length — not the chunk count — is
-what makes the encoding injective: `"abc"` and `"abc\0"` differ, and `"ab"`
-differs from `"a"` then `"b"`.
+`Tag = u64`: `constants::transcript_tags`, 45 tags numbered from 1 and named by
+`transcript_tags::NAMES[tag − 1]`; 0 is not a tag. Kinds: **S** scalars, **B** bytes, **C**
+challenge. Where: G1–G11 and the shard transcript are [proof.md](proof.md) §2, §4, the SRS digest
+§3 there; identity [program.md](program.md) §8; Mercury [mercury.md](mercury.md); GKR
+[gkr.md](gkr.md) §5; `io_digest` [public-values.md](public-values.md) §5; stacks and nodes
+[recursion.md](recursion.md) §1.3, §8.3. † marks a tag on no proof path.
 
-An empty byte string is a real message: it absorbs `tag, 0` and no payload.
-
-## 11. `challenge_scalar`
-
-```
-challenge_scalar(tag) -> Fr:
-    observe(tag)
-    return sample()
-```
-
-The tag is absorbed, so a challenge is domain-separated and always follows a
-fresh permutation: the two pending elements (`tag`, plus whatever preceded it)
-or the tag alone force a duplex step inside `sample`.
-
-## 12. `snapshot` / `restore`
-
-`snapshot()` captures the sponge state and both buffers — exactly what §4 lists,
-and nothing else. `restore(&snapshot)` rebuilds a transcript that emits the same
-challenge stream the original would have from that point.
-
-The wire form is a fixed 226 bytes: `state[3]`, `input[2]`, `input_len: u8`,
-`output[2]`, `output_len: u8`, with every field element canonical
-little-endian. Deserialisation refuses anything `snapshot` could not have
-produced, so `restore` can never be handed a state outside the §4 invariant:
-
-- `input_len < 2` — **strictly** below the rate, because `observe` duplexes the
-  moment the rate fills, so a transcript is never handed back to a caller with a
-  full input buffer;
-- `output_len <= 2` — not strict: `observe` leaves a full output buffer behind
-  when the absorb it completed duplexed the sponge;
-- every lane at or past a buffer's length is zero.
-
-The event log is **not** captured: it is metadata, and a restored transcript
-starts a fresh one.
-
-## 13. The event log
-
-```rust
-enum TranscriptEvent {
-    Absorb { tag: Tag, n_scalars: usize },
-    Challenge { tag: Tag },
-}
-```
-
-Always on, and metadata only — the log never feeds the sponge, so it cannot
-affect a challenge. `n_scalars` counts payload field elements: the scalar count
-for `append_scalar`/`append_scalars`, the 31-byte chunk count for
-`append_bytes`. The framing elements are not counted. Raw `observe` and `sample`
-are not recorded; they are the layer below.
+| tag | | | where |
+| --- | --- | --- | --- |
+| 1 | `PROTOCOL_SUITE` | S | G1: `[PROTOCOL_VERSION]` |
+| 2 | `PUBLIC_INPUTS` | B | G7: `io_digest`'s 32 canonical bytes |
+| 3 | `COMMITMENT` | S | a commitment list: identity, G8, shard witness, Mercury |
+| 4 | `SUMCHECK_ROUND` | S | a sumcheck round's coefficients |
+| 5 | `SUMCHECK_CHALLENGE` | C | a round's challenge; first, a zerocheck's eq-randomizers |
+| 6 | `EVALUATION_CLAIM` | S | Mercury: the point, then the claimed values |
+| 7 | `PCS_OPENING` | S | Mercury: proof points and evaluations |
+| 8 | `WITNESS_DIGEST` | S | `sumcheck::witness_digest`'s sponge, and its result † |
+| 9 | `SUMCHECK_FINAL_EVALS` | S | the zerocheck's final evaluations † |
+| 10 | `MERCURY_INSTANCE` | S | Mercury: `[n]` |
+| 11 | `MERCURY_ALPHA` | C | Mercury: `α` |
+| 12 | `MERCURY_GAMMA` | C | Mercury: `γ` |
+| 13 | `MERCURY_Z` | C | Mercury: `z`, redrawn while 0 |
+| 14 | `BDFG_BATCH` | C | Mercury: `δ` |
+| 15 | `BDFG_POINT` | C | Mercury: `z′` |
+| 16 | `PAIRING_MERGE` | C | Mercury: the pairing merge `ρ` |
+| 17 | `MERCURY_BATCH` | C | Mercury: the column batch `ρ` |
+| 18 | `ACCUMULATOR_DIGEST` | S | `pcs::discharge`: the entry words' sponge, and its result † |
+| 19 | `ACCUMULATOR_MERGE` | C | `pcs::discharge`: the per-check weight † |
+| 20 | `PUBLIC_INPUT_STREAM` | B | `io_digest`: the input |
+| 21 | `PUBLIC_OUTPUT_STREAM` | B | `io_digest`: the output |
+| 22 | `PROGRAM_IDENTITY` | S | identity: `[code_version]`; G6: `[identity]` |
+| 23 | `VM_CONFIG` | S | identity; G3 |
+| 24 | `SHARD_COUNTS` | S | G4 |
+| 25 | `GKR_OUTPUTS` | S | GKR: the output tables |
+| 26 | `GKR_OUTPUT_POINT` | C | GKR: the top point |
+| 27 | `GKR_BATCH` | C | GKR: a transition's claim batch |
+| 28 | `GKR_LAYER_CLAIMS` | S | GKR: a transition's claimed values |
+| 29 | `GKR_CHILD` | C | GKR: a halving transition's line point |
+| 30 | `MEMORY_WINDOWS` | S | G5 |
+| 31 | `MEMORY_BOUNDARY` | S | G9 |
+| 32 | `PROGRAM_ENTRY` | S | identity: `[entry_pc]` |
+| 33 | `LOOKUP_CHALLENGE` | C | shard: `g`, then `β` ([lookup.md](lookup.md) §2) |
+| 34 | `SRS_DIGEST` | S | G2 |
+| 35 | `SRS_VERIFIER` | B | the SRS digest: the 320-byte `SrsVerifier` |
+| 36 | `MEMORY_GROUP` | S | G8: `[family, shard count]` |
+| 37 | `MEMORY_CHALLENGE` | C | G10, four times |
+| 38 | `GLOBAL_STATE_DIGEST` | C | G11 |
+| 39 | `SHARD_SEED` | S | shard: `[digest, family, index]` |
+| 40 | `SHARD_TS_WINDOW` | S | shard: `[start, end]` |
+| 41 | `GENERIC_TABLE` | S | the SRS digest: the generic table's 3 points, 12 limbs |
+| 42 | `STACK_CHALLENGE` | C | a recursion-format shard: its `σ` stack challenges |
+| 43 | `FOLD_STATE` | S | a node: a verified shard's final transcript state |
+| 44 | `FOLD_WEIGHT` | C | a node: a shard's `w`, `w′`, or a child's weight |
+| 45 | `FOLD_CHILD` | S | a node: a child's journal |
