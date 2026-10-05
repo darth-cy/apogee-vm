@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# S24's workload guest. `src/lib.rs` is the program and it compiles for the
+# The Ethereum workload guest. `src/lib.rs` is the program and it compiles for the
 # host as well as for the guest: `crates/emulator/tests/revm.rs` calls it
 # directly as the native-revm oracle and `tools/kat-gen` builds the committed
 # witness against it. Only the binaries are guest-only, so the guest runtime is
@@ -13,29 +13,30 @@ publish.workspace = true
 # condition on the target, not a cargo feature: each target still has exactly
 # one build configuration.
 #
-# `revm` is the workload being proven, which `prompts/S24-revm.md` names a
-# permitted guest dependency; it is reachable from no prover, no verifier and
-# no other guest. The `alloy-primitives` edge below exists only to turn on
-# that crate's `native-keccak`, which routes every keccak256 in the image --
-# revm's included -- through the S21 delegation shim. A `features` key inside a
+# `revm` is the workload being proven, a crates.io dependency a guest may take
+# because the guest is the workload; it is reachable from no prover, no
+# verifier and no other guest (`docs/spec/ethereum.md` §1). The
+# `alloy-primitives` edge below exists only to turn on that crate's
+# `native-keccak`, which routes every keccak256 in the image -- revm's included
+# -- through the `KECCAK_F` delegation shim. A `features` key inside a
 # dependency entry selects an upstream crate's features and is not a
-# `[features]` table of ours: `crates/prover/tests/one_feature.rs` still holds.
+# `[features]` table of ours.
 [lib]
 name = "revm_block"
 path = "src/lib.rs"
 
-# The guest, and the provable one since S-IO: its witness is advice and its
-# output commitment is the journal.
+# The mini-block guest: its witness is advice and its output commitment is the
+# journal.
 [[bin]]
 name = "revm-block"
 path = "src/main.rs"
 
-# S25's second mode, and a **second program identity**, which is what
-# must-be-exact 2 asks for: the whole block transition, the pre-state
-# authenticated against the parent's state root and the post-state root
-# recomputed and checked against the header's. It publishes a different journal
-# from `revm-block`'s -- 148 fixed bytes rather than a record per transaction,
-# which a real block's would not fit in a public window.
+# The stateless validator, a **second program identity**: the whole block
+# transition, the pre-state authenticated against the parent's state root and
+# the post-state root recomputed and checked against the header's. It publishes
+# a different journal from `revm-block`'s -- the 43-byte stateless validation
+# result rather than a record per transaction, which a real block's would not
+# fit in a public window (`docs/spec/ethereum.md` §4).
 [[bin]]
 name = "revm-block-stateless"
 path = "src/stateless_main.rs"
@@ -43,27 +44,27 @@ path = "src/stateless_main.rs"
 # `revm`'s version is pinned **exactly**, and that is not tidiness. A guest's
 # `ProgramIdentity` is a digest of its compiled image, so a patch bump to any
 # crate in this tree silently moves it -- and with it every identity, output
-# digest and gas number pinned in `crates/emulator/tests/revm.rs`,
-# `crates/prover/tests/revm.rs` and the handoffs. Both lockfiles resolve it --
-# this crate is in `guests/`' workspace and is a path dependency of
-# `crates/emulator`, `crates/prover` and `tools/kat-gen` in the main one.
+# digest and gas number pinned in `crates/emulator/tests/revm.rs` and
+# `crates/prover/tests/revm.rs`. Both lockfiles resolve it -- this crate is in
+# `guests/`' workspace and is a path dependency of `crates/emulator`,
+# `crates/host`, `crates/prover` and `tools/kat-gen` in the main one.
 #
-# **The pin is the reference stateless guest's revm set, crate for crate**
-# (owner's decision): `paradigmxyz/stateless`'s lock, revm 43.0.1, whose
-# `revm-handler` carries the EIP-8037 system-call state-gas reservoir
-# `tests-zkevm@v21.0.1`'s Amsterdam expects and 43.0.2 reverted. 43.0.1 is
+# **The pin is the reference stateless guest's revm set, crate for crate**:
+# `paradigmxyz/stateless`'s lock, revm 43.0.1, whose `revm-handler` carries the
+# EIP-8037 system-call state-gas reservoir `tests-zkevm@v21.0.1`'s Amsterdam
+# expects and 43.0.2 reverted. 43.0.1 is
 # yanked, so `=` holds only this facade and only because the lockfiles already
 # contain it; the sub-crates exist in the lockfiles alone, and
 # `crates/host/tests/revm_lock.rs` is what refuses a `cargo update` that moves
 # any of them. It also says how to rebuild the lock from scratch.
 #
-# **This crate takes no `ark-*` dependency and defines no `Crypto` impl**, and
-# both are S26c decisions. The `0x02`, `0x06` and `0x07` routing is in
-# `guests/vendor/revm-precompile`, patched into the *default* bodies of the
-# `Crypto` trait: installing a second impl through `install_crypto` kills LLVM's
-# devirtualization of `crypto()` and retains 870,828 bytes of otherwise-dead
-# BLS12-381 and KZG code, which took this image past what a `2^20` decoded table
-# reaches. `guests/vendor/README.md` is the measurement.
+# **This crate takes no `ark-*` dependency and defines no `Crypto` impl.** The
+# `0x02`, `0x06` and `0x07` routing is in `guests/vendor/revm-precompile`,
+# patched into the *default* bodies of the `Crypto` trait: installing a second
+# impl through `install_crypto` kills LLVM's devirtualization of `crypto()` and
+# retains 870,828 bytes of otherwise-dead BLS12-381 and KZG code, which would
+# take this image past what a `2^20` decoded table reaches
+# (`docs/spec/ethereum.md` §1).
 [dependencies]
 revm = { version = "=43.0.1", default-features = false }
 # The stateless guest recovers every sender and EIP-7702 authority itself

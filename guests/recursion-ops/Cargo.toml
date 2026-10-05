@@ -4,9 +4,9 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# S23's fixture. It calls no shim by name: it does `field::Fr` arithmetic and
-# `transcript::poseidon2_permute`, which is what S26's verifier guest does, and
-# the guest-target backends in those two crates route both through the
+# The `POSEIDON2` and `FR_ARITH` fixture. It calls no shim by name: it does
+# `field::Fr` arithmetic and `transcript::poseidon2_permute`, as any guest would,
+# and the guest-target backends in those two crates route both through the
 # delegation shims. So this guest is the test that the *seam* works, not only
 # that the circuits do.
 [dependencies]

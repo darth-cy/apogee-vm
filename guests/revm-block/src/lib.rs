@@ -13,30 +13,30 @@
 //! - **keccak256.** `revm::primitives::keccak256` is `alloy-primitives`'
 //!   one-shot hash. On the guest this crate enables that crate's
 //!   `native-keccak`, which turns every such call into the `extern "C"` hook
-//!   [`native_keccak256`] below, which is `guest_sdk::keccak256` — the S21
-//!   delegation, with its own bit-identical software fallback behind it. On
-//!   the host the same call is `alloy-primitives`' own software Keccak. Every
-//!   keccak this workload performs — revm's `KECCAK256` opcode, a contract's
-//!   code hash, this file's two commitments — goes through that one call.
+//!   [`native_keccak256`] below, which is `guest_sdk::keccak256` — the
+//!   `KECCAK_F` delegation, with its own bit-identical software fallback behind
+//!   it. On the host the same call is `alloy-primitives`' own software Keccak.
+//!   Every keccak this workload performs — revm's `KECCAK256` opcode, a
+//!   contract's code hash, this file's two commitments — goes through that one
+//!   call.
 //! - **The allocator.** `guest-sdk`'s bump allocator on the guest, the host's
 //!   on the host. The bump allocator never frees, so what bounds a guest run
 //!   is the *total* it allocates.
 //!
 //! # Why revm is a dependency here and nowhere else
 //!
-//! Master rule 2 keeps the proving stack's cryptography in this repository and
-//! admits reference implementations as dev-dependencies alone. This crate is
-//! neither: it is the **workload being proven**, the thing the VM runs, and
-//! `prompts/S24-revm.md` names revm a permitted guest dependency for exactly
-//! that reason. It is reachable from no prover, no verifier and no other
-//! guest. `revm-precompile` brings arkworks, `k256`, `p256`, `sha2` and
-//! `ripemd` in with it, for the EVM's own precompiles; the same reading covers
-//! them, and `docs/handoff/S24-revm.md` records it.
+//! The proving stack's cryptography is this repository's own, and reference
+//! implementations are dev-dependencies alone. This crate is neither: it is
+//! the **workload being proven**, the thing the VM runs, and a guest may take a
+//! crates.io dependency for exactly that reason. It is reachable from no
+//! prover, no verifier and no other guest. `revm-precompile` brings arkworks,
+//! `k256`, `p256`, `sha2` and `ripemd` in with it, for the EVM's own
+//! precompiles; the same reading covers them (`docs/spec/ethereum.md` §1).
 //!
 //! # The two wire formats this file owns
 //!
 //! [`BlockWitness`] is what goes in and the output commitment is what comes
-//! out. Since S-IO the witness is **advice**, which nothing binds, and the
+//! out. The witness is **advice**, which nothing binds, and the
 //! commitment is the **journal**, whose bytes the statement carries
 //! (`docs/spec/public-values.md`); what stands in for binding the witness is
 //! this file's own checks — [`BlockWitness::decode`]'s canonicity rules and
@@ -80,15 +80,15 @@ use serde::{Deserialize, Serialize};
 ///
 /// # The `unsafe`
 ///
-/// The repository keeps every `unsafe` block in `crates/guest-sdk/src/lib.rs`
-/// and says so. This is the one exception, and it exists because the hook's
-/// signature is upstream's: a raw pointer, a length and a raw output pointer,
-/// which no safe function can implement. Putting it in `guest-sdk` instead
-/// would be worse — a `#[no_mangle]` export there is linked into every guest,
-/// and the declaration record it reaches would declare `KECCAK_F` for `fib`,
-/// which is precisely the hazard the `#[used]` comment in that file describes.
-/// Master rule 13 applies: must-be-exact 2 requires the routing, so the stage
-/// wins and `docs/handoff/S24-revm.md` records the deviation.
+/// Outside `crates/guest-sdk/src/lib.rs` the repository's `unsafe` is this and
+/// two test guests' calls into their own assembly. This one exists because the
+/// hook's signature is upstream's: a raw pointer, a length and a raw output
+/// pointer, which no safe function can implement. Putting it in `guest-sdk`
+/// instead would be worse — a `#[no_mangle]` export there is linked into every
+/// guest, and the declaration record it reaches would declare `KECCAK_F` for
+/// `fib`, which is precisely the hazard the `#[used]` comment in that file
+/// describes. The routing is what puts every keccak in the image through
+/// `KECCAK_F`, so the hook stays here.
 ///
 /// # Safety
 ///
@@ -116,19 +116,16 @@ pub type Word32 = [u8; 32];
 /// asserted against `crates/emulator/tests/vectors/revm_block_witness.bin` by
 /// `crates/emulator/tests/revm.rs`.
 ///
-/// 725 at S26, which appended `BlockEnvWitness::blob_gasprice`: the synthetic
-/// block sets it to `Some(1)`, which is the `Option` tag plus a one-byte varint
-/// (`docs/spec/ethereum.md` §2.2). 724 since S-STATELESS, which dropped the
-/// trailing `stateless: None` tag when the stateless guest took the canonical
-/// SSZ input instead. `cargo run -p kat-gen -- revm` prints the number it
-/// should be.
+/// The synthetic block sets `BlockEnvWitness::blob_gasprice` to `Some(1)`,
+/// which is the `Option` tag plus a one-byte varint (`docs/spec/ethereum.md`
+/// §2). `cargo run -p kat-gen -- revm` prints the number it should be.
 pub const COMMITTED_WITNESS_BYTES: usize = 724;
 
 /// The hardfork enum a witness's `spec_id` names, re-exported so that a
 /// fixture builder can write `SpecId::PRAGUE as u8` rather than a number.
 pub use revm::primitives::hardfork::SpecId;
 
-/// `keccak256`, as this image computes it: the S21 delegation on the guest,
+/// `keccak256`, as this image computes it: the `KECCAK_F` delegation on the guest,
 /// `alloy-primitives`' own Keccak on the host.
 ///
 /// Exported because the fixture builder needs the same hash the workload uses
@@ -149,7 +146,7 @@ pub fn sha256(bytes: &[u8]) -> Word32 {
 
 /// The `bytecode_size_words` this program is preprocessed under.
 ///
-/// The frozen default is `2^20` words, a 4 MiB span from `RAM_ORIGIN`, and the
+/// The default is `2^20` words, a 4 MiB span from `RAM_ORIGIN`, and the
 /// **debug** build of this guest is past it: revm at `opt-level = 0` spans
 /// 1,370,853 words where `--release` spans 430,706. One value covers both
 /// profiles, so the two builds differ in their code and in nothing else. It is
@@ -178,36 +175,16 @@ pub const TRACE_HEIGHT_DEBUG: u32 = 1 << 22;
 
 /// Everything one block's execution needs, and nothing an execution derives.
 ///
-/// **Not frozen** (owner's decision, S24). `prompts/S24-revm.md` asked for this
-/// type to be frozen here and the owner withdrew that before the stage closed,
-/// because a field this stage cannot fill is already known to be missing —
-/// see "The `BLOCKHASH` gap" below. A later stage adds fields and this
-/// type's shape moves with them. What *is* settled is the two rules a
-/// change must keep: `postcard` writes a struct's fields in
+/// A format of this repository's (`docs/spec/ethereum.md` §2), and two rules
+/// hold whatever its fields: `postcard` writes a struct's fields in
 /// declaration order, so the field order below is the canonical order, and
 /// [`BlockWitness::decode`] refuses a witness that is not in it — one logical
-/// state has exactly one encoding, whatever the fields are.
+/// state has exactly one encoding.
 ///
-/// Nothing here is synthetic-specific: S25's witness recorder produces this
-/// same type for a real block, which is why an account carries general code
-/// and storage entries and a transaction carries the full EIP-1559/2930
-/// envelope rather than the subset this stage's two transactions use.
-///
-/// # The `BLOCKHASH` gap
-///
-/// A `block_hashes` field does not exist here, and that is the concrete
-/// reason this type is not frozen. revm answers the `BLOCKHASH` opcode from
-/// its `Database`, and [`run`] gives it a `CacheDB<EmptyDB>` whose block-hash
-/// cache is empty, so every miss falls through to `EmptyDB`, which returns
-/// **`keccak256` of the block number's decimal string** — a deterministic
-/// placeholder, not any block's hash. A contract reading `BLOCKHASH(n)` for an
-/// `n` in the last 256 blocks therefore gets a made-up word today, the guest
-/// and the host agree on it, and the block still "executes". The witness is
-/// where a real one would have to come from, as a
-/// `block_hashes: Vec<(u64, Word32)>` loaded into `CacheDB`'s cache before
-/// execution. `docs/spec/ethereum.md` §2.2 is the standing note;
-/// `crates/emulator/tests/revm.rs::blockhash_reads_a_placeholder_today` pins
-/// the current behaviour so the gap cannot close by accident.
+/// Nothing here is synthetic-specific: `host::recorder` produces this same
+/// type for a real block, which is why an account carries general code and
+/// storage entries and a transaction carries the full envelope rather than
+/// the subset the synthetic block's two transactions use.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlockWitness {
     /// The header fields revm reads.
@@ -215,15 +192,14 @@ pub struct BlockWitness {
     /// Every account the execution touches, **sorted by address**, each with
     /// its slots **sorted by key**.
     ///
-    /// **An address absent from this list is an error, not an empty account**
-    /// (S25). S24 read an absent address as empty, which made an incomplete
-    /// witness indistinguishable from a complete one describing a sparser
-    /// chain — and since S-IO nothing binds the witness at all, so a silent
-    /// default is a value the prover chose. An account that genuinely does not
-    /// exist is *recorded*, with nonce 0, balance 0, no code and no slots, and
-    /// [`WitnessDb`] reports exactly that shape to revm as `None`.
-    /// `crates/host/tests/witness.rs`'s completeness control deletes one
-    /// recorded slot and requires the run to fail loudly.
+    /// **An address absent from this list is an error, not an empty account.**
+    /// Read as empty, an incomplete witness would be indistinguishable from a
+    /// complete one describing a sparser chain — and nothing binds the witness
+    /// at all, so a silent default would be a value the prover chose. An
+    /// account that genuinely does not exist is *recorded*, with nonce 0,
+    /// balance 0, no code and no slots, and [`WitnessDb`] reports exactly that
+    /// shape to revm as `None`. `crates/host/tests/witness.rs`'s completeness
+    /// control deletes one recorded slot and requires the run to fail loudly.
     pub accounts: Vec<AccountWitness>,
     /// The transactions, in execution order.
     pub txs: Vec<TxWitness>,
@@ -264,16 +240,16 @@ pub struct BlockEnvWitness {
     /// BLOB_BASE_FEE_UPDATE_FRACTION)`, and the update fraction is a
     /// **fork parameter that keeps changing**: EIP-4844 set it at 3,338,477,
     /// EIP-7691 raised it to 5,007,716 at Prague, and Fusaka's BPO forks
-    /// (EIP-7892) raise it again on a schedule revm 42 does not know — it
-    /// carries the Cancun and Prague constants and nothing after them. S25's
-    /// guest therefore computed Prague's answer for a post-Fusaka block and got
+    /// (EIP-7892) raise it again on a schedule revm 43 does not know — it
+    /// carries the Cancun and Prague constants and nothing after them. Derived
+    /// in the guest, Prague's answer for a post-Fusaka block is
     /// **4,387,037,219,060,994 where the chain says 5,055,772**, a factor of
-    /// 8.7e8, which made every block carrying a type-3 transaction refuse to
-    /// execute: revm checks `max_fee_per_blob_gas >= blob_gasprice` per
+    /// 8.7e8, which would make every block carrying a type-3 transaction refuse
+    /// to execute: revm checks `max_fee_per_blob_gas >= blob_gasprice` per
     /// transaction, and no real transaction sets a limit anywhere near that.
     ///
-    /// So it is recorded. `blobGasPrice` is on every receipt of every
-    /// post-Cancun block, which makes the chain itself the source, and the
+    /// So it is recorded, from `eth_feeHistory`'s `baseFeePerBlobGas`
+    /// (`host::recorder`), which makes the chain itself the source, and the
     /// guest does no `fake_exponential` at all — worth 2.0% of a mini-block's
     /// cycles on its own (`docs/tools.md` §2). It is **advice like every
     /// other field here**, bound by the journal the execution publishes
@@ -290,15 +266,12 @@ pub struct BlockEnvWitness {
     /// The ancestor hashes the `BLOCKHASH` opcode may read, **ascending by
     /// number, without repeats**.
     ///
-    /// S24 had no such field and that was the one *gap* in this type rather
-    /// than a decision (`docs/spec/ethereum.md` §2.2): revm answers
-    /// `BLOCKHASH` from its database, S24's database had an empty block-hash
-    /// cache, and every lookup fell through to `EmptyDB`, which returns
-    /// `keccak256` of the block number's decimal string — a made-up word the
-    /// guest and the host happened to agree on. S25 closes it, which is why
-    /// `crates/emulator/tests/revm.rs::blockhash_reads_a_placeholder_today`
-    /// had to be rewritten rather than merely kept passing: it pinned the
-    /// placeholder precisely so that closing the gap would be a decision.
+    /// revm answers `BLOCKHASH` from its database, and [`WitnessDb`] answers
+    /// from this list: an ancestor it does not carry is a refusal to execute,
+    /// never `EmptyDB`'s `keccak256` of the block number's decimal string
+    /// (`docs/spec/ethereum.md` §2.2). `crates/emulator/tests/revm.rs`'s
+    /// `blockhash_reads_the_recorded_ancestor_and_refuses_the_rest` pins both
+    /// halves.
     ///
     /// **At most 256 entries are ever needed**, and a witness carrying more is
     /// carrying dead weight rather than lying: the opcode is served from
@@ -330,9 +303,10 @@ pub struct AccountWitness {
     pub slots: Vec<(Word32, Word32)>,
 }
 
-/// One transaction, already recovered: `caller` is the sender, because this VM
-/// has no `ecrecover` delegation and signature recovery is not this stage's
-/// workload (`prompts/00-master.md`, "Stage register").
+/// One transaction, already recovered: `caller` is the sender as the
+/// witness's producer recovered it, unchecked — the mini-block binary carries
+/// no signatures (`docs/spec/ethereum.md` §2.2). The stateless binary recovers
+/// its senders itself (`src/tx.rs`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TxWitness {
     /// The sender.
@@ -374,10 +348,9 @@ pub struct TxWitness {
 /// `authority` is the address the signature recovers to, or `None` when it
 /// recovers to nothing — which is not an error, because EIP-7702 says an
 /// authorization that fails to recover is skipped and the transaction still
-/// runs. Recovery is the witness producer's job for the same reason `caller`
-/// is: there is no `ecrecover` delegation in this repository
-/// (`prompts/00-master.md`, "Stage register"), and revm's own
-/// `RecoveredAuthorization` takes a recovered authority for the same reason.
+/// runs. Recovery is the witness producer's job, as `caller`'s is, and revm's
+/// own `RecoveredAuthorization` takes a recovered authority. The stateless
+/// binary recovers authorities itself (`src/tx.rs`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorizationWitness {
     /// The chain the authorization is for; `0` means every chain.
@@ -445,7 +418,7 @@ impl BlockWitness {
     ///
     /// Canonicity is checked here rather than assumed, so that the same
     /// logical state has exactly one encoding: the guest and the host agree on
-    /// what the prover handed over. Since S-IO the witness is **advice**, which
+    /// what the prover handed over. The witness is **advice**, which
     /// nothing in the proof system binds, so this is not a tidiness check — it
     /// is one of the two things standing between a prover-supplied byte string
     /// and the block the journal claims was executed
@@ -466,11 +439,10 @@ impl BlockWitness {
     /// - **Non-minimal varints.** `postcard`'s varint decoder accumulates
     ///   continuation bytes and rejects only an overflowing *last* byte; it
     ///   never requires the shortest form. So `81 00` reads as 1 exactly as
-    ///   `01` does, and every length, `Option` tag, nonce and gas field in this
-    ///   type is a varint. On the committed witness alone, 32 byte positions
-    ///   take a two-byte non-minimal form and the widest field takes nine
-    ///   extra forms — far more than `2^32` distinct advice regions decoding
-    ///   to one block.
+    ///   `01` does, and every length, nonce and gas field in this type is a
+    ///   varint. On the committed witness alone, 32 byte positions take a
+    ///   two-byte non-minimal form and the widest field takes nine extra forms
+    ///   — far more than `2^32` distinct advice regions decoding to one block.
     ///
     /// The re-encode subsumes both, and the ordering rules in [`canonical`]
     /// are checked first so that a witness out of order is refused by the rule
@@ -488,7 +460,8 @@ impl BlockWitness {
         Ok(witness)
     }
 
-    /// `Ok` when this witness is in must-be-exact 6's canonical order.
+    /// `Ok` when this witness is in canonical order (`docs/spec/ethereum.md`
+    /// §2.1).
     fn canonical(&self) -> Result<(), WitnessError> {
         if self.env.spec().is_none() {
             return Err(WitnessError::UnknownSpec {
@@ -528,7 +501,7 @@ impl BlockWitness {
 
 /// Everything [`WitnessDb`] refuses, and it refuses rather than defaults.
 ///
-/// Since S-IO the witness is **advice**, which nothing in the proof system
+/// The witness is **advice**, which nothing in the proof system
 /// binds (`docs/spec/public-values.md` §6). A database that answered an
 /// unrecorded read with a plausible default would therefore be answering it
 /// with a value the prover chose, and the guest would commit an output for a
@@ -555,9 +528,8 @@ pub enum DbError {
     /// that is not a 23-byte delegation. Code like that predates EIP-3541 —
     /// which stopped `0xef` deployments at London — and a handful of such
     /// accounts exist on mainnet. It is an error rather than a panic because a
-    /// panicking guest publishes no journal and cannot be proven at all
-    /// (`docs/spec/public-values.md` §9), so a crash here would turn a rare
-    /// account into an unprovable block.
+    /// panicking guest exits 101 and says nothing about why
+    /// (`docs/spec/ecall-abi.md` §7), where this names the account.
     MalformedCode { address: Address20 },
 }
 
@@ -582,11 +554,10 @@ impl revm::database_interface::DBErrorMarker for DbError {}
 
 /// The pre-state, exactly as the witness recorded it and no more.
 ///
-/// It replaces S24's `CacheDB<EmptyDB>`, which had two silent defaults: an
-/// address it had not been given read as a non-existent account, and a
-/// `BLOCKHASH` it had not been given read as `keccak256` of the block number's
-/// decimal string (`docs/spec/ethereum.md` §2.2, the one acknowledged *gap*
-/// in S24's witness). Both are errors here.
+/// It has neither of revm's `CacheDB<EmptyDB>`'s silent defaults: an address
+/// it was not given is not a non-existent account, and a `BLOCKHASH` it was
+/// not given is not `keccak256` of the block number's decimal string. Both are
+/// errors here (`docs/spec/ethereum.md` §2.2).
 ///
 /// **Non-existence is recorded, not inferred.** An account that does not exist
 /// on chain is in [`BlockWitness::accounts`] with nonce 0, balance 0, no code
@@ -728,25 +699,22 @@ pub fn run(witness: &BlockWitness) -> Result<Vec<u8>, String> {
 /// The same block against a database the caller supplies.
 ///
 /// [`run`] is this with [`WitnessDb`], and that is the *only* instantiation
-/// inside the guest, so the image is exactly what it was. The second caller is
-/// `host::recorder::WitnessRecorder`, which answers revm's reads from a cached
-/// JSON-RPC endpoint and remembers what it was asked; the recording and the
-/// proved run therefore share one block executor rather than two that have to
-/// be kept equal. That is what makes the differential in
-/// `crates/host/tests/witness.rs` mean something: if the two were separate
-/// code paths, "the guest agrees with native revm" would be comparing two
+/// inside the guest, so the generic adds nothing to the image. The second
+/// caller is `host::recorder::WitnessRecorder`, which answers revm's reads from
+/// a cached JSON-RPC endpoint and remembers what it was asked; the recording
+/// and the proved run therefore share one block executor rather than two that
+/// have to be kept equal. That is what makes the differential in
+/// `crates/host/tests/witness.rs` mean something: if the two were separate code
+/// paths, "the guest agrees with native revm" would be comparing two
 /// implementations of the same idea rather than one implementation over two
 /// databases.
 ///
 /// # The generic
 ///
-/// Master anti-goal 2 bans trait generics, and names what it is about: the
-/// proving stack's field, polynomial, commitment and transcript types. This is
-/// none of those — it is workload code parameterised by *revm's own* database
-/// trait, which is how revm itself is built — and anti-goal 3's rule is met in
-/// the direction it asks for: the second caller exists, and the generic was
-/// introduced for it rather than in case of it.
-/// `docs/handoff/S25-block.md` records it.
+/// The proving stack's field, polynomial, commitment and transcript types are
+/// concrete, never generic. This is none of those — it is workload code
+/// parameterised by *revm's own* database trait, which is how revm itself is
+/// built — and the generic has a second caller, which is what it is for.
 pub fn run_against<DB: revm::Database>(witness: &BlockWitness, db: DB) -> Result<Vec<u8>, String> {
     let spec = witness
         .env
@@ -800,11 +768,9 @@ pub fn run_against<DB: revm::Database>(witness: &BlockWitness, db: DB) -> Result
 
 /// The witness's header fields as revm's `BlockEnv`.
 ///
-/// The blob base fee's update fraction is the **fork's**, not a constant:
-/// EIP-4844 set it at Cancun and EIP-7691 raised it at Prague, and a block
-/// priced with the wrong one charges the wrong blob gas. It is picked here
-/// rather than in the witness because it is a property of the hardfork the
-/// witness already names.
+/// The blob gas price is the witness's, recorded rather than derived: the
+/// update fraction a derivation needs is the **fork's**, not a constant, and
+/// revm 43 knows it only up to Prague (`BlockEnvWitness::blob_gasprice`).
 fn block_env(env: &BlockEnvWitness) -> BlockEnv {
     BlockEnv {
         number: U256::from_be_bytes(env.number),
@@ -815,7 +781,7 @@ fn block_env(env: &BlockEnvWitness) -> BlockEnv {
         difficulty: U256::from_be_bytes(env.difficulty),
         prevrandao: env.prevrandao.map(B256::new),
         // Recorded, never derived: the update fraction the derivation needs is a
-        // fork parameter revm 42 does not know past Prague
+        // fork parameter revm 43 does not know past Prague
         // (`BlockEnvWitness::blob_gasprice`).
         blob_excess_gas_and_price: env.excess_blob_gas.zip(env.blob_gasprice).map(
             |(excess_blob_gas, blob_gasprice)| BlobExcessGasAndPrice {
@@ -864,12 +830,11 @@ fn tx_env(tx: &TxWitness) -> TxEnv {
 ///
 /// `RecoveredAuthorization::new_unchecked` is the constructor for exactly this
 /// situation and says so: the authority is supplied rather than derived. That
-/// is the same arrangement `TxWitness::caller` has, and for the same reason —
-/// this VM has no `ecrecover` delegation, so recovery is the witness
-/// producer's job. `RecoveredAuthority::Invalid` is the faithful encoding of
-/// an authorization whose signature recovers to nothing: EIP-7702 skips such
-/// an entry and runs the transaction anyway, so dropping it from the witness
-/// would change the nonce bookkeeping revm does over the list.
+/// is the same arrangement `TxWitness::caller` has: in this binary recovery is
+/// the witness producer's job. `RecoveredAuthority::Invalid` is the faithful
+/// encoding of an authorization whose signature recovers to nothing: EIP-7702
+/// skips such an entry and runs the transaction anyway, so dropping it from the
+/// witness would change the nonce bookkeeping revm does over the list.
 fn recovered_authorization(auth: &AuthorizationWitness) -> RecoveredAuthorization {
     RecoveredAuthorization::new_unchecked(
         Authorization {
@@ -900,9 +865,9 @@ fn access_list(list: &[(Address20, Vec<Word32>)]) -> AccessList {
 // The output commitment
 // ---------------------------------------------------------------------------
 
-/// The output commitment: must-be-exact 7's three sections, in order and
-/// always all three. `src/main.rs` commits these bytes to the journal, where
-/// the statement carries them.
+/// The output commitment's three sections (`docs/spec/ethereum.md` §3), in
+/// order and always all three. `src/main.rs` commits these bytes to the
+/// journal, where the statement carries them.
 ///
 /// ```text
 ///   per-tx records, in execution order, one per transaction:

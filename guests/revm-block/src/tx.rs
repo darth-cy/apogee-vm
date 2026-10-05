@@ -1,14 +1,16 @@
 //! Transactions as a block carries them — EIP-2718 bytes — decoded strictly,
 //! their signing hashes rebuilt, their signers recovered.
 //!
-//! **Nothing here trusts a sender.** A payload carries signed transactions and
-//! no public key: `tests-zkevm@v21.0.1` removed the public-key hints from the
-//! canonical stateless input, so every sender and every EIP-7702 authority is
-//! recovered from its signature inside the guest, and the rules that make a
-//! signature acceptable are the spec's (`ethereum/execution-specs`,
+//! **Nothing here trusts a sender.** A payload carries signed transactions:
+//! `tests-zkevm@v21.0.1`'s canonical stateless input has no public keys, and
+//! the one ere-guests' layout carries per transaction is checked against the
+//! recovered sender, never trusted. So every sender and every EIP-7702
+//! authority is recovered from its signature inside the guest, and the rules
+//! that make a signature acceptable are the spec's (`ethereum/execution-specs`,
 //! `forks/amsterdam/transactions.py::recover_sender` and
-//! `vm/eoa_delegation.py::recover_authority`), not the `ecrecover` precompile's.
-//! The precompile accepts a high `s`; a transaction may not (EIP-2).
+//! `vm/eoa_delegation.py::recover_authority`), not the `ecrecover`
+//! precompile's. The precompile accepts a high `s`; a transaction may not
+//! (EIP-2).
 //!
 //! # The signing hash is the decoded items, re-wrapped
 //!
@@ -29,7 +31,7 @@
 //! reference recovery the spec and geth use, libsecp256k1's, does not
 //! re-verify either. On this VM the re-verification is about half of a
 //! recovery's 2.75 million guest cycles (measured: one upstream `ecrecover`,
-//! 576 `EC_ADD` point operations), so it is the owner's decision to drop it.
+//! 576 `EC_ADD` point operations), so it is dropped.
 //! The arithmetic is k256's own — the same `lincomb`, `decompress` and
 //! `invert` upstream calls, which `guests/vendor/k256` routes through the
 //! `MOD_MUL` and `EC_ADD` delegations — and `crates/host/tests/canonical.rs`

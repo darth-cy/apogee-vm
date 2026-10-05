@@ -1,12 +1,12 @@
 #![no_std]
 #![no_main]
-//! S26c's guest for the `SHA256_COMP` delegation: Ethereum's `0x02`
+//! The guest for the `SHA256_COMP` delegation: Ethereum's `0x02`
 //! precompile's compression function, checked three ways in one binary.
 //!
 //! # The three halves, and why each
 //!
 //! **The ABI, called by name.** One raw [`guest_sdk::recursion::sha256_rounds`]
-//! call — four rounds and four schedule words since S26e — and a whole
+//! call — four rounds and four schedule words — and a whole
 //! [`guest_sdk::recursion::sha256_comp`], its sixteen calls, over a frame this
 //! guest writes itself, so the circuit is exercised at the frame level and not
 //! only through a digest function. Every expectation is a **literal**: FIPS
@@ -16,8 +16,8 @@
 //! variables *is* the published digest.
 //!
 //! **The padding and the block loop, against published digests.**
-//! [`guest_sdk::sha256`] is the patchable surface (`docs/spec/delegation.md`
-//! §15), and what can go wrong in it is the Merkle-Damgård padding rather than
+//! [`guest_sdk::sha256`] is the patchable surface (`docs/spec/delegation-circuits.md`
+//! §6.5), and what can go wrong in it is the Merkle-Damgård padding rather than
 //! the compression: the length field, the `0x80`, and the boundary where a tail
 //! stops fitting in one block. So the vectors here are chosen by **length** —
 //! 0, 3, 55, 56, 63, 64, 65 — with 55 the last that pads into one block and 56

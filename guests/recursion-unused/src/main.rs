@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-//! S23's zero-shard fixture: a guest that **links** both delegation backends
+//! A zero-shard fixture: a guest that **links** both delegation backends
 //! and reaches neither.
 //!
 //! Static detachment is a property of the linked binary, not of the execution
@@ -8,7 +8,7 @@
 //! because `Fr`'s arithmetic and `poseidon2_permute` are reachable, so
 //! `decode_program` puts `FR_ARITH` and `POSEIDON2` in the `VmConfig` — and
 //! the run invokes them zero times, so the plan proves zero shards of each.
-//! Acceptance 9's second half is that this proves and verifies.
+//! `crates/emulator/tests/guests.rs` runs it with no invocation at all.
 //!
 //! The calls sit behind `black_box(0) == 1`, which the optimiser cannot fold:
 //! without it `opt-level = 3` would prove the branch dead, drop the calls,

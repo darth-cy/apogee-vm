@@ -481,7 +481,7 @@ mod apogee {
     /// Upstream scans all eight entries with `conditional_assign` and negates
     /// under a mask, so its time does not depend on `x`. In a zkVM that buys
     /// nothing: whoever proves an execution holds every value it computes, so
-    /// there is no observer for a timing difference to inform. It cost 3,515
+    /// there is no observer for a timing difference to inform. It costs 3,515
     /// cycles a call on a stateless block — eight 120-byte conditional
     /// assignments and an unconditional negation — and `lincomb` calls it
     /// sixty-six times a scalar.

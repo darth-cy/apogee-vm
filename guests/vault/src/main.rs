@@ -22,11 +22,11 @@
 //! links `crates/field` and `crates/transcript` to show that they compile for
 //! RV32; this one puts them under a computation with the shape a real circuit
 //! has. At the format's limits — 32 withdrawals at depth 16 — it is 1,088
-//! Poseidon2 permutations and one field inversion on a 32-bit machine, where
-//! every Montgomery multiply is sixteen 32x32 partial products. It is the only
-//! guest that inverts a field element, and `Fr::inverse` is Fermat, so that is
-//! `Fr::pow` over a 254-bit exponent rather than a Euclidean loop. It is also
-//! the only guest that takes the Poseidon2 precompile's software fallback in
+//! Poseidon2 permutations and one field inversion, which this VM delegates
+//! (`POSEIDON2`, `FR_ARITH`) and an executor without those circuits runs in
+//! software: every Montgomery multiply sixteen 32x32 partial products, and
+//! `Fr::inverse` Fermat, `Fr::pow` over a 254-bit exponent. On such an
+//! executor it is the guest that takes the Poseidon2 software fallback in
 //! anger rather than once for show, and its path walk is the deepest call chain
 //! in `guests/`, which is the only thing here that puts the stack reservation
 //! `link.ld` declares under any load at all.
@@ -58,7 +58,7 @@
 //! ```
 //!
 //! A batch at the format's limits is 19,688 bytes and a public input window
-//! holds 1,020 (`docs/spec/public-values.md` §3), so a bound batch at this
+//! holds 16,380 (`docs/spec/public-values.md` §3), so a bound batch at this
 //! scale is not a thing this VM has. The records are advice, and **nothing
 //! binds advice** — but a Merkle path is the one kind of bulk input that
 //! authenticates *itself*: every record is checked against the running root,
@@ -144,11 +144,11 @@ const EXIT_PRECOMPILE_NONCANONICAL: i32 = 73;
 /// The permutation is asked of the executor first, as
 /// `constants::ecall::PRECOMPILE_POSEIDON2` over the 96-byte canonical
 /// little-endian state, and computed with `transcript::poseidon2_permute` when
-/// the executor answers `false` — which every executor does today, because the
-/// precompile has a number and a calling convention but no circuit behind it.
-/// **The software path is the one the proof is about**, and stays so until a
-/// delegation circuit exists; the ecall is here so that on the day one does,
-/// this guest already speaks to it and its committed output does not move.
+/// the executor answers `false`, as one without the `POSEIDON2` circuit does.
+/// This VM's executor has the circuit, so the delegated path is the one a
+/// proof of this guest covers. The two compute the same permutation, so the
+/// committed output does not depend on which one ran, and an executor without
+/// the circuit runs this guest unchanged.
 ///
 /// A precompile that reports success and hands back a lane outside `[0, p)` has
 /// broken its own contract, and that is an executor fault rather than a
@@ -370,7 +370,7 @@ fn main() {
         "vault: a batch carries at most 32 withdrawals"
     );
 
-    // One inversion for the whole batch. `Fr::inverse` is Fermat, so it is a
+    // One inversion for the whole batch. In software `Fr::inverse` is Fermat, a
     // 254-bit `Fr::pow` — some 380 Montgomery multiplies, each sixteen 32x32
     // products on this machine — and doing it per withdrawal would cost more
     // than every Merkle hash in the batch put together. `total_assets` is a

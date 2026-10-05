@@ -1,18 +1,17 @@
 //! Ethereum's Merkle-Patricia trie, and the RLP codec under it — written here
-//! rather than taken from a crate, because S25's core algorithm says so:
-//! *"Own the in-guest MPT verification, which is guest workload rather than
-//! proving stack. An RLP decode and node-hash trie walk hashes through S21's
-//! keccak256 shim, and one code path serves both pre-state authentication and
-//! post-state root recomputation."*
+//! rather than taken from a crate: the in-guest MPT verification is guest
+//! workload rather than proving stack, its RLP decode and node-hash trie walk
+//! hash through the `KECCAK_F` keccak256 shim, and one code path serves both
+//! pre-state authentication and post-state root recomputation.
 //!
 //! It is one code path, and that is the design rather than a coincidence.
 //! Authentication and recomputation are the same operation seen twice: a node
 //! is authentic exactly when the parent that names it hashes to what *its*
 //! parent names, so **resolving a reference through the node map is the
 //! verification** — there is no separate check-the-hash step to forget. Build
-//! the sparse trie from the witness's nodes, assert its root re-hashes to the
-//! parent state root once, and every read below that point is authenticated by
-//! construction. Apply the block's writes to the same structure and re-hash,
+//! the sparse trie from the witness's nodes, starting from the node whose hash
+//! is the parent state root, and every read below that point is authenticated
+//! by construction. Apply the block's writes to the same structure and re-hash,
 //! and that is the post-state root.
 //!
 //! # What must not be got wrong
@@ -309,9 +308,10 @@ impl<'a> NodeMap<'a> {
 /// re-encodes to its own hash verbatim so the root round-trips. What *is* an
 /// error is needing one of those subtrees later — [`MptError::MissingNode`].
 ///
-/// The root itself must be present, and the caller should follow this with
-/// [`check_root`], which is the one assertion that catches every parse and
-/// encode bug at the moment it appears rather than as a wrong root at the end.
+/// The root itself must be present. [`check_root`] after this catches a parse
+/// or encode bug at the moment it appears rather than as a wrong root at the
+/// end; `crates/host/tests/mpt.rs` runs it, and the guest, whose root is
+/// authenticated by being found under its hash, does not.
 pub fn build(db: &NodeMap<'_>, root: &Word32) -> Result<Node, MptError> {
     if *root == EMPTY_TRIE_ROOT {
         return Ok(Node::Empty);

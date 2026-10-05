@@ -16,7 +16,7 @@ publish.workspace = true
 #
 # `default-features = false` drops `std` and the assembly backends, leaving the
 # portable software core. Selecting an upstream crate's features in a dependency
-# entry is not a cargo feature of ours (`crates/prover/tests/one_feature.rs`).
+# entry is not a cargo feature of ours.
 [dependencies]
 guest-sdk.workspace = true
 sha2 = { version = "0.10", default-features = false }

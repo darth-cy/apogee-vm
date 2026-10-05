@@ -1,12 +1,12 @@
 #![no_std]
 #![no_main]
-//! S18's guest: the shift/bitwise family's twelve instructions and the mul/div
-//! family's eight, with the operands the stage's acceptance names, checking
-//! every result itself and exiting with the number of checks that passed. It
-//! is the program S18 proves end to end (`docs/spec/shift-bitwise.md`,
-//! `docs/spec/mul-div.md`).
+//! The shift/bitwise family's twelve instructions and the mul/div family's
+//! eight, at the operands where each is easiest to get wrong, checking every
+//! result itself and exiting with the number of checks that passed.
+//! `crates/prover/tests/alu.rs` proves it end to end
+//! (`docs/spec/shift-bitwise.md`, `docs/spec/mul-div.md`).
 //!
-//! Everything in its image is an instruction of the four families S18 proves —
+//! Everything in its image is an instruction of four execution families —
 //! add/sub/lui/auipc, jump/branch/slt, shift/bitwise and mul/div — plus the
 //! exit ecall: no SDK, no `main`, no panic path. The panic handler below is
 //! required of a `no_std` binary and is unreachable, so the linker drops it.
@@ -21,20 +21,20 @@
 //!   of every byte, and their immediate forms, whose immediate is sign
 //!   extended before the operation — so `andi x, −1` masks against all ones;
 //! - **immediate shifts** at shamt 0, 1 and 31, and `srai` against `srli` on
-//!   the same negative operand at the same shamt (acceptance 2);
+//!   the same negative operand at the same shamt;
 //! - **register shifts**, whose amount is the low five bits of the whole word:
 //!   `rs2 = 32` shifts by 0 and `rs2 = 33` by 1, which is what the truncation
 //!   is for, and `sra` of a negative operand at 0, 1 and 31;
 //! - **the signed-multiply matrix**: all four sign quadrants of each of the
 //!   four multiplies, `−2^31 × −2^31`, the asymmetric `mulhsu` corner
-//!   `−2^31 × (2^32 − 1)`, and `mulhu` just under `2^64` (acceptance 3);
+//!   `−2^31 × (2^32 − 1)`, and `mulhu` just under `2^64`;
 //! - **the div/rem matrix**: all four sign quadrants of `div` and `rem`, the
 //!   unsigned pair, division by zero for all four, and the one signed
-//!   overflow `−2^31 ÷ −1` (acceptance 4). `DIV(−7, 2)` and `REM(−7, 2)` are
+//!   overflow `−2^31 ÷ −1`. `DIV(−7, 2)` and `REM(−7, 2)` are
 //!   the rows a *floored* quotient would also satisfy the bare division
 //!   identity on: the answer is −3 and −1, not −4 and 1;
-//! - **`rd = x0`** in each family, with `x0` read back and compared with 0
-//!   (acceptance 9);
+//! - **`rd = x0`** in each family, the row proven and its value discarded,
+//!   with `x0` read back and compared with 0;
 //! - **compressed forms**: `c.and`, `c.or`, `c.xor`, `c.slli`, `c.srli`,
 //!   `c.srai` and `c.andi`, so the family's decoded rows carry a fall-through
 //!   of `pc + 2` as well as `pc + 4`.
@@ -128,7 +128,7 @@ global_asm!(
     "  li    t3, 0x12345187", // xori 0x12345678, 2047 = 0x12345187
     "  bne   t2, t3, fail",
     "  addi  s0, s0, 1",
-    // Immediate shifts at shamt 0, 1 and 31 (S18 acceptance 2).
+    // Immediate shifts at shamt 0, 1 and 31.
     "  li    t0, 0x12345679",
     "  slli   t2, t0, 0",
     "  li    t3, 0x12345679", // slli 0x12345679, 0 = 0x12345679
@@ -264,7 +264,7 @@ global_asm!(
     "  bne   t2, t3, fail",
     "  addi  s0, s0, 1",
     // The signed-multiply matrix: all four sign quadrants of each of the
-    // four multiplies (S18 acceptance 3).
+    // four multiplies.
     "  li    t0, 0x00000007",
     "  li    t1, 0x00000003",
     "  mul    t2, t0, t1",
@@ -411,7 +411,7 @@ global_asm!(
     "  li    t3, 0xffffffff", // mulhsu 0xffffffff, 0x00000001 = 0xffffffff  -1 x 1, high half -1
     "  bne   t2, t3, fail",
     "  addi  s0, s0, 1",
-    // The div/rem matrix: all four sign quadrants (S18 acceptance 4). The
+    // The div/rem matrix: all four sign quadrants. The
     // negative-dividend rows are the ones a floored quotient would also
     // satisfy the bare division identity on: DIV(-7, 2) is -3, not -4.
     "  li    t0, 0x00000007",
@@ -584,7 +584,7 @@ global_asm!(
     "  bne   t2, t3, fail",
     "  addi  s0, s0, 1",
     // A destination of x0 in each family: the row is proven, and x0 keeps
-    // its zero (S18 acceptance 9).
+    // its zero.
     "  li    t0, 0x12345679",
     "  li    t1, 5",
     "  sll   x0, t0, t1",

@@ -6,32 +6,37 @@
 #
 #     cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
 #
-# `.cargo/config.toml` beside this file supplies the target, the runner and the
-# pinned linker flags; `rust-toolchain.toml` at the repository root supplies the
+# `.cargo/config.toml` beside this file supplies the target and the pinned
+# linker flags; `rust-toolchain.toml` at the repository root supplies the
 # toolchain, because rustup walks up from the working directory.
 [workspace]
 resolver = "2"
 members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "keccak-test", "keccak-unused", "recursion-ops", "recursion-unused", "revm-block", "public-io", "mod-mul-ops", "sha256-ops", "ec-ops", "recursion"]
 
-# Two crates are vendored and patched so that a guest's field arithmetic
-# reaches the `MOD_MUL` delegation on the guest target; `guests/vendor/README.md`
-# is the account of both and of how to refresh them.
+# Three crates are vendored and patched so that a guest's library code reaches
+# a delegation on the guest target; `guests/vendor/README.md` lists every
+# change and the upstream release each copy is.
 #
-#   k256    `FieldElement10x26::mul`/`::square` under the SECP256K1_P selector,
-#           and `Scalar::mul` under SECP256K1_N. The accelerator S26's profile
-#           ranked first -- 36.8% and 7.6% of a whole mainnet block's cycles in
-#           one function each. It reaches `revm-precompile`'s `ecrecover`
-#           through cargo's resolution and nothing else changes.
+#   k256    `FieldElement10x26::mul`/`::square` under the SECP256K1_P selector
+#           and `Scalar::mul` under SECP256K1_N, both `MOD_MUL`, and
+#           `ProjectivePoint`'s group law through `EC_ADD`. Unpatched, the
+#           field's `mul` and `square` are 36.8% and 7.6% of a whole mainnet
+#           block's cycles, one function each. It reaches `revm-precompile`'s
+#           `ecrecover` through cargo's resolution and nothing else changes.
 #   ark-ff  `MontBackend::mul_assign`/`::square_in_place` under BN254_P and
 #           BN254_R, which is `revm-precompile`'s `0x06`, `0x07` and `0x08`.
 #           Patched here rather than in `ark-bn254` because that crate's
 #           `#[derive(MontConfig)]` generates its own multiply.
+#   revm-precompile  the default bodies of `Crypto::sha256`, `::bn254_g1_add`
+#           and `::bn254_g1_mul` -- `0x02`, `0x06` and `0x07` -- through
+#           `SHA256_COMP` and `EC_ADD`, so `DefaultCrypto` stays the only
+#           `Crypto` implementation.
 #
-# The vendored crates are NOT workspace members -- `cargo metadata` lists the 23
+# The vendored crates are NOT workspace members -- `cargo metadata` lists the 24
 # guests and nothing else, a `[patch]` path being no member's dependency -- so the
 # release profile's `"*"` override below reaches them. `cargo fmt --all` covers
 # them because it formats local path dependencies too; their `[features]` tables
-# are the ones `crates/prover/tests/one_feature.rs` skips.
+# are upstream's.
 [patch.crates-io]
 k256 = { path = "vendor/k256" }
 ark-ff = { path = "vendor/ark-ff" }
@@ -75,9 +80,9 @@ codegen-units = 1
 # The journal is the committed public output. Left to the defaults, the
 # optimisation level would be part of the statement being proven, and a suite
 # that builds guests in dev would witness nothing about a release artifact. So
-# the two profiles are pinned to the same *semantics* and differ only in
-# `opt-level`. `crates/prover/tests/one_feature.rs` asserts that over this
-# file; CI additionally builds and runs guests at `--release` through
+# the two profiles are pinned to the same *semantics* and differ in `opt-level`
+# and in the one package override below, which reaches no guest's own code. CI
+# builds and runs guests at `--release` through
 # `crates/program/tests/delegation.rs` and `crates/emulator/tests/revm.rs`.
 [profile.release]
 panic = "abort"
@@ -87,10 +92,10 @@ codegen-units = 1
 overflow-checks = true
 debug-assertions = true
 
-# One exception, and only at `--release` (S26e): a DEPENDENCY's
+# One exception, and only at `--release`: a DEPENDENCY's
 # `debug_assert!`s are off. `"*"` is every package that is not a guest -- the
-# crates.io dependencies, the vendored ones, and this repository's own
-# guest-sdk, field and transcript -- so every guest keeps its own assertions,
+# crates.io dependencies, the vendored ones, and this repository's own library
+# crates a guest links -- so every guest keeps its own assertions,
 # and `overflow-checks` stays on everywhere, a package override inheriting it.
 #
 # It is not a semantic change of the kind the release profile's comment

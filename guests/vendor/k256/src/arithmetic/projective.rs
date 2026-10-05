@@ -990,9 +990,9 @@ mod apogee {
     /// `FieldElement::to_words` normalizes only a coordinate that is not
     /// already canonical, and every coordinate this module hands back is, so
     /// a chain of additions — `lincomb`'s whole shape — pays no normalization
-    /// at all. Until S26e this went through `to_bytes`, which normalizes
-    /// unconditionally and encodes a big-endian byte array the frame then
-    /// decoded straight back: 478 cycles a coordinate against about 30.
+    /// at all. Through `to_bytes`, which normalizes unconditionally and
+    /// encodes a big-endian byte array the frame then decodes straight back,
+    /// it is 478 cycles a coordinate against about 30.
     fn lanes(p: &ProjectivePoint) -> [[u32; 8]; 3] {
         [p.x.to_words(), p.y.to_words(), p.z.to_words()]
     }

@@ -4,13 +4,13 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# The fixture for the `MOD_MUL` delegation (`docs/spec/delegation-circuits.md` §5),
-# S26's and specialized at S26b.
+# The fixture for the `MOD_MUL` delegation (`docs/spec/delegation-circuits.md` §5)
+# over its four fixed moduli.
 #
-# Three dependencies and four kinds of check. `guest-sdk` is the shim, called
-# by name over frames this guest writes itself, once per selector: that is the
-# ABI's test, and the only place every modulus the circuit holds is exercised
-# at the frame level. `k256` and `ark-bn254` are the two workloads the profile
+# Three dependencies, besides `ark-ff`'s traits, and four kinds of check.
+# `guest-sdk` is the shim, called by name over frames this guest writes itself,
+# once per selector: that is the ABI's test, and the only place every modulus
+# the circuit holds is exercised at the frame level. `k256` and `ark-bn254` are the two workloads the profile
 # ranked first and second, asked for from crates.io and answered by
 # `guests/vendor` through the workspace's `[patch.crates-io]`: those are the
 # seams' tests, and the only executor that runs a patched multiply is this
@@ -21,8 +21,7 @@ publish.workspace = true
 # `ecrecover` spends its cycles in. `ark-bn254` keeps its default `curve`
 # feature because `Fq` is gated behind it; the curve code itself is unreached
 # and the linker drops it. Selecting an upstream crate's features in a
-# dependency entry is not a cargo feature of ours (`crates/prover/tests/
-# one_feature.rs`).
+# dependency entry is not a cargo feature of ours.
 [dependencies]
 guest-sdk.workspace = true
 k256 = { version = "0.13.4", default-features = false, features = ["arithmetic"] }

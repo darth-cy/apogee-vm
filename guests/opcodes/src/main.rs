@@ -2,7 +2,7 @@
 #![no_main]
 //! Every RV32IMAC instruction, executed.
 //!
-//! S12's coverage fixture: every one of the 59 RV32IMA instructions runs here
+//! The coverage fixture: every one of the 59 RV32IMA instructions runs here
 //! with edge-case operands, and a block of compressed code runs every
 //! compressed form a program can execute. `crates/emulator/tests/` checks that
 //! every mnemonic really does execute, rather than trusting this comment.
@@ -24,7 +24,7 @@
 //!   `c.unimp`, which trap), each instruction of the block executed;
 //! - `cover_ecall`: the `ecall` instruction over the two numbers nothing
 //!   answers — one in the precompile range and one in the host-call range —
-//!   each returning `-ENOSYS`. There is no I/O call left to cover: the ABI
+//!   each returning `-ENOSYS`. There is no I/O call to cover: the ABI
 //!   has no descriptors and no `read`/`write` (`docs/spec/public-values.md`
 //!   §1), and the calls it does have either do not return (`EXIT`) or are
 //!   refused to a guest that did not declare them (the delegations).
@@ -444,7 +444,7 @@ cover_a:
 
     /* An unpaired sc.w: no reservation is held, and this VM succeeds anyway --
        t6 = 0 and t0 stored. That is the conformance deviation
-       (docs/spec/memory-ops.md 6.6), so t6 and the word are both overwritten
+       (docs/spec/memory-ops.md §6), so t6 and the word are both overwritten
        before either is read again and the deviation reaches neither the
        journal nor the exit status. */
     sc.w        t6, t0, (a6)
@@ -532,7 +532,7 @@ __cover_rvc_end:
 // scratch words and t1 the fold, because a0 is every call's argument and
 // result.
 //
-// There is nothing here to *call*. `EXIT` does not return, and the four
+// There is nothing here to *call*. `EXIT` does not return, and the
 // delegations are refused outright to a guest that did not declare them
 // (`docs/spec/delegation.md` §7) -- declaring one would make this coverage
 // fixture a delegation fixture and give it a family it has no rows for. What
@@ -556,7 +556,7 @@ cover_ecall:
        and calling one a guest did not declare is a fatal trace-time failure
        rather than an -ENOSYS (`docs/spec/delegation.md` §7). What this block
        covers is the `ecall` instruction over a number nothing answers, which
-       0x5ff is and 0x500 no longer is. */
+       0x5ff is and 0x500 is not. */
     li      a7, 0x5ff
     mv      a0, t0
     ecall

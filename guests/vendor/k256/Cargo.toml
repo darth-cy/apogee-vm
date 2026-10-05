@@ -119,12 +119,12 @@ default-features = false
 version = "2"
 optional = true
 
-# apogee-vm's vendored change: the `MOD_MUL` delegation's shim.
+# apogee-vm's vendored change: the `MOD_MUL` and `EC_ADD` delegations' shims.
 #
-# A **target dependency and never a cargo feature** (`crates/prover/tests/
-# one_feature.rs`, master anti-goal 1), and reachable only from the guest
-# workspace: the root workspace resolves `k256` from crates.io unpatched, so
-# `crates/emulator/tests/revm.rs`' native oracle runs the software multiply.
+# A **target dependency and never a cargo feature**, and reachable only from
+# the guest workspace: the root workspace resolves `k256` from crates.io
+# unpatched, so `crates/emulator/tests/revm.rs`' native oracle runs the
+# software multiply.
 [target.'cfg(target_arch = "riscv32")'.dependencies.guest-sdk]
 path = "../../../crates/guest-sdk"
 

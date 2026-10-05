@@ -47,7 +47,7 @@
 //! permutation is a permutation of the whole batch and not of some filtered
 //! subset of it.
 //!
-//! The batch is the statement's own input, so the window is what caps it: 1,020
+//! The batch is the statement's own input, so the window is what caps it: 16,380
 //! bytes of payload (`docs/spec/public-values.md` §3), four for the count, and
 //! twenty per record.
 //!
@@ -72,11 +72,11 @@
 //! taken, and they are all-or-nothing: the advice is used entire or discarded
 //! entire, never patched up. See [`advised_permutation`].
 //!
-//! **This guest cannot run without an advice region**, because asking for
-//! advice a run was not given is a fatal executor error rather than an empty
-//! slice (`docs/spec/public-values.md` §6). A run with no permutation to offer
-//! supplies a region whose length word is 0 — four zero bytes, or nothing at
-//! all — which fails the first check and sends the guest down the sort path.
+//! **This guest cannot run without advice**, because asking for advice a run
+//! was not given is a fatal executor error rather than an empty slice, and
+//! zero bytes of advice make no region (`docs/spec/public-values.md` §6). A run
+//! with no permutation to offer supplies four zero bytes, a count no non-empty
+//! batch has, which fails a check and sends the guest down the sort path.
 
 extern crate alloc;
 

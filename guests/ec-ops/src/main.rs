@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-//! S26c's guest for the `EC_ADD` delegation: one complete point addition on
+//! The guest for the `EC_ADD` delegation: one complete point addition on
 //! secp256k1 or BN254 G1, as three invocations, checked three ways.
 //!
 //! # The three halves, and why each
@@ -43,9 +43,9 @@
 //!
 //! # Input, advice and the journal
 //!
-//! Unused. `EXIT` and `PRECOMPILE_EC_ADD` are this guest's only ecalls — the
-//! field multiplications the oracles run reach `MOD_MUL` as well, which is
-//! `guests/mod-mul-ops`' business and not this guest's.
+//! Unused. `EXIT`, `PRECOMPILE_EC_ADD` and `PRECOMPILE_MOD_MUL` are this
+//! guest's only ecalls — the last from the field multiplications the oracles
+//! run, which are `guests/mod-mul-ops`' business and not this guest's.
 //!
 //! # The result
 //!

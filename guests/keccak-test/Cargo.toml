@@ -4,8 +4,8 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# S21's fixture guest. It links `guest-sdk` for `keccak256` — which is what
-# emits the delegation declaration record `crates/program` scans for
+# The `KECCAK_F` fixture guest. It links `guest-sdk` for `keccak256` — which is
+# what emits the delegation declaration record `crates/program` scans for
 # (`docs/spec/delegation.md` §7) — and for crt0.
 [dependencies]
 guest-sdk.workspace = true

@@ -3,8 +3,8 @@
 //! The provable guest: one `BlockWitness` out of the **advice** region, revm
 //! over it, the output commitment into the **journal**.
 //!
-//! This is the shape the target architecture asks for, and the reason S-IO
-//! exists (`docs/spec/public-values.md`):
+//! This is the shape the three memory regions are for
+//! (`docs/spec/public-values.md`):
 //!
 //! ```text
 //! large Ethereum witness -> ADVICE          prover-supplied, bound by nothing
@@ -20,11 +20,9 @@
 //! so a proof covers these transactions over the witness's state, not that this
 //! is Ethereum's state. `src/stateless_main.rs` is the binary that checks it.
 //!
-//! Until S-IO this program could not be proven at all. There was no provable
-//! way to get a witness in, so S24 proved a second binary with the witness
-//! baked into its `.rodata` — which moved the program identity with every
-//! block, and is what made per-block proving impossible. The witness is data
-//! now, not code, and the identity is the same for every block.
+//! The witness is data, not code, so the program identity is the same for
+//! every block. A witness baked into `.rodata` would move the identity with
+//! every block.
 //!
 //! # The exit status
 //!

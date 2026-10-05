@@ -1,10 +1,10 @@
 #![no_std]
 #![no_main]
-//! S20's guest: the smallest program whose *one* busiest family does not fit
-//! one shard. It exists to make the block layer's stage gate real — one
-//! execution cut into two shards of the same cycle-owning family, with pc
-//! continuity across the cut carried by the global memory multiset and by
-//! nothing else (`docs/spec/proof.md` §6).
+//! The smallest program whose *one* busiest family does not fit one shard.
+//! It exists to make a block's shard cut real — one execution cut into two
+//! shards of the same cycle-owning family, with pc continuity across the cut
+//! carried by the global memory multiset and by nothing else
+//! (`docs/spec/memory.md` §9).
 //!
 //! The shape is a counted loop whose body is 64 unrolled `add`s:
 //!
@@ -35,8 +35,8 @@
 //!
 //! # Input, advice and the journal
 //!
-//! Unused. The guest reads nothing and commits nothing: `EXIT` is still the
-//! only provable ecall (`docs/spec/add-sub.md` §4).
+//! Unused. The guest reads nothing and commits nothing: `EXIT` is its only
+//! ecall, and its result is the status.
 //!
 //! # The result
 //!

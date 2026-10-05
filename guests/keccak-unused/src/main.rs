@@ -1,13 +1,13 @@
 #![no_std]
 #![no_main]
-//! S21's zero-shard fixture: a guest that **links** the keccak shim and never
+//! A zero-shard fixture: a guest that **links** the keccak shim and never
 //! calls it.
 //!
 //! Static detachment is a property of the linked binary, not of the execution
 //! (`docs/spec/delegation.md` §7): the declaration record is in the image
 //! because `keccak256` is reachable, so `decode_program` puts `KECCAK_F` in the
 //! `VmConfig` — and the run invokes it zero times, so the plan proves zero
-//! shards of it. Acceptance 8's second half is that this proves and verifies.
+//! shards of it. `crates/prover/tests/keccak.rs` proves and verifies it.
 //!
 //! The call sits behind `black_box(0) == 1`, which the optimiser cannot fold:
 //! without it `opt-level = 3` would prove the branch dead, drop the call, drop
