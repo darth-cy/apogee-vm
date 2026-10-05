@@ -1,9 +1,9 @@
 //! The `JUMP_BRANCH_SLT` family's circuit: `jal`, `jalr`, the six branches,
 //! `slt`, `sltu`, `slti` and `sltiu`.
 //!
-//! `docs/spec/jump-branch-slt.md` is normative: the columns, the gates, the
-//! lookups and the argument. This file is that document as data, assembled by
-//! S15's `memory::frame_with_channels_artifact` beside S14's frame, with S17's
+//! `docs/spec/jump-branch-slt.md` specifies it: the columns, the gates, the
+//! lookups and the argument. This file is that page as data, assembled by
+//! `memory::frame_with_channels_artifact` beside the memory frame, with the
 //! two gadgets from `crate::gadgets`.
 //!
 //! ```text
@@ -529,9 +529,8 @@ fn family_spec() -> FamilySpec {
 /// [`artifact`] documents; a seam so a test can hand it a broken circuit.
 fn assemble(trace_vars: u32, family_spec: FamilySpec) -> CircuitArtifact {
     let a = frame_with_channels_artifact(&QUERIES, trace_vars, family_spec);
-    // Every obligation is built above and then handed over, so a count is
-    // what shows none was dropped on the way (S14 must-be-exact 5, S15's
-    // per-channel form).
+    // Every obligation is built above and then handed over, so a count per
+    // channel is what shows none was dropped on the way.
     for (channel, want) in [
         (lookup_channel::TIMESTAMP, 2 * QUERIES.len()),
         (lookup_channel::RANGE16, 11),

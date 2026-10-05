@@ -1,9 +1,9 @@
 //! The `MUL_DIV` family's circuit: the eight M-extension operations — `mul`,
 //! `mulh`, `mulhsu`, `mulhu`, `div`, `divu`, `rem`, `remu`.
 //!
-//! `docs/spec/mul-div.md` is normative: the columns, the gates, the lookups
-//! and the argument. This file is that document as data, assembled by S15's
-//! `memory::frame_with_channels_artifact` beside S14's frame, with S17's
+//! `docs/spec/mul-div.md` specifies it: the columns, the gates, the lookups
+//! and the argument. This file is that page as data, assembled by
+//! `memory::frame_with_channels_artifact` beside the memory frame, with the
 //! is-zero gadget from `crate::gadgets`.
 //!
 //! ```text
@@ -321,8 +321,8 @@ fn names(list: &[&str]) -> Vec<String> {
 ///
 /// [`family_spec`] calls this at [`WORD_BITS`], which is the only width a
 /// proof uses. The width is a parameter so that the exhaustive reduced-width
-/// check of the division encoding (S18 acceptance 5) evaluates these gates and
-/// not a transcription of them. The kind bits' booleanity is not here, being
+/// check of the division encoding (`crates/checker/tests/mul_div.rs`)
+/// evaluates these gates and not a transcription of them. The kind bits' booleanity is not here, being
 /// frame plumbing; that check supplies one-hot bits, as a live row's decoder
 /// lookup does.
 ///
@@ -682,9 +682,8 @@ fn family_spec() -> FamilySpec {
 /// [`artifact`] documents; a seam so a test can hand it a broken circuit.
 fn assemble(trace_vars: u32, family_spec: FamilySpec) -> CircuitArtifact {
     let a = frame_with_channels_artifact(&QUERIES, trace_vars, family_spec);
-    // Every obligation is built above and then handed over, so a count is
-    // what shows none was dropped on the way (S14 must-be-exact 5, S15's
-    // per-channel form).
+    // Every obligation is built above and then handed over, so a count per
+    // channel is what shows none was dropped on the way.
     for (channel, want) in [
         (lookup_channel::TIMESTAMP, 2 * QUERIES.len()),
         (lookup_channel::RANGE16, 16),

@@ -1,8 +1,8 @@
 //! The `MEM_SUBWORD` family's circuit: `lb`, `lh`, `lbu`, `lhu`, `sb`, `sh`.
 //!
-//! `docs/spec/memory-ops.md` is normative: the columns, the gates, the lookups
-//! and the argument. This file is that document as data, assembled by S15's
-//! `memory::frame_with_channels_artifact` beside S14's frame.
+//! `docs/spec/memory-ops.md` §4 specifies it: the columns, the gates, the
+//! lookups and the argument. This file is that section as data, assembled by
+//! `memory::frame_with_channels_artifact` beside the memory frame.
 //!
 //! Memory is word-addressed, so a sub-word access names the same
 //! `4·word_index` cell `mem_word` names, and the byte position lives only in
@@ -59,8 +59,9 @@ const FRAME_WITNESS: u32 = 6 + 3;
 
 /// Bits to a byte. The one place the width of a sub-word access is written:
 /// every literal of [`splice_gates`] is derived from it, so the reduced-width
-/// acceptance check evaluates the family's own gates rather than a
-/// transcription of them (S17's `gadgets::comparison_equation` precedent).
+/// check in `crates/checker/tests/mem_subword.rs` evaluates the family's own
+/// gates rather than a transcription of them, as with
+/// `gadgets::comparison_equation`.
 pub const BYTE_BITS: u32 = 8;
 
 const fn w(i: u32) -> PolyAddress {
@@ -90,9 +91,8 @@ const SH: PolyAddress = KINDS[kind::SH as usize];
 
 /// The kinds that load, that store, that access one byte, that access a
 /// halfword, and that sign-extend. Each is a linear form over the committed
-/// one-hot bits, which is what the stage prompt's STORE, BYTE and SIGNEXTEND
-/// modifier bits are here: S11's mask is not rebuilt
-/// (`docs/spec/memory-ops.md` §1).
+/// one-hot bits — the STORE, BYTE and SIGNEXT modifiers are not mask bits of
+/// their own (`docs/spec/memory-ops.md` §1).
 const LOADS: [PolyAddress; 4] = [LB, LH, LBU, LHU];
 const STORES: [PolyAddress; 2] = [SB, SH];
 const BYTES: [PolyAddress; 3] = [LB, LBU, SB];
@@ -182,11 +182,9 @@ pub const GENERIC_TABLE: [PolyAddress; generic_table::WIDTH] = [
 ];
 
 /// The decoded masks a live row of this family can carry: one bit per
-/// instruction, in `constants::extra_mask::mem_subword` order. The stage
-/// prompt's modifier-bit masks `{0, 1, 2, 3, 4, 6}` are **not** the encoding:
-/// S11 froze this table one-hot per mnemonic and append-only, and STORE, BYTE
-/// and SIGNEXTEND are linear forms over these six bits
-/// (`docs/spec/memory-ops.md` §1).
+/// instruction, in `constants::extra_mask::mem_subword` order. The mask is
+/// one-hot per mnemonic, and STORE, BYTE and SIGNEXT are linear forms over
+/// these six bits (`docs/spec/memory-ops.md` §1).
 pub const LEGAL_MASKS: [u32; 6] = [
     1 << kind::LB,
     1 << kind::LH,
@@ -314,9 +312,8 @@ fn names(list: &[&str]) -> Vec<String> {
 /// The splice, at `byte_bits` bits to a byte and `4·byte_bits` to a word: the
 /// **twelve** gates whose literals depend on that width, or that read a column
 /// one of them defines, over this family's own columns. `family_spec` calls it
-/// at [`BYTE_BITS`]; the reduced-width acceptance check calls it at 1 and
-/// evaluates *these* gates, so the check runs the circuit and not a copy of
-/// it.
+/// at [`BYTE_BITS`]; the reduced-width check calls it at 1 and evaluates
+/// *these* gates, so the check runs the circuit and not a copy of it.
 ///
 /// With `W = 4·byte_bits`, `offset = 2·bit1 + bit0`, `p = 2^(byte_bits·offset)`
 /// and `w` the access width — `2^byte_bits` for a byte, `2^(2·byte_bits)` for a
@@ -614,9 +611,10 @@ fn family_spec() -> FamilySpec {
             (neg(1), BIT0),
         ]),
     ));
-    // A halfword access has bit 0 clear. Nothing else gives bit 0 any effect
-    // at that width, and without this gate `w·p` reaches 2^40, which is what
-    // the whole write-side bound of `docs/spec/memory-ops.md` §4.3 rests on not happening.
+    // A halfword access has bit 0 clear. `addr_split` and `p_rule` read bit 0
+    // at every width, so without this gate a halfword at offset 3 has a
+    // witness and `w·p` reaches 2^40, which is what the whole write-side bound
+    // of `docs/spec/memory-ops.md` §4.3 rests on not happening.
     enforcing.push((
         "half_aligned".into(),
         quadratic(vec![], form_times(lit(1), &HALVES, BIT0)),

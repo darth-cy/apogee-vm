@@ -102,7 +102,7 @@ fn the_shapes_agree() {
     assert_eq!(keccak::LANES * keccak::LANE_BITS, keccak::STATE_BITS);
     assert_eq!(keccak::STATE_WORDS * 4, keccak::STATE_BYTES);
     // The frame is the round selector and the state, and nothing else: one
-    // invocation is one round since S26d (`docs/spec/delegation-circuits.md` §2).
+    // invocation is one round (`docs/spec/delegation-circuits.md` §2).
     assert_eq!(keccak::ROUND_WORD, 0);
     assert_eq!(keccak::STATE_WORD, 1);
     assert_eq!(keccak::FRAME_WORDS, 51);

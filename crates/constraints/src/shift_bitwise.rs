@@ -2,9 +2,9 @@
 //! `srl`, `srli`, `sra`, `srai` — and the six bitwise operations — `and`,
 //! `andi`, `or`, `ori`, `xor`, `xori`.
 //!
-//! `docs/spec/shift-bitwise.md` is normative: the columns, the gates, the
-//! lookups and the argument. This file is that document as data, assembled by
-//! S15's `memory::frame_with_channels_artifact` beside S14's frame.
+//! `docs/spec/shift-bitwise.md` specifies it: the columns, the gates, the
+//! lookups and the argument. This file is that page as data, assembled by
+//! `memory::frame_with_channels_artifact` beside the memory frame.
 //!
 //! ```text
 //! frame     M[0..21], W[0..7]: pc rs1 rs2 rd at slots 0..4
@@ -124,7 +124,9 @@ pub const RS1_SIGN: PolyAddress = w(21);
 /// that sum to a 32-bit word on every live row.
 pub const SRC2_HI: PolyAddress = w(22);
 /// `W[30]`: the truncated shift amount, bounded to `[0, 32)` by its own key
-/// bound under `f_shift` and again by `ShiftPowers`' domain.
+/// bound under `f_shift`, and again by its `ShiftPowers` lookup with
+/// `copower_rule`: a key outside `ShiftPowers` lands on a row whose two values
+/// do not multiply to `2^31`.
 pub const AMOUNT: PolyAddress = w(23);
 /// `W[31]`, `W[32]`: `2^amount` and `2^(31 − amount)`, the `ShiftPowers` row
 /// `amount` keys.
@@ -310,7 +312,7 @@ fn range32(name: &str, value: Vec<(Coeff, PolyAddress)>, hi: PolyAddress) -> [Lo
 /// another sub-table's row, and the lookup holds while the row means something
 /// else entirely. The direct check is the other half of the pair: a scaled
 /// bound alone admits `k·2^(bits − 16)` for a small `k`, which is not a small
-/// integer at all (S15's copower rule, `lookup::check_copowers`).
+/// integer at all (the copower rule, `lookup::check_copowers`).
 fn key_bound(name: &str, x: PolyAddress, bits: u32, selector: PolyAddress) -> [LookupExpr; 2] {
     let scale = 1u64 << (16 - bits);
     let range = |name: String, tuple: GateDef| LookupExpr {
@@ -510,9 +512,10 @@ fn family_spec() -> FamilySpec {
     ));
 
     // rs2 + imm = 32·high + amount. `amount` is bounded to [0, 32) by its key
-    // bound and ShiftPowers' domain alike, and `high` by its own range pair,
-    // so the split is the unique one and `amount` really is the low five bits:
-    // never leave the shamt free, or `sll` with rs2 = 4 shifts by 8.
+    // bound, and by its ShiftPowers lookup with `copower_rule`, and `high` by
+    // its own range pair, so the split is the unique one and `amount` really
+    // is the low five bits: a free shamt would let `sll` with rs2 = 4 shift by
+    // 8.
     let mut split = src2();
     split.push((neg(32), HIGH));
     split.push((neg(1), AMOUNT));
@@ -547,9 +550,8 @@ fn family_spec() -> FamilySpec {
     // Every boolean this family produces carries its booleanity: rs1's sign
     // bit, and `se`, its sign-weighted form. `se_boolean` is implied by
     // `se_rule` over a boolean `rs1_sign` and one-hot kind bits; it is written
-    // anyway, because S18 must-be-exact 5 asks for a sign bit's
-    // sign-weighted form to carry one and a reader should not have to derive
-    // it.
+    // anyway, so that a sign bit's sign-weighted form carries one and a reader
+    // need not derive it.
     enforcing.push(("rs1_sign_boolean".into(), booleanity(RS1_SIGN)));
     enforcing.push(("se_boolean".into(), booleanity(SE)));
 
@@ -710,9 +712,8 @@ fn family_spec() -> FamilySpec {
 /// [`artifact`] documents; a seam so a test can hand it a broken circuit.
 fn assemble(trace_vars: u32, family_spec: FamilySpec) -> CircuitArtifact {
     let a = frame_with_channels_artifact(&QUERIES, trace_vars, family_spec);
-    // Every obligation is built above and then handed over, so a count is
-    // what shows none was dropped on the way (S14 must-be-exact 5, S15's
-    // per-channel form).
+    // Every obligation is built above and then handed over, so a count per
+    // channel is what shows none was dropped on the way.
     for (channel, want) in [
         (lookup_channel::TIMESTAMP, 2 * QUERIES.len()),
         (lookup_channel::RANGE16, 24),

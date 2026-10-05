@@ -1,9 +1,9 @@
-//! `constants::memory`'s and `constants::lookup_channel`'s S14 numbers against
-//! the constants they are defined beside, because each is a claim about another
+//! `constants::memory`'s and `constants::lookup_channel`'s numbers against the
+//! constants they are defined beside, because each is a claim about another
 //! constant.
 //!
 //! An integration test rather than a unit test, for the reason
-//! `tests/ecall_abi.rs` gives: `crates/constants` holds no code.
+//! `tests/ecall_abi.rs` gives: `crates/constants` holds no tests.
 
 use constants::{guest_memory, lookup_channel, memory};
 

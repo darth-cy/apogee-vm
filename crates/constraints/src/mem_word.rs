@@ -1,14 +1,14 @@
 //! The `MEM_WORD` family's circuit: `lw` and `sw`.
 //!
-//! `docs/spec/memory-ops.md` is normative: the columns, the gates, the lookups
-//! and the argument. This file is that document as data, assembled by S15's
-//! `memory::frame_with_channels_artifact` beside S14's frame.
+//! `docs/spec/memory-ops.md` §3 specifies it: the columns, the gates, the
+//! lookups and the argument. This file is that section as data, assembled by
+//! `memory::frame_with_channels_artifact` beside the memory frame.
 //!
 //! The whole family is the addressing of `docs/spec/memory-ops.md` §2 plus two
 //! one-line semantics: a load copies the word it read into `rd`, a store copies
 //! `rs2` into the word. There is no splice — a word access takes the whole
-//! word — and no generic lookup, so this is the only S19 family whose setup
-//! columns are the decoded table alone.
+//! word — and no generic lookup, so this is the only memory-op family whose
+//! setup columns are the decoded table alone.
 //!
 //! ```text
 //! frame     M[0..31], W[0..9]: pc rs1 rs2 load ram rd at slots 0..6
@@ -334,7 +334,7 @@ fn family_spec() -> FamilySpec {
         ),
     ));
     // No kind here computes a pc, so `next_pc` is the decoded fall-through,
-    // degree 1, with no wrap bit and no bound of its own — S18's reading, which
+    // degree 1, with no wrap bit and no bound of its own — the reading
     // `crates/constraints/src/shift_bitwise.rs` states in full.
     enforcing.push((
         "next_pc_rule".into(),
@@ -384,9 +384,8 @@ fn assemble(trace_vars: u32, family_spec: FamilySpec) -> CircuitArtifact {
         a.padding.zero_row_valid,
         "mem_word: a gate is nonzero on the all-zero row"
     );
-    // Every obligation is built above and then handed over, so a count is what
-    // shows none was dropped on the way (S14 must-be-exact 5, S15's per-channel
-    // form).
+    // Every obligation is built above and then handed over, so a count per
+    // channel is what shows none was dropped on the way.
     for (channel, want) in [
         (lookup_channel::TIMESTAMP, 2 * QUERIES.len()),
         (lookup_channel::RANGE16, 5),

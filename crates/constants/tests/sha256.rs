@@ -100,7 +100,7 @@ const _: () = assert!(sha256::STATE_WORDS == 8);
 const _: () = assert!(sha256::BLOCK_WORDS == 16);
 const _: () = assert!(sha256::ROUNDS == 64);
 
-// S26e's frame: one call is four rounds, so a compression is sixteen calls, and
+// The frame: one call is four rounds, so a compression is sixteen calls, and
 // the frame is the group word, the eight working variables and the sixteen-word
 // schedule window — the window being exactly one block wide, which is what lets
 // call 0's window *be* the block.

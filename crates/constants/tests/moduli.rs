@@ -1,8 +1,7 @@
 //! `constants::mod_mul::MODULI` against two independent readings.
 //!
-//! Four 256-bit numbers entered this crate as literals at S26b, and
-//! `crates/constants/CLAUDE.md`'s standing rule is that a table copied from a
-//! reference is exactly the kind of constant a test must re-derive. There are
+//! Four 256-bit numbers sit in this crate as literals, and a table copied from
+//! a reference is exactly the kind of constant a test re-derives. There are
 //! two readings here and each covers a different failure:
 //!
 //! - **The committed vector**, `tests/vectors/moduli.txt`, written by

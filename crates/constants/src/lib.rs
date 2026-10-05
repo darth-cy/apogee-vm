@@ -1,19 +1,16 @@
 #![no_std]
-//! Frozen constants and tags for the whole workspace. Zero logic, forever.
+//! Constants and tags for the whole workspace.
 //!
-//! This crate holds constant items and doc comments and nothing else: no
-//! functions, no traits, no macros, no tests. Guest-side code links it, so it
-//! is `#![no_std]` and stays that way.
+//! This crate holds constant items, a few `const fn` lookups over its own
+//! tables, and doc comments: no traits, no macros, no tests. Guest-side code
+//! links it, so it is `#![no_std]`.
 //!
-//! From the first registered program identity on, changing any value here is
-//! a protocol-version change.
+//! Changing any value here is a protocol change.
 
-/// Protocol version absorbed into every transcript before anything else.
+/// Protocol version: the one scalar of the global transcript's first message,
+/// G1 (`docs/spec/proof.md` §2).
 ///
-/// Placeholder, 0, until the first program identity is registered; from then
-/// on it is bumped whenever a frozen protocol invariant changes. S12 and S14
-/// changed frozen values without a bump, by the owner's decision
-/// (`docs/handoff/S14-multiset.md`).
+/// A placeholder, 0.
 pub const PROTOCOL_VERSION: u32 = 0;
 
 /// BN254 scalar field modulus `p`, little-endian 64-bit limbs.
@@ -150,7 +147,7 @@ pub const FQ_INV: u64 = 0x87d2_0782_e486_6389;
 /// This is `q - 1`. `-1` is a nonresidue exactly because `q = 3 mod 4`, and
 /// that single fact is what makes the Fq2 square root a two-branch closed form
 /// (see `curve::Fq2::sqrt`). Implementations multiply by it by negating, so the
-/// value appears here as the frozen definition and in `curve`'s constants test
+/// value appears here as the definition and in `curve`'s constants test
 /// as the thing negation is checked against.
 pub const FQ2_NONRESIDUE: &str =
     "0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd46";
@@ -431,9 +428,10 @@ pub const FINAL_EXP_LAMBDA_2: [u64; 4] = [
 // those rows. The three tables below are exactly the entries the permutation
 // reads, split by the phase that reads them.
 //
-// `crates/transcript/tests/poseidon2.rs` checks all three — including that the
-// lanes not stored here are zero upstream — against a committed dump of the
-// full 64x3 table, so the transcription is verified rather than trusted.
+// `crates/transcript/tests/poseidon2.rs` holds the permutation built on these
+// three tables to 128 committed vectors that `tools/transcript-ref` computes
+// from Plonky3's permutation and upstream's `RC3`, so the transcription is
+// verified rather than trusted.
 // ---------------------------------------------------------------------------
 
 /// Round constants for the 4 initial full rounds: `RC3` rows 0..4, all lanes.
@@ -557,17 +555,17 @@ pub const POSEIDON2_RC3_TERMINAL: [[&str; 3]; 4] = [
 /// and the sentinel cannot collide with any point, on the curve or off it.
 /// The non-collision is a fact about the split, not about the curve equation.
 ///
-/// Spelled the way every frozen `Fr` literal in this crate is: `0x` plus 64
+/// Spelled the way every `Fr` literal in this crate is: `0x` plus 64
 /// lowercase big-endian hex digits, read by `field::Fr::from_hex`.
-/// `docs/spec/transcript.md` §4 is normative.
+/// `docs/spec/transcript.md` §4 specifies it.
 pub const G1_INFINITY_SENTINEL: &str =
     "0x0000000000000000000000000000000100000000000000000000000000000000";
 
 /// Domain-separation tags for the Poseidon2 duplex transcript.
 ///
-/// Sequential `u64`, assigned once and never renumbered: a value here is part
-/// of the absorbed stream, so changing one is a protocol-version change. Later
-/// stages append to this table; they never renumber or reuse.
+/// Sequential `u64`, each assigned once: a value here is part of the absorbed
+/// stream, so changing one changes the protocol. A tag is never renumbered or
+/// reused.
 ///
 /// `0` is deliberately not a tag, so an uninitialised tag can never be a valid
 /// message.
@@ -666,22 +664,22 @@ pub mod transcript_tags {
     /// `docs/spec/mercury.md` §6.3.
     pub const ACCUMULATOR_MERGE: u64 = 19;
 
-    /// Bytes. The guest's fd 0 stream inside the public I/O digest's own
-    /// sponge. Absorbed first, before the output stream, which is what
-    /// domain-separates the two. `docs/spec/public-values.md` §5.
+    /// Bytes. The statement's public input inside `io_digest`'s own sponge.
+    /// Absorbed first, before the output, which is what domain-separates the
+    /// two. `docs/spec/public-values.md` §5.
     pub const PUBLIC_INPUT_STREAM: u64 = 20;
 
-    /// Bytes. The guest's fd 1 stream inside the public I/O digest's own
-    /// sponge, absorbed second. Distinct from [`PUBLIC_INPUT_STREAM`] so that
-    /// swapping two unequal streams changes the digest.
-    /// `docs/spec/public-values.md` §5.
+    /// Bytes. The statement's public output, the journal, inside
+    /// `io_digest`'s own sponge, absorbed second. Distinct from
+    /// [`PUBLIC_INPUT_STREAM`] so that swapping two unequal byte strings
+    /// changes the digest. `docs/spec/public-values.md` §5.
     pub const PUBLIC_OUTPUT_STREAM: u64 = 21;
 
     /// Scalars. The first message of the program-identity sponge: the single
     /// element `code version`. It is what opens that sponge, so the identity
     /// is domain-separated from every other digest in the protocol.
-    /// `crates/program/CLAUDE.md`. Since S16 also the global transcript's G6
-    /// message, `[identity]` (`docs/spec/proof.md` §2).
+    /// `docs/spec/program.md` §8. Also the global transcript's G6 message,
+    /// `[identity]` (`docs/spec/proof.md` §2).
     pub const PROGRAM_IDENTITY: u64 = 22;
 
     /// Scalars. The static `VmConfig`: the family ids in ascending order, then
@@ -734,7 +732,7 @@ pub mod transcript_tags {
 
     /// Scalars. The program-identity sponge's `entry_pc`, one element,
     /// absorbed after [`VM_CONFIG`] and before the families' commitments.
-    /// `docs/spec/memory.md` §6.2.
+    /// `docs/spec/program.md` §8.
     pub const PROGRAM_ENTRY: u64 = 32;
 
     /// Challenge. The LogUp channels' two shard-local challenges, `g` then
@@ -777,8 +775,7 @@ pub mod transcript_tags {
 
     /// Scalars. The packed generic table's three commitments the verifying
     /// key carries, each point four limbs, as one twelve-limb message inside
-    /// the SRS digest's own sponge, right after [`SRS_VERIFIER`]. Added at
-    /// S17, the first stage whose family reads the generic channel.
+    /// the SRS digest's own sponge, right after [`SRS_VERIFIER`].
     /// `docs/spec/proof.md` §3.
     pub const GENERIC_TABLE: u64 = 41;
 
@@ -788,9 +785,10 @@ pub mod transcript_tags {
     /// the base format, where `σ = 0`.
     pub const STACK_CHALLENGE: u64 = 42;
 
-    /// Absorbed in a recursion node's own transcript: one verified shard's
-    /// final transcript state, its three lanes, which bind every point and
-    /// scalar of that shard's deferred checks (`docs/spec/recursion.md` §8.3).
+    /// Scalars. Absorbed in a recursion node's own transcript: one verified
+    /// shard's final transcript state, its three lanes, which bind every point
+    /// and scalar of that shard's deferred checks (`docs/spec/recursion.md`
+    /// §8.3).
     pub const FOLD_STATE: u64 = 43;
 
     /// Challenge. One of a recursion node's fold weights, drawn after the
@@ -798,9 +796,9 @@ pub mod transcript_tags {
     /// its batch check into the node's accumulator.
     pub const FOLD_WEIGHT: u64 = 44;
 
-    /// Absorbed in a recursion node's own transcript: one child's journal,
-    /// its every cell, the accumulator among them, before the weight that
-    /// folds that accumulator into the node's is drawn
+    /// Scalars. Absorbed in a recursion node's own transcript: one child's
+    /// journal, its every cell, the accumulator among them, before the weight
+    /// that folds that accumulator into the node's is drawn
     /// (`docs/spec/recursion.md` §8.3).
     pub const FOLD_CHILD: u64 = 45;
 
@@ -808,10 +806,9 @@ pub mod transcript_tags {
     /// semantics**, as `challenge_slot::NAMES` is: the number is the tag, and
     /// nothing reads a name to decide anything. `checker::tape` renders a
     /// transcript's absorb sequence with them, which is what makes a tape
-    /// diffable against the frozen order of `docs/spec/proof.md` §2.
+    /// diffable against the order `docs/spec/proof.md` §2 specifies.
     ///
-    /// Append here whenever a tag is appended above. This crate keeps its
-    /// zero-logic rule: the lookup lives in `checker::tape`.
+    /// One entry per tag above. The lookup itself lives in `checker::tape`.
     pub const NAMES: [&str; 45] = [
         "PROTOCOL_SUITE",
         "PUBLIC_INPUTS",
@@ -861,15 +858,15 @@ pub mod transcript_tags {
     ];
 }
 
-/// The external challenge slots a GKR circuit's coefficients may name, frozen
-/// at S13; **append-only**.
+/// The external challenge slots a GKR circuit's coefficients may name. A slot
+/// number is never reassigned.
 ///
 /// A `constraints::Coeff::Challenge(slot)` names one of these numbers, and the
 /// caller supplies its value in `ExternalChallenges`. The number is the
 /// semantics; [`challenge_slot::NAMES`] is documentation for dumps and
 /// diagnostics, indexed by slot, exactly as a tag's constant name is.
 pub mod challenge_slot {
-    /// The S13 toy circuit's one challenge. No production circuit reads it.
+    /// The test circuits' one challenge. No production circuit reads it.
     pub const TOY: u32 = 0;
 
     /// `γ_M`, the memory tuple's additive challenge. Drawn once per
@@ -956,16 +953,15 @@ pub mod challenge_slot {
     ];
 }
 
-/// The lookup channels a lookup expression names, frozen at S14 and completed
-/// at S15; **append-only**.
+/// The lookup channels a lookup expression names. A channel number is never
+/// reassigned.
 ///
 /// A `LookupExpr`'s `channel` is one of these numbers. A channel is either a
 /// **range** channel, whose one expression holds on a row when its canonical
 /// integer is below `2^BITS[channel]`, or a **table** channel, whose tuple
-/// holds when it is a row of the channel's committed table.
+/// holds when it is a row of the channel's table, committed or virtual.
 /// [`lookup_channel::NAMES`] is documentation, indexed by channel, as
-/// [`challenge_slot::NAMES`] is. `docs/spec/memory.md` §7 and
-/// `docs/spec/lookup.md`.
+/// [`challenge_slot::NAMES`] is. `docs/spec/lookup.md` §1 and §3.
 pub mod lookup_channel {
     /// Range. The timestamp gap's two 19-bit chunks: `[0, 2^19)`.
     pub const TIMESTAMP: u32 = 0;
@@ -979,12 +975,12 @@ pub mod lookup_channel {
     pub const GENERIC: u32 = 2;
 
     /// Table. A family's decoded instruction table, `crates/program`'s
-    /// `lookup_tuple(family)` columns in their frozen order.
+    /// `lookup_tuple(family)` columns in their fixed order.
     pub const DECODER: u32 = 3;
 
-    /// Table. The byte table `(a, b, a ^ b)`, all 65,536 triples, and the
-    /// first table channel whose table is **virtual** rather than committed
-    /// (S26d, `docs/spec/lookup.md` §3).
+    /// Table. The byte table `(a, b, a ^ b)`, all 65,536 triples, and the one
+    /// table channel whose table is **virtual** rather than committed
+    /// (`docs/spec/lookup.md` §3).
     ///
     /// Its three columns are closed forms of the row index — `a` the low
     /// eight bits, `b` the next eight, `a ^ b` their bitwise XOR, which is
@@ -998,9 +994,9 @@ pub mod lookup_channel {
     /// `x & y = (x + y - (x ^ y)) / 2`. A packed key `x + 256*y` would be one
     /// column cheaper and would bound neither operand on its own.
     ///
-    /// `constants::family::KECCAK_F` is its one consumer: a Keccak round is
-    /// 1,020 obligations on it and no bit anywhere
-    /// (`docs/spec/delegation-circuits.md` §2).
+    /// Two families consume it: a `KECCAK_F` round is 1,020 obligations on it
+    /// and no bit anywhere, and a `SHA256_COMP` row of four rounds is 336
+    /// (`docs/spec/delegation-circuits.md` §2, §6).
     pub const XOR8: u32 = 4;
 
     /// How many channels this table defines.
@@ -1008,8 +1004,7 @@ pub mod lookup_channel {
 
     /// Whether channel `i` is a range channel, indexed by channel. A range
     /// channel's table is the closed form of `docs/spec/lookup.md` §3; a table
-    /// channel's is committed, or — since S26d's [`XOR8`] — a closed form of
-    /// its own.
+    /// channel's is committed, or, for [`XOR8`], a closed form of its own.
     pub const IS_RANGE: [bool; COUNT as usize] = [true, true, false, false, false];
 
     /// A range channel's bound, as a bit width, indexed by channel; 0 where
@@ -1033,10 +1028,10 @@ pub mod lookup_channel {
     pub const MAX_TUPLE: usize = 7;
 }
 
-/// The generic channel's packed table, frozen at S15 in `crates/program`'s
-/// `lookup_tables` and moved here at S17, when a circuit — which cannot
-/// depend on `program` — first builds a key into it. S18 appends
-/// `ShiftPowers`. `docs/spec/lookup.md` §9.
+/// The generic channel's packed table: its width and key bases.
+/// `crates/program`'s `lookup_tables` builds the table; its numbers live here
+/// because a circuit, which cannot depend on `program`, builds keys into it.
+/// `docs/spec/lookup.md` §9.
 ///
 /// ```text
 /// row 0                     the ZeroEntry, all zero
@@ -1077,16 +1072,17 @@ pub mod generic_table {
     pub const SHIFT_COPOWER_BITS: u32 = 31;
 }
 
-/// The circuit families, by number. Frozen at S11; **append-only**.
+/// The circuit families, by number. A family number is never reassigned.
 ///
 /// A family is one arithmetization shape covering a set of program counters.
-/// The number is what every later stage cites: canonical ordering is ascending
+/// The number is what everything else cites: canonical ordering is ascending
 /// `FamilyId`, the program-identity digest absorbs families in that order, and
-/// shard transcripts are seeded with it. Delegation families are appended
-/// after [`ZERO_WINDOWS`] and never renumber anything below them.
+/// shard transcripts are seeded with it. Ids 0–6 are the execution families,
+/// 7–8 and 12–14 the window families, 9–11 and 15–17 the delegation families
+/// and 18–22 the recursion format's (`docs/spec/circuits.md` §1).
 ///
 /// Which mnemonic each instruction family claims is `crates/program`'s
-/// `row_kind`, and `crates/program/CLAUDE.md` is the table.
+/// `row_kind`, and `docs/spec/program.md` §4 is the table.
 pub mod family {
     /// `add`, `sub`, `addi`, `lui`, `auipc`, and the system row kind:
     /// `ecall`, `ebreak`, `fence`.
@@ -1112,22 +1108,22 @@ pub mod family {
     /// pc; present in every `VmConfig`, at the height of [`INIT_TEARDOWN`].
     /// `docs/spec/memory.md` §3.
     pub const ZERO_WINDOWS: u32 = 8;
-    /// The keccak-f[1600] **delegation** family (S21, re-shaped at S26d): one
-    /// Keccak *round* a row, so a permutation is 24 consecutive invocations,
-    /// invoked by the [`ecall::PRECOMPILE_KECCAK_F`] ecall and never decoded.
+    /// The keccak-f[1600] **delegation** family: one Keccak *round* a row, so
+    /// a permutation is 24 consecutive invocations, invoked by the
+    /// [`ecall::PRECOMPILE_KECCAK_F`] ecall and never decoded.
     /// Claims no pc, owns no cycle, and is in a `VmConfig` only when the
     /// linked binary declares it (`docs/spec/delegation.md` §7).
     pub const KECCAK_F: u32 = 9;
-    /// The Poseidon2 **delegation** family (S23): one width-3 permutation a
-    /// row, invoked by the [`ecall::PRECOMPILE_POSEIDON2`] ecall. The circuit
-    /// is `transcript::poseidon2_permute`, gate for gate
+    /// The Poseidon2 **delegation** family: one width-3 permutation a row,
+    /// invoked by the [`ecall::PRECOMPILE_POSEIDON2`] ecall. The circuit is
+    /// `transcript::poseidon2_permute`, gate for gate
     /// (`docs/spec/delegation-circuits.md` §3).
     pub const POSEIDON2: u32 = 10;
-    /// The Fr-arithmetic **delegation** family (S23): one `Fr` add, multiply
-    /// or inverse a row, invoked by the [`ecall::PRECOMPILE_FR_ARITH`] ecall
+    /// The Fr-arithmetic **delegation** family: one `Fr` add, multiply or
+    /// inverse a row, invoked by the [`ecall::PRECOMPILE_FR_ARITH`] ecall
     /// (`docs/spec/delegation-circuits.md` §4).
     pub const FR_ARITH: u32 = 11;
-    /// The **public input** window (S-IO): the verifier-known input of the
+    /// The **public input** window: the verifier-known input of the
     /// statement, at [`guest_memory::PUBLIC_INPUT_ORIGIN`]. Claims no pc,
     /// owns no cycle, and is in **every** `VmConfig` at
     /// [`PUBLIC_WINDOW_HEIGHT`], proving exactly one shard.
@@ -1136,7 +1132,7 @@ pub mod family {
     /// its teardown column is free, because a guest may overwrite its own
     /// input buffer (`docs/spec/public-values.md` §5).
     pub const PUBLIC_INPUT: u32 = 12;
-    /// The **public output** window — the journal — (S-IO), at
+    /// The **public output** window — the journal — at
     /// [`guest_memory::PUBLIC_OUTPUT_ORIGIN`]. In every `VmConfig` at
     /// [`PUBLIC_WINDOW_HEIGHT`], proving exactly one shard.
     ///
@@ -1145,7 +1141,7 @@ pub mod family {
     /// storing it; its teardown column is what the verifier holds to the
     /// statement's `output` (`docs/spec/public-values.md` §5).
     pub const PUBLIC_OUTPUT: u32 = 13;
-    /// The **advice** windows (S-IO): prover-supplied initial values for the
+    /// The **advice** windows: prover-supplied initial values for the
     /// region at [`guest_memory::ADVICE_ORIGIN`], one shard per window, `k`
     /// of them counted from [`guest_memory::ADVICE_ORIGIN`] upward. In every
     /// `VmConfig` at the window height, with `k >= 0` shards.
@@ -1154,9 +1150,9 @@ pub mod family {
     /// prover chose; a guest owes a check of it against something public
     /// (`docs/spec/public-values.md` §6).
     pub const ADVICE_WINDOWS: u32 = 14;
-    /// The **Ethereum field multiplication** delegation family (S26,
-    /// specialized at S26b): one `out = a * b mod m` a row over 32-bit limbs,
-    /// invoked by the [`ecall::PRECOMPILE_MOD_MUL`] ecall and never decoded
+    /// The **Ethereum field multiplication** delegation family: one
+    /// `out = a * b mod m` a row over 32-bit limbs, invoked by the
+    /// [`ecall::PRECOMPILE_MOD_MUL`] ecall and never decoded
     /// (`docs/spec/delegation-circuits.md` §5).
     ///
     /// The modulus is **one of four**, named by a selector word in the frame
@@ -1174,38 +1170,37 @@ pub mod family {
     /// schoolbook identity `a*b = q*m + out` limb by limb with a signed carry
     /// chain.
     ///
-    /// **Why it exists**: on a whole mainnet block, 44.4% of the guest's cycles
-    /// are 256-bit modular multiply and square inside `k256`, at ~1,300 cycles
-    /// a call (`docs/handoff/S26-cycle.md`).
+    /// **Why it exists**: run in software, 256-bit modular multiply and square
+    /// inside `k256` are 44.4% of a whole mainnet block's guest cycles, at
+    /// ~1,300 cycles a call.
     pub const MOD_MUL: u32 = 15;
 
-    /// Invoked. **Four SHA-256 rounds a row** since S26e, over a 25-word frame:
-    /// the round group, the eight working variables and a sixteen-word schedule
-    /// window; a compression is 16 rows glued by the frame's RAM. S26c's row
-    /// was a whole compression.
+    /// Invoked. **Four SHA-256 rounds a row**, over a 25-word frame: the round
+    /// group, the eight working variables and a sixteen-word schedule window;
+    /// a compression is 16 rows glued by the frame's RAM.
     ///
-    /// **Why it exists**: Ethereum's `0x02` precompile, and since S-STATELESS
-    /// the stateless guest's SSZ merkleization, which is 8,011 compressions on
-    /// a 100 Mgas devnet block. The guest keeps the padding and the block
-    /// loop, exactly as `guest_sdk::keccak256` keeps the sponge
-    /// (`docs/spec/delegation.md` §11).
+    /// **Why it exists**: Ethereum's `0x02` precompile, and the stateless
+    /// guest's SSZ merkleization, which is 8,011 compressions on a 100 Mgas
+    /// devnet block. The guest keeps the padding and the block loop, exactly
+    /// as `guest_sdk::keccak256` keeps the sponge (`docs/spec/delegation.md`
+    /// §11).
     pub const SHA256_COMP: u32 = 16;
 
     /// Invoked. One third of a complete elliptic-curve point addition a row,
     /// over a 97-word frame that is also the scratch the three invocations
     /// pass their intermediates through.
     ///
-    /// **Why it exists**: after S26 routed `k256`'s field multiply through
-    /// [`MOD_MUL`], 26% of a measured block's guest cycles were still
-    /// secp256k1 — the shim's marshalling, `operand`'s reduction and the
-    /// ladder's bookkeeping around 12 delegated multiplies a point operation
-    /// (`docs/handoff/S26-cycle.md`). Delegating the point operation removes
+    /// **Why it exists**: with `k256`'s field multiply routed through
+    /// [`MOD_MUL`] and the point operation in software, 26% of a measured
+    /// block's guest cycles are secp256k1 — the shim's marshalling,
+    /// `operand`'s reduction and the ladder's bookkeeping around 12 delegated
+    /// multiplies a point operation. Delegating the point operation removes
     /// all of it. The curve is a frame word, because the Renes-Costello-Batina
     /// formula is the same for secp256k1 and BN254 G1 — both `a = 0`, and `b`
     /// never appears.
     pub const EC_ADD: u32 = 17;
 
-    /// The **field memory**'s windows (S-RECURSION): zero-initialized cells of
+    /// The **field memory**'s windows: zero-initialized cells of
     /// [`crate::address_space::FIELD`], one shard per window, consecutive from
     /// cell 0. `ZERO_WINDOWS`' circuit at a stride of one cell a row. In a
     /// `VmConfig` exactly when the program declares a field delegation, and a
@@ -1248,17 +1243,16 @@ pub mod family {
     /// and leaves only window 0 in the hole — and window 0 initializes address
     /// 0, so a null dereference would balance. There is no step above this one.
     ///
-    /// **It was `2^8` until S-STREAM**, which bought 1,020 journal bytes and
-    /// a revm mini journal that overflowed above 73 transactions
-    /// (`docs/spec/ethereum.md` §3). 16,380 is what the geometry allows; it
-    /// is headroom and not a bound, a journal carrying verbatim return data
-    /// being unbounded in any window.
+    /// 16,380 payload bytes is what the geometry allows; it is headroom and
+    /// not a bound, a journal carrying verbatim return data being unbounded in
+    /// any window (`docs/spec/public-values.md` §9).
     ///
     /// The price is the verifier's step 10c, two 4,096-point multilinear
-    /// evaluations rather than two 256-point ones — 8,190 `Fr` multiplies and
-    /// 81,920 live bytes a shard (`2^11` `Fr` of fold scratch plus the 4,096
-    /// `u32` words of the window itself), 163,840 across the two. Noise on a
-    /// native verifier, and a budget a recursion guest will have to carry.
+    /// evaluations — 4,095 `Fr` multiplies and 81,920 live bytes a shard
+    /// (`2^11` `Fr` of fold scratch plus the 4,096 `u32` words of the window
+    /// itself), 8,190 and 163,840 across the two. Noise on a native verifier;
+    /// a recursion node evaluates the payload's words alone
+    /// (`verifier_core::chain::public_value`).
     pub const PUBLIC_WINDOW_HEIGHT: u32 = 1 << 12;
 
     /// [`PUBLIC_INPUT`]'s window id at [`PUBLIC_WINDOW_HEIGHT`].
@@ -1269,16 +1263,16 @@ pub mod family {
         crate::guest_memory::PUBLIC_OUTPUT_ORIGIN / (4 * PUBLIC_WINDOW_HEIGHT);
 
     /// Whether a family's rows are **execution cycles**, indexed by
-    /// `FamilyId`. Append-only, beside the ids themselves.
+    /// `FamilyId`.
     ///
     /// The seven instruction families own cycles; [`INIT_TEARDOWN`] and
     /// [`ZERO_WINDOWS`] own addresses — a RAM window's rows are words, not
     /// cycles (`docs/spec/memory.md` §3). A block's time-window rules apply to
     /// cycle-owning families alone (`docs/spec/proof.md` §8): only their
-    /// shards partition an execution in time. A **delegation** family appends
-    /// here as `false`: its rows are invocations, its shards carry a min/max
+    /// shards partition an execution in time. A **delegation** family is
+    /// `false` here: its rows are invocations, its shards carry a min/max
     /// invocation window, and no disjointness is asked of them
-    /// (`docs/spec/delegation.md` §8). [`KECCAK_F`] is the first.
+    /// (`docs/spec/delegation.md` §8).
     pub const CYCLE_OWNING: [bool; COUNT as usize] = [
         true,  // ADD_SUB_LUI_AUIPC
         true,  // JUMP_BRANCH_SLT
@@ -1308,69 +1302,60 @@ pub mod family {
     /// The trace-height menu, ascending. Even powers of two only, so that a
     /// Mercury opening's `b = sqrt(n)` exists.
     ///
-    /// `2^8` is S21's, and it is a **delegation** height: a row too wide to
-    /// afford at any ordinary height can still be afforded 256 of them. S21
-    /// opened the menu with it because one keccak row was a whole
-    /// keccak-f[1600] permutation at ~345,600 inner columns, and a shard's
-    /// forward pass is columns times height. S26d made one keccak row one
-    /// *round*, and that family sits at `2^18` today, as does `SHA256_COMP`
-    /// since S26e made one of its rows four rounds; what keeps `2^8` on the
-    /// menu is `POSEIDON2` and `FR_ARITH` (`docs/spec/delegation.md` §9). What closes `2^8` to a family is a
+    /// `2^8` is a **delegation** height: a row too wide to afford at any
+    /// ordinary height can still be afforded 256 of them, a shard's forward
+    /// pass being columns times height. `POSEIDON2` and `FR_ARITH` take it
+    /// (`docs/spec/delegation.md` §9). What closes `2^8` to a family is a
     /// channel whose **table needs more than eight variables**, not carrying a
     /// channel at all: `constraints::lookup::table_vars` is 19 for `TIMESTAMP`
     /// and 16 for `RANGE16` and `XOR8`, so any of those three forces `2^16` or
     /// above, while `GENERIC` and `DECODER` report **0** — their tables are
     /// committed setup rather than closed forms, so they raise the floor by
     /// nothing. `constraints::family_circuit` returns `None` below the widest
-    /// table its channels declare, and nothing today rests on the two zeros:
-    /// all five families reading `GENERIC` also carry `TIMESTAMP`, whose 19
-    /// puts them at `2^20` regardless.
-    /// `2^12` is S-STREAM's, and it is the two **public-value** families' and
-    /// nothing else's: it is below every channel floor an execution family
-    /// reaches, and a window family at `2^12` reaches `0x4000`, short of the
-    /// public windows' end, so `verifier_core::window_height` refuses it. What
-    /// it does widen is what a key may declare for the three channel-free
-    /// delegation families, which is benign and bought nothing.
+    /// table its channels declare, and nothing rests on the two zeros: all
+    /// five families reading `GENERIC` also carry `TIMESTAMP`, whose 19 puts
+    /// them at `2^20` regardless.
+    ///
+    /// `2^12` is the two **public-value** families' and nothing else's: it is
+    /// below every channel floor an execution family reaches, and a window
+    /// family at `2^12` reaches `0x4000`, short of the public windows' end, so
+    /// `verifier_core::window_height` refuses it. What it does widen is what a
+    /// key may declare for the two channel-free delegation families, which is
+    /// benign.
     pub const HEIGHT_MENU: [u32; 6] = [1 << 8, 1 << 12, 1 << 16, 1 << 18, 1 << 20, 1 << 22];
 
     /// The default trace height of every family, indexed by `FamilyId`.
     ///
-    /// **No execution family may default below `2^20`.** A circuit carrying a
+    /// **No execution family defaults below `2^20`.** A circuit carrying a
     /// timestamp gap obligation needs `lookup_channel::BITS[TIMESTAMP] = 19`
     /// variables (`docs/spec/lookup.md` §3), and a Mercury opening needs an
     /// even count, so `2^20` is the floor for every family that runs cycles.
-    /// `ATOMICS` sat at `2^16` from S11 until S19 raised it with the circuit
-    /// that needs it (`docs/handoff/S16-add-sub.md` answer 7).
     ///
     /// A **delegation** family is the other way round: its floor is whatever
     /// its own channels imply — 0 for the two that carry none — and its
     /// ceiling is its own circuit's width. Those widths differ by **orders of
-    /// magnitude**, so the six do not share a height and there is no reason
-    /// they should: [`FR_ARITH`] is 142 inner columns a row where [`KECCAK_F`]
-    /// is 5,490 at `2^18`. **That ceiling is a judgement and not a
+    /// magnitude**, so the delegation families do not share a height and there
+    /// is no reason they should: [`FR_ARITH`] is 142 inner columns a row where
+    /// [`KECCAK_F`] is 5,490 at `2^18`. **That ceiling is a judgement and not a
     /// wall**, and [`KECCAK_F`]'s `2^18` is what shows it: ~60 GB a shard is
     /// payable there because a keccak-heavy block has tens of thousands of
-    /// invocations to amortise it over. [`SHA256_COMP`] took the same height
-    /// for the same reason at S26e — S26c's whole-compression row was 16,688
-    /// inner columns and pinned it to `2^8`, and four rounds a row is 2,802 —
-    /// once the stateless guest's SSZ hashing made it 32 shards and two thirds
-    /// of a real block's proof. Below that ceiling the height is a **proof-size**
-    /// decision — a `2^8` shard's proof does not shrink with its height, so a
-    /// family's height is what decides how many shards a block's invocations
-    /// take, and `MOD_MUL` at `2^8` cost a measured block 1,048 shards against
-    /// 5 at `2^16` (`docs/spec/delegation.md` §9 and §9).
+    /// invocations to amortise it over. [`SHA256_COMP`] takes the same height
+    /// for the same reason: four rounds a row is 2,802 inner columns, and the
+    /// stateless guest's SSZ hashing is 8,011 compressions on a 100 Mgas devnet
+    /// block. Below that ceiling the height is a **proof-size** decision — a
+    /// shard's proof barely shrinks with its height, so a family's height is
+    /// what decides how many shards a block's invocations take: `MOD_MUL` at
+    /// `2^8` would take a measured block's multiplies 1,048 shards against 5 at
+    /// `2^16` (`docs/spec/delegation.md` §9).
     ///
     /// [`KECCAK_F`] is the case that shows the trade is about **width**, not
-    /// rows. At S21 one row was a whole permutation — 354,762 inner columns,
-    /// `2^16` of them 744 GB — so it sat at `2^8` and 256 permutations a shard,
-    /// which made five keccak shards 97% of a measured mini-block's proof
-    /// bytes. S26d made one row one *round*: 24 rows a permutation, ~5,490
-    /// inner columns each, and `2^18` is ~60 GB — 10,922 permutations a shard
-    /// and, per permutation, half the columns of the old shape. `2^16` is only
-    /// the **floor** its two channels imply; `2^18` is the choice above it,
-    /// because a shard's proof barely grows with its height — 381,100 bytes
-    /// against 373,276 — so the fatter shard is the cheaper one for a
-    /// keccak-heavy block (`docs/spec/delegation-circuits.md` §2.4, `docs/spec/delegation.md` §9).
+    /// rows. One row is one *round*: 24 rows a permutation, ~5,490 inner
+    /// columns each, and `2^18` is ~60 GB — 10,922 permutations a shard.
+    /// `2^16` is only the **floor** its two channels imply; `2^18` is the
+    /// choice above it, because a shard's proof barely grows with its height —
+    /// 381,100 bytes against 373,276 — so the fatter shard is the cheaper one
+    /// for a keccak-heavy block (`docs/spec/delegation-circuits.md` §2.4,
+    /// `docs/spec/delegation.md` §9).
     pub const DEFAULT_HEIGHTS: [u32; COUNT as usize] = [
         1 << 22, // ADD_SUB_LUI_AUIPC
         1 << 22, // JUMP_BRANCH_SLT
@@ -1406,8 +1391,8 @@ pub mod family {
     pub const CODE_VERSION: u32 = 0;
 }
 
-/// The bit positions of `family_extra_mask`, per family. Frozen at S11;
-/// **append-only**.
+/// The bit positions of `family_extra_mask`, per family. A bit position is
+/// never reassigned (`docs/spec/program.md` §6).
 ///
 /// Every live row's mask is **one-hot**: exactly one bit is set, naming the
 /// row's kind, which is its mnemonic — except the add/sub/lui/auipc family's
@@ -1517,19 +1502,19 @@ pub mod extra_mask {
     }
 }
 
-/// The guest memory map, frozen at S10 and re-frozen after S12 on the
-/// repository owner's instruction. These are the frozen values.
+/// The guest memory map.
 ///
-/// The one region a guest has. `crates/guest-sdk/link.ld` states the same two
-/// numbers for the linker, `docs/spec/ecall-abi.md` §6 states them for a
-/// reader, and `crates/constants/tests/ecall_abi.rs` checks all three against
-/// each other — a memory map written down three times is a memory map that can
-/// disagree with itself.
+/// RAM is the one region a program is loaded into. `crates/guest-sdk/link.ld`
+/// states the same two numbers for the linker, `docs/spec/ecall-abi.md` §6
+/// states them for a reader, and `crates/constants/tests/ecall_abi.rs` checks
+/// all three against each other — a memory map written down three times is a
+/// memory map that can disagree with itself.
 ///
 /// `crates/loader` refuses a `PT_LOAD` segment that does not lie inside this
-/// window. Nothing outside it is addressable, so a program that wants to be
-/// there is not a program this VM can run — and enforcing it also bounds what
-/// a hostile ELF can make the loader allocate.
+/// window. Outside it a guest reaches only the two public windows and the
+/// advice region, none of which is in the ELF, so a program that wants to be
+/// loaded there is not a program this VM can run — and enforcing it also
+/// bounds what a hostile ELF can make the loader allocate.
 pub mod guest_memory {
     /// First addressable byte, and where `_start` is placed.
     pub const RAM_ORIGIN: u32 = 0x0001_0000;
@@ -1538,27 +1523,26 @@ pub mod guest_memory {
     /// and lands on `0x8000_0000` — a window of just under 2 GiB.
     pub const RAM_LENGTH: u32 = 0x7FFF_0000;
 
-    /// The top of RAM the stack keeps for itself, added at S12. guest-sdk's
+    /// The top of RAM the stack keeps for itself. guest-sdk's
     /// allocator never hands out a block reaching into the last
     /// `STACK_RESERVE` bytes below `RAM_ORIGIN + RAM_LENGTH`, nor one above
     /// the live `sp`. 8 MiB: a native main thread's default stack on Linux and
     /// macOS, so a program whose recursion fits on the host fits here. Not
     /// part of the linker's map — `link.ld` has no symbol for it — but a
-    /// number the SDK, its documents and its probe guest must agree on.
+    /// number the SDK and its documents agree on.
     pub const STACK_RESERVE: u32 = 0x0080_0000;
 
     /// First byte of the **public input** window: the verifier-known input a
     /// statement is about (`docs/spec/public-values.md` §2).
     ///
-    /// `[0, RAM_ORIGIN)` is already a hole. `INIT_TEARDOWN` masks RAM window
-    /// 0's rows below `2^14` with `V[ram_live]` and `ZERO_WINDOWS` never
-    /// claims window 0, so no RAM window family initializes an address there
-    /// (`docs/spec/memory.md` §3.3). Two windows of that hole are therefore
-    /// free to claim without moving a single existing row, and `[0, 0x8000)`
-    /// stays a hole: a null dereference is still a read of a tuple nothing
-    /// wrote, and cannot balance. Since S-STREAM the two windows take the
-    /// **whole** of the hole above `0x8000` — `2^12` each, ending flush
-    /// against `RAM_ORIGIN` — which is what makes that height the ceiling.
+    /// No RAM window family initializes an address in `[0, RAM_ORIGIN)`:
+    /// `INIT_TEARDOWN` masks RAM window 0's rows below `2^14` with
+    /// `V[ram_live]` and `ZERO_WINDOWS` never claims window 0
+    /// (`docs/spec/memory.md` §3.3). The two public windows claim the
+    /// **whole** of that range above `0x8000` — `2^12` words each, ending
+    /// flush against `RAM_ORIGIN` — which is what makes that height the
+    /// ceiling, and `[0, 0x8000)` stays a hole: a null dereference is a read
+    /// of a tuple nothing wrote, and cannot balance.
     ///
     /// The address is not a free choice either. A window's first address is
     /// `4 * height * window`, so at [`family::PUBLIC_WINDOW_HEIGHT`] this is
@@ -1573,9 +1557,8 @@ pub mod guest_memory {
     /// window up from [`PUBLIC_INPUT_ORIGIN`].
     ///
     /// At [`family::PUBLIC_WINDOW_HEIGHT`] = `2^12` the pair is windows 2 and
-    /// 3 and ends flush against [`RAM_ORIGIN`]: the hole holds exactly two
-    /// public windows and no more. It was `0x8400` until S-STREAM, when the
-    /// height left `2^8`.
+    /// 3 and ends flush against [`RAM_ORIGIN`]: the range below `RAM_ORIGIN`
+    /// holds exactly two public windows and no more.
     pub const PUBLIC_OUTPUT_ORIGIN: u32 = 0x0000_C000;
 
     /// Bytes in each public window: `4 * family::PUBLIC_WINDOW_HEIGHT`.
@@ -1595,8 +1578,7 @@ pub mod guest_memory {
     /// (`docs/spec/public-values.md` §6).
     ///
     /// It sits above RAM rather than inside it, so it competes with no heap
-    /// and no stack, and `[RAM_ORIGIN, ADVICE_ORIGIN)` keeps exactly the
-    /// meaning it had. The address-space tag is [`address_space::RAM`] here
+    /// and no stack. The address-space tag is [`address_space::RAM`] here
     /// too: what makes an advice word advice is that its window family's init
     /// column is committed and bound to nothing, not a tag a load would have
     /// to name.
@@ -1606,17 +1588,14 @@ pub mod guest_memory {
     pub const ADVICE_WORDS: u32 = 1 << 29;
 }
 
-/// The guest ecall ABI: the numbers and the range boundaries, in one place
-/// forever.
+/// The guest ecall ABI: the numbers and the range boundaries, in one place.
 ///
-/// **Append-only.** Once a program's identity is published its ABI is frozen.
-/// Redefining a number does not fail loudly — it quietly makes an old program
-/// compute something else — so numbers here are assigned once and never
-/// reused, exactly like `transcript_tags`. *Retiring* a number obeys the same
-/// rule from the other side: it is struck out and never reassigned. `READ`
-/// (63) and `WRITE` (64) were retired when the POSIX compatibility layer was
-/// deleted, and **63 and 64 are burned** — append-only forbids giving them a
-/// second meaning, not deleting a call nothing may issue.
+/// **A number is assigned once.** A program's identity binds its ABI, and
+/// redefining a number does not fail loudly — it quietly makes an old program
+/// compute something else — so numbers here are never reused, exactly like
+/// `transcript_tags`. A *retired* number is struck out and never reassigned:
+/// **63 and 64**, POSIX `read` and `write`, are retired, as are the three
+/// `RETIRED_*` numbers below (`docs/spec/ecall-abi.md` §4).
 ///
 /// An ecall carries its number in `a7`, its arguments in `a0`-`a5` and its
 /// result in `a0`, with errors as a negated errno. **An Apogee guest is an
@@ -1625,21 +1604,20 @@ pub mod guest_memory {
 /// journal are *memory the proof system binds* — ordinary loads and stores
 /// against three fixed regions (`docs/spec/public-values.md`) — so the only
 /// ecalls a guest issues are [`EXIT`] and the delegation numbers below, which
-/// are exactly the provable ones. `docs/spec/ecall-abi.md` is the normative
+/// are exactly the provable ones. `docs/spec/ecall-abi.md` specifies the
 /// table.
 pub mod ecall {
     /// Terminate. `a0` is the exit status; a nonzero status is a failed
     /// execution, which is still an execution and is reported rather than
     /// refused.
     ///
-    /// The only non-delegation ecall a guest may issue. Its number is 93
-    /// because that is what it has always been here, and append-only keeps it
-    /// there; nothing downstream reads any meaning into the value.
+    /// The only non-delegation ecall a guest may issue. Its number is 93, and
+    /// nothing downstream reads any meaning into the value.
     pub const EXIT: u32 = 93;
 
     /// First number of the zkVM-specific host-call range, `0x0400..=0x04FF`.
     ///
-    /// **Reserved and empty, and it stays that way.** A call here would be
+    /// **Reserved and empty.** A call here would be
     /// nondeterministic prover advice, and advice does not need a syscall: it
     /// is a memory region the prover fills and the guest authenticates
     /// (`docs/spec/public-values.md` §6). Kept disjoint from
@@ -1663,20 +1641,18 @@ pub mod ecall {
     /// Poseidon2 permutation over a `[Fr; 3]` state, `a0` = the 96-byte frame
     /// base pointer, read and written in place.
     ///
-    /// Assigned at S10 and given its circuit at S23: a **delegation** call,
-    /// `docs/spec/delegation.md` is its ABI and `constants::family::POSEIDON2`
-    /// the family that proves it. The three lanes cross the frame as canonical
+    /// A **delegation** call: `docs/spec/delegation.md` is its ABI and
+    /// `constants::family::POSEIDON2` the family that proves it. The three lanes cross the frame as canonical
     /// little-endian `Fr`, 8 words each, lane `i` at words `8i..8i + 8`.
     pub const PRECOMPILE_POSEIDON2: u32 = 0x0500;
 
-    /// **Retired and burned at S26d.** `0x0501` was S21's keccak-f[1600] over
+    /// **Retired, and never reassigned.** `0x0501` named keccak-f[1600] over
     /// a 200-byte frame holding the state and nothing else: **one call, one
-    /// whole permutation**. S26d made one round one invocation, which needs a
+    /// whole permutation**. [`PRECOMPILE_KECCAK_F`] is one round over a
     /// 204-byte frame whose word 0 is the round — a different call with
-    /// different semantics, and append-only forbids giving a number a second
-    /// meaning. An old binary issuing `0x0501` under the new executor would
-    /// have its first state word read as a round selector and get one round of
-    /// a permuted state back, with nothing failing loudly.
+    /// different semantics. Were `0x0501` given that meaning, an old binary
+    /// issuing it would have its first state word read as a round selector and
+    /// get one round of a permuted state back, with nothing failing loudly.
     ///
     /// It is a constant rather than a comment for the reason
     /// [`RETIRED_MOD_MUL_WITNESSED_MODULUS`] is:
@@ -1685,8 +1661,8 @@ pub mod ecall {
     pub const RETIRED_KECCAK_F_WHOLE_PERMUTATION: u32 = 0x0501;
 
     /// One `Fr` add, multiply or inverse over a 25-word frame, `a0` = the
-    /// frame base pointer, read and written in place. A **delegation** call
-    /// (S23); `constants::family::FR_ARITH` is the family that proves it and
+    /// frame base pointer, read and written in place. A **delegation** call;
+    /// `constants::family::FR_ARITH` is the family that proves it and
     /// `docs/spec/delegation-circuits.md` §4 the frame table.
     ///
     /// The operands cross the frame in `field::Fr`'s **in-memory**
@@ -1697,15 +1673,14 @@ pub mod ecall {
     /// path and the software fallback are the same function by construction.
     pub const PRECOMPILE_FR_ARITH: u32 = 0x0502;
 
-    /// **Retired and burned at S26b.** `0x0503` was S26's modular
+    /// **Retired, and never reassigned.** `0x0503` named a modular
     /// multiplication over a 32-word frame carrying a **witnessed** 256-bit
-    /// modulus. S26b specialized that family to four fixed moduli named by a
-    /// selector, which is a different 25-word frame with different semantics,
-    /// and append-only forbids giving a number a second meaning — an old
-    /// binary calling `0x0503` with a 32-word frame under the new executor
-    /// would read the modulus as a selector and compute something else, with
-    /// nothing failing loudly. So the specialized call took the next free
-    /// number and this one may never be issued or reassigned.
+    /// modulus. [`PRECOMPILE_MOD_MUL`] multiplies under one of four fixed
+    /// moduli named by a selector, a different 25-word frame with different
+    /// semantics. Were `0x0503` given that meaning, an old binary calling it
+    /// with a 32-word frame would have its modulus read as a selector and
+    /// compute something else, with nothing failing loudly. So this number is
+    /// never issued or reassigned.
     ///
     /// It is a constant rather than a comment for the reason [`EXIT`]'s number
     /// is: `crates/constants/tests/ecall_abi.rs` reads it, and a number in the
@@ -1713,9 +1688,9 @@ pub mod ecall {
     pub const RETIRED_MOD_MUL_WITNESSED_MODULUS: u32 = 0x0503;
 
     /// One **Ethereum field multiplication** over a 25-word frame, `a0` = the
-    /// frame base pointer, read and written in place. A **delegation** call
-    /// (S26, specialized at S26b); `constants::family::MOD_MUL` is the family
-    /// that proves it and `docs/spec/delegation-circuits.md` §5 the frame table.
+    /// frame base pointer, read and written in place. A **delegation** call;
+    /// `constants::family::MOD_MUL` is the family that proves it and
+    /// `docs/spec/delegation-circuits.md` §5 the frame table.
     ///
     /// Frame word 0 is the modulus selector, one of
     /// [`super::mod_mul::CODES`]; the two operands and the result follow it as
@@ -1728,20 +1703,20 @@ pub mod ecall {
     /// here and the EVM's opcode runs through the ordinary RV32 path.
     pub const PRECOMPILE_MOD_MUL: u32 = 0x0504;
 
-    /// **Retired and burned at S26e.** `0x0505` was S26c's SHA-256 over a
+    /// **Retired, and never reassigned.** `0x0505` named SHA-256 over a
     /// 96-byte frame holding the chaining state and one block: **one call, one
-    /// whole compression**. S26e made one call four rounds, which needs a
-    /// 100-byte frame whose word 0 is the round group — a different call with
-    /// different semantics, and an old binary issuing `0x0505` under the new
-    /// executor would have its first state word read as a group and get four
-    /// rounds of a shuffled state back, with nothing failing loudly. The
-    /// re-shaped call took [`PRECOMPILE_SHA256_COMP`] = `0x0508`.
+    /// whole compression**. [`PRECOMPILE_SHA256_COMP`] = `0x0508` is four
+    /// rounds over a 100-byte frame whose word 0 is the round group — a
+    /// different call with different semantics. Were `0x0505` given that
+    /// meaning, an old binary issuing it would have its first state word read
+    /// as a group and get four rounds of a shuffled state back, with nothing
+    /// failing loudly.
     pub const RETIRED_SHA256_COMP_WHOLE_COMPRESSION: u32 = 0x0505;
 
     /// **Four rounds** of SHA-256's compression over a 25-word frame, `a0` =
     /// the frame base pointer, read and written in place. A **delegation**
-    /// call (S26c, re-shaped at S26e); `constants::family::SHA256_COMP` is the
-    /// family that proves it and `docs/spec/delegation-circuits.md` §6 the frame table.
+    /// call; `constants::family::SHA256_COMP` is the family that proves it and
+    /// `docs/spec/delegation-circuits.md` §6 the frame table.
     ///
     /// Frame word 0 is the round group `r` in `0..16`, words 1..9 the working
     /// variables and words 9..25 the schedule window `W_{4r}..W_{4r+15}`. The
@@ -1757,8 +1732,8 @@ pub mod ecall {
 
     /// One **third of an elliptic-curve point addition** over a 97-word frame,
     /// `a0` = the frame base pointer, read and written in place. A
-    /// **delegation** call (S26c); `constants::family::EC_ADD` is the family
-    /// that proves it and `docs/spec/delegation-circuits.md` §7 the frame table.
+    /// **delegation** call; `constants::family::EC_ADD` is the family that
+    /// proves it and `docs/spec/delegation-circuits.md` §7 the frame table.
     ///
     /// Frame word 0 selects the curve **and** the group of three reductions
     /// this invocation performs, one of [`super::ec_add::CODES`]; the two
@@ -1772,7 +1747,7 @@ pub mod ecall {
 
     /// **One round** of keccak-f[1600] over a 51-word frame whose word 0 is
     /// the round and whose remaining 50 words are the 1,600-bit state, `a0` =
-    /// the frame base pointer, read and written in place. A **delegation** call (S21, re-shaped at S26d);
+    /// the frame base pointer, read and written in place. A **delegation** call;
     /// `constants::family::KECCAK_F` is the family that proves it and
     /// `docs/spec/delegation-circuits.md` §2 the frame table.
     ///
@@ -1780,45 +1755,44 @@ pub mod ecall {
     /// point addition is three `EC_ADD` calls: the frame is ordinary RAM, so
     /// the global memory multiset is what proves round `r`'s output is round
     /// `r + 1`'s input, and the guest's own proven loop is what supplies the
-    /// 24 round numbers. S21's whole-permutation call was
+    /// 24 round numbers. The retired whole-permutation call is
     /// [`RETIRED_KECCAK_F_WHOLE_PERMUTATION`].
     pub const PRECOMPILE_KECCAK_F: u32 = 0x0507;
 
-    /// One field operation over field cells (S-RECURSION): `a0` is a four-word
-    /// frame `[op, d, a, b]`, `crate::fr_op`'s layout.
+    /// One field operation over field cells: `a0` is a four-word frame
+    /// `[op, d, a, b]`, `crate::fr_op`'s layout.
     pub const PRECOMPILE_FR_OP: u32 = 0x0509;
 
-    /// One duplex step over field cells (S-RECURSION): `a0` is a five-word
-    /// frame `[n, s, x, y, d]`, `crate::p2_field`'s layout.
+    /// One duplex step over field cells: `a0` is a five-word frame
+    /// `[n, s, x, y, d]`, `crate::p2_field`'s layout.
     pub const PRECOMPILE_P2_FIELD: u32 = 0x050A;
 
-    /// One move between RAM and a field cell (S-RECURSION): `a0` is a
-    /// three-word frame `[op, cell, ptr]`, `crate::field_io`'s layout.
+    /// One move between RAM and a field cell: `a0` is a three-word frame
+    /// `[op, cell, ptr]`, `crate::field_io`'s layout.
     pub const PRECOMPILE_FIELD_IO: u32 = 0x050B;
 
-    /// One operation over BN254 base-field elements in field cells
-    /// (S-RECURSION): `a0` is a four-word frame `[op, d, a, b]`,
-    /// `crate::fq_op`'s layout.
+    /// One operation over BN254 base-field elements in field cells: `a0` is a
+    /// four-word frame `[op, d, a, b]`, `crate::fq_op`'s layout.
     pub const PRECOMPILE_FQ_OP: u32 = 0x050C;
 
     /// Linux `ENOSYS`. An unimplemented number returns `-ENOSYS` in `a0`.
     ///
-    /// It survives the deletion of the POSIX layer because it is not part of
-    /// it: it is the delegation ABI's "this executor has no circuit for that"
-    /// answer (`docs/spec/delegation.md` §2), which every shim checks for so a
-    /// caller can run its own software path. This VM implements all four
-    /// delegations, so its executor never answers `-ENOSYS` to one; what it
-    /// still answers `-ENOSYS` to is a number nobody has assigned.
+    /// It is also the delegation ABI's "this executor has no circuit for that"
+    /// answer (`docs/spec/delegation.md` §2), which a base-format shim checks
+    /// for so its caller can run its own software path. This VM implements
+    /// every delegation, so its executor never answers `-ENOSYS` to one; what
+    /// it answers `-ENOSYS` to is a number nobody has assigned, or a retired
+    /// one (`docs/spec/ecall-abi.md` §5).
     pub const ENOSYS: u32 = 38;
 }
 
-/// The memory argument's address spaces, frozen at S12.
+/// The memory argument's address spaces (`docs/spec/execution-trace.md` §2).
 ///
 /// A memory query names one of these, and the tag is the `AS` term of the
 /// compressed tuple `gamma_M + AS + alpha_addr*ADDR + ...`. The tags are
 /// nonzero on purpose: `(REG, x0, ts 0, value 0)` is a real initial tuple, and
 /// with `REG = 0` it would be the all-zero tuple — the same reason the decoded
-/// tables pad with `MINUS_ONE` rather than 0. Append-only.
+/// tables pad with `MINUS_ONE` rather than 0. A tag is never reassigned.
 pub mod address_space {
     /// The 32 registers. A query's address is the register index, `0..32`.
     pub const REG: u8 = 1;
@@ -1828,7 +1802,7 @@ pub mod address_space {
     /// The program counter: one address, `0`. Every cycle reads `pc` and
     /// writes `next_pc` here.
     pub const PC: u8 = 3;
-    /// The **delegation** anchor space of `family::KECCAK_F` (S21).
+    /// The **delegation** anchor space of `family::KECCAK_F`.
     ///
     /// Not memory: no guest instruction reaches it, no RAM window initializes
     /// it, and no chain runs through it. Its balance is a bijection — one
@@ -1838,59 +1812,57 @@ pub mod address_space {
     /// collide with a window family's init write, and a request with no
     /// invocation would balance.
     ///
-    /// **Each delegation family takes the next tag**, append-only. The tag
-    /// *is* the delegation type, which is why a keccak request cannot be
+    /// **Each delegation family has a tag of its own**, never reassigned. The
+    /// tag *is* the delegation type, which is why a keccak request cannot be
     /// answered by another type's invocation at the same frame base; the
     /// anchor's address is the frame base and carries no type of its own.
     ///
-    /// With more than one type the requesting row can no longer name its tag
-    /// with a literal, because one `deleg` frame query serves every type: the
-    /// tag rides the frame's `deleg_space` column instead, which the row's
-    /// type selectors pin (`docs/spec/delegation.md` §5.1).
+    /// The requesting row cannot name its tag with a literal, because one
+    /// `deleg` frame query serves every type: the tag rides the frame's
+    /// `deleg_space` column instead, which the row's type selectors pin
+    /// (`docs/spec/delegation.md` §5.1).
     pub const DELEGATION_KECCAK_F: u8 = 4;
 
-    /// The delegation anchor space of `family::POSEIDON2` (S23). As
+    /// The delegation anchor space of `family::POSEIDON2`. As
     /// [`DELEGATION_KECCAK_F`] in every respect but the type it names.
     pub const DELEGATION_POSEIDON2: u8 = 5;
 
-    /// The delegation anchor space of `family::FR_ARITH` (S23).
+    /// The delegation anchor space of `family::FR_ARITH`.
     pub const DELEGATION_FR_ARITH: u8 = 6;
 
-    /// The delegation anchor space of `family::MOD_MUL` (S26).
+    /// The delegation anchor space of `family::MOD_MUL`.
     pub const DELEGATION_MOD_MUL: u8 = 7;
 
-    /// The delegation anchor space of `family::SHA256_COMP` (S26c).
+    /// The delegation anchor space of `family::SHA256_COMP`.
     pub const DELEGATION_SHA256_COMP: u8 = 8;
 
-    /// The delegation anchor space of `family::EC_ADD` (S26c).
+    /// The delegation anchor space of `family::EC_ADD`.
     pub const DELEGATION_EC_ADD: u8 = 9;
 
-    /// The **field memory** (S-RECURSION): cells holding whole `Fr` elements,
+    /// The **field memory**: cells holding whole `Fr` elements,
     /// addressed by a `u32`. No instruction reaches it — a load or store names
     /// [`RAM`] — and only the recursion families' rows read and write it
     /// (`docs/spec/recursion.md` §2).
     pub const FIELD: u8 = 10;
 
-    /// The anchor space of `family::FR_OP` (S-RECURSION).
+    /// The anchor space of `family::FR_OP`.
     pub const DELEGATION_FR_OP: u8 = 11;
 
-    /// The anchor space of `family::P2_FIELD` (S-RECURSION).
+    /// The anchor space of `family::P2_FIELD`.
     pub const DELEGATION_P2_FIELD: u8 = 12;
 
-    /// The anchor space of `family::FIELD_IO` (S-RECURSION).
+    /// The anchor space of `family::FIELD_IO`.
     pub const DELEGATION_FIELD_IO: u8 = 13;
 
-    /// The anchor space of `family::FQ_OP` (S-RECURSION).
+    /// The anchor space of `family::FQ_OP`.
     pub const DELEGATION_FQ_OP: u8 = 14;
 
-    /// Every delegation tag, ascending, **append-only**: the one place the set
-    /// is written down, so a reader of a memory event can tell a delegation
-    /// anchor from RAM, a register or the pc without knowing which family it
-    /// belongs to.
+    /// Every delegation tag, ascending: the one place the set is written down,
+    /// so a reader of a memory event can tell a delegation anchor from RAM, a
+    /// register or the pc without knowing which family it belongs to.
     ///
-    /// `constraints::memory::frame_query_takes` and `trace::AddressSpace` both
-    /// read it; the `deleg` frame query takes an event in **any** of these
-    /// spaces, and nothing else does.
+    /// `constraints::memory::frame_query_takes` reads it: the `deleg` frame
+    /// query takes an event in **any** of these spaces, and nothing else does.
     pub const DELEGATION: [u8; 10] = [
         DELEGATION_KECCAK_F,
         DELEGATION_POSEIDON2,
@@ -1905,8 +1877,7 @@ pub mod address_space {
     ];
 }
 
-/// The memory argument's clock, frozen at S12 from the master's memory
-/// invariant, and the memory argument's own numbers, frozen at S14.
+/// The memory argument's clock and its own numbers.
 ///
 /// Cycle `c` occupies timestamps `TS_STEP * c + delta` for the four in-cycle
 /// slots `delta` in `0..TS_STEP`. Timestamp 0 is the initial write of every
@@ -1914,7 +1885,8 @@ pub mod address_space {
 /// would write at timestamp 0 and could not strictly follow the initial write
 /// it reads. Every timestamp is below `2^TS_BITS`.
 ///
-/// `docs/spec/memory.md` is normative for everything S14 added here.
+/// `docs/spec/execution-trace.md` §1 specifies the clock and
+/// `docs/spec/memory.md` the rest.
 pub mod memory {
     /// Timestamps per cycle, one per in-cycle slot.
     pub const TS_STEP: u64 = 4;
@@ -1950,13 +1922,13 @@ pub mod memory {
     pub const RAM_LIVE_BIT: u32 = 14;
 }
 
-/// The **delegation** ABI's numbers, frozen at S21. `docs/spec/delegation.md`
-/// is the ABI itself; this module is the one place its numbers live.
+/// The **delegation** ABI's numbers. `docs/spec/delegation.md` specifies the
+/// ABI itself; this module is the one place its numbers live.
 ///
 /// A delegation family is *invoked*, never decoded: it sets no family bit, it
 /// runs its own trace beside the CPU families, and a requesting cycle hands it
-/// a frame base pointer in `a0`. Every number here is append-only, for the
-/// same reason [`ecall`]'s are — a published identity's ABI is frozen, and
+/// a frame base pointer in `a0`. No number here is ever reassigned, for the
+/// same reason [`ecall`]'s are — a program's identity binds its ABI, and
 /// redefining a number quietly makes an old program compute something else.
 pub mod delegation {
     /// The in-cycle slot (`delta`) of every frame access an invocation makes:
@@ -1967,14 +1939,14 @@ pub mod delegation {
     /// the row's own register reads — and `(RAM, 0)` is a pair **no query of
     /// `constraints::memory`'s table has**, which is what lets the frame
     /// builder pass over an invocation's events instead of trying to file them
-    /// in the requesting family's frame. The narrow-frame panic beside that
-    /// rule is unchanged: a pair the table *does* have and no free slot takes
-    /// is still loud.
+    /// in the requesting family's frame. This does not weaken the narrow-frame
+    /// panic beside that rule: a pair the table *does* have and no free slot
+    /// takes fails loudly.
     pub const FRAME_DELTA: u64 = 0;
 
     /// The in-cycle slot of a request's mirror query and of the invocation's
-    /// answer tuple: **3**, which is `constraints::memory::FRAME_DELTA`'s
-    /// entry for the `deleg` query and must stay equal to it.
+    /// answer tuple: **3**, equal to `constraints::memory::FRAME_DELTA`'s
+    /// entry for the `deleg` query.
     ///
     /// The two sides of the anchor meet at this timestamp, which is what binds
     /// an invocation to its requesting cycle (`docs/spec/delegation.md` §5.3).
@@ -2000,14 +1972,13 @@ pub mod delegation {
     pub const MARKER_BYTES: usize = 12;
 
     /// **The delegation registry**: every delegation type, ascending by family
-    /// id, as `(family, ecall number, address-space tag, frame words)`.
-    /// Append-only, and the one place the four are tied together —
-    /// `program::DELEGATIONS` is this table, `constraints::add_sub` builds one
-    /// selector and one number gate per row of it, `constraints`' circuits
-    /// take their tag from it, and `emulator` dispatches on it.
+    /// id, as `(family, ecall number, address-space tag, frame words)`. A row
+    /// is never reassigned, and this is the one place the four are tied
+    /// together — `program::DELEGATIONS` is this table, `constraints::add_sub`
+    /// builds one request selector and three gates per row of it, and
+    /// `emulator` dispatches on it.
     ///
-    /// `docs/spec/delegation.md` §3 is the same table in prose, and
-    /// `crates/constants/tests/ecall_abi.rs` holds the two equal.
+    /// `docs/spec/delegation.md` §3 is the same table.
     pub const TYPES: [(u32, u32, u8, usize); 10] = [
         (
             super::family::KECCAK_F,
@@ -2071,11 +2042,11 @@ pub mod delegation {
         ),
     ];
 
-    /// The prefix of [`TYPES`] the **base format** knows (S-RECURSION,
-    /// `docs/spec/recursion.md` §1.2). Frozen: the base `ADD_SUB` circuit
-    /// carries one selector per row of `TYPES[..BASE_TYPES]` and no other, so
-    /// every base key keeps its bytes while the registry grows. A
-    /// recursion-format `ADD_SUB` carries every row.
+    /// The prefix of [`TYPES`] the **base format** knows
+    /// (`docs/spec/recursion.md` §1.2). The base `ADD_SUB` circuit carries one
+    /// selector per row of `TYPES[..BASE_TYPES]` and no other, so a base key's
+    /// bytes do not depend on the rows past it. A recursion-format `ADD_SUB`
+    /// carries every row.
     pub const BASE_TYPES: usize = 6;
 
     /// What a request of registry row `index` leaves in `a0`, its frame at
@@ -2092,13 +2063,13 @@ pub mod delegation {
     }
 }
 
-/// keccak-f[1600] and keccak256, frozen at S21.
+/// keccak-f[1600] and keccak256.
 ///
-/// The permutation's shape and its two constant tables. Four consumers read
-/// them and none of them defines its own: `constraints::keccak` builds the
-/// circuit, `emulator` executes the delegation ecall, `guest-sdk` runs the
-/// software fallback, and the test oracles check all three against
-/// `tiny-keccak`.
+/// The permutation's shape and its two constant tables. Every consumer reads
+/// them here and none defines its own: `constraints::keccak` builds the
+/// circuit, `prover`'s fill derives its intermediates, `emulator` executes the
+/// delegation ecall, `guest-sdk` runs the software fallback, and the test
+/// oracles check them against `tiny-keccak`.
 pub mod keccak {
     /// Lanes in the state: 5 by 5.
     pub const LANES: usize = 25;
@@ -2110,14 +2081,14 @@ pub mod keccak {
     pub const STATE_BYTES: usize = STATE_BITS / 8;
     /// 32-bit words the state occupies in the frame: 50. Lane `i = 5y + x`
     /// occupies state words `2i` and `2i + 1`, low half first
-    /// (`docs/spec/delegation.md` §4).
+    /// (`docs/spec/delegation-circuits.md` §2.1).
     pub const STATE_WORDS: usize = STATE_BYTES / 4;
     /// Rounds of the permutation.
     pub const ROUNDS: usize = 24;
 
     /// The frame's word 0: the round this invocation performs, in `0..ROUNDS`.
     ///
-    /// **A whole permutation is 24 invocations, not one** (S26d). One round is
+    /// **A whole permutation is 24 invocations, not one.** One round is
     /// one delegation row, the 24 rows of a permutation are glued by the frame
     /// being ordinary RAM, and the guest's own proven loop supplies the round.
     /// `docs/spec/delegation-circuits.md` §2.
@@ -2220,7 +2191,7 @@ pub mod keccak {
     ];
 }
 
-/// The **Poseidon2 delegation** family's shape, frozen at S23.
+/// The **Poseidon2 delegation** family's shape.
 ///
 /// The permutation itself is `transcript::poseidon2_permute` and its round
 /// constants are [`POSEIDON2_RC3_INITIAL`], [`POSEIDON2_RC3_INTERNAL`] and
@@ -2253,10 +2224,9 @@ pub mod poseidon2 {
     pub const SBOXES: usize = 3 * ROUNDS_FULL + ROUNDS_PARTIAL;
 }
 
-/// The **Fr-arithmetic delegation** family's shape, frozen at S23.
+/// The **Fr-arithmetic delegation** family's shape.
 ///
-/// One invocation is one operation, and one operation is one trace row: the
-/// contraction the recursion guest is sized against is `ops/row = 1`
+/// One invocation is one operation, and one operation is one trace row
 /// (`docs/spec/delegation-circuits.md` §4).
 ///
 /// The three operands cross the frame in `field::Fr`'s **in-memory**
@@ -2304,8 +2274,7 @@ pub mod fr_arith {
     pub const OPS: [u32; 3] = [OP_ADD, OP_MUL, OP_INV];
 }
 
-/// `FR_OP`'s frame and operation codes (S-RECURSION,
-/// `docs/spec/recursion.md` §3).
+/// `FR_OP`'s frame and operation codes (`docs/spec/recursion.md` §3).
 pub mod fr_op {
     /// The accesses a row makes besides its frame, in order: `a`, `b`, `d`.
     pub const ACCESSES: usize = 3;
@@ -2359,7 +2328,7 @@ pub mod fr_op {
     pub const DELTA_D: u64 = 2;
 }
 
-/// `P2_FIELD`'s frame (S-RECURSION, `docs/spec/recursion.md` §4).
+/// `P2_FIELD`'s frame (`docs/spec/recursion.md` §4).
 pub mod p2_field {
     /// The accesses a row makes besides its frame, in order: the state's three lanes, `x`, `y`, the next state's three.
     pub const ACCESSES: usize = 8;
@@ -2390,8 +2359,7 @@ pub mod p2_field {
     pub const DELTA_NEXT: u64 = 3;
 }
 
-/// `FIELD_IO`'s frame and operation codes (S-RECURSION,
-/// `docs/spec/recursion.md` §5).
+/// `FIELD_IO`'s frame and operation codes (`docs/spec/recursion.md` §5).
 pub mod field_io {
     /// The accesses a row makes besides its frame, in order: the eight data words, then the cell.
     pub const ACCESSES: usize = 9;
@@ -2423,8 +2391,7 @@ pub mod field_io {
     pub const CELL_DELTA: u64 = 0;
 }
 
-/// `FQ_OP`'s frame, codes and element layout (S-RECURSION,
-/// `docs/spec/recursion.md` §6).
+/// `FQ_OP`'s frame, codes and element layout (`docs/spec/recursion.md` §6).
 ///
 /// An **element** of BN254's base field is four consecutive field cells
 /// holding 64-bit limbs, `Σ_i v_i·2^{64i} < 2^256`, congruent to the element
@@ -2508,28 +2475,13 @@ pub mod fq_op {
     pub const DELTA_D: u64 = 3;
 }
 
-/// The Ethereum field-multiplication delegation's frame, its four moduli and
-/// its bounds. Frozen at S26, **specialized at S26b**.
-/// `docs/spec/delegation-circuits.md` §5.
+/// SHA-256's compression function.
 ///
-/// **One operation, and the modulus is a selector.** The family computes
-/// `out = a * b mod m` and nothing else, over one of **four fixed moduli** a
-/// frame word names: the two secp256k1 fields and the two BN254 fields, which
-/// between them are every 256-bit field Ethereum block execution multiplies
-/// in. S26 carried the modulus in the frame as a witnessed 256-bit operand;
-/// S26b removed that, because a runtime modulus bought generality nothing
-/// asked for — no caller ever passed one this table does not hold — and cost
-/// eight frame words, 256 witness bits and the ability to state `a < m` at
-/// all. `docs/handoff/S26b-eth-field-mul.md` is the account.
-///
-/// **This is not `MULMOD`.** The EVM's opcode takes an arbitrary modulus and
-/// runs through the ordinary RV32 path; nothing here serves it.
-/// SHA-256's compression function, frozen at S26c and re-shaped at S26e.
-///
-/// The frame's shape and the algorithm's two constant tables. Three consumers
-/// read them and none restates them: `constraints::sha256` builds the circuit,
-/// `emulator` executes the frame, and `guest_sdk` runs the padding, the block
-/// loop and the sixteen calls a compression takes.
+/// The frame's shape and the algorithm's two constant tables. Every consumer
+/// reads them here and none restates them: `constraints::sha256` builds the
+/// circuit, `prover`'s fill derives its witness, `emulator` executes the
+/// frame, and `guest_sdk` runs the padding, the block loop and the sixteen
+/// calls a compression takes.
 ///
 /// **One call is four rounds**, and a compression is [`GROUPS`] calls on one
 /// frame: call `r` runs rounds `4r..4r + 4` with the window's first four words
@@ -2666,7 +2618,7 @@ pub mod sha256 {
     ];
 }
 
-/// The elliptic-curve point addition, frozen at S26c.
+/// The elliptic-curve point addition.
 ///
 /// One **complete** addition in homogeneous projective coordinates, by
 /// Renes-Costello-Batina 2015 Algorithm 7 for `a = 0` — the formula
@@ -2676,11 +2628,11 @@ pub mod sha256 {
 /// guest branches on nothing and the circuit has no degenerate row.
 ///
 /// **Three invocations make one addition**, and the frame is the scratch they
-/// pass intermediates through (`docs/spec/delegation-circuits.md` §7). The alternative
-/// — nine reductions on one row — is 19,316 committed columns and 28.9 GiB of
-/// peak a shard; three rows of three reductions is a computed 20.5 GB a shard at
-/// `2^16` — above an execution shard's ~11 GB, and second now only to
-/// `KECCAK_F`'s ~60 GB at the `2^18` S26d's reshape let it take.
+/// pass intermediates through (`docs/spec/delegation-circuits.md` §7). The
+/// alternative — nine reductions on one row — is 19,316 committed columns and
+/// 28.9 GiB of peak a shard; three rows of three reductions is a computed
+/// 20.5 GB a shard at `2^16` — above an execution shard's ~11 GB, and second
+/// only to `KECCAK_F`'s ~60 GB at `2^18`.
 pub mod ec_add {
     /// Limbs in a coordinate: eight 32-bit little-endian words.
     pub const LIMBS: usize = 8;
@@ -2772,8 +2724,8 @@ pub mod ec_add {
     /// names.
     ///
     /// A `const fn` and a search rather than `code - 1`, so the table stays the
-    /// one authority on which codes exist: a later curve appended out of order
-    /// must not silently become a different group.
+    /// one authority on which codes exist: a curve appended out of order
+    /// cannot silently become a different group.
     pub const fn code_index(code: u32) -> Option<usize> {
         let mut i = 0;
         while i < CODES.len() {
@@ -2876,31 +2828,27 @@ pub mod ec_add {
     /// `256*m` without going degree 3, `m` being a column rather than a
     /// literal.
     ///
-    /// **1024 and not 256, and the difference is a soundness-adjacent
-    /// completeness bug S26c shipped and caught.** The binding slot is group
-    /// 2's `Y3`, not its `X3`: `yp*ym + bxx9*xz` with `yp` up to `22m`, `ym`
-    /// down to `-21m`, `bxx9` up to `63m` and `xz` down to `-2m` reaches
-    /// **`-673 m^2`** — the operand ceilings' products, `22*22 + 63*3`. At an
-    /// offset of 256 the honest quotient of such a row is *negative* and the row
-    /// is unprovable, and the frames that do it are ordinary: `zz` above about
-    /// `0.76m` is enough on its own, which is roughly a quarter of random
-    /// invocations. Nothing in the executor or the emulator can see it — both
-    /// compute the right answer — so what found it is
-    /// `crates/checker/tests/ec_add.rs`' widest honest row, and what keeps it
-    /// found is `constraints::ec_add`'s `the_offset_covers_every_slot`, which
-    /// derives this floor from the same ceiling table the carry bound uses.
+    /// **1024 and not 256, and the difference is completeness.** The binding
+    /// slot is group 2's `Y3`, not its `X3`: `yp*ym + bxx9*xz` with `yp` up to
+    /// `22m`, `ym` down to `-21m`, `bxx9` up to `63m` and `xz` down to `-2m`
+    /// reaches **`-673 m^2`** — the operand ceilings' products,
+    /// `22*22 + 63*3`. At an offset of 256 the honest quotient of such a row
+    /// is *negative* and the row is unprovable, and the frames that do it are
+    /// ordinary: `zz` above about `0.76m` is enough on its own, which is
+    /// roughly a quarter of random invocations. Nothing in the executor or the
+    /// emulator can see it — both compute the right answer — so what checks it
+    /// is `crates/checker/tests/ec_add.rs`' widest honest row, and
+    /// `constraints::ec_add`'s `the_offset_covers_every_slot`, which derives
+    /// this floor from the same ceiling table the carry bound uses.
     pub const OFFSET_MULTIPLE: u64 = 1024;
 
     /// A signed carry's offset, as a bit position: the carry spans
     /// `[-2^46, 2^46)`, so `u = c + 2^46` spans `[0, 2^46)`.
     ///
-    /// **Derived, and the derivation moved it twice.** The widest position is
-    /// group 2's `Y3`, whose left-hand side is `yp*ym + bxx9*xz` at
-    /// `22*22 + 63*3` multiples of `m^2` plus [`OFFSET_MULTIPLE`] more — 1,697
-    /// of them since that constant rose to 1024 — so a position reaches `2^78`
-    /// and the carry's fixed point `2^46`. It read 44 when the offset was
-    /// guessed, 45 when the positions were derived, and 46 once the offset had
-    /// to cover `-673 m^2`. `constraints::ec_add`'s
+    /// **Derived.** The widest position is group 2's `Y3`, whose left-hand
+    /// side is `yp*ym + bxx9*xz` at `22*22 + 63*3` multiples of `m^2` plus
+    /// [`OFFSET_MULTIPLE`] more — 1,697 of them — so a position reaches `2^78`
+    /// and the carry's fixed point `2^46`. `constraints::ec_add`'s
     /// `the_carry_offset_covers_every_slot` recomputes it from the operand
     /// ceilings rather than trusting this paragraph.
     pub const CARRY_OFFSET_BITS: u32 = 46;
@@ -2910,6 +2858,19 @@ pub mod ec_add {
     pub const CARRY_BITS: u32 = CARRY_OFFSET_BITS + 1;
 }
 
+/// The Ethereum field-multiplication delegation's frame, its four moduli and
+/// its bounds. `docs/spec/delegation-circuits.md` §5.
+///
+/// **One operation, and the modulus is a selector.** The family computes
+/// `out = a * b mod m` and nothing else, over one of **four fixed moduli** a
+/// frame word names: the two secp256k1 fields and the two BN254 fields, which
+/// between them are every 256-bit field Ethereum block execution multiplies
+/// in. A fixed modulus is what lets the circuit state `a < m` at all; a
+/// modulus carried in the frame as a witnessed operand would cost eight frame
+/// words and that statement.
+///
+/// **This is not `MULMOD`.** The EVM's opcode takes an arbitrary modulus and
+/// runs through the ordinary RV32 path; nothing here serves it.
 pub mod mod_mul {
     /// Limbs per 256-bit value: eight 32-bit words, little-endian.
     pub const LIMBS: usize = 8;
@@ -3089,7 +3050,8 @@ pub mod mod_mul {
     /// whose outgoing carry the identity forces to zero.
     pub const CARRIES: usize = POSITIONS - 1;
 
-    /// Bits a signed carry takes, offset included.
+    /// The width of a carry's committed value: a signed carry `c` is committed
+    /// as `c + CARRY_OFFSET`, range-checked into `[0, 2^CARRY_BITS)`.
     ///
     /// **Derived, not chosen.** At position `k` the identity is
     /// `P_k - S_k - out_k + c_{k-1} = 2^32 * c_k`, where `P_k` and `S_k` are
@@ -3097,14 +3059,13 @@ pub mod mod_mul {
     /// `8 * 2^64 = 2^67` — and `out_k` is under `2^32`. Writing `C` for the
     /// bound on `|c|`, the recurrence is
     /// `C = (2^67 + 2^32 + C) / 2^32`, whose fixed point is just above `2^35`.
-    /// [`CARRY_OFFSET`] is `2^36` and a carry is written as
-    /// `sum of bits - CARRY_OFFSET`, so the bits span `[-2^36, 2^36)` — a full
-    /// factor of two of room over the bound.
+    /// [`CARRY_OFFSET`] is `2^36`, so the committed values span
+    /// `c ∈ [-2^36, 2^36)` — a full factor of two of room over the bound.
     ///
     /// **The selector does not tighten it.** Every limb of `m`, `a`, `b` and
-    /// `q` is still bounded only by `2^32`, which is what this arithmetic
-    /// reads; fixing the modulus changes no term of it.
+    /// `q` is bounded only by `2^32`, which is what this arithmetic reads;
+    /// fixing the modulus changes no term of it.
     pub const CARRY_BITS: usize = 37;
-    /// The offset a carry's bit decomposition carries: `2^36`.
+    /// The offset a carry is committed with: `2^36`.
     pub const CARRY_OFFSET: u64 = 1 << (CARRY_BITS - 1);
 }

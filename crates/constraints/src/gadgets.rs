@@ -1,12 +1,13 @@
-//! The two gadgets S17 froze for every later family: the witnessed-inverse
+//! The two gadgets the execution families share: the witnessed-inverse
 //! **is-zero** test, and the **comparison** that settles signed and unsigned
-//! ordering in one degree-2 equation. `docs/spec/jump-branch-slt.md` §3 is
-//! normative.
+//! ordering in one degree-2 equation. `docs/spec/jump-branch-slt.md` §3
+//! specifies both.
 //!
 //! Both return gates and lookups as data, and a family's circuit puts them in
-//! its `memory::FamilySpec`. S14's x0 rule is built on [`is_zero`]; S17's
-//! jump/branch/slt family is the first to use both; S18 takes them for its
-//! magnitude comparisons and its `rem ≠ 0` test, and S19 for `amomin`/`amomax`.
+//! its `memory::FamilySpec`. The x0 rule is built on [`is_zero`]; the
+//! jump/branch/slt family uses both, `MUL_DIV` uses [`is_zero`] for its
+//! `r = 0` and zero-divisor tests, and `ATOMICS` the comparison for
+//! `amomin`/`amomax`.
 
 use alloc::format;
 use alloc::string::String;
@@ -24,11 +25,11 @@ fn lit(v: u64) -> Coeff {
 
 /// A sign lookup's key is `hi + SIGN_BASE + 1` for a halfword `hi`, which is
 /// above every AND key only because `U16GetSign`'s base is past the AND
-/// table's 256 keys, and below every `ShiftPowers` key only because S18's base
-/// is past `U16GetSign`'s `2^16` (`docs/spec/lookup.md` §9). A caller must
-/// still bound the key it looks up: the ranges being disjoint is what makes an
-/// *in-range* key unambiguous, not what keeps an out-of-range one out
-/// (`docs/spec/shift-bitwise.md` §3.3).
+/// table's 256 keys, and below every `ShiftPowers` key only because that
+/// table's base is past `U16GetSign`'s `2^16` (`docs/spec/lookup.md` §9). A
+/// caller must still bound the key it looks up: the ranges being disjoint is
+/// what makes an *in-range* key unambiguous, not what keeps an out-of-range
+/// one out (`docs/spec/shift-bitwise.md` §3.3).
 const _: () = assert!(generic_table::SIGN_BASE >= generic_table::AND_BASE + 256);
 const _: () = assert!(generic_table::SHIFT_BASE >= generic_table::SIGN_BASE + (1 << 16));
 
@@ -46,7 +47,7 @@ const _: () = assert!(generic_table::SHIFT_BASE >= generic_table::SIGN_BASE + (1
 /// boolean with no gate of its own, and a row whose `enable` is 0 has
 /// `z = 0`, which keeps the all-zero row valid. Both gates are degree 2.
 ///
-/// S14's x0 rule is this over `x = addr`, enabled by the `rd` query's mask, so
+/// The x0 rule is this over `x = addr`, enabled by the `rd` query's mask, so
 /// its bytes are the frame fixtures' (`docs/spec/memory.md` §2.4).
 pub fn is_zero(
     x: &[(Coeff, PolyAddress)],
@@ -113,7 +114,8 @@ pub struct Comparison {
 ///
 /// [`comparison`] builds it at 32 bits, which is the only width a proof uses.
 /// The width is a parameter so that the exhaustive reduced-width check
-/// (S17 acceptance 2) evaluates this gate and not a transcription of it.
+/// (`crates/checker/tests/jump_branch_slt.rs`) evaluates this gate and not a
+/// transcription of it.
 ///
 /// Panics unless `word_bits` is between 1 and 32.
 pub fn comparison_equation(c: &Comparison, word_bits: u32) -> GateDef {

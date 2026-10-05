@@ -1,7 +1,7 @@
 //! The `FR_OP` family's circuit: one field operation a row over cells of the
 //! field memory, invoked by `ecall::PRECOMPILE_FR_OP` and never decoded.
 //!
-//! `docs/spec/recursion.md` §3 is normative.
+//! `docs/spec/recursion.md` §3 specifies it.
 //!
 //! ```text
 //! frame     M[0..20]   cycle live base anchor_value, then 4 per word of [op, d, a, b]

@@ -3,11 +3,11 @@
 //! validates and keeps the construction-time rules at two heights, their
 //! layouts, obligations and read sets are the document's, the committed
 //! fixtures are the constructors' bytes, and `check_memory` refuses each thing
-//! §8 names. S14 acceptance 9 is here; acceptance 12's negative control is the
-//! unit test in `src/memory.rs`, which reaches the private construction.
+//! §8 names. The dropped-obligation negative control is the unit test in
+//! `src/memory.rs`, which reaches the private construction.
 //!
 //! A family's frame holds only the queries its instructions can make (§2.1), so
-//! nothing below is written against the eight of the query table: every
+//! nothing below is written against the seven of the query table: every
 //! expectation is derived from that family's list. **A query's address space
 //! and its in-cycle slot Δ come from its id in the query table; its columns,
 //! its gap chunk and its leaves come from its position — its *slot* — in the
@@ -274,7 +274,7 @@ fn every_artifact_has_two_named_roots_and_an_all_zero_padding_row() {
     }
 }
 
-/// §1's part order, S14 must-be-exact 1: every query of the table has a read
+/// §1's part order: every query of the table has a read
 /// tuple with one term per part, and its term `PART_*` is that part —
 /// `(AS, mask)`, `(α_addr, addr)`, `(α_ts, read_ts)`, `(α_val, read_value)` —
 /// with constant `γ_M`. `gkr_verify::boundary_factors` places its operand
@@ -329,8 +329,8 @@ fn the_read_tuples_parts_are_at_their_named_positions() {
     }
 }
 
-/// The query table itself, §2.1: nine entries, their names, address spaces and
-/// Δ, the five read-only queries, `rd` and then S21's `deleg` last, and `M[0]`
+/// The query table itself, §2.1: seven entries, their names, address spaces
+/// and Δ, the three read-only queries, `rd` and then `deleg` last, and `M[0]`
 /// the cycle. These are indexed by a query's *id*, never by its slot in a
 /// family.
 ///
@@ -338,10 +338,6 @@ fn the_read_tuples_parts_are_at_their_named_positions() {
 /// (`docs/spec/delegation.md` §5.1): the last role, at slot 3 like `ram` and
 /// `rd`, in the delegation family's own address space, and read-write — the
 /// value it writes back is not the value it read.
-///
-/// The table was nine until the POSIX layer was deleted. `arg1` and `arg2`
-/// were an ecall row's `a1` and `a2`, which only `read` and `write` ever
-/// passed, so both became unreachable with those calls.
 #[test]
 fn the_query_table_is_the_documents() {
     assert_eq!(FRAME_QUERIES, 7);
@@ -376,7 +372,7 @@ fn the_query_table_is_the_documents() {
 /// addresses are the slot's, `M[1 + 5s + f]` and `W[s]`, with the x0 gadget's
 /// three witness columns after the family's `w` gap chunks.
 ///
-/// Fails if a family's frame kept the table's eight queries, if a query's
+/// Fails if a family's frame kept the table's seven queries, if a query's
 /// columns were placed by its id rather than its slot, if a write-back gate
 /// were emitted for a query the family does not hold, or if the pads were
 /// dropped or misordered.
@@ -492,9 +488,7 @@ fn the_pad_leaves_are_the_constant_one_and_read_nothing() {
         constant: Coeff::Literal(Fr::ONE),
     };
     for (id, pads) in [
-        // The add/sub frame was eight queries — a power of two, so no pad at
-        // all — from S21 until the POSIX layer went. Losing `arg1`, `arg2`
-        // and `ram` left it at five, so it now pays three a side like
+        // The add/sub frame is five queries, so it pays three a side like
         // `ATOMICS`.
         (family::ADD_SUB_LUI_AUIPC, 3),
         (family::MEM_WORD, 2),
@@ -701,14 +695,14 @@ fn the_frame_carries_two_gap_obligations_per_query() {
     );
 }
 
-/// S14 acceptance 11, exhaustively at reduced width: §2.4's gap encoding with
+/// Exhaustively at reduced width: §2.4's gap encoding with
 /// `w = 5`-bit chunks over a 10-bit clock. The two obligations say
 /// `hi ∈ [0, 2^w)` and `lo = gap − 2^w·hi ∈ [0, 2^w)`, `lo` a field element, so
 /// a pair is admitted exactly when `gap`, computed in `Fr`, is one of the
 /// `2^{2w}` field elements `lo + 2^w·hi` — which are distinct. The gap is the
 /// library's: each slot's `gap_lo_<q>` from that family's frame, evaluated with
 /// its high chunk `W[s]` at 0, at `cycle` and `read_ts`. Over the four distinct
-/// frames — which between them place all eight queries of the table, asserted
+/// frames — which between them place all seven queries of the table, asserted
 /// below — every cycle in `[0, 2^8)`, so `ts = 4·cycle + Δ` meets every value
 /// of the 10-bit clock across the four `Δ`, and every `read_ts` in `[0, 2^10)`,
 /// where `read_ts ≥ ts` wraps the gap to `p − (read_ts − ts + 1)`, a pair is
@@ -883,8 +877,8 @@ fn swap(gate: &GateDef, from: PolyAddress, to: PolyAddress) -> GateDef {
     }
 }
 
-/// S14 acceptance 9, on the widest frame — `ADD_SUB_LUI_AUIPC`, whose gate
-/// list 0 also carries a constant-1 pad leaf a side: the `rs1` read leaf's
+/// The provenance rule, on the `ADD_SUB_LUI_AUIPC` frame, whose gate list 0
+/// also carries three constant-1 pad leaves a side: the `rs1` read leaf's
 /// address, slot 1's `M[7]`, fed from `W[0]` instead, in its gate and its
 /// relation alike. The artifact is still a lawful circuit — `validate` accepts
 /// it — and `check_memory` refuses it by provenance, naming the leaf.
@@ -1230,8 +1224,8 @@ fn a_frame_missing_a_booleanity_gate_is_refused() {
                 e.relation -= (e.relation > r) as u32;
             }
         }
-        // Two independent rules bite, and each names its own subject. Since
-        // S15 a mask is also the selector of that query's gap obligations, and
+        // Two independent rules bite, and each names its own subject. A mask
+        // is also the selector of that query's gap obligations, and
         // `validate` refuses a selector gate list 0 does not hold to
         // booleanity (`docs/spec/lookup.md` §2).
         assert_eq!(

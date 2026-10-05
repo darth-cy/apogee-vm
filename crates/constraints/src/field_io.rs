@@ -1,7 +1,7 @@
 //! The `FIELD_IO` family's circuit: one move a row between eight RAM words and
 //! a field cell, invoked by `ecall::PRECOMPILE_FIELD_IO` and never decoded.
 //!
-//! `docs/spec/recursion.md` §5 is normative.
+//! `docs/spec/recursion.md` §5 specifies it.
 //!
 //! ```text
 //! frame     M[0..16]   cycle live base anchor_value, then 4 per word of [op, cell, ptr]

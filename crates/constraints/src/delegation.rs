@@ -1,4 +1,4 @@
-//! The delegation frame, shared by S23's two circuits.
+//! The delegation frame, shared by every delegation and recursion circuit.
 //!
 //! Every delegation family proves the same thing about its frame, and
 //! `docs/spec/delegation.md` §4 and §5 say it once: the `2^n` rows are
@@ -7,17 +7,7 @@
 //! address space that pair the invocation with exactly one request. This
 //! module is that paragraph as data — the memory columns, the leaves, the
 //! bounds and the layered-artifact builder — so a family's own file holds only
-//! the function it delegates.
-//!
-//! **`keccak` keeps its own copy.** S21's circuit is frozen, its artifact is
-//! 100 MB and its fixture is a digest; rewriting it to call this module would
-//! put a frozen artifact's bytes at risk for tidiness, which is a trade the
-//! master's "build conservatively" refuses. What is here was written from it,
-//! and what holds the two spellings from drifting is that each is exercised by
-//! its own family's row suite against the same rules — `crates/checker/tests/
-//! keccak.rs` for S21's copy and `tests/{poseidon2,fr_arith,sha256}.rs` for this
-//! module's, all four of them running `check_laws`, `check_padding` and
-//! `check_memory` over an artifact and an honest witness over its frame.
+//! the function it delegates (`docs/spec/delegation-circuits.md` §1).
 //!
 //! # The committed layout every delegation family shares
 //!
@@ -27,9 +17,15 @@
 //! M[2]              base           the frame base pointer
 //! M[3]              anchor_value   the teardown's value, free on both sides
 //! M[4 + 4j + f]     frame word j:  addr, read_ts, read_value, write_value
+//!
+//! bit form, at 2^8 (POSEIDON2, FR_ARITH):
 //! W[38j + i]        frame word j's 38 timestamp-gap bits
 //! W[38·words + ..]  base_low (29 bits), then base_room (31 bits)
 //! W[frame_witness(words) + ..]   the family's own
+//!
+//! chunk form, at 2^16 and above (every other family), over RANGE16:
+//! W[2j + c]         frame word j's two timestamp-gap chunks
+//! W[2·words + ..]   base_low, base_low_hi, base_room, base_room_hi
 //! ```
 
 use alloc::format;
@@ -50,7 +46,6 @@ use crate::{
 // land on a `(space, Δ)` pair no frame query of the table holds, or the frame
 // builder would file them into the requesting row. Both are `const` assertions
 // rather than tests because a violation is a broken ABI, not a failing case.
-// `crates/constraints/src/keccak.rs` carries the same two.
 const _: () = assert!(
     constants::delegation::ANCHOR_DELTA == crate::memory::FRAME_DELTA[crate::memory::DELEG]
 );
@@ -122,8 +117,9 @@ pub fn memory_names(words: usize) -> Vec<String> {
     out
 }
 
-/// Bits in a timestamp gap: the whole clock, because a delegation family has
-/// no lookup channel to range-check into (`docs/spec/delegation.md` §9).
+/// Bits in a timestamp gap in the bit form: the whole clock, because at `2^8`
+/// no lookup channel's table fits to range-check into
+/// (`docs/spec/delegation-circuits.md` §1).
 pub const GAP_BITS: usize = mem::TS_BITS as usize;
 /// Bits in `(base − RAM_ORIGIN) / 4`, which is below `2^31 / 4`.
 pub const BASE_LOW_BITS: usize = 29;
@@ -254,7 +250,7 @@ pub(crate) fn leaf(
 /// [`leaf`] under its own `mask` and at `addr + offset`:
 /// `mask·T(space, addr + offset, ts, value) + 1 − mask`.
 ///
-/// A field query is the reason for both (`docs/spec/recursion.md` §1): a
+/// A field query is the reason for both (`docs/spec/recursion.md` §2.1): a
 /// recursion row's queries switch on and off with its operation, so each
 /// carries a mask of its own, and `P2_FIELD`'s three lanes sit at one base cell
 /// plus 0, 1 and 2. At `LIVE` and offset 0 this is [`leaf`] term for term.
@@ -686,14 +682,13 @@ pub(crate) fn canonical_gates(
 // Range checks through the RANGE16 channel
 // ---------------------------------------------------------------------------
 //
-// `docs/spec/delegation.md` §9 forbade a delegation family a lookup channel
-// until §10.3 amended it. Three families take the channel now — `EC_ADD`, whose
-// row is otherwise 3,746 columns of gap bits, `MOD_MUL`, whose row falls
-// from 3,468 committed columns to about 325, and `KECCAK_F`, whose frame gaps
-// take it in chunks since S26d — and the three helpers below are what they
-// share. `POSEIDON2`, `FR_ARITH` and `SHA256_COMP` stay on bit decompositions:
-// they live at `2^8`, where no channel's table fits at any price
-// (`docs/spec/lookup.md` §3).
+// Every delegation family at `2^16` or above bounds through `RANGE16` —
+// `EC_ADD`, whose row would otherwise be 3,746 columns of gap bits, `MOD_MUL`,
+// whose row is about 325 committed columns rather than 3,468, `KECCAK_F` and
+// `SHA256_COMP`, and the recursion families — and the helpers below are what
+// they share (`docs/spec/delegation.md` §9). `POSEIDON2` and `FR_ARITH` stay
+// on bit decompositions: they live at `2^8`, where no channel's table fits at
+// any price (`docs/spec/lookup.md` §3).
 
 /// Bits a `RANGE16` chunk holds.
 pub(crate) const CHUNK_BITS: u32 = 16;
@@ -753,8 +748,8 @@ pub(crate) fn bound32(
 /// `Fr`, so an unbounded `x` sweeps a coset of which almost no member is a
 /// small integer, and the range check sees nothing wrong. It is the top
 /// chunk's own direct obligation that establishes the premise, which is why
-/// `lookup::check_copowers` requires the pair under the **same** selector — the
-/// S18 fix, and the reason every caller here passes one selector to both.
+/// `lookup::check_copowers` requires the pair under the **same** selector, and
+/// why every caller here passes one selector to both.
 pub(crate) fn bound_chunked(
     name: &str,
     x: Vec<(Coeff, PolyAddress)>,
@@ -803,9 +798,9 @@ pub(crate) fn bound_chunked(
 /// Chunks a 38-bit timestamp gap takes over `RANGE16`: two committed, the low
 /// one derived.
 ///
-/// `TIMESTAMP` would be the natural channel and it does not fit — its table
-/// needs 19 variables and a delegation family that carries a channel at all is
-/// at `2^16` or `2^18`, where 19 variables need `2^20`, an execution family's
+/// `TIMESTAMP` would be the natural channel and it does not fit a base
+/// delegation family — its table needs 19 variables, and those families sit at
+/// `2^16` or `2^18`, where 19 variables need `2^20`, an execution family's
 /// floor (`docs/spec/delegation.md` §9).
 pub const GAP_CHUNKS: usize = 2;
 
@@ -814,8 +809,8 @@ pub const GAP_CHUNKS: usize = 2;
 /// Three differences from [`frame_gates`], and no others: the timestamp gap is
 /// four obligations rather than 38 booleans, and the base's two decompositions
 /// are one committed value plus one chunk each rather than 29 and 31 booleans.
-/// [`frame_gates`] itself is untouched, so the four bit-decomposing families'
-/// artifacts do not move.
+/// [`frame_gates`] is the bit form, which `POSEIDON2` and `FR_ARITH` take at
+/// `2^8`.
 ///
 /// The caller supplies the witness addresses, because their position in the
 /// witness subtree is the family's business: `base_low` is the aligned
@@ -855,9 +850,10 @@ pub(crate) fn frame_gates_range16(
     out
 }
 
-/// The `W` prefix a **read-only** `RANGE16` frame takes, `docs/spec/recursion.md`
-/// §3-§5's three families: two gap chunks a word at `W[2j + c]`, then
-/// `base_low`, its halfword, `base_room`, its halfword — `MOD_MUL`'s layout.
+/// The `W` prefix a **read-only** `RANGE16` frame takes, the four recursion
+/// families' (`docs/spec/recursion.md` §3 to §6): two gap chunks a word at
+/// `W[2j + c]`, then `base_low`, its halfword, `base_room`, its halfword —
+/// `MOD_MUL`'s layout.
 pub(crate) const fn frame_witness_range16(words: usize) -> u32 {
     (GAP_CHUNKS * words + 4) as u32
 }
@@ -966,8 +962,8 @@ pub(crate) fn gap_lookups_range16(
 /// its own — it builds trees and nothing else — and its `push_list` maps an
 /// inner address to its scratch slot by searching every slot pushed so far.
 /// Here the slot is arithmetic: the slots of a layer are contiguous and in
-/// order, so `base[k] + j` is `L{k}[j]`'s. Written from
-/// `crates/constraints/src/keccak.rs`'s.
+/// order, so `base[k] + j` is `L{k}[j]`'s. `POSEIDON2` builds its rounds with
+/// it.
 pub(crate) struct Assembly {
     pub(crate) layers: Vec<LayerSpec>,
     pub(crate) relations: Vec<Relation>,

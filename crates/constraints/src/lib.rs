@@ -4,7 +4,7 @@
 //! `CircuitArtifact` that holds a whole circuit twice — as a flat constraint
 //! list and as layered gates — with the laws that tie the two together.
 //!
-//! `docs/spec/gkr.md` is normative; §1–§4 are this crate. Nothing here
+//! `docs/spec/gkr.md` specifies it; §1–§4 are this crate. Nothing here
 //! evaluates a gate: the kernel, which is the semantic authority, is
 //! `gkr-verify`'s. What lives here is the formula *representation*, the
 //! construction-time checks, and the wire form.
@@ -48,8 +48,8 @@ mod wire;
 pub use laws::ConstraintError;
 
 /// The artifact format this crate reads and writes. The first word of every
-/// artifact. 1 since S14, whose lookup element carries a selector; a reader
-/// refuses every other version before it decodes anything after it.
+/// artifact. 1, whose lookup element carries a selector; a reader refuses
+/// every other version before it decodes anything after it.
 pub const FORMAT_VERSION: u32 = 1;
 
 /// The one coefficient encoding: every `Fr` is its canonical 32-byte
@@ -69,7 +69,7 @@ pub const MAX_TRACE_VARS: u32 = 30;
 /// A family's circuit as a verifying key conveys it: the artifact **and** the
 /// channel specs that say which output pair is whose root, which columns are a
 /// table and which column counts it — none of which an artifact records
-/// (`docs/spec/lookup.md` §12). `docs/spec/proof.md` §7.
+/// (`docs/spec/lookup.md` §11). `docs/spec/proof.md` §7.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FamilyCircuit {
     pub family: u32,
@@ -90,33 +90,28 @@ impl FamilyCircuit {
 }
 
 /// The circuit that proves `family` over `2^trace_vars` rows, or `None` for a
-/// family no stage has built yet, or a height it cannot be built at.
+/// family this registry holds no circuit for — the recursion families, which
+/// only [`recursion_circuit`] holds — or a height it cannot be built at.
 ///
 /// **The one registry of circuits**, `docs/spec/circuits.md` §1: a
 /// verifying key's circuits must be byte for byte what this returns, and a
-/// later family is added here, with one constructor, and nowhere in the
-/// verifier.
+/// family is added here, with one constructor, and nowhere in the verifier.
 ///
 /// **The minimum height is derived from the family's own channels, not from a
 /// list.** A range channel's table is the closed form over `BITS[channel]`
 /// variables, so `lookup::channel_trees` asserts `BITS <= trace_vars` — and
 /// that assertion would panic inside `VerifyingKey::check`, on bytes a
-/// verifier was handed, rather than returning a clean `Err`. Until S26c the
-/// guard was a hand-written arm naming the seven execution families and one
-/// threshold, `BITS[TIMESTAMP]`; a family missing from it, or a family whose
-/// widest channel was not TIMESTAMP, reached the assertion anyway. It is now
-/// the most any one of the family's channels' tables needs, taken from
-/// `channels()` before the artifact is built, which closes the class rather
-/// than one instance of it. A family with no channel at all keeps a floor of 0,
-/// which is what the RAM window families and `POSEIDON2`, `FR_ARITH` and
-/// `SHA256_COMP` take.
+/// verifier was handed, rather than returning a clean `Err`. The guard is the
+/// most any one of the family's channels' tables needs, taken from
+/// `channels()` before the artifact is built, so no family can be missing
+/// from it and no channel's table can be overlooked. A family with no channel
+/// at all keeps a floor of 0, which is what the RAM window families and
+/// `POSEIDON2` and `FR_ARITH` take.
 ///
-/// `EC_ADD` is the first delegation family to carry a channel at all
-/// (`docs/spec/delegation.md` §9, which amends §9): RANGE16 at 16 bits, so
-/// its floor is `2^16`, which is also its `DEFAULT_HEIGHTS` entry. `KECCAK_F`
-/// has carried `RANGE16` and `XOR8` since S26d, so its floor is `2^16` too —
-/// and a floor is not a height: its `DEFAULT_HEIGHTS` entry is `2^18`, chosen
-/// above it.
+/// `MOD_MUL` and `EC_ADD` carry `RANGE16`, and `KECCAK_F` and `SHA256_COMP`
+/// `RANGE16` and `XOR8` (`docs/spec/delegation.md` §9), so each has a floor of
+/// `2^16` — and a floor is not a height: `KECCAK_F`'s and `SHA256_COMP`'s
+/// `DEFAULT_HEIGHTS` entries are `2^18`, chosen above it.
 pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
     circuit(false, family, trace_vars)
 }
@@ -165,7 +160,7 @@ fn circuit(recursion: bool, family: u32, trace_vars: u32) -> Option<FamilyCircui
             f::PUBLIC_INPUT | f::ADVICE_WINDOWS => (memory::value_window_artifact, Vec::new()),
             // The delegation families. Their heights differ by three orders of
             // magnitude because their rows do (`docs/spec/delegation.md` §9);
-            // what each one may take is the floor below, and for the three
+            // what each one may take is the floor below, and for the two
             // that carry no channel that floor is 0.
             f::KECCAK_F => (keccak::artifact, keccak::channels()),
             f::POSEIDON2 => (poseidon2::artifact, poseidon2::channels()),
@@ -199,11 +194,10 @@ fn circuit(recursion: bool, family: u32, trace_vars: u32) -> Option<FamilyCircui
 /// rather than a panic on bytes a verifier was handed.
 ///
 /// The per-channel number is `lookup::table_vars` and **not** `BITS` with a
-/// range filter, which is what it was until S26d. `XOR8`'s table is virtual
-/// and 65,536 rows wide without being a range channel at all, so a filter on
-/// `IS_RANGE` would have given a family carrying it alone a floor of 0 and an
-/// incomplete table at every height below `2^16` — true of `KECCAK_F` only by
-/// the accident of its also carrying `RANGE16`.
+/// range filter. `XOR8`'s table is virtual and 65,536 rows wide without being
+/// a range channel at all, so a filter on `IS_RANGE` would give a family
+/// carrying it alone a floor of 0 and an incomplete table at every height
+/// below `2^16`.
 fn minimum_trace_vars(channels: &[crate::lookup::ChannelSpec]) -> u32 {
     channels
         .iter()
@@ -311,8 +305,7 @@ pub enum Coeff {
 /// kernel in `gkr-verify` is the semantic authority, and the order of
 /// [`GateDef::operands`] is the order it reads values in.
 ///
-/// Later stages extend the enum additively, each variant with a wire tag of
-/// its own.
+/// Each variant has a wire tag of its own.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GateDef {
     /// `Σ c_i·x_i + c_0`.
@@ -554,7 +547,8 @@ pub struct EnforcingEntry {
 /// Gate list `k`: reads layer `k`, writes layer `k + 1`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LayerSpec {
-    /// A halving list writes one variable fewer and holds only `TreeProduct`s.
+    /// A halving list writes one variable fewer and holds only `TreeProduct`s
+    /// and `TreeCross`es.
     pub halving: bool,
     /// The variable count of layer `k + 1`, derived and stored (Law 2).
     pub num_vars: u32,
@@ -576,10 +570,11 @@ pub struct Relation {
 }
 
 /// A lookup expression: on every row where `selector` is nonzero, `tuple` is
-/// looked up in `channel`, one of `constants::lookup_channel`. Every channel is
-/// a range channel at S14: its tuple is one `Linear` expression with literal
-/// coefficients, which holds when its canonical integer is below
-/// `2^BITS[channel]`. `docs/spec/lookup.md` §1.
+/// looked up in `channel`, one of `constants::lookup_channel`. The tuple is
+/// `Linear` expressions with literal coefficients: on a range channel one,
+/// which holds when its canonical integer is below `2^BITS[channel]`; on a
+/// table channel 1 to `MAX_TUPLE`, which hold when they are a row of the
+/// channel's table. `docs/spec/lookup.md` §1.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LookupExpr {
     pub name: String,
@@ -630,7 +625,7 @@ pub struct CircuitArtifact {
     pub layers: Vec<LayerSpec>,
     /// The flat constraint list.
     pub relations: Vec<Relation>,
-    /// The range obligations, `docs/spec/memory.md` §7.
+    /// The lookup obligations, `docs/spec/lookup.md` §1.
     pub lookups: Vec<LookupExpr>,
     /// The scratch bijection: `scratch[i]` is `scratch[i].address`.
     pub scratch: Vec<ScratchSlot>,

@@ -2,7 +2,7 @@
 //! addition a row, invoked by the `ecall::PRECOMPILE_EC_ADD` ecall and never
 //! decoded.
 //!
-//! `docs/spec/delegation-circuits.md` §7 is normative.
+//! `docs/spec/delegation-circuits.md` §7 specifies it.
 //!
 //! # The formula, and why it is projective
 //!
@@ -12,11 +12,11 @@
 //! the circuit has no degenerate row and needs no inverse witness.
 //!
 //! It is projective because `guests/vendor/k256`'s `ProjectivePoint` already is
-//! (`projective.rs:96`, this same algorithm), and the owner's rule is that a
-//! delegation understands the representation its caller already uses rather
-//! than the caller being rewritten around the circuit. BN254 comes in affine at
-//! revm's `Crypto::bn254_g1_add` boundary and the guest lifts it with `Z = 1`,
-//! which is free.
+//! (`projective.rs:96`, this same algorithm), and a delegation understands the
+//! representation its caller already uses rather than the caller being
+//! rewritten around the circuit. BN254 comes in affine at revm's
+//! `Crypto::bn254_g1_add` boundary and the guest lifts it with `Z = 1`, which
+//! is free.
 //!
 //! Twelve multiplications, in three groups of three reductions:
 //!
@@ -46,38 +46,34 @@
 //! builds, so it is **linear in the row's width**. Nine reductions on one row
 //! would be some three times this one's and beyond any machine; three rows of
 //! three is 1,420 committed columns, 8,772 inner, and a computed **20.5 GB** a
-//! shard at `2^16`.
+//! shard at `2^16`: 18.3 GB of forward pass, 0.7 GB of committed base, 1.5 GB
+//! of first bind.
 //!
-//! **That is above an execution shard's ~11 GB, and it made this family the
-//! peak-setting one in a block until `KECCAK_F` took `2^18`** — ~60 GB a shard
-//! against this family's 20.5. An earlier draft of this comment said 10.5
-//! GiB; the figure was wrong by a factor of two, and the arithmetic is
-//! `crates/constraints/tests/` — 18.3 GB of forward pass, 0.7 GB of committed
-//! base, 1.5 GB of first bind. `2^16` is nonetheless forced rather than chosen:
-//! the `RANGE16` channel needs sixteen variables, Mercury needs an even count,
-//! and `2^18` is four times worse. The lever that remains is the **group
-//! count** — five groups of two reductions would be about two-thirds the width
-//! at two more invocations an addition — and `docs/handoff/S26c-sha256-ec.md`
-//! records the measurement a deferred run produces against this estimate.
+//! **That is above an execution shard's ~11 GB**, and second only to
+//! `KECCAK_F`'s ~60 GB a shard at `2^18`. `2^16` is nonetheless forced rather
+//! than chosen: the `RANGE16` channel needs sixteen variables, Mercury needs an
+//! even count, and `2^18` is four times worse. The lever that remains is the
+//! **group count** — five groups of two reductions would be about two-thirds
+//! the width at two more invocations an addition.
 //!
 //! The three rows are glued by the **frame**, not by a bus: group 0 leaves
 //! `xx`, `yy` and `zz` in frame words 49..73 and group 2 reads them there, as
 //! ordinary RAM words on an ordinary RAM chain. Nothing new carries them — no
 //! new address space, no new presence rule, and `checker::memory_columns_from_log`
-//! still covers every column.
+//! covers every column.
 //!
 //! # The lookup channel this family carries
 //!
-//! `RANGE16`, which `docs/spec/delegation.md` §9 forbade until §10.3 amended
-//! it. It is worth 32 MSMs and ~5 wire bytes per bound: a 32-bit bound is one
-//! committed column and two obligations where a bit decomposition is 32
-//! columns, and the frame's 38-bit timestamp gap is two columns where it is 38.
-//! Without it this family's row is 3,746 columns of gap bits alone.
+//! `RANGE16` (`docs/spec/delegation.md` §9). It is worth 32 MSMs and ~5 wire
+//! bytes per bound: a 32-bit bound is one committed column and two obligations
+//! where a bit decomposition is 32 columns, and the frame's 38-bit timestamp
+//! gap is two columns where it is 38. Without it this family's row is 3,746
+//! columns of gap bits alone.
 //!
 //! `TIMESTAMP` would be the natural channel for a gap and it does **not** fit:
 //! its table needs 19 variables and this family is `2^16`. So the gap takes
-//! `RANGE16` in three chunks with a scaled obligation on the top one, which is
-//! exact at `2^38` — [`gap_lookups`] is the arithmetic.
+//! `RANGE16` in two chunks with a scaled obligation on the top one, which is
+//! exact at `2^38` — `delegation::bound_chunked` is the arithmetic.
 //!
 //! # Soundness, in one paragraph
 //!
@@ -643,8 +639,9 @@ fn helper_gates() -> Vec<(String, GateDef)> {
 /// reduction: without it a prover answers `r + m` with the quotient one lower
 /// and the identity holds over the integers just as well. A frame value's
 /// `< m` is what bounds the honest quotient below nine limbs, so that every
-/// frame the circuit accepts is one an honest prover can fill — `docs/spec/
-/// delegation-circuits.md` §5.3's lesson, applied to twelve values instead of two.
+/// frame the circuit accepts is one an honest prover can fill — the lesson of
+/// `docs/spec/delegation-circuits.md` §5.3, applied to twelve values instead
+/// of two.
 fn chain_gates() -> Vec<(String, GateDef)> {
     let mut out: Vec<(String, GateDef)> = Vec::new();
     for (v, (name, _, groups)) in VALUES.into_iter().enumerate() {
@@ -704,15 +701,14 @@ fn one_chain(
     // `enable * (1 - b_7) = 0`: below the modulus **on the rows that read it**,
     // and unconstrained on the rest.
     //
-    // **Not `enable - b_7 = 0`**, which is what S26c first wrote and which is a
-    // different statement: it forces `b_7 = 0` where `enable` is 0, so a value
-    // that *is* below the modulus on a row that does not read it becomes
-    // unprovable. Every lane is such a value — `EcAddFrame::of` zeroes the six
-    // intermediates, and a group-2 row's `X1..Z2` are ordinary coordinates — so
-    // that spelling made **every row of this family** unprovable while every
-    // shape test, the executor and the guests all passed. What catches it is an
-    // honest witness evaluated against the gates, which is
-    // `crates/checker/tests/ec_add.rs`.
+    // **Not `enable - b_7 = 0`**, which is a different statement: it forces
+    // `b_7 = 0` where `enable` is 0, so a value that *is* below the modulus on
+    // a row that does not read it becomes unprovable. Every lane is such a
+    // value — `EcAddFrame::of` zeroes the six intermediates, and a group-2
+    // row's `X1..Z2` are ordinary coordinates — so that spelling makes **every
+    // row of this family** unprovable while every shape test, the executor and
+    // the guests pass. What catches it is an honest witness evaluated against
+    // the gates, which is `crates/checker/tests/ec_add.rs`.
     //
     // Degree 2: a selector column times a borrow column, both committed.
     let products: Vec<(Coeff, PolyAddress, PolyAddress)> = enable
@@ -778,7 +774,7 @@ fn operand_gates() -> Vec<(String, GateDef)> {
 /// The sixteen limb equations of `A*B + C*D + 1024*m^2 = q*m + out`, per slot.
 ///
 /// At position `k`, writing `P_k` for `sum_{i+j=k} (A_i B_j + C_i D_j)`,
-/// `O_k` for `256 * sum_{i+j=k} m_i m_j` and `S_k` for `sum_{i+j=k} q_i m_j`:
+/// `O_k` for `1024 * sum_{i+j=k} m_i m_j` and `S_k` for `sum_{i+j=k} q_i m_j`:
 ///
 /// ```text
 /// P_k + O_k - S_k - out_k + c_{k-1} - 2^32 c_k = 0
@@ -796,11 +792,11 @@ fn operand_gates() -> Vec<(String, GateDef)> {
 /// `1024*m^2` on the left is degree 2 and costs the first two groups nothing but
 /// a larger honest quotient.
 ///
-/// **It read `-189 m^2` and named slot 0 until S26c, and that was a shipped
-/// bug.** Slot 0's floor is the smaller of the two; sizing the offset against it
-/// left slot 1's honest quotient negative on about a quarter of rows, which no
-/// executor, guest or shape test could see. [`the_offset_covers_every_slot`]
-/// derives the floor now, from the same ceiling table the carry's width uses.
+/// **Slot 1 binds, not slot 0.** Slot 0's floor, `-189 m^2`, is the smaller of
+/// the two; an offset sized against it leaves slot 1's honest quotient negative
+/// on about a quarter of rows, which no executor, guest or shape test can see.
+/// [`the_offset_covers_every_slot`] derives the floor from the same ceiling
+/// table the carry's width uses.
 fn product_gates() -> Vec<(String, GateDef)> {
     let offset = f::OFFSET_MULTIPLE;
     let mut out: Vec<(String, GateDef)> = Vec::new();
@@ -995,8 +991,7 @@ fn scaled_columns() -> Vec<(PolyAddress, PolyAddress)> {
     out
 }
 
-/// The family's lookup channels: `RANGE16`, and it is the first a delegation
-/// family has ever carried (`docs/spec/delegation.md` §9).
+/// The family's lookup channels: `RANGE16` (`docs/spec/delegation.md` §9).
 pub fn channels() -> Vec<ChannelSpec> {
     vec![ChannelSpec {
         channel: lookup_channel::RANGE16,
@@ -1091,9 +1086,7 @@ fn witness_names() -> Vec<String> {
 ///
 /// `|A| <= a*m`, and so on. **One table, two derivations**: the carry's width
 /// needs the largest `a*b + c*d` and [`OFFSET_MULTIPLE`] needs it too, because
-/// the same product bounds how far below zero a left-hand side can reach. They
-/// were two separate arguments until S26c derived only the first and shipped an
-/// offset the second refutes.
+/// the same product bounds how far below zero a left-hand side can reach.
 const CEILINGS: [[u64; 4]; SLOTS * SLOTS] = [
     [1, 1, 0, 0],
     [1, 1, 0, 0],
@@ -1114,11 +1107,11 @@ const CEILINGS: [[u64; 4]; SLOTS * SLOTS] = [
 /// — so the offset has to be at least that, or the honest quotient of such a row
 /// is negative, `q_limb` cannot hold it, and the row is **unprovable**.
 ///
-/// It is a completeness bug and not a soundness one, which is exactly why
-/// nothing else catches it: the emulator computes the right answer, the guest
-/// agrees with its own software path, and the only thing that fails is an
-/// honest prover — intermittently, on about a quarter of group-2 rows, hours
-/// into a block proof.
+/// Too small an offset is a completeness bug and not a soundness one, which is
+/// exactly why nothing else catches it: the emulator computes the right
+/// answer, the guest agrees with its own software path, and the only thing
+/// that fails is an honest prover — intermittently, on about a quarter of
+/// group-2 rows, hours into a block proof.
 fn the_offset_covers_every_slot() {
     let mut worst = 0u64;
     for [a, b, c, d] in CEILINGS {
@@ -1142,9 +1135,9 @@ fn the_offset_covers_every_slot() {
 /// ceilings as multiples of `2^32`. The carry is the fixed point of
 /// `C = (position + C) / 2^32`, and `2^CARRY_OFFSET_BITS` must cover it.
 ///
-/// The group-2 `Y3` slot is the binding one — `yp*ym + bxx9*xz` at
-/// `22*22 + 63*3` — and it is why this constant is 45 and not the 44 every
-/// other slot needs.
+/// The group-2 `Y3` slot is the widest — `yp*ym + bxx9*xz` at
+/// `22*22 + 63*3` — but at an offset of 1024 every slot's carry passes `2^45`,
+/// so every slot needs the 46 bits `CARRY_OFFSET_BITS` holds.
 fn the_carry_offset_covers_every_slot() {
     // Operand ceilings, as multiples of 2^32, in the order `group` builds them.
     let base = 1u128 << 32;

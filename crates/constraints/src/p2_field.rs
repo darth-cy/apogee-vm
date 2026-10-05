@@ -2,7 +2,7 @@
 //! over cells of the field memory, invoked by `ecall::PRECOMPILE_P2_FIELD` and
 //! never decoded.
 //!
-//! `docs/spec/recursion.md` §4 is normative.
+//! `docs/spec/recursion.md` §4 specifies it.
 //!
 //! ```text
 //! frame     M[0..24]   cycle live base anchor_value, then 4 per word of [n, s, x, y, d]
@@ -19,8 +19,8 @@
 //! ```
 //!
 //! **Flat.** Every gate is degree 2 on one list, so a parent verifies the row
-//! in about 350 sumcheck rounds where S23's layered `POSEIDON2` costs about
-//! 3,600. **Homogeneous.** Each round constant enters as `rc·live`, so on a
+//! in about 350 sumcheck rounds where the layered `POSEIDON2` circuit costs
+//! about 3,600. **Homogeneous.** Each round constant enters as `rc·live`, so on a
 //! padding row the whole permutation is zero and the all-zero row is valid.
 
 use alloc::format;
@@ -179,7 +179,7 @@ fn matrix(s: &[Expr; 3], a: u64) -> [Expr; 3] {
 /// The permutation's rounds in order: three constants a full round, one a
 /// partial round.
 fn rounds() -> Vec<Vec<Fr>> {
-    let hex = |h: &str| Fr::from_hex(h).expect("a frozen round constant is canonical");
+    let hex = |h: &str| Fr::from_hex(h).expect("a round constant is canonical");
     let mut out: Vec<Vec<Fr>> = Vec::new();
     out.extend(
         constants::POSEIDON2_RC3_INITIAL
