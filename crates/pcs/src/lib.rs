@@ -202,8 +202,7 @@ impl MercuryProof {
 /// the one value no real limb can take. Read here rather than in each caller so
 /// the absorber and the accumulator's decoder cannot disagree about it.
 fn infinity_sentinel() -> Fr {
-    Fr::from_hex(G1_INFINITY_SENTINEL)
-        .expect("the infinity sentinel is a canonical hex literal")
+    Fr::from_hex(G1_INFINITY_SENTINEL).expect("the infinity sentinel is a canonical hex literal")
 }
 
 /// Absorb one affine `G1` point under `tag`, as one typed message of four `Fr`
