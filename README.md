@@ -62,20 +62,6 @@ settling to the same base layer. Apogee is the proof engine that makes running o
 - **Specialize** the environment around your product. Apogee proves any program built for its
   machine, so the state-transition function is yours to define.
 
-## Measured, not promised
-
-**A full Ethereum block, from guest to contract.** Apogee v1.0.0 was proved end to end on block
-257,510 of `glamsterdam-devnet-8`. The block was validated statelessly inside the VM under the
-execution-specs rules, then folded by recursion into one proof that an Ethereum contract accepts.
-
-<p align="center">
-  <img src=".github/assets/measured.svg" width="100%" alt="Measured on block 257,510: one Ethereum block of 101.5 Mgas and 60 transactions, run through the stateless validator inside the VM; 198M RISC-V cycles, each a proved row, across 207 shards; 1 proof at the top, a 116-shard recursion tree folded into one Groth16 proof; 3.62M gas and 34,980 bytes of calldata to verify on-chain; 704 bytes per shard opening; 23 circuit families; 67,251 conformance cases matched natively; 0 outside cryptography.">
-</p>
-
-<sub>The base proof took 2,481 s on a 32-vCPU machine and peaked at 174 GiB; the recursion tree
-took about 2,620 s more. Every figure is the specification's: [streaming](docs/spec/streaming.md)
-§1 and [recursion](docs/spec/recursion.md) §10.</sub>
-
 ## The path of a proof
 
 **You write the program. Apogee does everything after it.** Between your Rust and the contract's
@@ -86,7 +72,8 @@ Groth16 decider. None of it is yours to build or maintain.
   <img src=".github/assets/proof-path.svg" width="100%" alt="The path of a proof, in eight steps. You write: Write, in no_std Rust. Apogee proves: Load, the image and its identity (32 bytes); Execute, RV32IMAC on one hart (198M cycles); Shard, into 23 families (207 shards); Prove, with GKR and Mercury (a 14.5 MB proof); Recurse, from leaves to a root (1.03 MB); Decide, with Groth16 over BN254 (34,980 bytes of calldata). The chain checks: Verify, in ApogeeVerifier.sol, which returns true for 3.62M gas.">
 </p>
 
-<sub>Everything inside the dashed frame is Apogee's. Figures are block 257,510's.</sub>
+<sub>Everything inside the dashed frame is Apogee's. Figures are block 257,510 of
+`glamsterdam-devnet-8`, proved end to end ([recursion](docs/spec/recursion.md) §10).</sub>
 
 ## Under the hood
 
