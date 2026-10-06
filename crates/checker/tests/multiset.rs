@@ -40,7 +40,7 @@ use constants::memory::TS_STEP;
 use constraints::memory::{
     family_frame_artifact, frame, frame_queries, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE,
     FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA,
-    FRAME_NAMES, FRAME_READ_ONLY, FRAME_SPACE, PC, RAM, RD, RS1,
+    FRAME_MIN_ADVANCE, FRAME_NAMES, FRAME_READ_ONLY, FRAME_SPACE, PC, RAM, RD, RS1,
 };
 use constraints::PolyAddress;
 use field::Fr;
@@ -351,7 +351,7 @@ fn one_changed_value_does_not_reconcile() {
 ///   of the row four earlier: the roots do not reconcile, and the lookup
 ///   evaluator also names, on that row, the low chunk of every live query whose
 ///   gap was below 4 and went negative — measured: the pc query's, whose gap is
-///   always 3, and `rs1`'s.
+///   always 0, and `rs1`'s.
 ///
 /// So the surfaces differ: a value enters no obligation, and a timestamp that
 /// moves a gap below 0 is caught by the lookup evaluator as well as by
@@ -367,7 +367,7 @@ fn one_changed_timestamp_does_not_reconcile_and_a_moved_cycle_breaks_a_gap() {
     let pc = slot(&f, ALU, PC).expect("every frame has the pc query");
     let read_ts = frame(pc, FIELD_READ_TS);
     assert_eq!(cell(&f.shards[ALU], read_ts, ROW), int(68));
-    let gap = TS_STEP * CYCLE_AT_ROW - 67 - 1;
+    let gap = TS_STEP * CYCLE_AT_ROW - 67 - FRAME_MIN_ADVANCE[PC];
     let cells = [
         (ALU, read_ts, ROW, int(67)),
         (ALU, gap_hi(pc), ROW, int(gap >> 19)),
@@ -386,8 +386,8 @@ fn one_changed_timestamp_does_not_reconcile_and_a_moved_cycle_breaks_a_gap() {
     let short: Vec<String> = (0..queries.len())
         .filter(|&s| at(s, FIELD_MASK) == 1)
         .filter(|&s| {
-            let delta = FRAME_DELTA[queries[s]];
-            TS_STEP * CYCLE_AT_ROW + delta - at(s, FIELD_READ_TS) - 1 < TS_STEP
+            let (delta, advance) = (FRAME_DELTA[queries[s]], FRAME_MIN_ADVANCE[queries[s]]);
+            TS_STEP * CYCLE_AT_ROW + delta - at(s, FIELD_READ_TS) - advance < TS_STEP
         })
         .map(|s| format!("gap_lo_{}", FRAME_NAMES[queries[s]]))
         .collect();
@@ -540,21 +540,62 @@ fn the_gap_obligations_accept_exactly_0_through_2_38_minus_1() {
     assert_eq!(violated_lookups(&a, &row(top, int((1 << 19) - 1))), lo);
 }
 
+/// Consecutive rows are a cycle apart (`docs/spec/memory.md` §2.4, §9):
+/// `ADD_SUB_LUI_AUIPC`'s `gap_lo_pc` through `violated_lookups`, on a row whose
+/// pc query reads the previous row's pc write at `4c` and whose `4·cycle` is
+/// `4c + k`, whatever value `cycle` takes for it: `c + k/4` in the field. At
+/// `k = 0` through 3, where the row's four timestamps would overlap the
+/// previous row's, the obligation is the one violated; at `k = 4`, the next
+/// cycle, it holds with gap 0. Every other query is masked off. Fails if the
+/// pc's constant admitted a pc write fewer than 4 after the one it reads.
+#[test]
+fn consecutive_rows_are_a_cycle_apart() {
+    const C: u64 = 1000;
+    let a = family_frame_artifact(family::ADD_SUB_LUI_AUIPC, 4);
+    let pc = frame_queries(family::ADD_SUB_LUI_AUIPC)
+        .iter()
+        .position(|&q| q == PC)
+        .expect("the pc is in every frame");
+    let layout = a.committed();
+    let at = |address| layout.iter().position(|c| *c == address).expect("a column");
+    let quarter = int(4).inverse().expect("4 is invertible");
+    let row = |k: u64| {
+        let mut committed = vec![Fr::ZERO; layout.len()];
+        committed[at(CYCLE)] = int(C) + int(k) * quarter;
+        committed[at(frame(pc, FIELD_MASK))] = Fr::ONE;
+        committed[at(frame(pc, FIELD_READ_TS))] = int(TS_STEP * C);
+        WitnessRow {
+            committed,
+            row: 0,
+            scratch: Vec::new(),
+        }
+    };
+    for k in 0..4 {
+        assert_eq!(
+            violated_lookups(&a, &row(k)),
+            ["gap_lo_pc".to_string()],
+            "4·cycle = 4c + {k}"
+        );
+    }
+    assert_eq!(violated_lookups(&a, &row(4)), Vec::<String>::new());
+}
+
 // ---------------------------------------------------------------------------
 // Controls
 // ---------------------------------------------------------------------------
 
-/// Mask booleanity (`docs/spec/memory.md` §2.4). On the first
-/// padding row of `ADD_SUB_LUI_AUIPC`'s frame, row 657, the pc query — slot 0 of
-/// every frame — forged with mask −1: address 10, reading `x10`'s last write and
-/// writing 42 at `4·2,118`, the row's cycle set to 2,118, one past fib's last,
-/// with the boundary claiming `x10` ends at 42 there — the exit status. At
-/// `m = −1` each of the query's two leaves is `−T(AS − 2, …)`: the pc query reads
-/// and writes as a REG query, one sign flip on each side of the equation, so the
-/// roots reconcile and every obligation holds. A single query's read and write
-/// pair suffices; a second −1 query is not needed. `gkr::self_check` names
-/// `pc_mask_boolean` on that row, the one gate that stops it; the same forgery
-/// at mask 1, a PC query, does not reconcile.
+/// Mask booleanity (`docs/spec/memory.md` §2.4). On the first padding row of
+/// `ADD_SUB_LUI_AUIPC`'s frame, row 1,009, the pc query — slot 0 of every
+/// frame — forged with mask −1: address 10, reading `x10`'s last write and
+/// writing 42 at `4·2,119`, the row's cycle set to 2,119, two past fib's last so
+/// that the write is the pc's least advance, 4, or more after the exit row's
+/// write to `x10`, with the boundary claiming `x10` ends at 42 there — the exit
+/// status. At `m = −1` each of the query's two leaves is `−T(AS − 2, …)`: the pc
+/// query reads and writes as a REG query, one sign flip on each side of the
+/// equation, so the roots reconcile and every obligation holds. A single
+/// query's read and write pair suffices; a second −1 query is not needed.
+/// `gkr::self_check` names `pc_mask_boolean` on that row, the one gate that
+/// stops it; the same forgery at mask 1, a PC query, does not reconcile.
 ///
 /// Fails if the booleanity gate were missing — which the construction refuses,
 /// `crates/constraints/tests/memory.rs`' `a_frame_missing_a_booleanity_gate_is_refused`.
@@ -566,11 +607,12 @@ fn a_pc_query_masked_by_minus_1_reads_as_a_register_and_only_booleanity_refuses_
         row < 1usize << f.shards[ALU].artifact.trace_vars,
         "a padding row"
     );
-    let cycle = f.t.cycles.len() as u64 + 1;
+    let cycle = f.t.cycles.len() as u64 + 2;
     let ts = TS_STEP * cycle;
     let pc = slot(&f, ALU, PC).expect("every frame has the pc query");
     let (t10, v10) = (f.finals.reg_ts[10], f.finals.reg_values[9]);
-    assert!(t10 < ts && ts - t10 - 1 < 1 << 19);
+    let advance = FRAME_MIN_ADVANCE[PC];
+    assert!(t10 + advance <= ts && ts - t10 - advance < 1 << 19);
     let cells = |mask: Fr| {
         [
             (ALU, CYCLE, row, int(cycle)),

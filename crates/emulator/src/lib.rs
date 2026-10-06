@@ -188,19 +188,25 @@ impl fmt::Display for EmuError {
 ///
 /// The permutation is `transcript::poseidon2_permute` and nothing else — the
 /// executor and the circuit are held to one definition, not to each other.
-/// A lane that is not canonical is refused by the caller before this runs.
-fn poseidon2_frame(old: &[u32]) -> Vec<u32> {
+/// A lane at or above `p` is refused: the circuit holds every lane to its
+/// canonical encoding, so it has no witness for one (`docs/spec/delegation.md`
+/// §6).
+fn poseidon2_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
     let mut state = [Fr::ZERO; poseidon2::WIDTH];
     for (i, lane) in state.iter_mut().enumerate() {
-        *lane = Fr::from_bytes(&value_bytes(old, poseidon2::WORDS_PER_LANE * i))
-            .expect("the caller checked canonicity");
+        *lane = Fr::from_bytes(&value_bytes(old, poseidon2::WORDS_PER_LANE * i)).ok_or(
+            EmuError::DelegationFrame {
+                pc,
+                detail: "a lane is not a canonical Fr",
+            },
+        )?;
     }
     transcript::poseidon2_permute(&mut state);
     let mut out = old.to_vec();
     for (i, lane) in state.iter().enumerate() {
         write_value(&mut out, poseidon2::WORDS_PER_LANE * i, &lane.to_bytes());
     }
-    out
+    Ok(out)
 }
 
 /// The Fr-arithmetic delegation over its 25-word frame: the opcode word, then
@@ -997,8 +1003,9 @@ struct Machine<'a> {
     /// word: the top of what a guest may load. Above it the advice region is
     /// addressable in principle and initialized by nothing in this execution,
     /// so a read there is refused loudly here rather than left to fail as an
-    /// unprovable trace.
-    advice_end: u32,
+    /// unprovable trace. A `u64`, because a full region, `ADVICE_WORDS` words,
+    /// ends at `2^32`, which a `u32` wraps to 0.
+    advice_end: u64,
     /// The field memory (`docs/spec/recursion.md` §2): a cell never written
     /// holds 0.
     field: HashMap<u32, Fr>,
@@ -1027,8 +1034,8 @@ impl<'a> Machine<'a> {
             ram: HashMap::new(),
             cycle: 1,
             public_input: &io.input,
-            advice_end: guest_memory::ADVICE_ORIGIN
-                + 4 * trace::advice_region_words(&io.advice) as u32,
+            advice_end: guest_memory::ADVICE_ORIGIN as u64
+                + 4 * trace::advice_region_words(&io.advice),
             field: HashMap::new(),
             exit: None,
             recorder: None,
@@ -1203,7 +1210,7 @@ impl<'a> Machine<'a> {
         }
         let word = addr & !3;
         let reachable = trace::addressable(word)
-            && (word < guest_memory::ADVICE_ORIGIN || word < self.advice_end);
+            && (word < guest_memory::ADVICE_ORIGIN || (word as u64) < self.advice_end);
         if !reachable {
             return Err(EmuError::OutOfBounds { pc, addr });
         }
@@ -1263,7 +1270,7 @@ impl<'a> Machine<'a> {
         let old = self.delegation_frame(pc, base, words)?;
         let new = match family {
             family::KECCAK_F => keccak_frame(pc, &old)?,
-            family::POSEIDON2 => poseidon2_frame(&old),
+            family::POSEIDON2 => poseidon2_frame(pc, &old)?,
             family::FR_ARITH => fr_arith_frame(pc, &old)?,
             family::MOD_MUL => mod_mul_frame(pc, &old)?,
             family::SHA256_COMP => sha256_frame(pc, &old)?,
@@ -2700,6 +2707,32 @@ mod tests {
         assert!(mod_mul_frame(8, &frame(mod_mul::SECP256K1_P, minus_one, minus_one)).is_ok());
     }
 
+    /// Every `POSEIDON2` lane at or above `p` is refused by name rather than
+    /// panicking the host, in each of the three lanes, and `p − 1` is
+    /// admitted, so the bound is `< p` (`docs/spec/delegation.md` §6).
+    #[test]
+    fn poseidon2_frame_refuses_a_lane_at_or_above_p() {
+        let below = Fr::MINUS_ONE.to_bytes();
+        // `p − 1` ends in a zero byte, so `p` is one more in its first byte.
+        let mut p = below;
+        p[0] += 1;
+        assert_eq!(Fr::from_bytes(&p), None, "p is not canonical");
+        for lane in 0..poseidon2::WIDTH {
+            let mut frame = vec![0u32; poseidon2::FRAME_WORDS];
+            write_value(&mut frame, poseidon2::WORDS_PER_LANE * lane, &p);
+            assert_eq!(
+                poseidon2_frame(4, &frame),
+                Err(EmuError::DelegationFrame {
+                    pc: 4,
+                    detail: "a lane is not a canonical Fr",
+                }),
+                "lane {lane}"
+            );
+            write_value(&mut frame, poseidon2::WORDS_PER_LANE * lane, &below);
+            assert!(poseidon2_frame(4, &frame).is_ok(), "lane {lane} at p − 1");
+        }
+    }
+
     /// `x · y` over eight 32-bit limbs, as sixteen. Test-only.
     fn wide_mul16(x: &[u32; 8], y: &[u32; 8]) -> [u32; 16] {
         let mut out = [0u64; 16];
@@ -2809,6 +2842,31 @@ mod tests {
         assert_eq!(
             machine.step(),
             Err(EmuError::ClockOverflow { cycle: last + 1 })
+        );
+    }
+
+    /// A full advice region, `ADVICE_WORDS` words from `ADVICE_ORIGIN`, ends at
+    /// `2^32`: its last word loads, and a region one word shorter refuses that
+    /// word by name. The bound is set on the machine rather than reached by
+    /// supplying the advice, which would take 2 GiB.
+    #[test]
+    fn a_full_advice_region_reaches_the_top_of_the_address_space() {
+        let io = GuestIo {
+            input: Vec::new(),
+            advice: Vec::new(),
+        };
+        let image = spin();
+        let mut machine = Machine::new(&image, &io);
+        let full = guest_memory::ADVICE_ORIGIN as u64 + 4 * guest_memory::ADVICE_WORDS as u64;
+        assert_eq!(full, 1 << 32);
+        let (first, last) = (guest_memory::ADVICE_ORIGIN, u32::MAX - 3);
+        machine.advice_end = full;
+        assert_eq!(machine.data_word(0, first, 4), Ok(first));
+        assert_eq!(machine.data_word(0, last, 4), Ok(last));
+        machine.advice_end = full - 4;
+        assert_eq!(
+            machine.data_word(0, last, 4),
+            Err(EmuError::OutOfBounds { pc: 0, addr: last })
         );
     }
 }

@@ -18,8 +18,8 @@ use constraints::memory::{
     check_memory, deleg_space, family_frame_artifact, frame, frame_artifact, frame_queries,
     frame_query_takes, gap_hi, image_window_artifact, rd_inv, rd_is_zero, rd_selected, read_tuple,
     zero_window_artifact, CYCLE, DELEG, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE,
-    FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_NAMES, FRAME_QUERIES, FRAME_READ_ONLY, FRAME_SPACE, LOAD,
-    PC, RAM, RD, RS1, RS2,
+    FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_MIN_ADVANCE, FRAME_NAMES, FRAME_QUERIES, FRAME_READ_ONLY,
+    FRAME_SPACE, LOAD, PC, RAM, RD, RS1, RS2,
 };
 use constraints::{
     CachedEntry, CircuitArtifact, Coeff, ConstraintError, EnforcingEntry, GateDef, LayerSpec,
@@ -30,11 +30,11 @@ use field::Fr;
 use std::collections::HashSet;
 use test_support::{sha256, to_hex};
 
-const FRAME_ALU_SHA256: &str = "81dc6bcde755bef9caa328a9e196049aa40ce20a4d541c7fde245ba2ac81f0d4";
-const FRAME_REG_SHA256: &str = "f94da36c6f7052acd10c36a3a0bd04ce09fe2419cdbfa046db4a58b1a716cbc0";
-const FRAME_MEM_SHA256: &str = "7a31fd867d4b5490821bcef24e356daf34d834a397efed8fa41b8e821b6fee6f";
+const FRAME_ALU_SHA256: &str = "0d8a7618dae7f40f978ad6f108009bc0068f632119c0d7db1975bbfc5af9d453";
+const FRAME_REG_SHA256: &str = "bd55a15ee9b2d7fc5afd11ba5d4dbca6ce876bc8cce784570555500bf6829308";
+const FRAME_MEM_SHA256: &str = "f4ab6499b1a476ada2a8ef338ac019b983828eb97f2c41431134fd94f0e3ec68";
 const FRAME_ATOMICS_SHA256: &str =
-    "518c3853426a2ca30216536edc41a2659189c6c1e5abbeca9b516cf2032488c8";
+    "af7cf287bb4b3b2951812e2540e77bad9621d5950da42df65df0bb73909d84ce";
 const IMAGE_WINDOW_SHA256: &str =
     "39a8655d430ed5c031e4f27075662fe92a9a1274cd23dc300ae5e2e82df67ecc";
 const ZERO_WINDOW_SHA256: &str = "f08dde677a70c8a15cc7b67b35806e6ee5d9afff9cb703586f21426baa51ec1c";
@@ -330,9 +330,9 @@ fn the_read_tuples_parts_are_at_their_named_positions() {
 }
 
 /// The query table itself, §2.1: seven entries, their names, address spaces
-/// and Δ, the three read-only queries, `rd` and then `deleg` last, and `M[0]`
-/// the cycle. These are indexed by a query's *id*, never by its slot in a
-/// family.
+/// and Δ, their least advances (§2.4: 4 for the pc, 1 for the rest), the three
+/// read-only queries, `rd` and then `deleg` last, and `M[0]` the cycle. These
+/// are indexed by a query's *id*, never by its slot in a family.
 ///
 /// `deleg` is a delegation request's mirror query
 /// (`docs/spec/delegation.md` §5.1): the last role, at slot 3 like `ram` and
@@ -347,6 +347,7 @@ fn the_query_table_is_the_documents() {
     );
     assert_eq!([PC, RS1, RS2, LOAD, RAM, RD, DELEG], [0, 1, 2, 3, 4, 5, 6]);
     assert_eq!(FRAME_DELTA, [0, 1, 2, 2, 3, 3, 3]);
+    assert_eq!(FRAME_MIN_ADVANCE, [4, 1, 1, 1, 1, 1, 1]);
     let (pc, reg, ram) = (address_space::PC, address_space::REG, address_space::RAM);
     // The `deleg` query names **no** space: one query serves every delegation
     // type and the row's `deleg_space` column carries the tag. 0 is a value no
@@ -619,14 +620,18 @@ fn a_query_at_a_slot_that_is_not_its_id_keeps_its_own_space_and_delta() {
 /// §2.4 per family: two obligations per *slot* in slot order, `gap_hi_<q>`
 /// then `gap_lo_<q>`, on the timestamp channel under that slot's mask; the
 /// high chunk is the slot's `W[s]` and the low chunk reads the slot's
-/// `read_ts` — while the constant is `Δ − 1` for the query's **id**, `−1` for
-/// the pc, which every frame holds at slot 0. `ATOMICS` is the witness that
-/// the two differ: its `ram` sits at slot 3, whose table entry `arg1` has
-/// Δ 2, and its obligation's constant is Δ(`ram`) − 1 = 2.
+/// `read_ts` — while the constant is `Δ − 1` for the query's **id**, and `−4`
+/// for the pc, which every frame holds at slot 0. `ATOMICS` is the witness
+/// that the two differ: its `ram` sits at slot 3, whose table entry `arg1` has
+/// Δ 2, and its obligation's constant is Δ(`ram`) − 1 = 2. Each registry's
+/// circuit for the family, base and recursion format, opens its obligation
+/// list with exactly these.
 ///
 /// Fails if an obligation were keyed to the wrong slot's columns, if a query
-/// took the Δ of the slot it happens to sit at, or if a family carried the
-/// table's sixteen obligations rather than its own `2w`.
+/// took the Δ of the slot it happens to sit at, if the pc's constant admitted
+/// a pc write fewer than 4 after the one it reads, if a family carried the
+/// table's sixteen obligations rather than its own `2w`, or if a registry's
+/// circuit carried other ones.
 #[test]
 fn the_frame_carries_two_gap_obligations_per_query() {
     let minus = |v: u64| Coeff::Literal(-Fr::from_u64(v));
@@ -639,6 +644,10 @@ fn the_frame_carries_two_gap_obligations_per_query() {
             let name = FRAME_NAMES[q];
             let hi = PolyAddress::Witness(at as u32);
             let selector = frame(at, FIELD_MASK);
+            let constant = match q {
+                PC => minus(4),
+                _ => Coeff::Literal(Fr::from_u64(FRAME_DELTA[q]) - Fr::ONE),
+            };
             let expected = [
                 LookupExpr {
                     name: format!("gap_hi_{name}"),
@@ -659,7 +668,7 @@ fn the_frame_carries_two_gap_obligations_per_query() {
                             (minus(1), frame(at, FIELD_READ_TS)),
                             (minus(1 << 19), hi),
                         ],
-                        constant: Coeff::Literal(Fr::from_u64(FRAME_DELTA[q]) - Fr::ONE),
+                        constant,
                     }],
                 },
             ];
@@ -672,11 +681,23 @@ fn the_frame_carries_two_gap_obligations_per_query() {
         let GateDef::Linear { constant, .. } = &a.lookups[1].tuple[0] else {
             panic!("gap_lo_pc is Linear");
         };
+        assert_eq!(a.lookups[1].name, "gap_lo_pc");
         assert_eq!(
             *constant,
-            minus(1),
-            "family {id}: gap_lo_pc's constant is −1"
+            minus(4),
+            "family {id}: gap_lo_pc's constant is −4"
         );
+        for registry in [constraints::family_circuit, constraints::recursion_circuit] {
+            let circuit = registry(id, 20)
+                .expect("an execution family at 2^20")
+                .artifact;
+            let bare = family_frame_artifact(id, 20);
+            assert_eq!(
+                circuit.lookups[..bare.lookups.len()],
+                bare.lookups[..],
+                "family {id}: the registry's circuit opens with its frame's obligations"
+            );
+        }
     }
     // `ram` at slot 3 of ATOMICS keeps Δ = 3, not slot 3's `arg1` Δ = 2.
     let atomics = family_frame_artifact(family::ATOMICS, 12);
@@ -705,17 +726,19 @@ fn the_frame_carries_two_gap_obligations_per_query() {
 /// frames — which between them place all seven queries of the table, asserted
 /// below — every cycle in `[0, 2^8)`, so `ts = 4·cycle + Δ` meets every value
 /// of the 10-bit clock across the four `Δ`, and every `read_ts` in `[0, 2^10)`,
-/// where `read_ts ≥ ts` wraps the gap to `p − (read_ts − ts + 1)`, a pair is
-/// admitted exactly when `read_ts < ts`.
+/// where a pair closer than the query's least advance wraps the gap to `p`
+/// less the shortfall, a pair is admitted exactly when `read_ts < ts`; for the
+/// pc, exactly when `read_ts + 4 ≤ ts`.
 ///
 /// This test holds the recombination at width 5 and the expression's cycle,
 /// read-timestamp and constant terms; the chunk width `2^19` and the
 /// evaluator are held at full width by `crates/checker/tests/multiset.rs`'
 /// `the_gap_obligations_accept_exactly_0_through_2_38_minus_1`.
 ///
-/// Fails if a wrapped negative gap were admitted, or a strictly ordered pair
-/// refused — so if `gap_lo`'s constant were `Δ` rather than `Δ − 1`, admitting
-/// `read_ts = ts`, or if a displaced query took its slot's Δ.
+/// Fails if a wrapped negative gap were admitted, or an ordered pair refused —
+/// so if `gap_lo`'s constant were `Δ` rather than `Δ − 1`, admitting
+/// `read_ts = ts`, if the pc's admitted a pc write fewer than 4 after the one
+/// it reads, or if a displaced query took its slot's Δ.
 #[test]
 fn the_gap_encoding_is_strict_at_reduced_width() {
     const W: u32 = 5;
@@ -764,10 +787,13 @@ fn the_gap_encoding_is_strict_at_reduced_width() {
                 for read_ts in 0..clock {
                     let gap = step * Fr::from_u64(cycle) + sign * Fr::from_u64(read_ts) + constant;
                     let ok = admitted_gaps.contains(&gap.to_bytes());
+                    let ordered = match q {
+                        PC => read_ts + 4 <= ts,
+                        _ => read_ts < ts,
+                    };
                     let name = FRAME_NAMES[q];
                     assert_eq!(
-                        ok,
-                        read_ts < ts,
+                        ok, ordered,
                         "family {id}, {name} at slot {at}: ts {ts}, read_ts {read_ts}"
                     );
                 }

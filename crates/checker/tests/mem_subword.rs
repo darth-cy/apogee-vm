@@ -47,7 +47,7 @@ const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../constraints/tests/vectors/mem_subword.bin"
 );
-const FIXTURE_SHA256: &str = "2c423eb1c5dc9b8a3c326dcb32b57f2a0edecffbb5ca9041e1a6cc9f9f596181";
+const FIXTURE_SHA256: &str = "fa3e07979411c96a5bf22749c2c3c161ab889f469414dd1ad6bb2f8c100cdb28";
 
 /// The cycle every hand-built row runs at, and the row it is evaluated at.
 const CYCLE: u64 = 7;

@@ -131,6 +131,13 @@ pub fn frame_query_takes(q: usize, space: u8, delta: u64) -> bool {
 /// Each query's in-cycle slot `Δ`: its write is at `4·cycle + Δ`.
 pub const FRAME_DELTA: [u64; FRAME_QUERIES] = [0, 1, 2, 2, 3, 3, 3];
 
+/// Each query's least advance: how many timestamps, at least, its write
+/// follows the write it reads. 1, a read strictly preceding its write, for
+/// every query but the pc, whose read is the previous row's pc write: its
+/// `TS_STEP` puts all four of a row's timestamps after the previous row's, so
+/// consecutive rows never interleave. `docs/spec/memory.md` §2.4, §9.
+pub const FRAME_MIN_ADVANCE: [u64; FRAME_QUERIES] = [memory::TS_STEP, 1, 1, 1, 1, 1, 1];
+
 /// `M[1 + 5·slot + field]`: one field of the query at `slot` — its position in
 /// the family's query list, not its id in [`FRAME_NAMES`]. The two agree only
 /// for a family holding every query, and none does.
@@ -394,13 +401,14 @@ fn x0_gates(at: usize, width: usize) -> [(&'static str, GateDef); 4] {
 ///
 /// ```text
 /// gap_hi_<q> : Linear { [(1, hi)], 0 }
-/// gap_lo_<q> : Linear { [(4, cycle), (−1, read_ts), (−2^19, hi)], Δ − 1 }
+/// gap_lo_<q> : Linear { [(4, cycle), (−1, read_ts), (−2^19, hi)], Δ − a }
 /// ```
 ///
-/// Both below `2^19` make `gap = 4·cycle + Δ − read_ts − 1 = lo + 2^19·hi` a
-/// field element in `[0, 2^38)`: `read_ts < 4·cycle + Δ` as integers, under
-/// the counting premise of `docs/spec/memory.md` §4.2. §2.4; `Δ − 1` is the
-/// field element, `−1` for the pc.
+/// `a` is the query's [`FRAME_MIN_ADVANCE`]. Both below `2^19` make
+/// `gap = 4·cycle + Δ − read_ts − a = lo + 2^19·hi` a field element in
+/// `[0, 2^38)`: `read_ts + a ≤ 4·cycle + Δ` as integers, under the counting
+/// premise of `docs/spec/memory.md` §4.2. §2.4; `Δ − a` is the field element,
+/// `Δ − 1` for every query but the pc, whose is `−4`.
 fn gap_lookups(query: usize, at: usize) -> [LookupExpr; 2] {
     let (name, hi) = (FRAME_NAMES[query], gap_hi(at));
     let selector = frame(at, FIELD_MASK);
@@ -426,7 +434,9 @@ fn gap_lookups(query: usize, at: usize) -> [LookupExpr; 2] {
                     (Coeff::Literal(Fr::MINUS_ONE), frame(at, FIELD_READ_TS)),
                     (Coeff::Literal(-chunk), hi),
                 ],
-                constant: Coeff::Literal(Fr::from_u64(FRAME_DELTA[query]) - Fr::ONE),
+                constant: Coeff::Literal(
+                    Fr::from_u64(FRAME_DELTA[query]) - Fr::from_u64(FRAME_MIN_ADVANCE[query]),
+                ),
             }],
         },
     ]

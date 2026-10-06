@@ -41,7 +41,7 @@ const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../constraints/tests/vectors/jump_branch_slt.bin"
 );
-const FIXTURE_SHA256: &str = "99094d63daa97a1a1cfa5f61f0b9124fa376e8c7e045cdfa0c213ae7742c1305";
+const FIXTURE_SHA256: &str = "77a50c13c464a30382338eed5b97df4cd621d04a7ca54b4187301b2824ee3ba4";
 
 fn artifact() -> CircuitArtifact {
     jump_branch_slt::artifact(VARS)

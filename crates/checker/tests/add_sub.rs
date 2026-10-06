@@ -35,7 +35,7 @@ const FIXTURE: &str = concat!(
 /// `deleg_{family}_number`'s literal is that number, read from `constants::ecall`,
 /// so this family's bytes are a function of the delegation registry
 /// (`docs/spec/delegation.md` §3).
-const FIXTURE_SHA256: &str = "a6113128738235d972ff4c074f875ea43c2bd0290e516957e9f891496cae38c7";
+const FIXTURE_SHA256: &str = "ebbd55f8767f65858bef31c756f5348ea9f638cb420bc6bd189b83b3797263c4";
 
 fn artifact() -> CircuitArtifact {
     add_sub::artifact(VARS)
