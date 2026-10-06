@@ -1,0 +1,155 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 360" width="900" height="360" role="img" aria-labelledby="title desc">
+  <title id="title">The path of a proof</title>
+  <desc id="desc">Eight steps. You write the program in no_std Rust. Apogee loads it (image and identity), executes it (RV32IMAC, one hart), shards it (23 circuit families), proves each shard (GKR and Mercury), recurses (leaves to a root) and decides (Groth16 over BN254). The chain verifies it (ApogeeVerifier.sol). For block 257,510: your source, a 32-byte identity, 198M cycles, 207 shards, a 14.5 MB proof, a 1.03 MB root, 34,980 bytes of calldata, and true for 3.62M gas.</desc>
+  <style>
+    .frame { fill: #030914; stroke: rgba(64, 108, 176, 0.30); stroke-width: 1; }
+    .sans { font-family: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
+    .mono { font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Mono', Menlo, Consolas, 'Liberation Mono', monospace; }
+    .band-you { fill: rgba(95, 141, 215, 0.07); stroke: rgba(95, 141, 215, 0.62); stroke-width: 1.2; }
+    .band-chain { fill: rgba(144, 147, 249, 0.07); stroke: rgba(144, 147, 249, 0.62); stroke-width: 1.2; }
+    .band-machine { fill: rgba(95, 141, 215, 0.035); stroke: rgba(95, 141, 215, 0.34); stroke-width: 1; stroke-dasharray: 4 5; }
+    .box { fill: #081325; stroke: rgba(113, 157, 226, 0.55); stroke-width: 1.2; }
+    .box-accent { fill: #0A1A33; stroke: #5F8DD7; stroke-width: 1.4; }
+    .box-event { fill: #13163A; stroke: #9093F9; stroke-width: 1.4; }
+    .rule { stroke: rgba(64, 108, 176, 0.30); stroke-width: 1; }
+    .flow { stroke: #5F8DD7; stroke-width: 1.6; fill: none; }
+    .arrow { fill: #5F8DD7; }
+    .lane { fill: #5F8DD7; font-size: 10.5px; font-weight: 600; letter-spacing: 0.16em; }
+    .lane-event { fill: #9093F9; font-size: 10.5px; font-weight: 600; letter-spacing: 0.16em; }
+    .title { fill: #EAF3FB; font-size: 17px; font-weight: 600; }
+    .index { fill: #6E7F98; font-size: 11px; letter-spacing: 0.08em; }
+    .what { fill: #899AB1; font-size: 12px; }
+    .value { fill: #C0D6F1; font-size: 13px; font-weight: 600; }
+    .value-event { fill: #9093F9; font-size: 13px; font-weight: 700; }
+    .unit { fill: #899AB1; font-size: 12px; }
+
+    /* A signal walks the path, one step at a time, and lands on the chain. */
+    .pulse { fill: none; stroke: #719DE2; stroke-width: 2; opacity: 0;
+             animation: pulse 9s ease-in-out infinite; }
+    .pulse-event { fill: none; stroke: #9093F9; stroke-width: 2.2; opacity: 0;
+                   animation: land 9s ease-in-out infinite; }
+    @keyframes pulse { 0% { opacity: 0; } 3% { opacity: 1; } 9% { opacity: 0.8; } 16% { opacity: 0; } 100% { opacity: 0; } }
+    @keyframes land { 0% { opacity: 0; } 4% { opacity: 1; } 22% { opacity: 0.9; } 36% { opacity: 0; } 100% { opacity: 0; } }
+    .d0 { animation-delay: 0.0s; }
+    .d1 { animation-delay: 0.7s; }
+    .d2 { animation-delay: 1.4s; }
+    .d3 { animation-delay: 2.1s; }
+    .d4 { animation-delay: 2.8s; }
+    .d5 { animation-delay: 3.5s; }
+    .d6 { animation-delay: 4.2s; }
+    .d7 { animation-delay: 4.9s; }
+    @media (prefers-reduced-motion: reduce) { .pulse, .pulse-event { animation: none; } }
+  </style>
+  <defs>
+    <radialGradient id="wash" cx="0.5" cy="0" r="0.75">
+      <stop offset="0" stop-color="#5F8DD7" stop-opacity="0.16"/>
+      <stop offset="0.7" stop-color="#5F8DD7" stop-opacity="0"/>
+    </radialGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10z" class="arrow"/>
+    </marker>
+    <filter id="glow" x="-12%" y="-24%" width="124%" height="148%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="3.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect class="frame" x="0.5" y="0.5" width="899" height="359" rx="16"/>
+  <rect x="1" y="1" width="898" height="280" rx="15" fill="url(#wash)"/>
+
+  <!-- lanes -->
+  <rect class="band-you" x="28" y="18" width="202" height="154" rx="16"/>
+  <rect class="band-chain" x="28" y="188" width="202" height="154" rx="16"/>
+  <rect class="band-machine" x="242" y="18" width="630" height="324" rx="16"/>
+  <text class="mono lane" x="129" y="40" text-anchor="middle">YOU WRITE</text>
+  <text class="mono lane" x="557" y="40" text-anchor="middle">APOGEE PROVES</text>
+  <text class="mono lane-event" x="129" y="328" text-anchor="middle">THE CHAIN CHECKS</text>
+
+  <!-- flow -->
+  <g class="flow">
+    <path d="M222 108H249" marker-end="url(#arrow)"/>
+    <path d="M436 108H463" marker-end="url(#arrow)"/>
+    <path d="M650 108H677" marker-end="url(#arrow)"/>
+    <path d="M771 164V195" marker-end="url(#arrow)"/>
+    <path d="M678 252H651" marker-end="url(#arrow)"/>
+    <path d="M464 252H437" marker-end="url(#arrow)"/>
+    <path d="M250 252H223" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- steps -->
+  <g>
+    <rect class="box" x="40" y="56" width="178" height="104" rx="12"/>
+    <text class="sans title" x="58" y="88">Write</text>
+    <text class="mono index" x="200" y="87" text-anchor="end">01</text>
+    <text class="mono what" x="58" y="110">no_std Rust</text>
+    <path class="rule" d="M58 124.5H200"/>
+    <text class="mono" x="58" y="146"><tspan class="value">your</tspan><tspan class="unit"> source</tspan></text>
+  </g>
+  <g>
+    <rect class="box" x="254" y="56" width="178" height="104" rx="12"/>
+    <text class="sans title" x="272" y="88">Load</text>
+    <text class="mono index" x="414" y="87" text-anchor="end">02</text>
+    <text class="mono what" x="272" y="110">image · identity</text>
+    <path class="rule" d="M272 124.5H414"/>
+    <text class="mono" x="272" y="146"><tspan class="value">32-byte</tspan><tspan class="unit"> identity</tspan></text>
+  </g>
+  <g>
+    <rect class="box" x="468" y="56" width="178" height="104" rx="12"/>
+    <text class="sans title" x="486" y="88">Execute</text>
+    <text class="mono index" x="628" y="87" text-anchor="end">03</text>
+    <text class="mono what" x="486" y="110">RV32IMAC · 1 hart</text>
+    <path class="rule" d="M486 124.5H628"/>
+    <text class="mono" x="486" y="146"><tspan class="value">198M</tspan><tspan class="unit"> cycles</tspan></text>
+  </g>
+  <g>
+    <rect class="box" x="682" y="56" width="178" height="104" rx="12"/>
+    <text class="sans title" x="700" y="88">Shard</text>
+    <text class="mono index" x="842" y="87" text-anchor="end">04</text>
+    <text class="mono what" x="700" y="110">23 families</text>
+    <path class="rule" d="M700 124.5H842"/>
+    <text class="mono" x="700" y="146"><tspan class="value">207</tspan><tspan class="unit"> shards</tspan></text>
+  </g>
+  <g>
+    <rect class="box-accent" x="682" y="200" width="178" height="104" rx="12"/>
+    <text class="sans title" x="700" y="232">Prove</text>
+    <text class="mono index" x="842" y="231" text-anchor="end">05</text>
+    <text class="mono what" x="700" y="254">GKR · Mercury</text>
+    <path class="rule" d="M700 268.5H842"/>
+    <text class="mono" x="700" y="290"><tspan class="value">14.5 MB</tspan><tspan class="unit"> proof</tspan></text>
+  </g>
+  <g>
+    <rect class="box" x="468" y="200" width="178" height="104" rx="12"/>
+    <text class="sans title" x="486" y="232">Recurse</text>
+    <text class="mono index" x="628" y="231" text-anchor="end">06</text>
+    <text class="mono what" x="486" y="254">leaves → root</text>
+    <path class="rule" d="M486 268.5H628"/>
+    <text class="mono" x="486" y="290"><tspan class="value">1.03 MB</tspan><tspan class="unit"> root</tspan></text>
+  </g>
+  <g>
+    <rect class="box" x="254" y="200" width="178" height="104" rx="12"/>
+    <text class="sans title" x="272" y="232">Decide</text>
+    <text class="mono index" x="414" y="231" text-anchor="end">07</text>
+    <text class="mono what" x="272" y="254">Groth16 · BN254</text>
+    <path class="rule" d="M272 268.5H414"/>
+    <text class="mono" x="272" y="290"><tspan class="value">34,980 B</tspan><tspan class="unit"> calldata</tspan></text>
+  </g>
+  <g>
+    <rect class="box-event" x="40" y="200" width="178" height="104" rx="12"/>
+    <text class="sans title" x="58" y="232">Verify</text>
+    <text class="mono index" x="200" y="231" text-anchor="end">08</text>
+    <text class="mono what" x="58" y="254">ApogeeVerifier.sol</text>
+    <path class="rule" d="M58 268.5H200"/>
+    <text class="mono" x="58" y="290"><tspan class="value-event">true</tspan><tspan class="unit"> · 3.62M gas</tspan></text>
+  </g>
+
+  <!-- the signal -->
+  <g filter="url(#glow)">
+    <rect class="pulse d0" x="40" y="56" width="178" height="104" rx="12"/>
+    <rect class="pulse d1" x="254" y="56" width="178" height="104" rx="12"/>
+    <rect class="pulse d2" x="468" y="56" width="178" height="104" rx="12"/>
+    <rect class="pulse d3" x="682" y="56" width="178" height="104" rx="12"/>
+    <rect class="pulse d4" x="682" y="200" width="178" height="104" rx="12"/>
+    <rect class="pulse d5" x="468" y="200" width="178" height="104" rx="12"/>
+    <rect class="pulse d6" x="254" y="200" width="178" height="104" rx="12"/>
+    <rect class="pulse-event d7" x="40" y="200" width="178" height="104" rx="12"/>
+  </g>
+</svg>
