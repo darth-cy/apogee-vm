@@ -183,8 +183,10 @@ pub fn honest(
     (values, proof, result)
 }
 
-/// The discharge a shard proof's Mercury opening does: every base claim
-/// against the committed column it names.
+/// The discharge an opening of the base columns would do: every base claim
+/// against the column it names, evaluated directly. A test stands in for a
+/// commitment scheme this way; the protocol has none yet
+/// (`docs/architecture.md` §0).
 pub fn discharge(base: &BaseLayer, claims: &[BaseClaim]) -> Result<(), String> {
     for claim in claims {
         let column = base

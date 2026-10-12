@@ -15,8 +15,7 @@
 //!
 //! The guest list is read out of `guests/Cargo.toml` rather than written down
 //! here, so this cannot go stale by omission: a guest that exists is a guest
-//! that gets walked. [`NOT_A_COMMITTED_FIXTURE`] is the one exception, and it
-//! is named, reasoned and checked in both directions.
+//! that gets walked.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -27,36 +26,6 @@ use artifact_dump::dump;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-/// The guests with no committed ELF, which the two rules below therefore skip.
-///
-/// **`revm-block` is the Ethereum block workload**, and its ELF is not worth
-/// committing. It is 2.2 MB at `--release` and 7.8 MB at `debug`, where
-/// it expands to 1.88 million instruction slots — so a committed fixture would
-/// be 1.7 times the largest one the repository has, the walkthrough below would
-/// render two full instruction listings of it per run, and every suite that
-/// decodes every committed guest would decode it at `2^22` rows inside
-/// `cargo test --workspace`. Nothing is derived from its bytes but its
-/// identity, which needs the ceremony and is checked from a from-source build
-/// instead (`crates/emulator/tests/revm.rs`, `crates/prover/tests/revm.rs`).
-///
-/// **`recursion` is the recursion guest**, exempt for the same reason: it links
-/// `verifier-core`, `gkr-verify` and the circuit registry, nothing is derived
-/// from its bytes but its identity, and its one input is a base proof far
-/// larger than any committed fixture — so it is built from source where it is
-/// run (`host::fixture::build_guest`).
-///
-/// A name here is checked to be a real guest *and* to actually have no
-/// committed ELF, so the list cannot rot in either direction.
-const NOT_A_COMMITTED_FIXTURE: [&str; 2] = ["revm-block", "recursion"];
-
-/// The guests both rules below cover: every member but [`NOT_A_COMMITTED_FIXTURE`].
-fn committed_members() -> Vec<String> {
-    guest_members()
-        .into_iter()
-        .filter(|name| !NOT_A_COMMITTED_FIXTURE.contains(&name.as_str()))
-        .collect()
 }
 
 /// The names in the first `members = [...]` line of `text`.
@@ -165,7 +134,7 @@ fn build(name: &str, slot: &str) -> PathBuf {
 #[test]
 fn every_guest_in_the_workspace_is_a_committed_fixture() {
     let vectors = repo_root().join("crates/loader/tests/vectors");
-    let missing: Vec<String> = committed_members()
+    let missing: Vec<String> = guest_members()
         .into_iter()
         .filter(|name| !vectors.join(format!("{name}.elf")).is_file())
         .collect();
@@ -176,32 +145,6 @@ fn every_guest_in_the_workspace_is_a_committed_fixture() {
          `cargo run -p kat-gen -- guests` and then `-- loader`, and move the \
          digests it prints into crates/loader/tests/common/mod.rs."
     );
-}
-
-/// The exemption list names guests that exist and that really have no
-/// committed ELF.
-///
-/// Without this an entry could outlive the crate it names, or outlive the
-/// reason it was granted — a guest whose ELF was committed later would go on
-/// being skipped by both rules, silently.
-#[test]
-fn the_exemptions_are_real_and_still_needed() {
-    let root = repo_root();
-    let members = guest_members();
-    for name in NOT_A_COMMITTED_FIXTURE {
-        assert!(
-            members.iter().any(|m| m == name),
-            "{name} is exempted from the committed-fixture rule and is not a guest"
-        );
-        assert!(
-            !root
-                .join("crates/loader/tests/vectors")
-                .join(format!("{name}.elf"))
-                .is_file(),
-            "{name} has a committed ELF now, so its exemption is stale: take it out \
-             of NOT_A_COMMITTED_FIXTURE and let the rules cover it"
-        );
-    }
 }
 
 /// The manual accounts for every guest the workspace has, and invents none.
@@ -315,7 +258,7 @@ fn the_manual_accounts_for_every_guest() {
 /// bytes that would have been written.
 #[test]
 fn every_guest_walks_the_manuals_procedure() {
-    for name in committed_members() {
+    for name in guest_members() {
         let first = build(&name, "a");
         let second = build(&name, "b");
 

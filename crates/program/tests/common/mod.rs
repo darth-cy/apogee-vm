@@ -17,7 +17,7 @@ use program::{decode_program, ProgramParams};
 use test_support::{sha256, to_hex};
 
 /// Every guest with a committed ELF, in `guests/Cargo.toml`'s order.
-pub const GUESTS: [&str; 21] = [
+pub const GUESTS: [&str; 14] = [
     "fib",
     "echo",
     "rvc-dense",
@@ -32,56 +32,18 @@ pub const GUESTS: [&str; 21] = [
     "alu",
     "mem",
     "shards",
-    "keccak-test",
-    "keccak-unused",
-    "recursion-ops",
-    "recursion-unused",
-    "mod-mul-ops",
-    "sha256-ops",
-    "ec-ops",
-];
-
-/// The guests whose image declares a delegation family, and which
-/// (`docs/spec/delegation.md` §7). Every other guest declares none, which is
-/// what `tests/delegation.rs` holds them to.
-pub const DECLARING_GUESTS: [(&str, &[u32]); 9] = [
-    ("echo", &[family::POSEIDON2, family::FR_ARITH]),
-    ("vault", &[family::POSEIDON2, family::FR_ARITH]),
-    ("keccak-test", &[family::KECCAK_F]),
-    ("keccak-unused", &[family::KECCAK_F]),
-    ("recursion-ops", &[family::POSEIDON2, family::FR_ARITH]),
-    ("recursion-unused", &[family::POSEIDON2, family::FR_ARITH]),
-    // The `MOD_MUL` fixture declares **two** families and neither is
-    // `POSEIDON2` or `FR_ARITH`: it does secp256k1 arithmetic through `k256`
-    // and no `field::Fr` arithmetic at all, so those two records are
-    // unreachable and the linker drops them. `EC_ADD` is there because the
-    // vendored `k256` patches `ProjectivePoint`, which this guest's group
-    // checks reach — the guest's own source names no `EC_ADD` shim. That is
-    // static detachment saying something (`docs/spec/delegation.md` §7).
-    ("mod-mul-ops", &[family::MOD_MUL, family::EC_ADD]),
-    // The `SHA256_COMP` and `EC_ADD` fixtures. `sha256-ops` names the SHA-256
-    // shim and nothing else; `ec-ops` names the EC_ADD shim and reaches
-    // `MOD_MUL` besides, through the same `k256` and `ark-bn254` field
-    // arithmetic its oracles run on.
-    ("sha256-ops", &[family::SHA256_COMP]),
-    ("ec-ops", &[family::MOD_MUL, family::EC_ADD]),
 ];
 
 /// This crate's committed fixtures and their digests. Refresh with
-/// `cargo run -p kat-gen -- program`, which prints them; the identity and
-/// generic-table files need the ceremony file.
-pub const PINS: [(&str, &str); 3] = [
+/// `cargo run -p kat-gen -- program`, which prints them.
+pub const PINS: [(&str, &str); 2] = [
     (
         "mul_free.elf",
         "17a27f6ea5370cd865bb08afa7b2796274b41f0ede49f63d11a6314d7b4477fb",
     ),
     (
         "identity.txt",
-        "605bc8d2f4b7bfce5b75aba668faf30cc5219718a0738ebe16e6e11a46e24210",
-    ),
-    (
-        "generic_table.txt",
-        "3c813459777d65a46855ddb763683714ea3fab182e0ffcba69fb6f74673c7b29",
+        "0748de53892a494fe855fceb02eddf928a5431a3331e39b824b96c69dd81dd76",
     ),
 ];
 
@@ -131,19 +93,15 @@ pub fn instructions(image: &ProgramImage) -> Vec<(u32, u32, bool)> {
 
 /// Every family at the smallest menu height a *decoded* table can take.
 ///
-/// The menu opens with `2^8` — among the delegation families `POSEIDON2`'s and
-/// `FR_ARITH`'s, `KECCAK_F` and `SHA256_COMP` taking `2^18` — and then `2^12`,
-/// the two public-value families' pinned height: a delegation family's rows
-/// are invocations, not halfwords, so 256 rows is a sensible table there, and
-/// no guest's code fits in a table that short anywhere else
-/// (`docs/spec/delegation.md` §9). The floor for an instruction table is
-/// therefore the menu's *third* entry, and the tests below spell that height
-/// out in their own arithmetic — pc `0x1fffe` is row 65535 — so it is asserted
-/// here rather than left to an index. A 2^16 table is cheap enough to export
-/// in full, and every committed guest but `mod-mul-ops` fits in one.
+/// The menu opens with `2^12`, the two public-value families' pinned height,
+/// and no guest's code fits in a table that short. The floor for an
+/// instruction table is therefore the menu's *second* entry, and the tests
+/// below spell that height out in their own arithmetic — pc `0x1fffe` is row
+/// 65535 — so it is asserted here rather than left to an index. A 2^16 table
+/// is cheap enough to export in full, and every committed guest fits in one.
 pub fn smallest() -> ProgramParams {
-    let height = family::HEIGHT_MENU[2];
-    assert_eq!(height, 1 << 16, "the menu's third entry is not 2^16");
+    let height = family::HEIGHT_MENU[1];
+    assert_eq!(height, 1 << 16, "the menu's second entry is not 2^16");
     ProgramParams {
         heights: [height; family::COUNT as usize],
         ..ProgramParams::defaults()
@@ -154,10 +112,8 @@ pub fn smallest() -> ProgramParams {
 ///
 /// A table's rows are absolute pcs, one per halfword, so a family's height has
 /// to reach past its last instruction — and the heights are per family, which
-/// makes the *smallest* family's the binding one. `guests/mod-mul-ops`' `.text`
-/// reaches pc `0x45be6`, which `smallest()` (2^16 rows, pc below `0x20000`)
-/// cannot hold and `2^18` can. A test that is not *about* the heights takes
-/// the ones that fit.
+/// makes the *smallest* family's the binding one. A test that is not *about*
+/// the heights takes the ones that fit.
 pub fn fitting(image: &ProgramImage) -> ProgramParams {
     for &height in &family::HEIGHT_MENU {
         let params = ProgramParams {
@@ -194,57 +150,17 @@ pub fn image_of(at: u32, words: &[u32]) -> ProgramImage {
     }
 }
 
-/// The ceremony file every identity is taken over.
-///
-/// Panics when it is absent: the tests that call this are `#[ignore]`d, so
-/// reaching here means someone asked for them, and a silent pass would report
-/// coverage that did not happen.
-pub fn ptau() -> PathBuf {
-    let path = root().join("assets/ptau/ppot_0080_24.ptau");
-    assert!(
-        path.exists(),
-        "{} is absent. The identity tests need PSE's ceremony file, contribution \
-         80, power 24 (docs/spec/srs.md §1).",
-        path.display()
-    );
-    path
-}
-
-/// `identity.txt` as `(ceremony, [(label, identity hex)])`.
-pub fn pinned_identities() -> (String, Vec<(String, String)>) {
+/// `identity.txt` as `[(label, identity hex)]`.
+pub fn pinned_identities() -> Vec<(String, String)> {
     let text = String::from_utf8(own_vector("identity.txt")).expect("UTF-8");
-    let ceremony = text
-        .lines()
-        .find_map(|l| l.strip_prefix("# ceremony "))
-        .expect("identity.txt names its ceremony")
-        .to_string();
-    let rows = text
-        .lines()
+    text.lines()
         .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
         .map(|l| {
             let f: Vec<&str> = l.split_whitespace().collect();
             assert_eq!(f.len(), 3, "an identity row is guest, parameters, identity");
             (format!("{} {}", f[0], f[1]), f[2].to_string())
         })
-        .collect();
-    (ceremony, rows)
-}
-
-/// `generic_table.txt` as `(ceremony, [commitment hex; 3])`.
-pub fn pinned_generic_table() -> (String, Vec<String>) {
-    let text = String::from_utf8(own_vector("generic_table.txt")).expect("UTF-8");
-    let ceremony = text
-        .lines()
-        .find_map(|l| l.strip_prefix("# ceremony "))
-        .expect("generic_table.txt names its ceremony")
-        .to_string();
-    let rows: Vec<&str> = text
-        .lines()
-        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-        .collect();
-    assert_eq!(rows.len(), 1, "one row: the three commitments");
-    let points = rows[0].split_whitespace().map(|x| x.to_string()).collect();
-    (ceremony, points)
+        .collect()
 }
 
 /// Build one guest from source into a fresh target directory, the way
@@ -257,11 +173,7 @@ pub fn build(name: &str, slot: &str) -> Vec<u8> {
 /// The same, at `profile` — `debug` or `release`.
 ///
 /// `guests/Cargo.toml` pins both profiles to the same semantics; they differ in
-/// `opt-level` — and in dependencies' debug assertions — which is exactly what
-/// makes the second one worth building here: a declaration record is kept by
-/// **reachability**, and at `opt-level = 3` LLVM will fold a constant read into
-/// an immediate and drop the record unless something stops it
-/// (`docs/spec/delegation.md` §7).
+/// `opt-level`.
 pub fn build_profile(name: &str, slot: &str, profile: &str) -> Vec<u8> {
     let guest_dir = root().join("guests").join(name);
     let target_dir = std::env::temp_dir().join(format!("apogee-program-{slot}-{name}"));

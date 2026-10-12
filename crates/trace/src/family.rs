@@ -5,7 +5,6 @@
 //! a padding row holds, and how a column becomes a multilinear, belong to the
 //! memory column builders and the family fills that read these rows.
 
-use field::Fr;
 use program::FamilyId;
 
 use crate::log::AddressSpace;
@@ -18,7 +17,7 @@ pub enum Role {
     /// Slot 1, a register read: `rs1`. On an ecall row, `a7`.
     Rs1,
     /// Slot 2, a register read: `rs2`. On an ecall row, `a0` — its one
-    /// argument, which is an exit status or a delegation frame base.
+    /// argument, the exit status.
     Rs2,
     /// Slot 2, a RAM read: a load's word.
     Load,
@@ -26,12 +25,6 @@ pub enum Role {
     Ram,
     /// Slot 3, a register write: `rd`. On an ecall row, `a0`, the result.
     Rd,
-    /// Slot 3, a **delegation** request's mirror query. Its address is
-    /// the frame base pointer the request handed over in `a0`, in the
-    /// delegation family's own address space; its read is the invocation's
-    /// answer tuple, stamped 0 (`docs/spec/delegation.md` §5). Only an ecall
-    /// row whose number is a delegation call has one.
-    Delegate,
 }
 
 /// Every role, in order. A cycle's events are its pc query, then one
@@ -39,16 +32,9 @@ pub enum Role {
 ///
 /// Eight is the ceiling: `Row::present` is a `u8` with one bit per role, so a
 /// ninth role widens it, and that is a schema change
-/// (`docs/spec/execution-trace.md` §7). There are six, so two bits are
+/// (`docs/spec/execution-trace.md` §7). There are five, so three bits are
 /// spare.
-pub const ROLES: [Role; 6] = [
-    Role::Rs1,
-    Role::Rs2,
-    Role::Load,
-    Role::Ram,
-    Role::Rd,
-    Role::Delegate,
-];
+pub const ROLES: [Role; 5] = [Role::Rs1, Role::Rs2, Role::Load, Role::Ram, Role::Rd];
 
 impl Role {
     /// The in-cycle slot.
@@ -56,25 +42,14 @@ impl Role {
         match self {
             Role::Rs1 => 1,
             Role::Rs2 | Role::Load => 2,
-            Role::Ram | Role::Rd | Role::Delegate => 3,
+            Role::Ram | Role::Rd => 3,
         }
     }
 
     /// The address space.
-    ///
-    /// [`Role::Delegate`]'s is **the row's**, not the role's: a delegation
-    /// family's anchor space *is* its type (`constants::address_space`), and
-    /// with more than one registered type the role alone does not say which.
-    /// `delegation` is the requested family's space, which the row knows
-    /// because the invocation riding its cycle names the family; every other
-    /// role ignores it, and passing `None` on a row that has this role is a
-    /// programmer error rather than a default.
-    pub fn space(self, delegation: Option<AddressSpace>) -> AddressSpace {
+    pub fn space(self) -> AddressSpace {
         match self {
             Role::Load | Role::Ram => AddressSpace::Ram,
-            Role::Delegate => {
-                delegation.expect("a delegation request's row knows which family it is requesting")
-            }
             _ => AddressSpace::Reg,
         }
     }
@@ -120,35 +95,6 @@ impl Row {
     /// The query in `role`, if the cycle has one.
     pub fn query(&self, role: Role) -> Option<Query> {
         (self.present & (1 << role as u8) != 0).then(|| self.queries[role as usize])
-    }
-
-    /// The **delegation anchor space** this row's mirror query names, or `None`
-    /// on a row that requests no delegation.
-    ///
-    /// [`Role::Delegate`]'s address space is the row's and not the role's: one
-    /// role serves every delegation type, and the type is the space
-    /// (`docs/spec/delegation.md` §5.1). What says which type is the ecall
-    /// number, which a delegation row reads into `a7` at slot 1 — that is
-    /// [`Role::Rs1`] on an ecall row (`docs/spec/execution-trace.md` §6) — so
-    /// the row answers this on its own, without the invocation beside it. That
-    /// is what lets a shard's columns be built from the shard's rows alone.
-    ///
-    /// Panics naming the number if a row claims the mirror query for an ecall
-    /// number no delegation family has, which is a buffer the emulator cannot
-    /// produce.
-    pub fn delegation_space(&self) -> Option<AddressSpace> {
-        self.query(Role::Delegate)?;
-        let number = self
-            .query(Role::Rs1)
-            .expect("a delegation request's row reads a7 at slot 1")
-            .read_value;
-        let family = program::delegation_family(number).unwrap_or_else(|| {
-            panic!(
-                "cycle {}: a delegation request whose ecall number {number:#x} names no family",
-                self.cycle
-            )
-        });
-        program::delegation_space(family).and_then(AddressSpace::from_tag)
     }
 }
 
@@ -202,120 +148,6 @@ impl<'a> RowSlice<'a> {
     }
 }
 
-/// One shard's invocations of one delegation family: a borrowed window into a
-/// [`DelegationTrace`], the same cut [`RowSlice`] takes over a `FamilyTrace`.
-#[derive(Clone, Copy, Debug)]
-pub struct FrameSlice<'a> {
-    trace: &'a DelegationTrace,
-    start: usize,
-    len: usize,
-}
-
-impl<'a> FrameSlice<'a> {
-    /// Shard `index`'s invocations of `trace` at `height`.
-    pub fn shard(trace: &'a DelegationTrace, index: u32, height: usize) -> FrameSlice<'a> {
-        let start = (index as usize * height).min(trace.len());
-        let len = (start + height).min(trace.len()) - start;
-        FrameSlice { trace, start, len }
-    }
-
-    /// How many invocations this shard holds; at most the height.
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    /// The family whose invocations these are.
-    pub fn family(&self) -> FamilyId {
-        self.trace.family
-    }
-
-    /// The frame's width in words.
-    pub fn width(&self) -> usize {
-        self.trace.words.len()
-    }
-
-    /// The requesting cycle of each invocation this shard holds.
-    pub fn cycles(&self) -> &'a [u64] {
-        &self.trace.cycle[self.start..self.start + self.len]
-    }
-
-    /// The frame base pointer of each.
-    pub fn bases(&self) -> &'a [u32] {
-        &self.trace.base[self.start..self.start + self.len]
-    }
-
-    /// Access `q`'s columns over this shard's invocations.
-    pub fn access(&self, q: usize) -> AccessSlice<'a> {
-        let c = &self.trace.accesses[q];
-        let (a, b) = (self.start, self.start + self.len);
-        AccessSlice {
-            live: &c.live[a..b],
-            addr: &c.addr[a..b],
-            read_ts: &c.read_ts[a..b],
-            read: &c.read[a..b],
-            write: &c.write[a..b],
-        }
-    }
-
-    /// Frame word `j`'s four columns over this shard's invocations.
-    pub fn word(&self, j: usize) -> WordSlice<'a> {
-        let c = &self.trace.words[j];
-        let (a, b) = (self.start, self.start + self.len);
-        WordSlice {
-            addr: &c.addr[a..b],
-            read_ts: &c.read_ts[a..b],
-            read_value: &c.read_value[a..b],
-            write_value: &c.write_value[a..b],
-        }
-    }
-}
-
-/// One access a recursion row makes besides its frame
-/// (`docs/spec/recursion.md` §2.1): a field cell, or `FIELD_IO`'s RAM data
-/// word, read and written in one slot. Its values are `Fr` because a cell's
-/// are; a data word's are below `2^32`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Access {
-    pub addr: u32,
-    pub read_ts: u64,
-    pub read: Fr,
-    pub write: Fr,
-}
-
-/// One access's columns over a family's invocations. A row that does not make
-/// the access holds zeros there, `live` false.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct AccessColumns {
-    pub live: Vec<bool>,
-    pub addr: Vec<u32>,
-    pub read_ts: Vec<u64>,
-    pub read: Vec<Fr>,
-    pub write: Vec<Fr>,
-}
-
-/// One access's columns over one shard's invocations.
-#[derive(Clone, Copy, Debug)]
-pub struct AccessSlice<'a> {
-    pub live: &'a [bool],
-    pub addr: &'a [u32],
-    pub read_ts: &'a [u64],
-    pub read: &'a [Fr],
-    pub write: &'a [Fr],
-}
-
-/// One frame word's four columns over one shard's invocations.
-#[derive(Clone, Copy, Debug)]
-pub struct WordSlice<'a> {
-    pub addr: &'a [u32],
-    pub read_ts: &'a [u64],
-    pub read_value: &'a [u32],
-    pub write_value: &'a [u32],
-}
-
 /// One role's four columns.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct QueryColumns {
@@ -330,7 +162,7 @@ pub struct QueryColumns {
 ///
 /// The column names are `cycle`, `pc`, `next_pc`, `present`, and for
 /// each role `r` in [`ROLES`] order `r.addr`, `r.read_ts`, `r.read_value`
-/// and `r.write_value` — `rs1.addr` through `delegate.write_value`.
+/// and `r.write_value` — `rs1.addr` through `rd.write_value`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FamilyTrace {
     pub family: FamilyId,
@@ -401,134 +233,18 @@ impl FamilyTrace {
     }
 }
 
-/// One **delegation** family's rows: one per invocation, column-major.
-///
-/// A delegation family is invoked, never decoded, so a row is not a cycle: it
-/// is one call of the precompile, stamped with the cycle that requested it. Its
-/// memory queries are the frame's fixed-offset words — 51 of them for
-/// `KECCAK_F` — which do not fit [`Row`]'s eight query slots and are not roles
-/// at all, so they live here rather than in a [`FamilyTrace`].
-///
-/// `words[j]` is frame word `j`, at byte offset `4 * j` from `base`
-/// (`docs/spec/delegation.md` §4); every word's write timestamp is
-/// `4 * cycle + constants::delegation::FRAME_DELTA`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DelegationTrace {
-    pub family: FamilyId,
-    /// The family's `VmConfig` height.
-    pub height: u32,
-    /// The requesting cycle, one per invocation.
-    pub cycle: Vec<u64>,
-    /// The frame base pointer the request handed over, one per invocation.
-    pub base: Vec<u32>,
-    /// The frame's word queries, in frame order; every entry has one value per
-    /// invocation.
-    pub words: Vec<QueryColumns>,
-    /// The accesses a row makes besides its frame, in the family's order —
-    /// `program::delegation_accesses` of them, none for a base family.
-    pub accesses: Vec<AccessColumns>,
-}
-
-impl DelegationTrace {
-    /// An empty buffer for `family` at `height`, with `width` frame words and
-    /// the family's own accesses.
-    pub fn new(family: FamilyId, height: u32, width: usize) -> DelegationTrace {
-        DelegationTrace {
-            family,
-            height,
-            cycle: Vec::new(),
-            base: Vec::new(),
-            words: vec![QueryColumns::default(); width],
-            accesses: vec![AccessColumns::default(); program::delegation_accesses(family)],
-        }
-    }
-
-    /// How many invocations the family made.
-    pub fn len(&self) -> usize {
-        self.cycle.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.cycle.is_empty()
-    }
-
-    /// Append one invocation. `words` is one query per frame word, in frame
-    /// order, and must be the buffer's width; `accesses` is one entry per
-    /// access of the family's, `None` where the row does not make it.
-    pub fn push(&mut self, cycle: u64, base: u32, words: &[Query], accesses: &[Option<Access>]) {
-        assert_eq!(
-            accesses.len(),
-            self.accesses.len(),
-            "delegation buffer: {} accesses for a family making {}",
-            accesses.len(),
-            self.accesses.len()
-        );
-        for (columns, a) in self.accesses.iter_mut().zip(accesses) {
-            columns.live.push(a.is_some());
-            let a = a.unwrap_or(Access {
-                addr: 0,
-                read_ts: 0,
-                read: Fr::ZERO,
-                write: Fr::ZERO,
-            });
-            columns.addr.push(a.addr);
-            columns.read_ts.push(a.read_ts);
-            columns.read.push(a.read);
-            columns.write.push(a.write);
-        }
-        assert_eq!(
-            words.len(),
-            self.words.len(),
-            "delegation buffer: an invocation of {} frame words in a {}-word frame",
-            words.len(),
-            self.words.len()
-        );
-        self.cycle.push(cycle);
-        self.base.push(base);
-        for (columns, q) in self.words.iter_mut().zip(words) {
-            columns.addr.push(q.addr);
-            columns.read_ts.push(q.read_ts);
-            columns.read_value.push(q.read_value);
-            columns.write_value.push(q.write_value);
-        }
-    }
-
-    /// Invocation `i`'s frame, gathered back out of the columns.
-    pub fn frame(&self, i: usize) -> Vec<Query> {
-        self.words
-            .iter()
-            .map(|columns| Query {
-                addr: columns.addr[i],
-                read_ts: columns.read_ts[i],
-                read_value: columns.read_value[i],
-                write_value: columns.write_value[i],
-            })
-            .collect()
-    }
-}
-
 /// Every family's buffer, one per family of the `VmConfig`, in its order —
-/// including those this execution never reached, which are empty.
-///
-/// A delegation family's buffer is a [`DelegationTrace`] and lives in
-/// `delegations`; every other family's is a [`FamilyTrace`] in `families`.
-/// Both are ascending by family id, and the two id sets are disjoint.
+/// including those this execution never reached, which are empty. Ascending by
+/// family id.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FamilyTraces {
     pub families: Vec<FamilyTrace>,
-    pub delegations: Vec<DelegationTrace>,
 }
 
 impl FamilyTraces {
-    /// The buffer of `family`, or `None` if the config has no such family or
-    /// the family is a delegation one.
+    /// The buffer of `family`, or `None` if the config has no such family.
     pub fn family(&self, family: FamilyId) -> Option<&FamilyTrace> {
         self.families.iter().find(|t| t.family == family)
-    }
-
-    /// The delegation buffer of `family`, or `None`.
-    pub fn delegation(&self, family: FamilyId) -> Option<&DelegationTrace> {
-        self.delegations.iter().find(|t| t.family == family)
     }
 
     /// Every buffer's row count, ascending by family id: the shape a
@@ -538,7 +254,6 @@ impl FamilyTraces {
             .families
             .iter()
             .map(|t| (t.family, t.len() as u64))
-            .chain(self.delegations.iter().map(|t| (t.family, t.len() as u64)))
             .collect();
         out.sort_by_key(|(f, _)| *f);
         out

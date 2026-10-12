@@ -1,10 +1,9 @@
 //! Rust symbol demangling, both mangling schemes, written here rather than taken
 //! from `rustc-demangle`: the workspace takes no dependency for a convenience.
 //!
-//! `guests/revm-block` carries **both** forms — 1,154 legacy and 139 v0, the v0
-//! ones being the precompiled sysroot crates, `core` and `compiler_builtins` —
-//! so a demangler that handled one would leave a tenth of the symbols
-//! unreadable.
+//! A guest carries **both** forms — legacy for its own crates, v0 for the
+//! precompiled sysroot crates, `core` and `compiler_builtins` — so a demangler
+//! that handled one would leave part of the symbols unreadable.
 //!
 //! # What this does and does not decode
 //!
@@ -176,7 +175,6 @@ mod tests {
     #[test]
     fn an_unmangled_name_is_itself() {
         assert_eq!(demangle("memcpy"), "memcpy");
-        assert_eq!(demangle("native_keccak256"), "native_keccak256");
         assert_eq!(demangle("__udivdi3"), "__udivdi3");
     }
 
@@ -189,7 +187,7 @@ mod tests {
 
     /// The crate disambiguator's base-62 digits include decimal ones, and a
     /// scan that did not skip it read the `7` inside `xJ7lp9` as a length. This
-    /// is the name that exposed it, from `guests/revm-block`.
+    /// is the name that exposed it, from a guest's `compiler_builtins`.
     #[test]
     fn a_v0_disambiguator_is_not_a_length() {
         assert_eq!(

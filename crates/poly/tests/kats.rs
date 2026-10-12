@@ -16,7 +16,7 @@ use field::Fr;
 use poly::{eq_eval, eq_table, MultilinearPoly, PolyBacking};
 
 const KATS_PATH: &str = "tests/vectors/poly_kats.txt";
-const KATS_SHA256: &str = "816ef7fe908bca15d8a71e0728de92aedc3be6358e2653979dc8ba45de54542a";
+const KATS_SHA256: &str = "428c7a938a81e2a4dcefe3861250aefb6e740dcd3192327da00c855d1bc96746";
 
 // ---------------------------------------------------------------------------
 // The committed file

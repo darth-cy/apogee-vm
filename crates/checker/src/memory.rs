@@ -18,14 +18,14 @@
 use constants::lookup_channel;
 use constants::memory::TS_STEP;
 use constraints::memory::{
-    deleg_space, frame, frame_query_takes, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, DELEG,
-    FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA,
-    FRAME_MIN_ADVANCE, RD,
+    frame, frame_query_takes, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, FIELD_ADDR,
+    FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_MIN_ADVANCE,
+    RD,
 };
 use constraints::PolyAddress;
 use field::Fr;
 use poly::{MultilinearPoly, PolyBacking};
-use trace::{AddressSpace, MemoryEvent, MemoryEventLog};
+use trace::{MemoryEvent, MemoryEventLog};
 
 /// `values`, zero-padded to `height`, in the narrowest backing that holds its
 /// largest entry — `docs/spec/memory.md`'s column convention, written out here
@@ -57,11 +57,7 @@ fn column(mut values: Vec<u64>, height: usize) -> MultilinearPoly {
 ///
 /// An event takes the first slot of its row still free whose space and slot are
 /// its own — the routing rule of `docs/spec/memory.md` §2.1, which is exact, no
-/// two queries sharing a space and a slot. A **delegation invocation's** frame
-/// access belongs to no cycle's row: it rides the requesting cycle at
-/// `constants::delegation::FRAME_DELTA` and is that family's row
-/// (`docs/spec/delegation.md` §4), so that one `(space, Δ)` pair is skipped by
-/// name and every other unmatched event panics.
+/// two queries sharing a space and a slot. An unmatched event panics.
 fn frame_rows(
     log: &MemoryEventLog,
     queries: &[usize],
@@ -86,9 +82,6 @@ fn frame_rows(
         let Some(&Some(i)) = row_of.get(event.cycle() as usize) else {
             continue;
         };
-        if event.space == AddressSpace::Ram && event.delta() == constants::delegation::FRAME_DELTA {
-            continue;
-        }
         let row = &mut rows[i];
         let at = (0..queries.len())
             .find(|&at| {
@@ -139,16 +132,6 @@ pub fn memory_columns_from_log(
             frame(at, FIELD_WRITE_VALUE),
             field(|e| e.write_value as u64),
         ));
-    }
-    // The delegation mirror's leaf names the requested type through one more
-    // `M` column, and the type is the mirror event's own address space
-    // (`docs/spec/delegation.md` §5.1) -- which is exactly what the production
-    // builder has to recover from the row's `a7` instead.
-    if let Some(at) = queries.iter().position(|&q| q == DELEG) {
-        let values = rows
-            .iter()
-            .map(|row| row[at].as_ref().map_or(0, |e| e.space.tag() as u64));
-        out.push((deleg_space(queries.len()), column(values.collect(), height)));
     }
     out
 }

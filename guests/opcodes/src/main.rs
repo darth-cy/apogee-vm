@@ -22,12 +22,10 @@
 //!   deviation of `docs/spec/memory-ops.md` §6, exercised on purpose;
 //! - `cover_rvc`: every executable compressed form (all but `c.ebreak` and
 //!   `c.unimp`, which trap), each instruction of the block executed;
-//! - `cover_ecall`: the `ecall` instruction over the two numbers nothing
-//!   answers — one in the precompile range and one in the host-call range —
-//!   each returning `-ENOSYS`. There is no I/O call to cover: the ABI
-//!   has no descriptors and no `read`/`write` (`docs/spec/public-values.md`
-//!   §1), and the calls it does have either do not return (`EXIT`) or are
-//!   refused to a guest that did not declare them (the delegations).
+//! - `cover_ecall`: the `ecall` instruction over two numbers nothing answers,
+//!   each returning `-ENOSYS`. There is no I/O call to cover: the ABI has no
+//!   descriptors and no `read`/`write` (`docs/spec/public-values.md` §1), and
+//!   the one call it does have, `EXIT`, does not return.
 //!
 //! # The public input
 //!
@@ -532,13 +530,10 @@ __cover_rvc_end:
 // scratch words and t1 the fold, because a0 is every call's argument and
 // result.
 //
-// There is nothing here to *call*. `EXIT` does not return, and the
-// delegations are refused outright to a guest that did not declare them
-// (`docs/spec/delegation.md` §7) -- declaring one would make this coverage
-// fixture a delegation fixture and give it a family it has no rows for. What
-// is left, and what this block covers, is the `ecall` instruction itself: two
-// numbers in the two reserved ranges that nothing answers, each coming back
-// `-ENOSYS`, which is a value to fold and a cycle to trace.
+// There is nothing here to *call*: `EXIT` does not return, and it is the one
+// number the ABI answers. What this block covers is the `ecall` instruction
+// itself: two numbers nothing answers, each coming back `-ENOSYS`, which is a
+// value to fold and a cycle to trace (`docs/spec/ecall-abi.md` §4).
 // ---------------------------------------------------------------------------
 
 global_asm!(
@@ -551,12 +546,7 @@ cover_ecall:
     mv      t0, a0
     li      t1, 0
 
-    /* the precompile range, and a host-call number nobody assigned: -ENOSYS.
-       0x5ff rather than 0x500: the low precompile numbers are *delegations*,
-       and calling one a guest did not declare is a fatal trace-time failure
-       rather than an -ENOSYS (`docs/spec/delegation.md` §7). What this block
-       covers is the `ecall` instruction over a number nothing answers, which
-       0x5ff is and 0x500 is not. */
+    /* two numbers nobody assigned: -ENOSYS, each. */
     li      a7, 0x5ff
     mv      a0, t0
     ecall

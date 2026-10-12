@@ -2,18 +2,19 @@
 
 The layered-circuit model every family circuit is written in, the artifact that carries one, its
 laws, and the backward pass reducing a circuit's outputs to claims on its committed columns at one
-point, which the shard's opening discharges ([proof.md](proof.md) §5).
+point, which a shard's opening is meant to discharge ([proof.md](proof.md) §5) — **UNFINISHED**:
+there is no opening, and the claims are dropped unchecked ([proof.md](proof.md) §3).
 
 `crates/constraints` is §1–§4; `crates/gkr-verify` is §5's verifier half and the verifier's
 helpers for the memory argument ([memory.md](memory.md) §3, §4) and LogUp
-([lookup.md](lookup.md) §2, §8). Both are `no_std`, as `verifier-core` and the recursion guest
-build on them. `crates/gkr`, `std` and rayon, is the prover half and re-exports `gkr-verify`.
+([lookup.md](lookup.md) §2, §8). Both are `no_std`, as `verifier-core` builds on them.
+`crates/gkr`, `std` and rayon, is the prover half and re-exports `gkr-verify`.
 `crates/checker` enforces §4.2–§4.3 again ([circuits.md](circuits.md) §3).
 
 ## 1. The layer model
 
 Layer `k`, `0 ≤ k ≤ N`, `N ≥ 1`, is `w_k` columns of `n_k` variables, indexed as
-[primitives.md](primitives.md) §6 fixes. **Layer 0** is the committed columns `M`, `W`, `S` in
+[primitives.md](primitives.md) §2 fixes. **Layer 0** is the committed columns `M`, `W`, `S` in
 layout order at `n_0 = trace_vars`, beside the virtual tables the artifact lists (§2.1), which
 count in no width. **Gate list** `k` reads layer `k` and writes layer `k + 1`; the **top**, layer
 `N`, is exactly the outputs. A list is **row-wise**, `n_{k+1} = n_k`, or **halving**,
@@ -62,13 +63,9 @@ order from 0.
 | `RamLive` | `V[ram_live]` | 1 if `y ≥ 2^14`, else 0 | `1 − Π_{14≤j<n} (1 − y_j)`; 0 if `n ≤ 14` |
 | `Range19` | `V[range19]` | `y mod 2^19` | `Σ_{j<min(19,n)} 2^j·y_j` |
 | `Range16` | `V[range16]` | `y mod 2^16` | `Σ_{j<min(16,n)} 2^j·y_j` |
-| `Xor8A` | `V[xor8_a]` | `a = y mod 2^8` | `Σ_{j<8} 2^j·y_j` |
-| `Xor8B` | `V[xor8_b]` | `b = ⌊y/2^8⌋ mod 2^8` | `Σ_{j<8} 2^j·y_{j+8}` |
-| `Xor8Out` | `V[xor8_out]` | `a ⊕ b` | `Σ_{j<8} 2^j·(y_j + y_{j+8} − 2·y_j·y_{j+8})` |
 
-14 is `constants::memory::RAM_LIVE_BIT` ([memory.md](memory.md) §3); the range and `XOR8` kinds
-are channel tables ([lookup.md](lookup.md) §3). `Xor8Out`'s form is multilinear because
-`y ⊕ z = y + z − 2yz` is.
+14 is `constants::memory::RAM_LIVE_BIT` ([memory.md](memory.md) §3); the range kinds are channel
+tables ([lookup.md](lookup.md) §3).
 
 ## 3. Gate shapes
 
@@ -89,8 +86,7 @@ of degree 0.
 `Quadratic` spells degree-2 relations, such as `a·b + c·d − e·f`, that no product of affine forms
 does. **The kernel**, `gkr_verify::eval_gate`, takes one value per operand in `GateDef::operands`
 order, a halving shape's each at child 0 then child 1, and is the semantic authority. Both passes
-reach it through `gkr_verify::ResolvedList`, `crates/checker` calls it over the relations, and
-`verifier_core::tape` transcribes it for the recursion nodes ([recursion.md](recursion.md) §7).
+reach it through `gkr_verify::ResolvedList`, and `crates/checker` calls it over the relations.
 
 ### 3.1 Cached entries and the degree ceiling
 
@@ -218,7 +214,8 @@ proofs do not depend on the thread count.
 ### 5.1 What the caller owes
 
 - The base is bound into the transcript before `prove` or `verify`, which absorb none of it
-  ([proof.md](proof.md) §4 binds a shard's commitments).
+  ([proof.md](proof.md) §4 is where a shard's commitments are meant to be bound; **UNFINISHED**,
+  none is, [proof.md](proof.md) §3).
 - Each challenge is drawn after every committed column its gates reach is bound, or is
   **derived**: a fixed function of such challenges and of statement data bound before them,
   computed by the verifier. That suffices for GKR; the memory argument needs more
@@ -232,7 +229,7 @@ proofs do not depend on the thread count.
 ### 5.2 The transcript schedule
 
 `prove` and `verify` run these steps and end in one sponge state; the tags are
-[transcript.md](transcript.md) §5's. `p` is the claim point, `v_j` the claim on column `j` of the
+[transcript.md](transcript.md) §4's. `p` is the claim point, `v_j` the claim on column `j` of the
 layer the next list writes.
 
 | step | op | tag | message |
@@ -260,7 +257,7 @@ halving    S_k(y) = Σ_j λ^j·G_j(layer k at (y, 0) and (y, 1))
 
 `G_j` writes `L{k+1}[j]` and `E_e`, the list's `e`-th enforcing gate, claims 0: enforcing gates are
 zerochecks sharing the descending point and its batch. The rounds are
-[primitives.md](primitives.md) §7's cubics, run from `c`, one per variable of layer `k + 1`, a
+[primitives.md](primitives.md) §3's cubics, run from `c`, one per variable of layer `k + 1`, a
 halving list's two children being separate tables. After L3 the verifier checks
 `claim = eq(p, ρ)·S_k(values)`, layer-`k` operands taking L3's values, virtual tables their closed
 form at `ρ`, cached entries their expression; with `n_{k+1} = 0` there are no rounds and the check

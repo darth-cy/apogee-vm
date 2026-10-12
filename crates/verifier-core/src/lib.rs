@@ -1,49 +1,42 @@
 #![no_std]
-//! The verifier core: everything a shard's verification does except its one
-//! Mercury opening. `#![no_std]` + `alloc`, because the recursion guest links
-//! it rather than re-implementing it; CI builds it for
-//! `riscv32imac-unknown-none-elf`.
+//! The verifier core: everything a shard's and a block's verification does.
+//! `#![no_std]` + `alloc`.
 //!
 //! `docs/spec/proof.md` specifies it. The core holds statement binding
-//! (the `VmConfig`, its descriptor and window rules, the identity and SRS
-//! digests, the global transcript), the shard transcript's replay, the GKR
-//! claim chain through `gkr-verify`, the LogUp root checks, and the memory
-//! argument's reconciliation; [`reduce_shard`] runs them in order and returns
-//! the opening claim. `crates/verifier` decodes the curve points and runs that
-//! opening through `pcs::batch_verify`, whose field side is `pcs-verify`'s; a
-//! curve point is held here as its 64 canonical bytes and absorbed through
-//! `transcript::append_g1_points`.
+//! (the `VmConfig`, its descriptor and window rules, the identity digest, the
+//! global transcript), the shard transcript's replay, the GKR claim chain
+//! through `gkr-verify`, the LogUp root checks, and the memory argument's
+//! reconciliation; [`reduce_shard`] runs them in order and returns the column
+//! claims.
 //!
-//! The recursion half (`docs/spec/recursion.md`) is the stacked opening, and
-//! [`tape`], [`chain`], [`fold`] and [`node`], which write a node's
-//! verification as coprocessor calls over field cells.
+//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The protocol
+//! this crate verifies is **UNCOMMITTED** and therefore **UNSOUND**: no column
+//! a GKR pass reduces to is committed, the transcripts absorb no commitment
+//! before the challenges that depend on one, the identity binds no code, and
+//! the [`ColumnClaims`] every shard ends in are discharged by nothing. Every
+//! place a commitment belongs is marked `UNFINISHED` in this crate; a later
+//! commitment scheme must fill each one (`docs/architecture.md` §0).
 
 extern crate alloc;
 
 mod block;
-pub mod chain;
-pub mod fold;
-pub mod node;
 mod reduce;
 mod statement;
-pub mod tape;
 mod types;
 pub mod wire;
 
 pub use block::{check_ts_windows, BlockProof, BlockReconciliation, ShardRecord};
 pub use reduce::{
-    derive_global_phase, reduce_shard, stack_challenges, stack_values, verify_global_memory,
-    verify_shard_local, GlobalChallenges,
+    derive_global_phase, reduce_shard, verify_global_memory, verify_shard_local, GlobalChallenges,
 };
 pub use statement::{
     absorb_statement_descriptor, advice_first_window, boundary_scalars, check_memory_windows,
     global_commit, identity_digest, memory_slots, public_io_words, shard_challenges,
-    shard_transcript, shard_window, srs_digest, stack_count, statement_shards, window_height,
-    GlobalTranscript, ProgramIdentity, VmConfig, STACK_LOG, TRIVIAL_TS_WINDOW,
+    shard_transcript, shard_window, statement_shards, window_height, GlobalTranscript,
+    ProgramIdentity, VmConfig, TRIVIAL_TS_WINDOW,
 };
 pub use types::{
-    read_gkr, write_gkr, OpeningClaim, PublicInputs, ShardProof, VerifyError, VerifyingKey,
-    OPENING_BYTES, SRS_VERIFIER_BYTES,
+    read_gkr, write_gkr, ColumnClaims, PublicInputs, ShardProof, VerifyError, VerifyingKey,
 };
 
 // The types a key and a proof are built from, so a caller needs no second

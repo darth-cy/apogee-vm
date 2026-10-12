@@ -14,15 +14,9 @@
 //!
 //! Numbers are internal only. Machine-dependent; make no public claims.
 
-mod block;
 mod fr_arith;
 mod gkr_prove;
-mod mercury;
-mod mercury_batch;
-mod msm;
 mod poly_bind;
-mod recurse;
-mod report;
 mod square;
 mod timing;
 mod zerocheck_prove;
@@ -30,31 +24,16 @@ mod zerocheck_verify;
 
 /// Every routine: selector, one line of what it measures, and the entry point.
 /// The order here is the order a bare `cargo run` runs them in.
-const ROUTINES: [(&str, &str, fn()); 8] = [
+const ROUTINES: [(&str, &str, fn()); 5] = [
     (
         "fr-arith",
-        "Fr mul, square, inverse and batch inverse against ark-bn254",
+        "Fr mul, square, inverse and batch inverse against ark-ff",
         fr_arith::run,
     ),
     (
         "poly-bind",
         "lift plus the full bind chain of a u32 column at 2^20",
         poly_bind::run,
-    ),
-    (
-        "msm",
-        "MSM at 2^22 over ceremony bases, against ark-bn254",
-        msm::run,
-    ),
-    (
-        "mercury",
-        "Mercury commit, open and verify at 2^22 over ceremony bases",
-        mercury::run,
-    ),
-    (
-        "mercury-batch",
-        "16 x 2^20 columns as one batch, then as 16 single openings",
-        mercury_batch::run,
     ),
     (
         "zerocheck-prove",
@@ -80,52 +59,10 @@ fn usage() {
     for (name, what, _) in ROUTINES {
         println!("  {name:width$}  {what}");
     }
-    println!("\nAnd verbs, which take arguments of their own:\n");
-    println!("{}", block::usage());
-    println!("{}", recurse::usage());
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-
-    // One verb, and it takes arguments: a proving job has to be told which
-    // block and what the hardware costs, which the routine table's `fn()` has
-    // nowhere to put. It is matched before the table rather than added to it,
-    // so the eight routines keep their signature.
-    // Four more: a recursion tree, one node of it, its decider's key and its
-    // root's decision (`recurse.rs`).
-    let recursion = match args.first().map(String::as_str) {
-        Some("recurse") => Some(recurse::run(&args[1..])),
-        Some("recurse-node") => Some(recurse::node(&args[1..])),
-        Some("ceremony") => Some(recurse::ceremony(&args[1..])),
-        Some("decide") => Some(recurse::decide(&args[1..])),
-        _ => None,
-    };
-    if let Some(result) = recursion {
-        if let Err(why) = result {
-            eprintln!("bench: {why}\n\n{}", recurse::usage());
-            std::process::exit(1);
-        }
-        return;
-    }
-
-    if args.first().map(String::as_str) == Some("prove") {
-        match block::parse(&args[1..]) {
-            Ok(options) => {
-                if let Err(why) = block::run(&options) {
-                    eprintln!("prove: {why}");
-                    std::process::exit(1);
-                }
-            }
-            Err(why) => {
-                eprintln!("bench: {why}\n");
-                usage();
-                std::process::exit(2);
-            }
-        }
-        println!("\nMachine-dependent; internal use only.");
-        return;
-    }
 
     if args
         .iter()

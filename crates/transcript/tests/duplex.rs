@@ -12,7 +12,7 @@ use field::Fr;
 use transcript::{poseidon2_permute, Tag, Transcript, TranscriptEvent};
 
 const CASES_PATH: &str = "tests/vectors/transcript_cases.txt";
-const CASES_SHA256: &str = "b81cdd9651ead3c7d0c8b49dc5147d99b7944f95567864766b7592ba24ae7017";
+const CASES_SHA256: &str = "4eb41c17b44c3c2885e93a0be0a6fc4db63ec0fc3e4521091cdc2158ed2d7740";
 
 fn load() -> Vec<Case> {
     let text = read_vectors(CASES_PATH);
@@ -72,14 +72,13 @@ fn every_committed_case_replays() {
 }
 
 /// The kind of every tag, mirroring `constants::transcript_tags`.
-const TAG_KINDS: [(&str, &str); 7] = [
+const TAG_KINDS: [(&str, &str); 6] = [
     ("PROTOCOL_SUITE", "scalars"),
     ("PUBLIC_INPUTS", "bytes"),
-    ("COMMITMENT", "scalars"),
     ("SUMCHECK_ROUND", "scalars"),
     ("SUMCHECK_CHALLENGE", "challenge"),
-    ("EVALUATION_CLAIM", "scalars"),
-    ("PCS_OPENING", "scalars"),
+    ("WITNESS_DIGEST", "scalars"),
+    ("SUMCHECK_FINAL_EVALS", "scalars"),
 ];
 
 /// Every tag used in `cases` must be used in the one kind the table gives it.
@@ -127,8 +126,8 @@ fn a_tag_used_in_two_kinds_is_caught() {
     let offender = Case {
         name: "synthetic".to_string(),
         ops: vec![
-            Op::AppendScalar(tags::PCS_OPENING, Fr::ONE),
-            Op::Challenge(tags::PCS_OPENING, Fr::ZERO),
+            Op::AppendScalar(tags::WITNESS_DIGEST, Fr::ONE),
+            Op::Challenge(tags::WITNESS_DIGEST, Fr::ZERO),
         ],
     };
     assert!(check_tag_kinds(&[offender]).is_err());
@@ -137,21 +136,21 @@ fn a_tag_used_in_two_kinds_is_caught() {
     // `tag, length, payload` a challenge absorbs one element where a message
     // absorbs a length, so a challenge tag reused as a message tag lets the two
     // framings line up element for element — here the run's declared length, 3,
-    // is exactly what the other reading takes for the COMMITMENT tag.
+    // is exactly what the other reading takes for the SUMCHECK_ROUND tag.
     let x = Fr::from_u64(4);
     let y = Fr::from_u64(9);
 
     let mut a = Transcript::new();
-    a.append_scalar(tags::PCS_OPENING, x); //                     P, 1, x
-    let _ = a.challenge_scalar(tags::PCS_OPENING); //             P
-    a.append_scalar(tags::COMMITMENT, y); //                      C, 1, y
+    a.append_scalar(tags::WITNESS_DIGEST, x); //                  P, 1, x
+    let _ = a.challenge_scalar(tags::WITNESS_DIGEST); //          P
+    a.append_scalar(tags::SUMCHECK_ROUND, y); //                  R, 1, y
     let from_a = a.challenge_scalar(tags::SUMCHECK_CHALLENGE); // S
 
     let mut b = Transcript::new();
-    b.append_scalar(tags::PCS_OPENING, x); //                     P, 1, x
+    b.append_scalar(tags::WITNESS_DIGEST, x); //                  P, 1, x
     b.append_scalars(
-        tags::PCS_OPENING,
-        // P, 3, then the run — and 3 is the COMMITMENT tag.
+        tags::WITNESS_DIGEST,
+        // P, 3, then the run — and 3 is the SUMCHECK_ROUND tag.
         &[Fr::from_u64(1), y, Fr::from_u64(tags::SUMCHECK_CHALLENGE)],
     );
     let from_b = b.sample();
@@ -252,16 +251,16 @@ fn typed_layer_is_the_documented_framing() {
     let x = Fr::from_u64(1234);
 
     let mut typed = Transcript::new();
-    typed.append_scalar(tags::COMMITMENT, x);
+    typed.append_scalar(tags::SUMCHECK_ROUND, x);
     let a = typed.challenge_scalar(tags::SUMCHECK_CHALLENGE);
 
     let mut run = Transcript::new();
-    run.append_scalars(tags::COMMITMENT, &[x]);
+    run.append_scalars(tags::SUMCHECK_ROUND, &[x]);
     let b = run.challenge_scalar(tags::SUMCHECK_CHALLENGE);
     assert_eq!(a, b, "append_scalar is append_scalars of one element");
 
     let mut raw = Transcript::new();
-    raw.observe(Fr::from_u64(tags::COMMITMENT));
+    raw.observe(Fr::from_u64(tags::SUMCHECK_ROUND));
     raw.observe(Fr::from_u64(1));
     raw.observe(x);
     raw.observe(Fr::from_u64(tags::SUMCHECK_CHALLENGE));
@@ -337,8 +336,8 @@ fn event_log_records_typed_operations_only() {
         "the raw duplex is not a typed operation"
     );
 
-    t.append_scalar(tags::COMMITMENT, Fr::from_u64(1));
-    t.append_scalars(tags::EVALUATION_CLAIM, &[Fr::ZERO, Fr::ONE, Fr::ZERO]);
+    t.append_scalar(tags::SUMCHECK_ROUND, Fr::from_u64(1));
+    t.append_scalars(tags::SUMCHECK_FINAL_EVALS, &[Fr::ZERO, Fr::ONE, Fr::ZERO]);
     t.append_bytes(tags::PUBLIC_INPUTS, &[7u8; 32]);
     t.append_bytes(tags::PUBLIC_INPUTS, &[]);
     let _ = t.challenge_scalar(tags::SUMCHECK_CHALLENGE);
@@ -347,11 +346,11 @@ fn event_log_records_typed_operations_only() {
         t.event_log(),
         [
             TranscriptEvent::Absorb {
-                tag: tags::COMMITMENT,
+                tag: tags::SUMCHECK_ROUND,
                 n_scalars: 1
             },
             TranscriptEvent::Absorb {
-                tag: tags::EVALUATION_CLAIM,
+                tag: tags::SUMCHECK_FINAL_EVALS,
                 n_scalars: 3
             },
             // 32 bytes is two 31-byte chunks.
@@ -377,7 +376,7 @@ fn event_log_does_not_affect_challenges() {
     let mut a = Transcript::new();
     let mut b = Transcript::new();
     for t in [&mut a, &mut b] {
-        t.append_scalar(tags::COMMITMENT, Fr::from_u64(5));
+        t.append_scalar(tags::SUMCHECK_ROUND, Fr::from_u64(5));
     }
     let _ = a.event_log();
     assert_eq!(
@@ -396,23 +395,10 @@ fn tag_table_is_well_formed() {
     let names = [
         "PROTOCOL_SUITE",
         "PUBLIC_INPUTS",
-        "COMMITMENT",
         "SUMCHECK_ROUND",
         "SUMCHECK_CHALLENGE",
-        "EVALUATION_CLAIM",
-        "PCS_OPENING",
         "WITNESS_DIGEST",
         "SUMCHECK_FINAL_EVALS",
-        "MERCURY_INSTANCE",
-        "MERCURY_ALPHA",
-        "MERCURY_GAMMA",
-        "MERCURY_Z",
-        "BDFG_BATCH",
-        "BDFG_POINT",
-        "PAIRING_MERGE",
-        "MERCURY_BATCH",
-        "ACCUMULATOR_DIGEST",
-        "ACCUMULATOR_MERGE",
         "PUBLIC_INPUT_STREAM",
         "PUBLIC_OUTPUT_STREAM",
         "PROGRAM_IDENTITY",
@@ -427,14 +413,10 @@ fn tag_table_is_well_formed() {
         "MEMORY_BOUNDARY",
         "PROGRAM_ENTRY",
         "LOOKUP_CHALLENGE",
-        "SRS_DIGEST",
-        "SRS_VERIFIER",
-        "MEMORY_GROUP",
         "MEMORY_CHALLENGE",
         "GLOBAL_STATE_DIGEST",
         "SHARD_SEED",
         "SHARD_TS_WINDOW",
-        "GENERIC_TABLE",
     ];
     let values: Vec<u64> = names
         .iter()
@@ -505,7 +487,7 @@ fn malformed_case_files_are_rejected() {
     assert!(replay_all(&text.replace("  observe ", "  absorb ")).is_err());
 
     // An unknown tag name.
-    assert!(replay_all(&text.replace(" COMMITMENT ", " COMMITMENTS ")).is_err());
+    assert!(replay_all(&text.replace(" SUMCHECK_ROUND ", " SUMCHECK_ROUNDS ")).is_err());
 
     // A truncated line: `sample` with no expected value.
     assert!(replay_all(&text.replace(
@@ -516,8 +498,8 @@ fn malformed_case_files_are_rejected() {
 
     // A run whose declared length does not match its payload.
     assert!(replay_all(&text.replace(
-        "  append_scalars COMMITMENT 2 ",
-        "  append_scalars COMMITMENT 3 "
+        "  append_scalars SUMCHECK_ROUND 2 ",
+        "  append_scalars SUMCHECK_ROUND 3 "
     ))
     .is_err());
 

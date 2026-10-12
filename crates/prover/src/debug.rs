@@ -8,16 +8,16 @@
 //! # Why a feature and not an unconditional runtime switch
 //!
 //! Because the cost is real and unconditional. The log's interesting lines are
-//! the **invariant scans**: every live row of a delegation shard checked against
-//! its modulus, every anchor's three zeroings, every multiplicity total. That
-//! is work proportional to the shard, and a switch would leave it compiled
-//! into every proving run behind a branch. The feature deletes it instead.
+//! the **invariant scans**: `self_check` before the backward pass, the forward
+//! pass's layer shapes, every multiplicity total. That is work proportional to
+//! the shard, and a switch would leave it compiled into every proving run
+//! behind a branch. The feature deletes it instead.
 //!
 //! # Why the level is an environment variable and not a parameter
 //!
 //! Because the log has no state to thread. Every line is emitted where its
-//! subject is already in scope — `family` and `index` inside `gkr_part`, the
-//! frame words inside `mod_mul` — so there is nothing for a `&mut Recorder`
+//! subject is already in scope — `family` and `index` inside `gkr_part` — so
+//! there is nothing for a `&mut Recorder`
 //! equivalent to carry, and adding one would put a parameter on twenty
 //! signatures to pass a `u8`. [`config`] reads `APOGEE_DEBUG` on each call and
 //! caches nothing: at the granularity these lines sit at — a phase, a shard, a
@@ -30,9 +30,9 @@
 //! ```text
 //! APOGEE_DEBUG=phase    the skeleton: one line per stage of a block
 //! APOGEE_DEBUG=detail   and per shard, per family, per channel; runs self_check
-//! APOGEE_DEBUG=deep     and per layer, per invocation sample
+//! APOGEE_DEBUG=deep     and per layer
 //! APOGEE_DEBUG=off      nothing
-//! APOGEE_DEBUG=deep:EC_ADD,MOD_MUL    deep for those families, detail for the rest
+//! APOGEE_DEBUG=deep:MUL_DIV,ATOMICS    deep for those families, detail for the rest
 //! ```
 //!
 //! Unset, in a build that has the feature, is [`Level::Phase`]: a reader who
@@ -79,7 +79,7 @@ pub enum Level {
     /// backward pass, which is the difference between a named relation and a
     /// layer number.
     Detail = 2,
-    /// Per GKR layer, per sampled invocation. Hundreds of lines a shard.
+    /// Per GKR layer. Hundreds of lines a shard.
     Deep = 3,
 }
 
@@ -99,7 +99,7 @@ impl Level {
 ///
 /// An empty `families` means every family, which is the common case; naming
 /// some raises *those* to the parsed level and leaves the rest one step below
-/// it, so `deep:EC_ADD` is the one thing a reader usually wants — everything
+/// it, so `deep:MUL_DIV` is the one thing a reader usually wants — everything
 /// at `detail`, and the family under suspicion at `deep`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
@@ -183,7 +183,7 @@ pub fn parse(value: Option<&str>) -> (Config, Option<String>) {
     } else {
         Some(format!(
             "{VAR}: {} names no family; the names are the ones this log prints, \
-             e.g. EC_ADD, MOD_MUL, ADD_SUB_LUI_AUIPC",
+             e.g. MUL_DIV, ATOMICS, ADD_SUB_LUI_AUIPC",
             unknown.join(", ")
         ))
     };
@@ -205,7 +205,7 @@ pub fn config() -> Config {
 ///
 /// The skeleton and the global phases are these: a family filter lowers the
 /// *other families*, never the block's own spine, so a reader who asks for
-/// `deep:EC_ADD` still gets every phase line.
+/// `deep:MUL_DIV` still gets every phase line.
 pub fn enabled(want: Level) -> bool {
     config().level >= want
 }
@@ -295,20 +295,9 @@ pub fn family_name(f: FamilyId) -> String {
         family::ATOMICS => "ATOMICS".to_string(),
         family::INIT_TEARDOWN => "INIT_TEARDOWN".to_string(),
         family::ZERO_WINDOWS => "ZERO_WINDOWS".to_string(),
-        family::KECCAK_F => "KECCAK_F".to_string(),
-        family::POSEIDON2 => "POSEIDON2".to_string(),
-        family::FR_ARITH => "FR_ARITH".to_string(),
         family::PUBLIC_INPUT => "PUBLIC_INPUT".to_string(),
         family::PUBLIC_OUTPUT => "PUBLIC_OUTPUT".to_string(),
         family::ADVICE_WINDOWS => "ADVICE_WINDOWS".to_string(),
-        family::MOD_MUL => "MOD_MUL".to_string(),
-        family::SHA256_COMP => "SHA256_COMP".to_string(),
-        family::EC_ADD => "EC_ADD".to_string(),
-        family::FIELD_WINDOWS => "FIELD_WINDOWS".to_string(),
-        family::FR_OP => "FR_OP".to_string(),
-        family::P2_FIELD => "P2_FIELD".to_string(),
-        family::FIELD_IO => "FIELD_IO".to_string(),
-        family::FQ_OP => "FQ_OP".to_string(),
         other => format!("family({other})"),
     }
 }
@@ -350,20 +339,6 @@ pub fn frs(xs: &[Fr], max: usize) -> String {
     } else {
         format!("[{}]", shown.join(" "))
     }
-}
-
-/// Eight 32-bit limbs as one **big-endian** hex integer, `0x`-marked: how a
-/// modulus or a coordinate reads in every reference this repository cites, and
-/// the one place this log is not in `to_bytes` order ([`fr_full`] says why).
-/// Limb 0 is the low one.
-pub fn limbs(words: &[u32]) -> String {
-    let hex: String = words
-        .iter()
-        .rev()
-        .map(|w| format!("{w:08x}"))
-        .collect::<Vec<_>>()
-        .join("");
-    format!("0x{hex}")
 }
 
 /// A height as `2^n`, which is how every spec in this repository writes one.
@@ -441,13 +416,12 @@ pub fn circuit(c: &FamilyCircuit, h: u32) -> String {
 /// argument and what every wire form in this repository carries
 /// (`docs/spec/primitives.md` §1). So a value this log prints can be pasted
 /// into the CLI, or grepped against a pinned fixture, without reversing
-/// anything. The one exception is [`limbs`], which prints an integer a reader
-/// compares against the literature — a modulus, a coordinate — and marks it
-/// `0x` and big-endian for that reason.
+/// anything.
 ///
-/// In full, not truncated, for the two values a reader compares against a
-/// **pinned constant** rather than against another run: identity and the SRS
-/// digest. A run that prints both, every time, shows a stale pin in one line.
+/// In full, not truncated, for the identity, which a reader compares against
+/// a **pinned constant** rather than against another run — a run that prints
+/// it, every time, shows a stale pin in one line — and for the global digest,
+/// where two runs that should agree diverge first.
 pub fn fr_full(x: &Fr) -> String {
     x.to_bytes().iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -475,235 +449,6 @@ pub fn ts_window(window: [u64; 2]) -> String {
 /// `O(rows)`, so `Deep` only.
 pub fn all_zero(column: &poly::MultilinearPoly) -> bool {
     (0..column.len()).all(|i| column.get(i) == Fr::ZERO)
-}
-
-/// A canonicity scan's verdict: how many of `live` rows carry a last borrow of
-/// 1, and the first row that does not.
-///
-/// **The delegation log's single most valuable line.** Every delegation frame
-/// value owes an eight-limb borrow chain whose last borrow is 1 exactly when
-/// the value is below the modulus (`docs/spec/delegation-circuits.md` §1), and a row
-/// that breaks it is provable nowhere: the circuit's gated conclusion fails,
-/// the shard's GKR self-check fails at whatever layer that conclusion sits on,
-/// and the reader gets a layer number. This says which value, on which
-/// invocation, and what it was.
-///
-/// `bad` is the offending rows in order; only the first is printed, because the
-/// cause is one guest bug and the rest are its copies.
-pub fn canonical(label: &str, live: usize, bad: &[(usize, String, String)]) -> String {
-    if bad.is_empty() {
-        return format!("canon {label}: {live}/{live} below the modulus");
-    }
-    let (row, value, modulus) = &bad[0];
-    format!(
-        "canon {label}: {}/{live} below the modulus -- NOT CANONICAL on {} rows, \
-         first invocation {row}: value={value} modulus={modulus}",
-        live - bad.len(),
-        bad.len(),
-    )
-}
-
-/// A one-hot selector column's histogram, by the name of what each code selects.
-///
-/// `MOD_MUL` multiplies in one of four fixed fields and `EC_ADD` over one of
-/// two curves; the selector is a frame word, so a caller that writes the wrong
-/// code does not fail a shape check — it proves a multiplication in the wrong
-/// field, or fails a bound it would have passed. A histogram is how that reads
-/// at a glance: a family whose every invocation should be `secp256k1_p` and
-/// whose histogram shows two in `bn254_r` has found its bug.
-pub fn histogram(label: &str, names: &[&str], tally: &[usize]) -> String {
-    let parts: Vec<String> = names
-        .iter()
-        .zip(tally)
-        .map(|(n, c)| format!("{n}:{c}"))
-        .collect();
-    format!("{label}=[{}]", parts.join(" "))
-}
-
-/// The extremes of a `u64` column, for a gap or a timestamp: the range the
-/// frame's bit decomposition or its `RANGE16` chunks have to hold.
-///
-/// A gap that does not fit its representation is the failure the decomposition
-/// silently truncates: `delegation_frame` writes `(gap >> bit) & 1` for 38 bits
-/// and drops anything above, so a gap of `2^38` becomes a gap of 0 and a
-/// timestamp chain that cannot balance. Printing `max` beside `bits` is how a
-/// reader sees it before the multiset does.
-pub fn range(label: &str, values: &[u64], bits: u32) -> String {
-    // A slice and not an `impl Iterator`: the caller's slice is one `u64` per
-    // live row per frame word — 30 kB on an `EC_ADD` shard, which is not worth
-    // a generic.
-    let (mut lo, mut hi) = (u64::MAX, 0u64);
-    for v in values {
-        lo = lo.min(*v);
-        hi = hi.max(*v);
-    }
-    if values.is_empty() {
-        return format!("{label}: no rows");
-    }
-    let ceiling = if bits >= 64 {
-        u64::MAX
-    } else {
-        (1u64 << bits) - 1
-    };
-    let verdict = if hi > ceiling {
-        format!(" -- OVER the {bits}-bit ceiling {ceiling}")
-    } else {
-        String::new()
-    };
-    format!("{label}=[{lo}..{hi}] over {bits} bits{verdict}")
-}
-
-/// A delegation shard's frame, scanned once, as the lines to print.
-///
-/// Every delegation family shares this much: `docs/spec/delegation.md` §4's
-/// frame, an invocation a row, a cycle and a base a row, and a timestamp gap a
-/// word. What it reports is the four things a reader needs before any
-/// family-specific gate can be read:
-///
-/// - **how many invocations this shard actually holds**, against its height. A
-///   zero here is the "declared but never invoked" case: the family is in
-///   the `VmConfig` because the linked binary declared it, its shard is proved
-///   because the statement counts it, and every row of it is padding. That is
-///   legal and it is also the first thing to check when a delegation is
-///   suspected of doing nothing.
-/// - **the cycle range**, which is the shard's cut of the execution and what
-///   its ts window has to contain.
-/// - **the base range**, which every frame's two decompositions bound.
-/// - **the timestamp gap's range against the 38-bit clock.** The
-///   bit-decomposition frame writes exactly `memory::TS_BITS` bits and drops
-///   anything above, so a gap of `2^38` is committed as a gap of 0 and the
-///   memory argument stops balancing for a reason no gate names. `range` says
-///   so in words.
-///
-/// `O(live rows × frame words)` and nothing worse, over the live rows alone —
-/// so on a `2^16` shard holding 1,893 invocations it reads 1,893 rows and not
-/// 65,536.
-pub fn frame_scan(frames: &trace::FrameSlice, height: usize) -> Vec<String> {
-    let live = frames.len();
-    let words = frames.width();
-    if live == 0 {
-        return vec![format!(
-            "invocations=0/{height} frame_words={words} \
-             -- DECLARED BUT NEVER INVOKED, every row of this shard is padding"
-        )];
-    }
-    let cycles = frames.cycles();
-    let bases = frames.bases();
-    let mut out = vec![format!(
-        "invocations={live}/{height} frame_words={words} cycles=[{}..{}] base=[{:#x}..{:#x}]",
-        cycles.iter().min().copied().unwrap_or(0),
-        cycles.iter().max().copied().unwrap_or(0),
-        bases.iter().min().copied().unwrap_or(0),
-        bases.iter().max().copied().unwrap_or(0),
-    )];
-    // `gap = 4·cycle + Δ − read_ts − 1`, the value both frame shapes decompose.
-    let gaps: Vec<u64> = (0..words)
-        .flat_map(|j| {
-            let w = frames.word(j);
-            (0..live).map(move |r| {
-                let ts =
-                    constants::memory::TS_STEP * cycles[r] + constants::delegation::FRAME_DELTA;
-                ts.saturating_sub(w.read_ts[r]).saturating_sub(1)
-            })
-        })
-        .collect();
-    out.push(range("ts-gap", &gaps, constants::memory::TS_BITS));
-    out
-}
-
-// ---------------------------------------------------------------------------
-// The delegation families' own vocabulary
-// ---------------------------------------------------------------------------
-
-/// What each of `constants::mod_mul::CODES` selects, in that order.
-///
-/// The log's own vocabulary, not the constants': `constants` carries the code
-/// and the limbs and no name, because nothing in the protocol needs one. A
-/// histogram over "1, 2, 3, 4" would say nothing;
-/// `secp256k1_p:1893 bn254_r:2` says which caller is wrong.
-pub const MOD_MUL_SELECTORS: [&str; 4] = ["secp256k1_p", "secp256k1_n", "bn254_p", "bn254_r"];
-
-/// What each of `constants::ec_add::CODES` selects, in that order: two curves
-/// times three groups, one group being one third of a point addition.
-pub const EC_ADD_SELECTORS: [&str; 6] = [
-    "secp256k1_g1",
-    "secp256k1_g2",
-    "secp256k1_g3",
-    "bn254_g1",
-    "bn254_g2",
-    "bn254_g3",
-];
-
-/// `constants::ec_add`'s twelve frame values, by name and in `VALUES` order.
-///
-/// A **mirror** of `constraints::ec_add::VALUES`, which is private to that
-/// module: the six point coordinates are read by groups 0 and 1, the six
-/// intermediates by group 2 alone, and `ec_add_reads` is that rule. It is
-/// mirrored rather than shared because the circuit's table carries a word
-/// offset and a gate's operand terms beside the name, none of which a log line
-/// wants, and because making it public would put a log's vocabulary in the
-/// circuit's API. **If `VALUES` gains a value or moves one between groups, this
-/// mirror and `ec_add_reads` move with it** — `a_group_reads_its_own_six`
-/// pins the shape, and nothing can pin the contents from outside that module.
-pub const EC_ADD_VALUES: [&str; 12] = [
-    "x1", "y1", "z1", "x2", "y2", "z2", "xx", "yy", "zz", "m4", "m5", "m6",
-];
-
-/// Does a row of group `group` read frame value `v`?
-///
-/// **This is what keeps the canonicity verdict from lying.** A value's `< m`
-/// chain is computed on every row, but its *conclusion* is gated to the groups
-/// that read it, so on a group-0 row the six intermediate words hold whatever
-/// the guest's scratch held and need not be below `m` at all
-/// (`crates/constraints/src/ec_add.rs`, `VALUES`). A scan that called those
-/// rows non-canonical would report the honest prover as broken on every block.
-pub fn ec_add_reads(group: usize, v: usize) -> bool {
-    if v < 6 {
-        group == 0 || group == 1
-    } else {
-        group == 2
-    }
-}
-
-/// `EC_ADD`'s one free invariant, checked: **each curve's three groups must
-/// have the same number of invocations.**
-///
-/// A row of this family is one third of a complete point addition
-/// (`docs/spec/delegation-circuits.md` §7), so a guest that performed `n` additions on
-/// a curve invoked each of that curve's three groups exactly `n` times. Three
-/// counts that differ mean an addition whose thirds did not all reach the
-/// executor — a dropped invocation, a guest that returned early between two
-/// thirds, or a shard cut that split an addition across a boundary the frame
-/// cannot express.
-///
-/// It costs a tally the log already has, and nothing else in the repository
-/// checks it: the global multiset catches a dropped invocation eventually, as a
-/// root product that does not reconcile over a whole block, which names no
-/// family and no row.
-pub fn ec_add_groups(tally: &[usize]) -> String {
-    let mut out = Vec::new();
-    for (curve, name) in ["secp256k1", "bn254"].iter().enumerate() {
-        let groups: Vec<usize> = (0..constants::ec_add::CODES.len())
-            .filter(|c| constants::ec_add::CODE_CURVE[*c] == curve)
-            .map(|c| tally.get(c).copied().unwrap_or(0))
-            .collect();
-        if groups.iter().all(|n| *n == 0) {
-            continue;
-        }
-        let balanced = groups.windows(2).all(|w| w[0] == w[1]);
-        out.push(format!(
-            "{name} thirds={groups:?}{}",
-            if balanced {
-                ""
-            } else {
-                " -- UNBALANCED, a point addition is missing a third"
-            }
-        ));
-    }
-    if out.is_empty() {
-        return "no invocations on either curve".to_string();
-    }
-    out.join("  ")
 }
 
 #[cfg(test)]
@@ -752,22 +497,22 @@ mod tests {
 
     #[test]
     fn a_family_filter_parses_by_name_and_by_number() {
-        let (c, complaint) = parse(Some("deep:ec_add, MOD_MUL ,17"));
+        let (c, complaint) = parse(Some("deep:mul_div, ATOMICS ,3"));
         assert!(complaint.is_none(), "{complaint:?}");
         assert_eq!(c.level, Level::Deep);
         assert_eq!(
             c.families,
-            vec![family::EC_ADD, family::MOD_MUL, family::EC_ADD]
+            vec![family::MUL_DIV, family::ATOMICS, family::MUL_DIV]
         );
     }
 
     #[test]
     fn an_unknown_family_complains_and_keeps_the_level() {
-        let (c, complaint) = parse(Some("deep:EC_ADDD"));
+        let (c, complaint) = parse(Some("deep:MUL_DIVV"));
         assert_eq!(c.level, Level::Deep);
         assert!(c.families.is_empty());
         let text = complaint.expect("a complaint");
-        assert!(text.contains("EC_ADDD"), "{text}");
+        assert!(text.contains("MUL_DIVV"), "{text}");
     }
 
     /// The filter's whole point: the named family is at the configured level
@@ -775,23 +520,23 @@ mod tests {
     /// so this test calls it rather than restating it.
     #[test]
     fn a_named_family_is_one_level_deeper_than_the_rest() {
-        let (c, _) = parse(Some("deep:EC_ADD"));
-        assert_eq!(c.level_for(family::EC_ADD), Level::Deep);
-        assert_eq!(c.level_for(family::MOD_MUL), Level::Detail);
+        let (c, _) = parse(Some("deep:ATOMICS"));
+        assert_eq!(c.level_for(family::ATOMICS), Level::Deep);
+        assert_eq!(c.level_for(family::MUL_DIV), Level::Detail);
 
-        let (c, _) = parse(Some("detail:MOD_MUL"));
-        assert_eq!(c.level_for(family::MOD_MUL), Level::Detail);
-        assert_eq!(c.level_for(family::EC_ADD), Level::Phase);
+        let (c, _) = parse(Some("detail:MUL_DIV"));
+        assert_eq!(c.level_for(family::MUL_DIV), Level::Detail);
+        assert_eq!(c.level_for(family::ATOMICS), Level::Phase);
 
         // No filter: every family is at the configured level.
         let (c, _) = parse(Some("deep"));
-        assert_eq!(c.level_for(family::EC_ADD), Level::Deep);
+        assert_eq!(c.level_for(family::ATOMICS), Level::Deep);
         assert_eq!(c.level_for(family::ADD_SUB_LUI_AUIPC), Level::Deep);
 
         // `off` stays off for every family, named or not: a filter raises
         // nothing above the configured level.
-        let (c, _) = parse(Some("off:EC_ADD"));
-        assert_eq!(c.level_for(family::EC_ADD), Level::Off);
+        let (c, _) = parse(Some("off:ATOMICS"));
+        assert_eq!(c.level_for(family::ATOMICS), Level::Off);
         assert_eq!(c.level_for(family::MUL_DIV), Level::Off);
     }
 
@@ -808,101 +553,6 @@ mod tests {
         }
         assert_eq!(family_id("nonsense"), None);
         assert_eq!(family_id(&family::COUNT.to_string()), None);
-    }
-
-    /// The selector names are the log's own, so nothing but a test holds them
-    /// to the constants they name. A code appended to either family without a
-    /// name here would print a histogram one column short.
-    #[test]
-    fn every_selector_code_has_a_name() {
-        assert_eq!(MOD_MUL_SELECTORS.len(), constants::mod_mul::CODES.len());
-        assert_eq!(EC_ADD_SELECTORS.len(), constants::ec_add::CODES.len());
-        // The `ec_add` names claim a curve and a group; `CODE_CURVE` and
-        // `CODE_GROUP` are what actually decide, so hold the two to agreeing.
-        for (c, name) in EC_ADD_SELECTORS.iter().enumerate() {
-            let curve = ["secp256k1", "bn254"][constants::ec_add::CODE_CURVE[c]];
-            let group = constants::ec_add::CODE_GROUP[c] + 1;
-            assert_eq!(*name, format!("{curve}_g{group}"), "code {c}");
-        }
-    }
-
-    /// The mirror's shape, which is all a test outside `constraints::ec_add`
-    /// can pin: twelve values, three groups, and every group reading exactly
-    /// six of them — six coordinates for groups 0 and 1, six intermediates for
-    /// group 2.
-    #[test]
-    fn a_group_reads_its_own_six() {
-        assert_eq!(EC_ADD_VALUES.len(), 12);
-        for group in 0..constants::ec_add::GROUPS {
-            let read: Vec<usize> = (0..12).filter(|v| ec_add_reads(group, *v)).collect();
-            assert_eq!(read.len(), 6, "group {group} reads {read:?}");
-        }
-        assert!(ec_add_reads(0, 0) && ec_add_reads(1, 5));
-        assert!(!ec_add_reads(0, 6) && !ec_add_reads(1, 11));
-        assert!(ec_add_reads(2, 6) && !ec_add_reads(2, 0));
-    }
-
-    #[test]
-    fn unbalanced_ec_add_thirds_are_named() {
-        // `CODES` is secp g1,g2,g3 then bn254 g1,g2,g3.
-        let balanced = ec_add_groups(&[7, 7, 7, 0, 0, 0]);
-        assert!(
-            balanced.contains("secp256k1 thirds=[7, 7, 7]"),
-            "{balanced}"
-        );
-        assert!(!balanced.contains("UNBALANCED"), "{balanced}");
-        // A curve with no invocations is not mentioned at all.
-        assert!(!balanced.contains("bn254"), "{balanced}");
-
-        let short = ec_add_groups(&[7, 7, 6, 0, 0, 0]);
-        assert!(short.contains("UNBALANCED"), "{short}");
-
-        assert!(ec_add_groups(&[0; 6]).contains("no invocations"));
-    }
-
-    #[test]
-    fn a_canonicity_verdict_names_the_first_bad_invocation() {
-        let clean = canonical("a", 1893, &[]);
-        assert!(clean.contains("1893/1893"), "{clean}");
-        assert!(!clean.contains("NOT CANONICAL"), "{clean}");
-
-        let bad = canonical(
-            "y2",
-            1893,
-            &[
-                (41, "0xdead".to_string(), "0xbeef".to_string()),
-                (42, "0x1".to_string(), "0xbeef".to_string()),
-            ],
-        );
-        assert!(bad.contains("NOT CANONICAL on 2 rows"), "{bad}");
-        assert!(bad.contains("first invocation 41"), "{bad}");
-        assert!(bad.contains("0xdead"), "{bad}");
-        // The count is the rows that DID pass, not the rows that failed.
-        assert!(bad.contains("1891/1893"), "{bad}");
-    }
-
-    /// A gap above its decomposition's ceiling is the silent truncation the
-    /// scan exists to catch, so the line has to say so in words.
-    #[test]
-    fn a_range_over_its_ceiling_says_so() {
-        let ok = range("gap", &[0u64, 5, 700], 38);
-        assert!(ok.contains("[0..700]"), "{ok}");
-        assert!(!ok.contains("OVER"), "{ok}");
-
-        let over = range("gap", &[1u64 << 38], 38);
-        assert!(over.contains("OVER the 38-bit ceiling"), "{over}");
-
-        assert!(range("gap", &[], 38).contains("no rows"));
-    }
-
-    #[test]
-    fn a_histogram_pairs_every_code_with_its_name() {
-        let h = histogram(
-            "sel",
-            &["secp_p", "secp_n", "bn_q", "bn_r"],
-            &[1893, 0, 2, 0],
-        );
-        assert_eq!(h, "sel=[secp_p:1893 secp_n:0 bn_q:2 bn_r:0]");
     }
 
     #[test]
@@ -927,12 +577,6 @@ mod tests {
         // Distinct values stay distinguishable in the short form, which is the
         // only property the log needs of it.
         assert_ne!(fr(&Fr::from_u64(1)), fr(&Fr::from_u64(2)));
-    }
-
-    #[test]
-    fn limbs_read_big_endian_with_limb_zero_low() {
-        assert_eq!(limbs(&[1, 0]), "0x0000000000000001");
-        assert_eq!(limbs(&[0, 1]), "0x0000000100000000");
     }
 
     #[test]

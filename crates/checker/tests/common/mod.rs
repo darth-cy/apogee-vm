@@ -244,7 +244,7 @@ pub const FAMILY_NAMES: [&str; 7] = [
 use transcript::Transcript;
 
 /// Every family's height: the init families' `h`, and tall enough for every
-/// instruction table of every committed guest but `mod-mul-ops` and `ec-ops`.
+/// instruction table of every guest these suites trace.
 pub const HEIGHT: u32 = 1 << 16;
 
 /// The guests, each on the input `crates/emulator/tests/common` runs it on:
@@ -276,9 +276,8 @@ pub fn traced(name: &str, input: u32) -> Traced {
 }
 
 /// [`traced`] for a guest whose success is a **nonzero** status: the fixtures
-/// that count their own checks exit with the count — `keccak-test` 6,
-/// `recursion-ops` 9, `mod-mul-ops` 28 — so the status is the assertion and not
-/// a failure.
+/// that count their own checks exit with the count — `mem` 50, `alu` 96,
+/// `control` 16 — so the status is the assertion and not a failure.
 pub fn traced_exiting(name: &str, input: u32, status: i32) -> Traced {
     traced_exiting_at(name, input, status, HEIGHT)
 }
@@ -286,8 +285,7 @@ pub fn traced_exiting(name: &str, input: u32, status: i32) -> Traced {
 /// [`traced_exiting`] at a height of the caller's choosing.
 ///
 /// A decoded table's row `i` is pc `2i`, so a guest whose `.text` outgrows
-/// `2·HEIGHT` needs a taller one: `guests/mod-mul-ops` reaches pc `0x45be6` and
-/// takes `2^18`. It and `guests/ec-ops` are the committed guests that need one.
+/// `2·HEIGHT` needs a taller one.
 pub fn traced_exiting_at(name: &str, input: u32, status: i32, height: u32) -> Traced {
     let path = format!(
         "{}/../loader/tests/vectors/{name}.elf",
@@ -324,10 +322,9 @@ pub fn traced_exiting_at(name: &str, input: u32, status: i32, height: u32) -> Tr
 }
 
 /// Slots 1–4, drawn from a fresh transcript that binds nothing. The global
-/// transcript owns the real schedule — the statement, every memory column's
-/// commitment and the boundary absorbed before the squeeze
-/// (`docs/spec/memory.md` §6.1). Here they are only values no trace was chosen
-/// against.
+/// transcript owns the real schedule — the statement and the boundary absorbed
+/// before the squeeze (`docs/spec/memory.md` §6.1). Here they are only values
+/// no trace was chosen against.
 pub fn memory_challenges() -> ExternalChallenges {
     let mut t = Transcript::new();
     let mut memory = ExternalChallenges::new();
@@ -389,9 +386,9 @@ pub fn frame_shard(
 
 /// Each execution family that ran, with the cycles its frame proves:
 /// `t.traces.families` in order, the families that never ran dropped. One
-/// frame cannot hold two families' cycles — an ecall row needs `deleg`, a
-/// load row needs `load` — so a statement's execution side is one
-/// frame per family, each under its own query list.
+/// frame cannot hold two families' cycles — a load row needs `load`, which the
+/// add/sub frame has not — so a statement's execution side is one frame per
+/// family, each under its own query list.
 pub fn frame_plan(t: &Traced) -> Vec<(u32, Vec<u64>)> {
     let ran = t.traces.families.iter().filter(|f| !f.is_empty());
     ran.map(|f| (f.family, f.cycle.clone())).collect()

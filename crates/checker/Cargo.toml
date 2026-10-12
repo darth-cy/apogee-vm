@@ -35,16 +35,10 @@ verifier-core.workspace = true
 # columns, then forwarded, reconciled and proved.
 emulator.workspace = true
 loader.workspace = true
-# `tests/logup.rs`: the toy's witness and multiplicity columns are
-# committed, and `g`/`beta` are drawn strictly after every absorb.
-pcs.workspace = true
-srs.workspace = true
-rayon.workspace = true
-curve.workspace = true
 # The family suites' instructions, each built as an `Instr` and routed
 # through `program::row_kind` to its one mask bit.
 isa.workspace = true
 # The tests' base-layer binding: their proofs absorb `witness_digest` of the
-# committed columns first, where a shard proof absorbs commitments.
+# base columns first.
 sumcheck.workspace = true
 test-support.workspace = true

@@ -6,7 +6,7 @@ mod common;
 
 use std::str::FromStr;
 
-use common::ark_to_bytes;
+use common::{ark_to_bytes, ArkFr};
 use constants::{FR_INV, FR_MODULUS, FR_MODULUS_MINUS_TWO, FR_R, FR_R2, PROTOCOL_VERSION};
 use field::Fr;
 use test_support::to_hex;
@@ -27,19 +27,19 @@ fn limbs_to_bytes(limbs: &[u64; 4]) -> [u8; 32] {
 fn modulus_is_the_bn254_scalar_field() {
     assert_eq!(
         FR_MODULUS,
-        <ark_bn254::Fr as ark_ff::PrimeField>::MODULUS.0,
-        "FR_MODULUS must be Fr, not Fq"
+        <ArkFr as ark_ff::PrimeField>::MODULUS.0,
+        "FR_MODULUS must be the scalar field's modulus"
     );
 
     // The decimal is pinned from both sides: p - 1 is the
     // largest element, and p itself is not an element at all.
     let p_minus_one_decimal =
         "21888242871839275222246405745257275088548364400416034343698204186575808495616";
-    let p_minus_one = ark_bn254::Fr::from_str(p_minus_one_decimal).expect("p-1 is an element");
-    assert_eq!(p_minus_one, -ark_bn254::Fr::from(1u64));
+    let p_minus_one = ArkFr::from_str(p_minus_one_decimal).expect("p-1 is an element");
+    assert_eq!(p_minus_one, -ArkFr::from(1u64));
     assert_eq!(Fr::MINUS_ONE.to_bytes(), ark_to_bytes(&p_minus_one));
     assert_eq!(
-        ark_bn254::Fr::from_str(FR_MODULUS_DECIMAL).map(|x| x == ark_bn254::Fr::from(0u64)),
+        ArkFr::from_str(FR_MODULUS_DECIMAL).map(|x| x == ArkFr::from(0u64)),
         Ok(true),
         "the decimal modulus must reduce to zero"
     );
@@ -64,7 +64,7 @@ fn modulus_minus_two_is_p_minus_two() {
 #[test]
 fn montgomery_radix_constants_are_right() {
     // R = 2^256 mod p and R^2 = 2^512 mod p, as canonical little-endian limbs.
-    let two = ark_bn254::Fr::from(2u64);
+    let two = ArkFr::from(2u64);
     let r = ark_ff::Field::pow(&two, [256u64, 0, 0, 0]);
     let r2 = ark_ff::Field::pow(&two, [512u64, 0, 0, 0]);
     assert_eq!(limbs_to_bytes(&FR_R), ark_to_bytes(&r), "FR_R");

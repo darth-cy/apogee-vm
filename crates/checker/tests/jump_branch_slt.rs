@@ -839,8 +839,8 @@ fn the_layout_and_the_gates_are_the_specs() {
 }
 
 /// The registry: this family from 19 variables, the timestamp channel's width,
-/// the constructor it names — a provable height being 20 and up, Mercury's
-/// even count — and nothing below 19.
+/// the constructor it names — a provable height being 20 and up, the height
+/// menu's first entry past 19 — and nothing below 19.
 #[test]
 fn the_registry_holds_the_family() {
     let c = family_circuit(family::JUMP_BRANCH_SLT, VARS).expect("the family at 2^20");

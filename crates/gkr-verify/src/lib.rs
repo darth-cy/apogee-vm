@@ -3,9 +3,8 @@
 //! the layer sumcheck's verifier, and `verify`, which reduces a circuit's
 //! output claims to claims about its committed base columns.
 //!
-//! `docs/spec/gkr.md` §5 specifies it. `#![no_std]` + `alloc`: the recursion
-//! guest links this crate. `crates/gkr` is the prover half and re-exports
-//! everything here.
+//! `docs/spec/gkr.md` §5 specifies it. `#![no_std]` + `alloc`. `crates/gkr` is
+//! the prover half and re-exports everything here.
 
 extern crate alloc;
 
@@ -25,9 +24,7 @@ mod lookup;
 mod memory;
 
 pub use lookup::{channel_holds, insert_lookup_challenges};
-pub use memory::{
-    boundary_factors, field_window_challenges, reconciles, window_challenges, BoundaryFinals,
-};
+pub use memory::{boundary_factors, reconciles, window_challenges, BoundaryFinals};
 
 // ---------------------------------------------------------------------------
 // The containers
@@ -75,7 +72,7 @@ pub struct OutputClaims {
 
 /// A claim about a committed base column, left for the caller to discharge.
 /// `point[j]` is the value bound to variable `j`, so it is exactly what
-/// `MultilinearPoly::evaluate` and a Mercury opening take.
+/// `MultilinearPoly::evaluate` takes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BaseClaim {
     pub address: PolyAddress,
@@ -219,13 +216,6 @@ pub fn virtual_at_row(kind: VirtualKind, row: usize) -> Fr {
             let bits = range_bits(kind);
             Fr::from_u64((row as u64) & ((1u64 << bits) - 1))
         }
-        // The `XOR8` table's three columns: the row index's low byte, its next
-        // byte, and their XOR. At a height of `2^16` rows or more the table is
-        // exactly the 65,536 triples `(a, b, a ^ b)`, each once per `2^16`
-        // rows (`docs/spec/lookup.md` §3).
-        VirtualKind::Xor8A => Fr::from_u64((row as u64) & 0xff),
-        VirtualKind::Xor8B => Fr::from_u64(((row as u64) >> 8) & 0xff),
-        VirtualKind::Xor8Out => Fr::from_u64(((row as u64) & 0xff) ^ (((row as u64) >> 8) & 0xff)),
     }
 }
 
@@ -254,35 +244,7 @@ pub fn virtual_at_point(kind: VirtualKind, point: &[Fr]) -> Fr {
             let low = &point[..point.len().min(range_bits(kind) as usize)];
             low.iter().rev().fold(Fr::ZERO, |acc, y| acc + acc + *y)
         }
-        // `Σ_j 2^j·y_j` over bits 0..8 and 8..16, and over bits 0..8 of their
-        // XOR: `y ^ z = y + z − 2yz`, which is multilinear in each of `y` and
-        // `z`, so the sum below **is** the table column's multilinear
-        // extension and not an approximation of it. A `point` shorter than the
-        // bits a column reads leaves the missing variables out, exactly as the
-        // range tables do; `constraints::lookup::table_vars` is what keeps a
-        // circuit from declaring the channel there.
-        VirtualKind::Xor8A => byte_at_point(point, 0),
-        VirtualKind::Xor8B => byte_at_point(point, 8),
-        VirtualKind::Xor8Out => {
-            let mut acc = Fr::ZERO;
-            for j in (0..8).rev() {
-                let y = point.get(j).copied().unwrap_or(Fr::ZERO);
-                let z = point.get(j + 8).copied().unwrap_or(Fr::ZERO);
-                acc = acc + acc + y + z - (y * z + y * z);
-            }
-            acc
-        }
     }
-}
-
-/// `Σ_{j < 8} 2^j · point[first + j]`, the multilinear extension of one byte of
-/// the row index, over the variables `point` has.
-fn byte_at_point(point: &[Fr], first: usize) -> Fr {
-    let mut acc = Fr::ZERO;
-    for j in (0..8).rev() {
-        acc = acc + acc + point.get(first + j).copied().unwrap_or(Fr::ZERO);
-    }
-    acc
 }
 
 /// Where one operand of a [`ResolvedList`] is read at a point.

@@ -172,8 +172,7 @@ fn the_cli_verifies_a_block_file() {
         std::fs::read_to_string(&paths.identity).unwrap().trim(),
         identity
     );
-    // The bundle reads back through its own inverse, which is what recursion
-    // development does with it.
+    // The bundle reads back through its own inverse.
     let (vk2, id2, public2, block2) =
         verifier::proof_archive::read_proof(&dir, "addsub").expect("the proof reads back");
     assert_eq!(vk2.to_bytes(), setup.vk.to_bytes());

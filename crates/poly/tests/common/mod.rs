@@ -3,6 +3,9 @@
 //! The RNG, hex and SHA-256 are shared and live in `tools/test-support`.
 //! Test-only; never compiled into the library.
 #![allow(dead_code)]
+// `MontConfig`'s expansion names arkworks' own `asm` feature, which this crate
+// does not have.
+#![allow(unexpected_cfgs)]
 
 use field::Fr;
 use poly::{MultilinearPoly, PolyBacking};
@@ -147,13 +150,25 @@ pub fn corrupt(text: &str, prefix: &str) -> String {
 // arkworks bridge
 // ---------------------------------------------------------------------------
 
-pub fn to_ark(x: &Fr) -> ark_bn254::Fr {
+use ark_ff::fields::{Fp256, MontBackend, MontConfig};
+
+/// arkworks' Montgomery field over `Fr`'s modulus, derived from the decimal
+/// modulus with `ark-ff`'s own `MontConfig`.
+#[derive(MontConfig)]
+#[modulus = "21888242871839275222246405745257275088548364400416034343698204186575808495617"]
+#[generator = "5"]
+pub struct ArkFrConfig;
+
+/// The reference field `ark-poly`'s polynomials are taken over.
+pub type ArkFr = Fp256<MontBackend<ArkFrConfig, 4>>;
+
+pub fn to_ark(x: &Fr) -> ArkFr {
     ark_ff::PrimeField::from_le_bytes_mod_order(&x.to_bytes())
 }
 
 /// The same table as an `ark-poly` polynomial, so the two can be compared at
 /// any point. Reads through `get`, which is where our lift lives.
-pub fn to_ark_mle(p: &MultilinearPoly) -> ark_poly::DenseMultilinearExtension<ark_bn254::Fr> {
+pub fn to_ark_mle(p: &MultilinearPoly) -> ark_poly::DenseMultilinearExtension<ArkFr> {
     ark_poly::DenseMultilinearExtension::from_evaluations_vec(
         p.num_vars(),
         (0..p.len()).map(|i| to_ark(&p.get(i))).collect(),

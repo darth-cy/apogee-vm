@@ -1,5 +1,5 @@
 # host
 
-The host SDK (setup, prove, verify), the block-witness recorder and its RPC client, the tests-zkevm reader, the recursion tree and the Groth16 decider.
+The host SDK: setup, prove, verify, and the proof archive re-exported. **UNFINISHED: no commitment scheme; a block it proves is unsound until one fills the voids marked `UNFINISHED`** ([architecture.md](../../docs/architecture.md) §0).
 
-Specified in [ethereum.md](../../docs/spec/ethereum.md) §6, [recursion.md](../../docs/spec/recursion.md) §8–§9, [streaming.md](../../docs/spec/streaming.md) §1.
+Specified in [streaming.md](../../docs/spec/streaming.md) §1.

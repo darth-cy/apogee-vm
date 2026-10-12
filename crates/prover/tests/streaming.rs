@@ -1,12 +1,16 @@
 //! **`max_in_flight` is a resource setting and nothing else.**
 //!
 //! `docs/spec/streaming.md` specifies the streaming prover. It changes *when* a
-//! column exists: pass 1 commits each shard's `M` columns as the shard fills
-//! and runs G1–G11 over the ordered list at the end, pass 2 re-executes and
-//! proves each shard as it fills, holding at most `max_in_flight` of them, one
-//! per worker. Every commitment, every absorption and every challenge is a
-//! function of the statement and the shard's own columns, so the worker count
-//! cannot reach one — and that is the claim here.
+//! column exists: pass 1 runs the execution to its end and G1–G9 over the
+//! statement, pass 2 re-executes and proves each shard as it fills, holding at
+//! most `max_in_flight` of them, one per worker. Every absorption and every
+//! challenge is a function of the statement and the shard's own columns, so
+//! the worker count cannot reach one — and that is the claim here.
+//!
+//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** Pass 1 is
+//! where each shard's `M` columns are meant to be committed as the shard fills,
+//! and G1–G9 to absorb the ordered list. Nothing is committed
+//! (`docs/architecture.md` §0).
 //!
 //! # What holds the streamed block
 //!
@@ -28,10 +32,10 @@
 //!   block's: where an archived construction and a streamed one are held to
 //!   the same bytes.
 //!
-//! The three `ShardRows` arms are each proved and verified by the suites that
+//! The two `ShardRows` arms are each proved and verified by the suites that
 //! are about them: `tests/block.rs` and `tests/acceptance.rs` the `Cycles` arm,
-//! `tests/keccak.rs` the `Invocations` arm, `tests/public_io.rs` the `Window`
-//! arm. Re-proving them here would be the same mutation set at twice the cost.
+//! `tests/public_io.rs` the `Window` arm. Re-proving them here would be the
+//! same mutation set at twice the cost.
 //!
 //! Every test here is `#[ignore]`d and proves real statements: run with
 //! `cargo test --release -p prover --test streaming -- --include-ignored
@@ -39,7 +43,7 @@
 
 mod common;
 
-use common::{empty_io, keccak_setup, setup};
+use common::{empty_io, setup};
 use emulator::GuestIo;
 use prover::{prove_block_streaming, ProverSetup, StreamingReport};
 
@@ -91,20 +95,4 @@ fn a1_the_streamed_block_does_not_depend_on_max_in_flight() {
         r8.peak_in_flight, 3,
         "addsub: the window families' batch is the largest"
     );
-}
-
-/// `guests/keccak-test`: a **delegation** shard, so the `Invocations` arm — and
-/// the statement whose order puts a family the executor fills first *last*
-/// (`docs/spec/delegation.md` §8).
-///
-/// That ordering is the one place where the worker count could plausibly reach
-/// a proof: pass 2's workers finish shards in whatever order the schedule
-/// picks, while the statement is in ascending-`FamilyId` order, so a block
-/// whose two orders disagree is the case worth varying the bound over. The
-/// `Window` arm needs no second run — a window family's shard is built after
-/// the pipeline, over the final state, at any bound.
-#[test]
-#[ignore = "proves a delegation block twice"]
-fn a2_a_block_with_a_delegation_shard_does_not_depend_on_max_in_flight() {
-    same_at_one_and_eight("keccak-test", &keccak_setup(), &empty_io());
 }

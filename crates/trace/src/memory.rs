@@ -9,9 +9,9 @@
 use constants::lookup_channel;
 use constants::memory::{HALT_PC, RAM_LIVE_BIT, TS_STEP};
 use constraints::memory::{
-    deleg_space, frame, frame_query_takes, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, DELEG,
-    FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA,
-    FRAME_MIN_ADVANCE, RD,
+    frame, frame_query_takes, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, FIELD_ADDR,
+    FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_MIN_ADVANCE,
+    RD,
 };
 use constraints::PolyAddress;
 use field::Fr;
@@ -52,11 +52,7 @@ fn column(mut values: Vec<u64>, height: usize) -> MultilinearPoly {
 ///
 /// A row is a complete encoding of its events. The pc query's read timestamp is
 /// the only field a buffer does not store, because it is always the previous
-/// cycle's pc write, `4·(cycle − 1)`; every other field is in the row. What is
-/// **not** here is a delegation invocation's frame accesses: they ride this
-/// cycle's timestamp but they are the delegation family's own rows, not this
-/// one's (`docs/spec/delegation.md` §4), and `checker::memory_columns_from_log`,
-/// which reads the log, skips them.
+/// cycle's pc write, `4·(cycle − 1)`; every other field is in the row.
 ///
 /// `crates/trace/src/archive.rs`'s `check_parts` is the same derivation in the
 /// other direction — it holds an archived log to the rows event for event — so
@@ -72,11 +68,10 @@ fn row_events(row: &Row) -> Vec<MemoryEvent> {
         read_value: row.pc,
         write_value: row.next_pc,
     });
-    let delegation = row.delegation_space();
     for role in ROLES {
         if let Some(q) = row.query(role) {
             out.push(MemoryEvent {
-                space: role.space(delegation),
+                space: role.space(),
                 addr: q.addr,
                 ts: base + role.delta(),
                 read_ts: q.read_ts,
@@ -171,17 +166,6 @@ pub fn build_memory_columns(
             frame(at, FIELD_WRITE_VALUE),
             field(|e| e.write_value as u64),
         ));
-    }
-    // The delegation mirror's leaf names the requested *type* through one more
-    // `M` column, and the type is the mirror event's own address space — one
-    // `deleg` query serves them all (`docs/spec/delegation.md` §5.1). Zero on
-    // every row that requests nothing, which the leaf reads as no tuple at
-    // all because the mask is zero there too.
-    if let Some(at) = queries.iter().position(|&q| q == DELEG) {
-        let values = rows
-            .iter()
-            .map(|row| row[at].as_ref().map_or(0, |e| e.space.tag() as u64));
-        out.push((deleg_space(queries.len()), column(values.collect(), height)));
     }
     out
 }

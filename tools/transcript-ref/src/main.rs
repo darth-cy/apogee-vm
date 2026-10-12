@@ -59,13 +59,12 @@ fn tag(name: &str) -> u64 {
     match name {
         "PROTOCOL_SUITE" => 1,
         "PUBLIC_INPUTS" => 2,
-        "COMMITMENT" => 3,
-        "SUMCHECK_ROUND" => 4,
-        "SUMCHECK_CHALLENGE" => 5,
-        "EVALUATION_CLAIM" => 6,
-        "PCS_OPENING" => 7,
-        "PUBLIC_INPUT_STREAM" => 20,
-        "PUBLIC_OUTPUT_STREAM" => 21,
+        "SUMCHECK_ROUND" => 3,
+        "SUMCHECK_CHALLENGE" => 4,
+        "WITNESS_DIGEST" => 5,
+        "SUMCHECK_FINAL_EVALS" => 6,
+        "PUBLIC_INPUT_STREAM" => 7,
+        "PUBLIC_OUTPUT_STREAM" => 8,
         other => panic!("unknown transcript tag name: {other}"),
     }
 }
@@ -410,36 +409,36 @@ fn cases() -> Vec<(String, Vec<Op>)> {
     v.push((
         "T1_tag_x".into(),
         vec![
-            Op::AppendScalar("COMMITMENT", a),
+            Op::AppendScalar("SUMCHECK_ROUND", a),
             Op::Challenge("SUMCHECK_CHALLENGE"),
         ],
     ));
     v.push((
         "T2_tag_y".into(),
         vec![
-            Op::AppendScalar("EVALUATION_CLAIM", a),
+            Op::AppendScalar("SUMCHECK_FINAL_EVALS", a),
             Op::Challenge("SUMCHECK_CHALLENGE"),
         ],
     ));
     v.push((
         "T3_run".into(),
         vec![
-            Op::AppendScalars("COMMITMENT", vec![a, b]),
+            Op::AppendScalars("SUMCHECK_ROUND", vec![a, b]),
             Op::Challenge("SUMCHECK_CHALLENGE"),
         ],
     ));
     v.push((
         "T4_split".into(),
         vec![
-            Op::AppendScalar("COMMITMENT", a),
-            Op::AppendScalar("COMMITMENT", b),
+            Op::AppendScalar("SUMCHECK_ROUND", a),
+            Op::AppendScalar("SUMCHECK_ROUND", b),
             Op::Challenge("SUMCHECK_CHALLENGE"),
         ],
     ));
     v.push((
         "T5_empty_run".into(),
         vec![
-            Op::AppendScalars("COMMITMENT", vec![]),
+            Op::AppendScalars("SUMCHECK_ROUND", vec![]),
             Op::Challenge("SUMCHECK_CHALLENGE"),
         ],
     ));
@@ -479,7 +478,7 @@ fn cases() -> Vec<(String, Vec<Op>)> {
         Op::AppendBytes("PUBLIC_INPUTS", rng.next_bytes(8)),
         Op::Challenge("SUMCHECK_CHALLENGE"),
         Op::AppendScalars(
-            "COMMITMENT",
+            "SUMCHECK_ROUND",
             vec![next_fr(&mut rng), next_fr(&mut rng), next_fr(&mut rng)],
         ),
         Op::Observe(next_fr(&mut rng)),
@@ -492,11 +491,11 @@ fn cases() -> Vec<(String, Vec<Op>)> {
         Op::Sample,
         Op::AppendBytes("PUBLIC_INPUTS", rng.next_bytes(33)),
         Op::Challenge("SUMCHECK_CHALLENGE"),
-        Op::AppendScalars("EVALUATION_CLAIM", vec![next_fr(&mut rng)]),
+        Op::AppendScalars("SUMCHECK_FINAL_EVALS", vec![next_fr(&mut rng)]),
         Op::Sample,
         Op::Observe(next_fr(&mut rng)),
-        Op::AppendScalar("PCS_OPENING", next_fr(&mut rng)),
-        Op::AppendScalar("COMMITMENT", next_fr(&mut rng)),
+        Op::AppendScalar("WITNESS_DIGEST", next_fr(&mut rng)),
+        Op::AppendScalar("SUMCHECK_ROUND", next_fr(&mut rng)),
         Op::Sample,
         Op::Challenge("SUMCHECK_CHALLENGE"),
     ];

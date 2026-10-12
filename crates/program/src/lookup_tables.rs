@@ -1,5 +1,5 @@
-//! The generic channel's committed table: the tables a wide field still
-//! needs, packed into one column set under the gated-key convention of
+//! The generic channel's table: the tables a wide field still needs, packed
+//! into one column set under the gated-key convention of
 //! `docs/spec/lookup.md` §4.
 //!
 //! ```text
@@ -31,11 +31,8 @@
 //! `constants::generic_table::SHIFT_COPOWER_BITS`.
 
 use constants::generic_table;
-use curve::G1Affine;
 use field::Fr;
-use pcs::commit;
 use poly::{MultilinearPoly, PolyBacking};
-use srs::Srs;
 
 /// The channel's tuple width: a key and two values, which the AND table and
 /// `ShiftPowers` both fill and `U16GetSign` is zero-padded to.
@@ -118,26 +115,4 @@ pub fn generic_entries() -> Vec<[u32; GENERIC_WIDTH]> {
 /// The `ZeroEntry`, which every switched-off row of the channel looks up.
 pub fn zero_entry() -> [Fr; GENERIC_WIDTH] {
     [Fr::ZERO; GENERIC_WIDTH]
-}
-
-/// The packed table's `GENERIC_WIDTH` commitments, in tuple order: what every
-/// verifying key carries, and its SRS digest covers
-/// (`docs/spec/lookup.md` §9).
-///
-/// **One set at every height.** A Mercury commitment is the evaluation table
-/// read as coefficients (`docs/spec/mercury.md`), and every row of
-/// [`generic_table`] past its entries is zero, so the table over `2^n` rows
-/// commits to these points for every even `n ≥ 18`; a family's shard opens its
-/// `2^n`-row columns against them. They are computed at [`GENERIC_LOG_HEIGHT`].
-/// A constant of the SRS, which is why anyone holding the ceremony can
-/// recompute them, and why a verifier holding only its `SrsVerifier` cannot.
-///
-/// Panics if `srs` holds fewer than `2^18` powers.
-pub fn generic_commitments(srs: &Srs) -> [G1Affine; GENERIC_WIDTH] {
-    let columns = generic_table(GENERIC_LOG_HEIGHT);
-    std::array::from_fn(|j| {
-        commit(srs, &columns[j])
-            .unwrap_or_else(|e| panic!("committing the generic table: {e:?}"))
-            .0
-    })
 }

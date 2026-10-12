@@ -158,15 +158,11 @@ fn next_pc_is_the_fall_through_the_encoding_implies() {
 /// Every table is exactly its family's `VmConfig` height, an
 /// even variable count, and exports at that length.
 ///
-/// Two guests, because the default heights are not one band: `fib`
-/// carries execution families and the window ones, and
-/// `keccak-test` carries a delegation family beside them, whose default is
-/// `2^18` (`docs/spec/delegation.md` §9). A delegation family is
-/// invoked, never decoded, so its table is empty — but it is still exactly its
-/// height, liveness bitset and all.
+/// `fib` carries execution families and every window one, whose tables are
+/// empty — but each is still exactly its height, liveness bitset and all.
 #[test]
 fn every_table_is_exactly_its_config_height() {
-    for name in ["fib", "keccak-test"] {
+    for name in ["fib"] {
         let image = common::guest(name);
         let (tables, config) = decode_program(&image, &ProgramParams::defaults()).unwrap();
         assert_eq!(tables.families.len(), config.families.len());
@@ -189,30 +185,16 @@ fn every_table_is_exactly_its_config_height() {
                 assert_eq!(len, *height as usize);
             }
         }
-        // Two ends of the menu, named so neither guest's pass is vacuous: the
-        // widest execution table at 2^22, and — for the guest that declares one
-        // — the delegation table at its own height: `RANGE16`'s table and
-        // `XOR8`'s each need sixteen variables — that is the **floor** — and the
-        // family is at `2^18`, two rungs above it, so that a stateless block's
-        // keccak load is fewer, fatter shards (`docs/spec/delegation-circuits.md`
-        // §2.4, `docs/spec/delegation.md` §9).
+        // The widest execution table, at 2^22.
         let alu = tables.family(family::ADD_SUB_LUI_AUIPC).unwrap();
         assert_eq!(alu.height, 1 << 22, "{name}");
-        match tables.family(family::KECCAK_F) {
-            Some(keccak) => {
-                assert_eq!(name, "keccak-test");
-                assert_eq!(keccak.height, 1 << 18);
-                assert!(keccak.columns.is_empty(), "invoked, never decoded");
-            }
-            None => assert_eq!(name, "fib", "fib declares no delegation family"),
-        }
         if name == "fib" {
             // One export at the full default height, to see the length and
             // the variable count directly. 2^22 rows of Fr is 128 MiB, so it
             // is done once and not per guest.
             let exported = alu.column_poly(0);
             assert_eq!(exported.len(), 1 << 22);
-            assert_eq!(exported.num_vars() % 2, 0);
+            assert_eq!(exported.num_vars(), 22);
         }
     }
 }
@@ -440,10 +422,8 @@ fn parameters_off_the_menu_and_unknown_versions_are_refused() {
 }
 
 /// The per-family field masks, pinned. `funct3` is bit 6 and no family keeps
-/// it; mul/div and the atomics have no immediate; the window families and the
-/// delegation families have no decoded table at all, so their tuple is empty
-/// and their mask 0 — a delegation family is invoked, never decoded
-/// (`docs/spec/delegation.md` §1).
+/// it; mul/div and the atomics have no immediate; the window families have no
+/// decoded table at all, so their tuple is empty and their mask 0.
 ///
 /// The list is every family, in canonical ascending order, and is held to
 /// `FAMILIES` by count *and* by order: a family appended to
@@ -451,7 +431,7 @@ fn parameters_off_the_menu_and_unknown_versions_are_refused() {
 /// silently.
 #[test]
 fn the_field_masks_are_frozen() {
-    let want: [(FamilyId, u8); 23] = [
+    let want: [(FamilyId, u8); 12] = [
         (family::ADD_SUB_LUI_AUIPC, 0b1011_1111),
         (family::JUMP_BRANCH_SLT, 0b1011_1111),
         (family::SHIFT_BITWISE, 0b1011_1111),
@@ -461,20 +441,9 @@ fn the_field_masks_are_frozen() {
         (family::ATOMICS, 0b1001_1111),
         (family::INIT_TEARDOWN, 0),
         (family::ZERO_WINDOWS, 0),
-        (family::KECCAK_F, 0),
-        (family::POSEIDON2, 0),
-        (family::FR_ARITH, 0),
         (family::PUBLIC_INPUT, 0),
         (family::PUBLIC_OUTPUT, 0),
         (family::ADVICE_WINDOWS, 0),
-        (family::MOD_MUL, 0),
-        (family::SHA256_COMP, 0),
-        (family::EC_ADD, 0),
-        (family::FIELD_WINDOWS, 0),
-        (family::FR_OP, 0),
-        (family::P2_FIELD, 0),
-        (family::FIELD_IO, 0),
-        (family::FQ_OP, 0),
     ];
     assert_eq!(want.map(|(f, _)| f), FAMILIES, "every family, in order");
     for (family, mask) in want {

@@ -578,7 +578,7 @@ fn show(x: Fr) -> String {
 ///
 /// A committed column has a name of its own. An inner column does not — it is a
 /// gate's output — so it is named by **the relation that wrote it**, which is
-/// what makes a failure at layer 9 of a delegation circuit legible at all.
+/// what makes a failure at layer 9 of a deep circuit legible at all.
 fn operand_name(artifact: &CircuitArtifact, k: usize, op: &PolyAddress) -> String {
     match *op {
         PolyAddress::Memory(i) => artifact

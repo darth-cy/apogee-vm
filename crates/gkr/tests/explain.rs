@@ -88,8 +88,8 @@ fn a_committed_operand_is_named_and_valued() {
 /// `root_circuit`'s top gate list enforces `0 = root`, and `root` is
 /// `L{2}[0]` — a gate's output, which the artifact gives no name of its own.
 /// Naming it `written by define_root` is what makes a failure deep in a
-/// delegation circuit legible: layer 12 of `EC_ADD` is unreadable as a number
-/// and readable as the relation that produced it.
+/// circuit legible: a layer's offset is unreadable as a number and readable as
+/// the relation that produced it.
 ///
 /// With `a = [2, 2]`, `sq = [2, 2]` and `root = 4`, so the enforcing gate
 /// computes 4 where it owes 0.

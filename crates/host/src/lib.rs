@@ -1,5 +1,9 @@
-//! The host SDK: a guest ELF and its inputs in, a `BlockProof` out, and the
-//! witness recorder that produces a real Ethereum block's `BlockWitness`.
+//! The host SDK: a guest ELF and its inputs in, a `BlockProof` out.
+//!
+//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A block this
+//! SDK proves binds none of its columns, so one that [`verify`] accepts is
+//! **UNSOUND** evidence of the execution until a commitment scheme fills the
+//! voids marked `UNFINISHED` (`docs/architecture.md` §0).
 //!
 //! # What is here, and what is not
 //!
@@ -29,39 +33,21 @@
 //!   clocks either. [`Proven::report`] carries the streaming run's own clocks
 //!   instead: one wall clock per pass, and the executor's time inside each.
 //!   The guest is stepped by whichever worker needs the next shard while the
-//!   others commit or prove theirs, so the executor's time overlaps the rest
-//!   and is not a slice of the wall.
+//!   others prove theirs, so the executor's time overlaps the rest and is not
+//!   a slice of the wall.
 //!
 //! The guest's execution is not timed separately here. It does not need
 //! to be: `StreamingReport`'s `pass1_execute_ns` and `pass2_execute_ns` are
 //! measured inside the prover, around the executor itself, which is a tighter
 //! interval than this function could take.
 //!
-//! # The modules
+//! # The proof archive
 //!
-//! - [`proof_archive`] — the four files a proved block leaves on disk, which
-//!   are exactly what the `verifier` CLI reads back. **The proof is the only
-//!   thing a proving run archives.** It is `verifier::proof_archive`,
-//!   re-exported: the format's reader is the CLI, so its writer lives beside
-//!   the reader and there is one definition of it.
-//! - [`rpc`] — the minimal JSON-RPC client and its content-addressed cache.
-//!   Manual paths only; CI never reaches it.
-//! - [`recorder`] — [`recorder::WitnessRecorder`], which pre-executes a block's
-//!   transactions with native revm against an RPC-backed database, harvests the
-//!   touch set, and emits the `BlockWitness` the guest reads as advice.
-//! - [`fixture`] — what a recorded block is on disk, and how it is pinned.
-//! - [`canonical`] — JSON-RPC objects back to the bytes the chain hashes:
-//!   headers, transactions, withdrawals and receipts.
-//! - [`zkevm`] — a `tests-zkevm` release on disk: its stateless input/output
-//!   pairs, and the verdict the stateless guest gives each.
-
-pub mod canonical;
-pub mod decider;
-pub mod fixture;
-pub mod recorder;
-pub mod recursion;
-pub mod rpc;
-pub mod zkevm;
+//! [`proof_archive`] is the four files a proved block leaves on disk, which are
+//! exactly what the `verifier` CLI reads back. **The proof is the only thing a
+//! proving run archives.** It is `verifier::proof_archive`, re-exported: the
+//! format's reader is the CLI, so its writer lives beside the reader and there
+//! is one definition of it.
 
 pub use verifier::proof_archive;
 
@@ -71,7 +57,6 @@ use emulator::GuestIo;
 use loader::load_elf;
 use program::{decode_program, ProgramParams};
 use prover::{Program, ProverSetup, StreamingReport};
-use srs::Srs;
 use verifier_core::{BlockProof, VerifyError, VerifyingKey};
 
 /// Everything one proving run produced, beside the proof itself.
@@ -98,28 +83,24 @@ pub struct Proven {
 /// A guest ELF and the heights it is preprocessed under, as a `ProverSetup`.
 ///
 /// This is steps 1 to 4 of the path `crates/prover`'s module documentation
-/// describes. The SRS is moved in: a `ProverSetup` owns it for the run.
-pub fn setup(elf: &[u8], params: &ProgramParams, srs: Srs) -> Result<ProverSetup, String> {
+/// describes.
+pub fn setup(elf: &[u8], params: &ProgramParams) -> Result<ProverSetup, String> {
     let image = load_elf(elf).map_err(|e| format!("the guest ELF does not load: {e:?}"))?;
     let (tables, config) =
         decode_program(&image, params).map_err(|e| format!("the guest does not decode: {e}"))?;
-    ProverSetup::new(
-        Program {
-            image,
-            tables,
-            config,
-        },
-        srs,
-    )
+    ProverSetup::new(Program {
+        image,
+        tables,
+        config,
+    })
     .map_err(|e| format!("the program does not register: {e:?}"))
 }
 
 /// Execute the guest over `io` and prove the block, streaming.
 ///
 /// One call into `prover::prove_block_streaming`, which executes the guest
-/// twice — once to commit each shard's memory columns as it fills, once to
-/// prove them — and never holds more than `max_in_flight` shards at once, one
-/// per worker.
+/// twice — once to its statement, once to prove each shard as it fills — and
+/// never holds more than `max_in_flight` shards at once, one per worker.
 /// `max_in_flight` must be at least 1; `docs/spec/streaming.md` §5 is what it
 /// bounds and why the caller chooses it.
 ///
@@ -169,6 +150,10 @@ pub fn prove(setup: &ProverSetup, io: &GuestIo, max_in_flight: usize) -> Result<
 /// against a value from a channel the prover does not control. That is one
 /// comparison and the caller writes it, exactly as the `verifier` CLI makes it
 /// a separate argument.
+///
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** An `Ok` here
+/// is **UNSOUND**: nothing commits the columns, so the verifier accepts the
+/// prover's word for every value (`docs/architecture.md` §0).
 pub fn verify(vk: &VerifyingKey, block: &BlockProof) -> Result<(), VerifyError> {
     verifier::verify_block(vk, block, block.statement())
 }

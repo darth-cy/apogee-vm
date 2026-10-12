@@ -1,9 +1,10 @@
-//! In-process differential test against ark-bn254: 1,000 randomized inputs per
-//! operator, from a fixed seed, so a failure reproduces exactly.
+//! In-process differential test against arkworks' Montgomery field over the
+//! same modulus: 1,000 randomized inputs per operator, from a fixed seed, so a
+//! failure reproduces exactly.
 
 mod common;
 
-use common::{ark_to_bytes, next_canonical, next_fr, to_ark};
+use common::{ark_to_bytes, next_canonical, next_fr, to_ark, ArkFr};
 use field::{batch_inverse, Fr};
 use test_support::Rng;
 
@@ -12,7 +13,7 @@ const SEED: u64 = 0x5001_f1e1_d000_0001;
 
 /// Every comparison goes through the canonical wire form, which also exercises
 /// `to_bytes` on every single result.
-fn assert_same(ours: &Fr, theirs: &ark_bn254::Fr, what: &str, round: usize) {
+fn assert_same(ours: &Fr, theirs: &ArkFr, what: &str, round: usize) {
     assert_eq!(
         ours.to_bytes(),
         ark_to_bytes(theirs),
@@ -140,7 +141,7 @@ fn assign_operators_match_owned_operators() {
 fn batch_inverse_matches_arkworks() {
     let mut rng = Rng::new(SEED ^ 8);
     let mut ours: Vec<Fr> = (0..ROUNDS).map(|_| next_fr(&mut rng)).collect();
-    let mut theirs: Vec<ark_bn254::Fr> = ours.iter().map(to_ark).collect();
+    let mut theirs: Vec<ArkFr> = ours.iter().map(to_ark).collect();
 
     batch_inverse(&mut ours);
     ark_ff::fields::batch_inversion(&mut theirs);
@@ -155,7 +156,7 @@ fn from_u64_matches_arkworks() {
     let mut rng = Rng::new(SEED ^ 9);
     for round in 0..ROUNDS {
         let x = rng.next_u64();
-        assert_same(&Fr::from_u64(x), &ark_bn254::Fr::from(x), "from_u64", round);
+        assert_same(&Fr::from_u64(x), &ArkFr::from(x), "from_u64", round);
     }
 }
 
@@ -165,7 +166,7 @@ fn wire_roundtrip_matches_arkworks() {
     for round in 0..ROUNDS {
         let bytes = next_canonical(&mut rng);
         let ours = Fr::from_bytes(&bytes).expect("canonical by construction");
-        let theirs: ark_bn254::Fr = ark_ff::PrimeField::from_le_bytes_mod_order(&bytes);
+        let theirs: ArkFr = ark_ff::PrimeField::from_le_bytes_mod_order(&bytes);
         assert_same(&ours, &theirs, "from_bytes", round);
         assert_eq!(ours.to_bytes(), bytes, "to_bytes is the inverse at {round}");
     }

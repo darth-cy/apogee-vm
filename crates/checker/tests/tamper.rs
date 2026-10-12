@@ -1,6 +1,5 @@
-//! Tamper twins through `TamperHarness`: one statement — `guests/addsub`,
-//! `guests/control`, or a delegation family's guest — proved honestly once per
-//! test, then proved again with one tamper as an honest prover would prove the
+//! Tamper twins through `TamperHarness`: one statement — `guests/addsub` or
+//! `guests/control` — proved honestly once per test, then proved again with one tamper as an honest prover would prove the
 //! tampered witness, and one shard verified through `verify_shard`, or the
 //! block through `verify_block`. Each twin asserts the class of the check that
 //! refuses it (`docs/spec/proof.md` §6).
@@ -43,12 +42,11 @@ use verifier::VerifyError;
 /// A query inserted into the frame would move every one of these silently,
 /// which is what `the_slot_constants_are_the_frames` below exists to catch. It
 /// runs in ordinary CI, unlike every proof test in this file.
-const WIDTH: usize = 5;
+const WIDTH: usize = 4;
 const PC: usize = 0;
 const RS1: usize = 1;
 const RS2: usize = 2;
 const RD: usize = 3;
-const DELEG: usize = 4;
 
 /// The slot constants above against the frame, and the witness columns
 /// they index against the circuit's own names. No proof, so this is the one
@@ -58,13 +56,7 @@ fn the_slot_constants_are_the_frames() {
     let queries = constraints::memory::frame_queries(ADD);
     assert_eq!(queries.len(), WIDTH, "the add/sub frame is {WIDTH} queries");
     use constraints::memory as m;
-    for (slot, id) in [
-        (PC, m::PC),
-        (RS1, m::RS1),
-        (RS2, m::RS2),
-        (RD, m::RD),
-        (DELEG, m::DELEG),
-    ] {
+    for (slot, id) in [(PC, m::PC), (RS1, m::RS1), (RS2, m::RS2), (RD, m::RD)] {
         assert_eq!(queries[slot], id, "slot {slot}");
     }
     // And the x0 gadget's three columns, which follow the frame's gap chunks.
@@ -78,12 +70,20 @@ fn the_slot_constants_are_the_frames() {
     assert_eq!(name(rd_inv(WIDTH)), "rd_inv");
     assert_eq!(name(rd_is_zero(WIDTH)), "rd_is_zero");
     assert_eq!(name(rd_selected(WIDTH)), "rd_selected");
-    assert_eq!(name(gap_hi(DELEG)), "deleg_gap_hi");
+    assert_eq!(name(gap_hi(RD)), "rd_gap_hi");
 }
 
 const CONSTRAINT: VerifyError = VerifyError::Constraint { layer: 0 };
 const MEMORY: VerifyError = VerifyError::MemoryArgument("");
-const OPENING: VerifyError = VerifyError::Opening;
+
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A twin only
+/// an opening of the committed columns can refuse: no gate, no channel and no
+/// memory argument sees it. There is no opening and so no class to refuse it
+/// with — **the twin verifies today** — and its test stops here until a
+/// commitment scheme fills the void (`docs/architecture.md` §0).
+fn unfinished_refusal(_h: &TamperHarness, _twin: &Tamper, _shard: (u32, u32)) -> ! {
+    todo!("UNFINISHED: no commitment scheme, so no opening refuses this twin (docs/architecture.md §0)")
+}
 
 fn lookup(channel: u32) -> VerifyError {
     VerifyError::Lookup { channel }
@@ -358,17 +358,17 @@ fn a_pc_read_less_than_a_cycle_before_its_write_is_refused() {
 }
 
 /// The frame's and the halting rule's tamper targets, `docs/spec/memory.md`
-/// §2.1 and §5, and the image column's opening, §6.2: each refused.
+/// §2.1 and §5: each refused.
 ///
 /// - a padding row's `rd` query rewriting `x10` after the exit, and a live
 ///   row's `rd` write masked off — each `Constraint`; the exit row given a
 ///   store has no column to live in;
 /// - the exit rewriting its status — `Constraint`;
 /// - a row that is not the exit writing `HALT_PC`, the truncation target —
-///   `Constraint`;
-/// - the image column and a teardown value moved together, so the multiset
-///   still balances — refused by the opening of `S[0]` against the identity's
-///   commitment, `Opening`.
+///   `Constraint`.
+///
+/// The image column's twin is
+/// `UNFINISHED_the_image_column_moved_with_its_teardown_is_refused`.
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
 fn the_targets_s14_left_to_s16_are_refused() {
@@ -438,19 +438,30 @@ fn the_targets_s14_left_to_s16_are_refused() {
         (ADD, 0),
         CONSTRAINT,
     );
+}
 
-    // The image column and the teardown of one untouched word, moved together.
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The image
+/// column and the teardown of one untouched word, moved together, so the
+/// multiset still balances: meant to be refused by the opening of `S[0]`
+/// against the identity's commitment of the image column
+/// (`docs/spec/memory.md` §6.2). Nothing commits it, so the twin verifies
+/// today (`docs/architecture.md` §0).
+#[test]
+#[ignore = "UNFINISHED: only an opening refuses this twin, and there is no commitment scheme \
+            (docs/architecture.md §0)"]
+#[allow(non_snake_case)]
+fn UNFINISHED_the_image_column_moved_with_its_teardown_is_refused() {
+    let setup = common::setup();
+    let archive = common::archive(&setup.program);
+    let h = TamperHarness::new(&setup, &archive);
     let row = IMAGE_ROW + 10;
     let word = h.cell(INIT, 0, PolyAddress::Setup(0), row);
     assert_eq!(word, h.cell(INIT, 0, PolyAddress::Memory(1), row));
-    h.assert_rejects(
-        &tamper(vec![
-            cell(INIT, PolyAddress::Setup(0), row, word + Fr::ONE),
-            cell(INIT, PolyAddress::Memory(1), row, word + Fr::ONE),
-        ]),
-        (INIT, 0),
-        OPENING,
-    );
+    let twin = tamper(vec![
+        cell(INIT, PolyAddress::Setup(0), row, word + Fr::ONE),
+        cell(INIT, PolyAddress::Memory(1), row, word + Fr::ONE),
+    ]);
+    unfinished_refusal(&h, &twin, (INIT, 0));
 }
 
 /// A field element's canonical integer, which the tests only read where it is
@@ -511,12 +522,10 @@ fn jbs_cell(address: PolyAddress, row: usize, value: Fr) -> Cell {
 ///   global memory argument refuses it, `MemoryArgument` — and again with the
 ///   add/sub row that wrote that `rs1` moved to match, so the register's chain
 ///   balances and the pc's alone does not;
-/// - one generic-channel count moved, `Lookup { GENERIC }`;
-/// - a packed-table cell no row looks up, poisoned — `37 AND 45` answering 0
-///   — which no gate and no channel sees: the opening of the table's columns
-///   against the key's commitments refuses it, `Opening`.
+/// - one generic-channel count moved, `Lookup { GENERIC }`.
 ///
-/// And two cells nothing reads, on a padding row, still verify.
+/// And two cells nothing reads, on a padding row, still verify. The poisoned
+/// packed-table twin is `UNFINISHED_a_poisoned_generic_table_row_is_refused`.
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks near 10 GB"]
 fn s17_a7_the_comparison_and_the_pc_are_pinned() {
@@ -590,21 +599,12 @@ fn s17_a7_the_comparison_and_the_pc_are_pinned() {
     pc_only.push(cell(ADD, frame(RD, FIELD_WRITE_VALUE), a, f(v + 2)));
     h.assert_rejects(&tamper(pc_only), (JBS, 0), MEMORY);
 
-    // The generic channel's count of the ZeroEntry, and a poisoned AND row.
+    // The generic channel's count of the ZeroEntry.
     let m = at(jbs::MULTIPLICITIES[2], 0);
     h.assert_rejects(
         &tamper(vec![jbs_cell(jbs::MULTIPLICITIES[2], 0, m + Fr::ONE)]),
         (JBS, 0),
         lookup(lookup_channel::GENERIC),
-    );
-    let and_row = 1 + 37 * 256 + 45;
-    assert_eq!(at(jbs::GENERIC_TABLE[0], and_row), f(37 + 1));
-    assert_eq!(at(jbs::GENERIC_TABLE[2], and_row), f(37 & 45));
-    assert_eq!(at(jbs::MULTIPLICITIES[2], and_row), Fr::ZERO);
-    h.assert_rejects(
-        &tamper(vec![jbs_cell(jbs::GENERIC_TABLE[2], and_row, Fr::ZERO)]),
-        (JBS, 0),
-        OPENING,
     );
 
     // A padding row's dropped bit and its equality inverse: nothing reads
@@ -646,689 +646,23 @@ fn jalr_moved(r: usize, v: u64, next: u64) -> Vec<Cell> {
     ]
 }
 
-// ---------------------------------------------------------------------------
-// `KECCAK_F`'s cells, and the anchor's linkage
-// ---------------------------------------------------------------------------
-
-/// Over `guests/keccak-test`: eleven shards — six execution families at `2^20`,
-/// the two RAM windows, the two public-value windows, and the `KECCAK_F`
-/// delegation shard at `2^18`.
-///
-/// **The circuit cells**: four cells of the delegation witness, each corrupted
-/// alone, each refused by the gate that reads it — `Constraint` — with the
-/// honest twin passing and the structural counts on screen beside them: a
-/// state **byte**, a written word, a **round selector** and a **rotated
-/// byte**. There is no state-bit twin because there is no state bit; and
-/// there is no gap twin because there is no `gap_w{j}` gate — the frame's gap
-/// is four `RANGE16` obligations, refused in the `Lookup` class, which
-/// `MOD_MUL`'s and `EC_ADD`'s one-row suites already read natively.
-///
-/// **The linkage**: the anchor twins of `docs/spec/delegation.md` §5.2, run
-/// through the family-parameterized helper
-/// `checker::assert_anchor_twins_refused`. They are the block's, not one
-/// shard's: a dropped invocation's only symptom is the cross-shard root
-/// product, and that check reads the statement rather than a proof
-/// (`docs/spec/proof.md` §6).
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A
+/// packed-table cell no row looks up, poisoned — `37 AND 45` answering 0 —
+/// which no gate and no channel sees: meant to be refused by the opening of
+/// the table's columns against the key's commitments. Nothing commits the
+/// table, so the twin verifies today (`docs/architecture.md` §0).
 #[test]
-#[ignore]
-fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
-    use constants::family::KECCAK_F as KEC;
-    use constants::family::ZERO_WINDOWS as ZERO;
-    use constants::{delegation, keccak as k};
-    use constraints::keccak as kec;
-
-    let setup = common::keccak_setup();
-    let archive = common::keccak_archive(&setup.program);
+#[ignore = "UNFINISHED: only an opening refuses this twin, and there is no commitment scheme \
+            (docs/architecture.md §0)"]
+#[allow(non_snake_case)]
+fn UNFINISHED_a_poisoned_generic_table_row_is_refused() {
+    let setup = common::control_setup();
+    let archive = common::control_archive(&setup.program);
     let h = TamperHarness::new(&setup, &archive);
-
-    // The structural counts. Eleven shards — six `2^20` execution ones, the two
-    // `2^16` RAM windows, one `2^18` delegation shard and the two `2^12` public
-    // value ones — and the delegation circuit's width: 208 memory columns
-    // (`cycle`, `live`, `base`, `anchor_value` and four a frame word, the frame
-    // being 51 words) and 1,556 witness ones, not one of them a bit. The
-    // delegation shard is not the last: the public value families take higher
-    // ids, and the statement's tail is ascending.
-    let (public, proofs) = h.honest();
-    let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
-    assert_eq!(shards.len(), 11, "eleven shards: {shards:?}");
-    assert_eq!(
-        &shards[shards.len() - 3..],
-        &[
-            (KEC, 0),
-            (constants::family::PUBLIC_INPUT, 0),
-            (constants::family::PUBLIC_OUTPUT, 0)
-        ]
-    );
-    assert!(shards.contains(&(INIT, 0)) && shards.contains(&(ZERO, 0)));
-    let a = &setup.vk.circuit(KEC).expect("a keccak circuit").artifact;
-    assert_eq!(
-        (a.memory.len(), a.witness.len(), a.setup.len()),
-        (4 + 4 * k::FRAME_WORDS, 1556, 0)
-    );
-    assert_eq!(a.trace_vars, common::KECCAK_VARS);
-
-    // The circuit cells. The invocation rows are the guest's 240 — ten
-    // permutations of 24 rounds — in order; the twins take the first, found by
-    // its mask rather than by its number.
-    let columns = shard_columns(&setup, &archive, KEC, 0, &public.windows)
-        .expect("the delegation shard's columns");
-    let at = |address: PolyAddress, row: usize| {
-        columns
-            .iter()
-            .find(|(a, _)| *a == address)
-            .unwrap_or_else(|| panic!("the shard has no {address}"))
-            .1
-            .get(row)
-    };
-    let live_row = (0..1 << common::KECCAK_VARS)
-        .find(|r| at(kec::LIVE, *r) == Fr::ONE)
-        .expect("a live invocation");
-    let padding_row = (0..1 << common::KECCAK_VARS)
-        .find(|r| at(kec::LIVE, *r) == Fr::ZERO)
-        .expect("a padding row");
-    let keccak_cell = |address, row, value| Cell {
-        family: KEC,
-        shard: 0,
-        address,
-        row,
-        value,
-    };
-
-    // A corrupted input state byte: the word it recomposes no longer matches,
-    // and `input_w{j}` is the gate that says so.
-    let byte = at(kec::state_in(0, 0), live_row);
-    h.assert_rejects(
-        &tamper(vec![keccak_cell(
-            kec::state_in(0, 0),
-            live_row,
-            byte + Fr::ONE,
-        )]),
-        (KEC, 0),
-        CONSTRAINT,
-    );
-    // A corrupted written word: the round's output says what it must be.
-    let out_word = 1 + 2 * 3;
-    let out = at(kec::word(out_word, kec::WORD_WRITE_VALUE), live_row);
-    h.assert_rejects(
-        &tamper(vec![keccak_cell(
-            kec::word(out_word, kec::WORD_WRITE_VALUE),
-            live_row,
-            out + Fr::ONE,
-        )]),
-        (KEC, 0),
-        CONSTRAINT,
-    );
-    // A round selector moved: the cell a prover would reach for. A row claiming
-    // a round other than the frame's would XOR the wrong constant into lane
-    // (0,0) — and `round_rule` refuses it, because the frame's word 0 is pinned
-    // to the selector's own weighted sum. Clearing the claimed round leaves the
-    // sum at 0 and the word at its value.
-    let claimed = (0..k::ROUNDS)
-        .find(|r| at(kec::round_sel(*r), live_row) == Fr::ONE)
-        .expect("a live row claims a round");
-    h.assert_rejects(
-        &tamper(vec![keccak_cell(
-            kec::round_sel(claimed),
-            live_row,
-            Fr::ZERO,
-        )]),
-        (KEC, 0),
-        CONSTRAINT,
-    );
-    // A rotated byte moved: `rho_pi_l{i}_b{j}` is the rotation, written as a
-    // literal-weighted combination of a byte and its mask, and it is the most
-    // intricate relation in the family.
-    let rotated = at(kec::rho_out(7, 3), live_row);
-    h.assert_rejects(
-        &tamper(vec![keccak_cell(
-            kec::rho_out(7, 3),
-            live_row,
-            rotated + Fr::ONE,
-        )]),
-        (KEC, 0),
-        CONSTRAINT,
-    );
-
-    // The negative control: a padding row's cells that every gate and every
-    // obligation of the family really does gate off `live` — a gap chunk, whose
-    // four `RANGE16` obligations all carry `live` as their selector, and a
-    // frame-pointer headroom halfword, whose `base_in_window` carries the mask
-    // on every product.
-    h.assert_verifies(
-        &tamper(vec![
-            keccak_cell(kec::gap_chunk(5, 1), padding_row, Fr::ONE),
-            keccak_cell(kec::base_room_hi(), padding_row, Fr::ONE),
-        ]),
-        (KEC, 0),
-    );
-    // And its other half, which is the sharper statement: **a state byte is not
-    // free on a padding row**, because `input_w{j}` is ungated. It does not
-    // need the mask on an honest row — every term is 0 there — but that also
-    // means a padding row's state bytes are pinned to the words they recompose,
-    // which are 0. Setting lane 1's byte 3 asks word 3 to be 2^24 and
-    // `input_w3` refuses it. The distinction matters: a reviewer reading "every
-    // gate is gated on live" would expect this cell to be free, and it is not
-    // (`docs/spec/delegation-circuits.md` §2.2, §2.3).
-    h.assert_rejects(
-        &tamper(vec![keccak_cell(kec::state_in(1, 3), padding_row, Fr::ONE)]),
-        (KEC, 0),
-        CONSTRAINT,
-    );
-
-    // The linkage. The requesting rows are the add/sub family's delegation
-    // ecalls, found by the mirror query's own mask.
-    let alu = shard_columns(&setup, &archive, ADD, 0, &public.windows).expect("the add/sub shard");
-    let alu_at = |address: PolyAddress, row: usize| {
-        alu.iter()
-            .find(|(a, _)| *a == address)
-            .unwrap_or_else(|| panic!("the add/sub shard has no {address}"))
-            .1
-            .get(row)
-    };
-    let requests: Vec<usize> = (0..1 << common::ADD_VARS)
-        .filter(|r| alu_at(frame(DELEG, FIELD_MASK), *r) == Fr::ONE)
-        .collect();
-    assert_eq!(
-        requests.len() as u64,
-        common::KECCAK_INVOCATIONS,
-        "one request an invocation, and 24 invocations a permutation"
-    );
-    // The invocation that pairs with request 0 is the one at its cycle: the
-    // anchor binds them there and nowhere else.
-    let cycle_of = |row: usize| alu_at(CYCLE, row);
-    let paired = (0..1 << common::KECCAK_VARS)
-        .find(|r| at(kec::LIVE, *r) == Fr::ONE && at(kec::CYCLE, *r) == cycle_of(requests[0]))
-        .expect("the invocation at the request's cycle");
-    assert_eq!(
-        at(kec::BASE, paired),
-        alu_at(frame(DELEG, FIELD_ADDR), requests[0]),
-        "and at its frame base"
-    );
-    assert_eq!(
-        (
-            alu_at(frame(DELEG, FIELD_READ_TS), requests[0]),
-            alu_at(frame(DELEG, FIELD_READ_VALUE), requests[0])
-        ),
-        (Fr::ZERO, Fr::ZERO),
-        "an honest request's mirror read is the answer tuple, stamped 0"
-    );
-    assert_eq!(
-        delegation::ANCHOR_DELTA,
-        constraints::memory::FRAME_DELTA[constraints::memory::DELEG],
-        "the anchor's slot is the mirror query's"
-    );
-
-    checker::assert_anchor_twins_refused(
-        &h,
-        &checker::AnchorTwins {
-            requester: (ADD, 0),
-            delegation: (KEC, 0),
-            request: requests[0],
-            invocation: paired,
-            other_request: requests[1],
-            rd_selected: rd_selected(WIDTH),
-            cycle: CYCLE,
-            mirror_read_ts: frame(DELEG, FIELD_READ_TS),
-            mirror_read_value: frame(DELEG, FIELD_READ_VALUE),
-            mirror_write_value: frame(DELEG, FIELD_WRITE_VALUE),
-            live: kec::LIVE,
-            anchor_value: kec::ANCHOR_VALUE,
-        },
-    );
-}
-
-// ---------------------------------------------------------------------------
-// `POSEIDON2` and `FR_ARITH`: their witnesses and their anchors
-// ---------------------------------------------------------------------------
-
-/// A corrupted cell in each family's witness is refused, the honest twin
-/// passes, and the structural counts hold; and the anchor's twins, per family,
-/// through the shared helper.
-///
-/// `#[ignore]`d for the reason every twin in this file is: it proves
-/// `guests/recursion-ops`' block once honestly and again per twin.
-#[test]
-#[ignore]
-fn s23_a5_a6_the_recursion_witnesses_and_anchors_are_pinned() {
-    use constants::family::{FR_ARITH as FA, POSEIDON2 as P2};
-    use constants::{delegation, fr_arith as fa, poseidon2 as p2};
-    use constraints::{fr_arith as fa_c, poseidon2 as p2_c};
-
-    let setup = common::recursion_setup();
-    let archive = common::recursion_archive(&setup.program);
-    let h = TamperHarness::new(&setup, &archive);
-
-    // The structural counts: a shard of each family, in id order after every
-    // execution shard, each its circuit's width. They are **not** last: the
-    // two public value families take higher ids and prove one shard each;
-    // `ADVICE_WINDOWS` proves none, this guest having no advice.
-    let (public, proofs) = h.honest();
-    let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
-    assert_eq!(
-        &shards[shards.len() - 4..],
-        &[
-            (P2, 0),
-            (FA, 0),
-            (constants::family::PUBLIC_INPUT, 0),
-            (constants::family::PUBLIC_OUTPUT, 0)
-        ],
-        "the two delegation shards sort after the execution ones: {shards:?}"
-    );
-    for (family, memory, witness) in [
-        (P2, 4 + 4 * p2::FRAME_WORDS, p2_c::WITNESS_COLUMNS),
-        (FA, 4 + 4 * fa::FRAME_WORDS, fa_c::WITNESS_COLUMNS),
-    ] {
-        let a = &setup
-            .vk
-            .circuit(family)
-            .unwrap_or_else(|| panic!("a circuit for {}", program::family_name(family)))
-            .artifact;
-        assert_eq!(
-            (a.memory.len(), a.witness.len(), a.setup.len()),
-            (memory, witness, 0)
-        );
-        assert_eq!(a.trace_vars, common::DELEGATION_VARS);
-    }
-
-    let rows = 1usize << common::DELEGATION_VARS;
-    let columns_of = |family: u32| {
-        shard_columns(&setup, &archive, family, 0, &public.windows).unwrap_or_else(|e| {
-            panic!(
-                "the {} shard's columns: {e:?}",
-                program::family_name(family)
-            )
-        })
-    };
-    let cell_of = |family: u32, address, row, value| Cell {
-        family,
-        shard: 0,
-        address,
-        row,
-        value,
-    };
-
-    // --- POSEIDON2: a mid-round state cell. The written lane is what the
-    // permutation's last layer compares against, so moving one word of it is
-    // refused by the round block rather than by any frame gate.
-    let p2_columns = columns_of(P2);
-    let p2_at = |address: PolyAddress, row: usize| {
-        p2_columns
-            .iter()
-            .find(|(a, _)| *a == address)
-            .unwrap_or_else(|| panic!("the poseidon2 shard has no {address}"))
-            .1
-            .get(row)
-    };
-    let p2_live = (0..rows)
-        .find(|r| p2_at(p2_c::LIVE, *r) == Fr::ONE)
-        .expect("a live invocation");
-    let p2_pad = (0..rows)
-        .find(|r| p2_at(p2_c::LIVE, *r) == Fr::ZERO)
-        .expect("a padding row");
-    // A written lane word, moved with the bit it decomposes so the frame's own
-    // recomposition still holds and the refusal is the permutation's.
-    let word = p2_at(p2_c::word(0, p2_c::WORD_WRITE_VALUE), p2_live);
-    let bit0 = p2_at(p2_c::value_bit(p2::WIDTH, 0, 0), p2_live);
-    h.assert_rejects(
-        &tamper(vec![
-            cell_of(
-                P2,
-                p2_c::word(0, p2_c::WORD_WRITE_VALUE),
-                p2_live,
-                word + Fr::ONE - bit0 - bit0,
-            ),
-            cell_of(
-                P2,
-                p2_c::value_bit(p2::WIDTH, 0, 0),
-                p2_live,
-                Fr::ONE - bit0,
-            ),
-        ]),
-        (P2, 0),
-        CONSTRAINT,
-    );
-    // An input lane word alone: the permutation's output does not match.
-    let in_word = p2_at(p2_c::word(0, p2_c::WORD_READ_VALUE), p2_live);
-    h.assert_rejects(
-        &tamper(vec![cell_of(
-            P2,
-            p2_c::word(0, p2_c::WORD_READ_VALUE),
-            p2_live,
-            in_word + Fr::ONE,
-        )]),
-        (P2, 0),
-        CONSTRAINT,
-    );
-    // The control: a padding row's gap bit, whose gate carries the mask on
-    // every product, is genuinely free.
-    h.assert_verifies(
-        &tamper(vec![cell_of(P2, p2_c::gap_bit(5, 7), p2_pad, Fr::ONE)]),
-        (P2, 0),
-    );
-
-    // --- FR_ARITH: a corrupted op result. The result's word and its bit move
-    // together, so the frame's recomposition holds and what refuses it is
-    // `out_rule` — the gate that says the operation was performed.
-    let fa_columns = columns_of(FA);
-    let fa_at = |address: PolyAddress, row: usize| {
-        fa_columns
-            .iter()
-            .find(|(a, _)| *a == address)
-            .unwrap_or_else(|| panic!("the fr_arith shard has no {address}"))
-            .1
-            .get(row)
-    };
-    let fa_live = (0..rows)
-        .find(|r| fa_at(fa_c::LIVE, *r) == Fr::ONE)
-        .expect("a live invocation");
-    let fa_pad = (0..rows)
-        .find(|r| fa_at(fa_c::LIVE, *r) == Fr::ZERO)
-        .expect("a padding row");
-    let out = fa_at(fa_c::word(fa::OUT_WORD, fa_c::WORD_WRITE_VALUE), fa_live);
-    h.assert_rejects(
-        &tamper(vec![cell_of(
-            FA,
-            fa_c::word(fa::OUT_WORD, fa_c::WORD_WRITE_VALUE),
-            fa_live,
-            out + Fr::ONE,
-        )]),
-        (FA, 0),
-        CONSTRAINT,
-    );
-    // The product helper, which is what buys the degree: moving it alone
-    // breaks `prod_rule`.
-    let prod = fa_at(fa_c::prod(), fa_live);
-    h.assert_rejects(
-        &tamper(vec![cell_of(FA, fa_c::prod(), fa_live, prod + Fr::ONE)]),
-        (FA, 0),
-        CONSTRAINT,
-    );
-    // And the control.
-    h.assert_verifies(
-        &tamper(vec![cell_of(FA, fa_c::gap_bit(5, 7), fa_pad, Fr::ONE)]),
-        (FA, 0),
-    );
-
-    // --- The anchor, per family, through the shared helper. Nothing here is
-    // either family's: the anchor is one mechanism.
-    let alu = shard_columns(&setup, &archive, ADD, 0, &public.windows).expect("the add/sub shard");
-    let alu_at = |address: PolyAddress, row: usize| {
-        alu.iter()
-            .find(|(a, _)| *a == address)
-            .unwrap_or_else(|| panic!("the add/sub shard has no {address}"))
-            .1
-            .get(row)
-    };
-    assert_eq!(
-        delegation::ANCHOR_DELTA,
-        constraints::memory::FRAME_DELTA[constraints::memory::DELEG],
-        "the anchor's slot is the mirror query's"
-    );
-    for (family, live, anchor_value, tag) in [
-        (
-            P2,
-            p2_c::LIVE,
-            p2_c::ANCHOR_VALUE,
-            constants::address_space::DELEGATION_POSEIDON2,
-        ),
-        (
-            FA,
-            fa_c::LIVE,
-            fa_c::ANCHOR_VALUE,
-            constants::address_space::DELEGATION_FR_ARITH,
-        ),
-    ] {
-        // The requesting rows of *this* type, told apart from the other's by
-        // the `deleg_space` column — which is the whole point of that column.
-        let requests: Vec<usize> = (0..1 << common::ADD_VARS)
-            .filter(|r| {
-                alu_at(frame(DELEG, FIELD_MASK), *r) == Fr::ONE
-                    && alu_at(constraints::memory::deleg_space(WIDTH), *r) == f(tag as u64)
-            })
-            .collect();
-        assert!(
-            requests.len() >= 2,
-            "{} needs two requests for the replay twin, and has {}",
-            program::family_name(family),
-            requests.len()
-        );
-        let columns = columns_of(family);
-        let at = |address: PolyAddress, row: usize| {
-            columns
-                .iter()
-                .find(|(a, _)| *a == address)
-                .unwrap_or_else(|| panic!("the shard has no {address}"))
-                .1
-                .get(row)
-        };
-        let paired = (0..rows)
-            .find(|r| at(live, *r) == Fr::ONE && at(CYCLE, *r) == alu_at(CYCLE, requests[0]))
-            .expect("the invocation at the request's cycle");
-        checker::assert_anchor_twins_refused(
-            &h,
-            &checker::AnchorTwins {
-                requester: (ADD, 0),
-                delegation: (family, 0),
-                request: requests[0],
-                invocation: paired,
-                other_request: requests[1],
-                rd_selected: rd_selected(WIDTH),
-                cycle: CYCLE,
-                mirror_read_ts: frame(DELEG, FIELD_READ_TS),
-                mirror_read_value: frame(DELEG, FIELD_READ_VALUE),
-                mirror_write_value: frame(DELEG, FIELD_WRITE_VALUE),
-                live,
-                anchor_value,
-            },
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// The `MOD_MUL` witness and its anchor
-// ---------------------------------------------------------------------------
-
-/// `MOD_MUL`'s twins, over `guests/mod-mul-ops`.
-///
-/// Two things are particular to this family and neither is the anchor. **The
-/// quotient is a column no execution recorded**: `fill::mod_mul_witness`
-/// derives it, so a twin that moves it is a twin on the *prover's own*
-/// arithmetic and the fifteen limb equations are what refuse it. And **the
-/// modulus is a frame word's choice**, word 0 selecting it, so a twin that
-/// moves that word moves the statement the row proves — which is refused by
-/// `writes_back_w0`, the gate that says the call did not rewrite its caller's
-/// operands.
-///
-/// `#[ignore]`d for the reason every twin in this file is: it proves
-/// `mod-mul-ops`' block once honestly and again per twin.
-#[test]
-#[ignore]
-fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
-    use constants::family::{EC_ADD as EA, MOD_MUL as MM};
-    use constants::{delegation, mod_mul as mm};
-    use constraints::mod_mul as mm_c;
-
-    let setup = common::mod_mul_setup();
-    let archive = common::mod_mul_archive(&setup.program);
-    let h = TamperHarness::new(&setup, &archive);
-
-    // The structural counts. `MOD_MUL`'s id is 15, above the three value-window
-    // families, so its shards sort after them. **`EC_ADD` sorts last, not
-    // `MOD_MUL`**: `guests/mod-mul-ops` reaches the projective `k256` patch
-    // too, so its image declares both, and id 17 is above 15.
-    let (public, proofs) = h.honest();
-    let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
-    let (last_family, _) = *shards.last().expect("a statement has shards");
-    assert_eq!(last_family, EA, "EC_ADD sorts last: {shards:?}");
-    let mm_shards = shards.iter().filter(|(f, _)| *f == MM).count();
-    // **One shard**: `guests/mod-mul-ops`' 1,443 invocations in a 65,536-row
-    // shard leave it 98% padding, so the live row and the padding row this
-    // test needs are both in shard 0.
-    assert_eq!(mm_shards, 1, "one 2^16 shard holds the fixture: {shards:?}");
-
-    let a = &setup.vk.circuit(MM).expect("a MOD_MUL circuit").artifact;
-    assert_eq!(
-        (a.memory.len(), a.witness.len(), a.setup.len()),
-        (4 + 4 * mm::FRAME_WORDS, mm_c::WITNESS_COLUMNS, 0)
-    );
-    assert_eq!(a.trace_vars, common::DELEGATION_CHANNEL_VARS);
-
-    let rows = 1usize << common::DELEGATION_CHANNEL_VARS;
-    let columns = shard_columns(&setup, &archive, MM, 0, &public.windows)
-        .expect("the MOD_MUL shard's columns");
-    let at = |address: PolyAddress, row: usize| {
-        columns
-            .iter()
-            .find(|(a, _)| *a == address)
-            .unwrap_or_else(|| panic!("the MOD_MUL shard has no {address}"))
-            .1
-            .get(row)
-    };
-    let live = (0..rows)
-        .find(|r| at(mm_c::LIVE, *r) == Fr::ONE)
-        .expect("a live invocation");
-    // The one shard has the room, so its own padding rows are the ones to tamper.
-    let pad_shard = 0u32;
-    let pad_columns = shard_columns(&setup, &archive, MM, pad_shard, &public.windows)
-        .expect("the MOD_MUL shard's columns");
-    let pad_at = |address: PolyAddress, row: usize| {
-        pad_columns
-            .iter()
-            .find(|(a, _)| *a == address)
-            .unwrap_or_else(|| panic!("the MOD_MUL shard has no {address}"))
-            .1
-            .get(row)
-    };
-    let pad = (0..rows)
-        .find(|r| pad_at(mm_c::LIVE, *r) == Fr::ZERO)
-        .expect("a padding row in the last shard");
-
-    // This family range-checks through `RANGE16` rather than decomposing into
-    // bits, so a value and its bound travel together as the value and its
-    // **halfword**: shifting both by `2^16` and `1` leaves the derived low half
-    // exactly where it was, so both obligations still hold and what refuses the
-    // twin is a limb equation — the gate that says the multiplication was
-    // performed. The direction is chosen from the observed halfword so the twin
-    // cannot accidentally leave `[0, 2^16)` and be refused as a lookup instead.
-    let shift_with_halfword = |value: PolyAddress, hi: PolyAddress| -> Vec<Cell> {
-        let (v, high) = (at(value, live), at(hi, live));
-        let up = high == Fr::ZERO;
-        let step = Fr::from_u64(1 << 16);
-        vec![
-            cell(MM, value, live, if up { v + step } else { v - step }),
-            cell(
-                MM,
-                hi,
-                live,
-                if up { high + Fr::ONE } else { high - Fr::ONE },
-            ),
-        ]
-    };
-
-    // --- The result.
-    h.assert_rejects(
-        &tamper(shift_with_halfword(
-            mm_c::word(mm::OUT_WORD, mm_c::WORD_WRITE_VALUE),
-            mm_c::value_hi(mm_c::OUT, 0),
-        )),
-        (MM, 0),
-        CONSTRAINT,
-    );
-
-    // --- The quotient, the one column the execution never produced.
-    h.assert_rejects(
-        &tamper(shift_with_halfword(mm_c::q_limb(0), mm_c::q_hi(0))),
-        (MM, 0),
-        CONSTRAINT,
-    );
-
-    // --- A carry alone: the chain that joins two limb equations. Its low chunk
-    // is the companion, weight `2^16`, so the same shift applies.
-    h.assert_rejects(
-        &tamper(shift_with_halfword(mm_c::carry(0), mm_c::carry_chunk(0, 0))),
-        (MM, 0),
-        CONSTRAINT,
-    );
-
-    // --- The selector word the call rewrote. The read side is what the
-    // frame's tuples carry, so moving the **write** side alone is refused by
-    // `writes_back_w0` and by nothing in the multiset. Word 0 is the modulus
-    // selector, so this is also what stops an invocation reporting
-    // a field it was not asked for.
-    let sel_write = mm_c::word(mm::SELECTOR_WORD, mm_c::WORD_WRITE_VALUE);
-    h.assert_rejects(
-        &tamper(vec![cell(
-            MM,
-            sel_write,
-            live,
-            at(sel_write, live) + Fr::ONE,
-        )]),
-        (MM, 0),
-        CONSTRAINT,
-    );
-
-    // --- The control, on the shard that has a padding row: a padding row's gap
-    // chunk is genuinely free, because every obligation it feeds carries `live`
-    // as its selector and a lookup holds where its selector is 0.
-    h.assert_verifies(
-        &Tamper {
-            cells: vec![Cell {
-                family: MM,
-                shard: pad_shard,
-                address: mm_c::gap_chunk(5, 0),
-                row: pad,
-                value: Fr::ONE,
-            }],
-            boundary: None,
-        },
-        (MM, pad_shard),
-    );
-
-    // --- The anchor, through the shared helper. Nothing here is this family's:
-    // the anchor is one mechanism.
-    let alu = shard_columns(&setup, &archive, ADD, 0, &public.windows).expect("the add/sub shard");
-    let alu_at = |address: PolyAddress, row: usize| {
-        alu.iter()
-            .find(|(a, _)| *a == address)
-            .unwrap_or_else(|| panic!("the add/sub shard has no {address}"))
-            .1
-            .get(row)
-    };
-    assert_eq!(
-        delegation::ANCHOR_DELTA,
-        constraints::memory::FRAME_DELTA[constraints::memory::DELEG],
-        "the anchor's slot is the mirror query's"
-    );
-    let tag = constants::address_space::DELEGATION_MOD_MUL;
-    let requests: Vec<usize> = (0..1 << common::ADD_VARS)
-        .filter(|r| {
-            alu_at(frame(DELEG, FIELD_MASK), *r) == Fr::ONE
-                && alu_at(constraints::memory::deleg_space(WIDTH), *r) == f(tag as u64)
-        })
-        .collect();
-    assert!(
-        requests.len() >= 2,
-        "MOD_MUL needs two requests for the replay twin, and has {}",
-        requests.len()
-    );
-    let paired = (0..rows)
-        .find(|r| at(mm_c::LIVE, *r) == Fr::ONE && at(CYCLE, *r) == alu_at(CYCLE, requests[0]))
-        .expect("the invocation at the request's cycle");
-    checker::assert_anchor_twins_refused(
-        &h,
-        &checker::AnchorTwins {
-            requester: (ADD, 0),
-            delegation: (MM, 0),
-            request: requests[0],
-            invocation: paired,
-            other_request: requests[1],
-            rd_selected: rd_selected(WIDTH),
-            cycle: CYCLE,
-            mirror_read_ts: frame(DELEG, FIELD_READ_TS),
-            mirror_read_value: frame(DELEG, FIELD_READ_VALUE),
-            mirror_write_value: frame(DELEG, FIELD_WRITE_VALUE),
-            live: mm_c::LIVE,
-            anchor_value: mm_c::ANCHOR_VALUE,
-        },
-    );
+    let and_row = 1 + 37 * 256 + 45;
+    assert_eq!(h.cell(JBS, 0, jbs::GENERIC_TABLE[0], and_row), f(37 + 1));
+    assert_eq!(h.cell(JBS, 0, jbs::GENERIC_TABLE[2], and_row), f(37 & 45));
+    assert_eq!(h.cell(JBS, 0, jbs::MULTIPLICITIES[2], and_row), Fr::ZERO);
+    let twin = tamper(vec![jbs_cell(jbs::GENERIC_TABLE[2], and_row, Fr::ZERO)]);
+    unfinished_refusal(&h, &twin, (JBS, 0));
 }

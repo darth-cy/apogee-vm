@@ -191,12 +191,9 @@ fn mutants() -> Vec<Mutant> {
             enforcing_linear(a).push((lit(1), PolyAddress::Scratch(0)))
         }),
         // Law 2: a declared width or variable count the gates do not imply.
-        m(
-            "list 0 declares width 4, its gates write 3 (keccak_special5)",
-            2,
-            &[],
-            |a| a.layers[0].width = 4,
-        ),
+        m("list 0 declares width 4, its gates write 3", 2, &[], |a| {
+            a.layers[0].width = 4
+        }),
         m("list 0 declares width 2, its gates write 3", 2, &[], |a| {
             a.layers[0].width = 2
         }),

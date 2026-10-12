@@ -1,12 +1,12 @@
-//! What a symbol *is*, semantically: the classification rules that turn a
-//! function name into a workload an accelerator could replace.
+//! What a symbol *is*: the classification rules that turn a function name into
+//! a workload.
 //!
 //! `docs/tools.md` §2.2 is the design. The rules are an **ordered** list
 //! of substring patterns, first match winning, so the specific ones come before
-//! the general: `revm_interpreter::instructions::system::keccak256` is hashing
-//! and `revm_interpreter::` is interpreter overhead, and the order is what says
-//! which. They are matched against the demangled path, which for both mangling
-//! schemes contains the crate and module names literally.
+//! the general: `compiler_builtins::mem::memcpy` is memory copy and
+//! `compiler_builtins` is the runtime, and the order is what says which. They
+//! are matched against the demangled path, which for both mangling schemes
+//! contains the crate and module names literally.
 //!
 //! Adding a rule is adding a line. What must not happen is a rule that overlaps
 //! an earlier one and was meant to win: `tests/rules.rs` holds every pattern to
@@ -15,85 +15,36 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A semantic workload. Every function of a guest lands in exactly one.
+/// A workload. Every function of a guest lands in exactly one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Category {
-    /// `keccak256`, wherever it is computed — including the SDK's keccak shim.
-    Keccak,
-    /// SHA-256 and RIPEMD-160: the EVM's other two hash precompiles.
-    OtherHash,
-    /// secp256k1: `ecrecover`, one per transaction and per `0x01` call.
-    Secp256k1,
-    /// BN254 pairing and curve arithmetic: the `0x06`–`0x08` precompiles.
-    Bn254,
-    /// **256-bit arithmetic**: the EVM's arithmetic and comparison opcodes, and
-    /// `ruint`'s wide integers wherever they are not inlined into them.
-    U256Arith,
-    /// The interpreter itself: dispatch, the stack, gas accounting, memory
-    /// opcodes, control flow.
-    Interpreter,
-    /// The EVM's state layer: account and storage access, the journal, the
-    /// context, and the host's own bookkeeping.
-    EvmState,
     /// `memcpy`, `memmove`, `memset` and the pointer primitives under them.
     MemoryCopy,
     /// The guest's allocator, and `alloc`'s containers.
     Alloc,
-    /// RLP encoding and the Merkle-Patricia trie.
-    RlpTrie,
-    /// This VM's own delegation **shims**: the frame's stores, the ecall, the
-    /// results' loads. What a delegated operation costs the guest.
-    ///
-    /// It is deliberately NOT "the work the delegations replace": the keccak
-    /// sponge around the delegated permutation is `keccak256` work and is
-    /// counted there, because a category called "already delegated" that held it
-    /// would hide 4% of a real block behind a reassuring name. What the
-    /// delegations do against ordinary RV32 execution is read off the
-    /// **family** invocation counts beside these cycles.
-    Delegated,
-    /// Decoding the block witness, and the guest's own block executor.
-    BlockSetup,
-    /// `core` and `compiler_builtins`: 64-bit division helpers, formatting,
-    /// slice primitives, panic machinery.
+    /// `core`, `compiler_builtins` and the guest SDK: 64-bit division helpers,
+    /// formatting, slice primitives, panic machinery, the entry point and the
+    /// I/O calls.
     CoreRuntime,
-    /// A symbol no rule claims, and a pc no symbol claims.
+    /// A symbol no rule claims — the guest's own code — and a pc no symbol
+    /// claims.
     Other,
 }
 
 impl Category {
     pub fn name(self) -> &'static str {
         match self {
-            Category::Keccak => "keccak256",
-            Category::OtherHash => "sha256/ripemd160",
-            Category::Secp256k1 => "secp256k1",
-            Category::Bn254 => "bn254",
-            Category::U256Arith => "256-bit arithmetic",
-            Category::Interpreter => "evm interpreter",
-            Category::EvmState => "evm state + journal",
             Category::MemoryCopy => "memory copy",
             Category::Alloc => "allocation",
-            Category::RlpTrie => "rlp + trie",
-            Category::Delegated => "delegation shims",
-            Category::BlockSetup => "witness + block setup",
             Category::CoreRuntime => "core runtime",
             Category::Other => "unattributed",
         }
     }
 
     /// Every category, in report order.
-    pub const ALL: [Category; 14] = [
-        Category::Keccak,
-        Category::OtherHash,
-        Category::Secp256k1,
-        Category::Bn254,
-        Category::U256Arith,
-        Category::Interpreter,
-        Category::EvmState,
+    pub const ALL: [Category; 4] = [
         Category::MemoryCopy,
         Category::Alloc,
-        Category::RlpTrie,
-        Category::Delegated,
-        Category::BlockSetup,
         Category::CoreRuntime,
         Category::Other,
     ];
@@ -101,80 +52,9 @@ impl Category {
 
 /// The rules, in order. First match wins.
 ///
-/// Each pattern is a substring of the demangled path. The comments say why a
-/// rule is where it is; the order is the whole of the semantics.
-pub const RULES: [(&str, Category); 53] = [
-    // --- the delegation shims, before anything else -----------------------
-    // `guest_sdk::recursion` holds the delegation shims, and `recursion` rather
-    // than the full path because a partially decoded v0 name has no `::` in it
-    // (`crate::demangle`). The keccak SHIM is not here: it is the sponge, which
-    // is keccak work, and the rule below claims it.
-    ("recursion", Category::Delegated),
-    // --- hashing ----------------------------------------------------------
-    ("keccak", Category::Keccak),
-    ("native_keccak256", Category::Keccak),
-    ("Keccak", Category::Keccak),
-    ("tiny_keccak", Category::Keccak),
-    ("sha2::", Category::OtherHash),
-    ("sha256", Category::OtherHash),
-    ("Sha256", Category::OtherHash),
-    ("ripemd", Category::OtherHash),
-    ("Ripemd", Category::OtherHash),
-    // --- elliptic curves --------------------------------------------------
-    ("k256", Category::Secp256k1),
-    ("secp256k1", Category::Secp256k1),
-    ("ecrecover", Category::Secp256k1),
-    ("ec_recover", Category::Secp256k1),
-    ("elliptic_curve", Category::Secp256k1),
-    ("p256", Category::Secp256k1),
-    ("bn128", Category::Bn254),
-    ("bn254", Category::Bn254),
-    ("ark_bn254", Category::Bn254),
-    ("ark_ec", Category::Bn254),
-    ("ark_ff", Category::Bn254),
-    // --- 256-bit arithmetic ------------------------------------------------
-    // The EVM's arithmetic and comparison opcode handlers. `ruint`'s wide
-    // integers are mostly inlined INTO these, which is why the opcode handler
-    // is the unit this category counts (`docs/tools.md` §2.2).
-    ("instructions::arithmetic", Category::U256Arith),
-    ("instructions::bitwise", Category::U256Arith),
-    ("ruint", Category::U256Arith),
-    ("Uint::", Category::U256Arith),
-    ("U256", Category::U256Arith),
-    // --- rlp and the trie -------------------------------------------------
-    ("alloy_rlp", Category::RlpTrie),
-    ("::rlp", Category::RlpTrie),
-    ("mpt::", Category::RlpTrie),
-    ("trie", Category::RlpTrie),
-    // --- the block's own setup --------------------------------------------
-    // `serde` and `postcard` are here and not under the runtime because in this
-    // guest they do exactly one thing: decode the block witness and, for the
-    // canonicity rule, re-encode it (`docs/spec/ethereum.md` §2.1). They must
-    // also come before the `core::` fallback, which `serde_core::` contains as a
-    // substring.
-    ("serde", Category::BlockSetup),
-    ("postcard", Category::BlockSetup),
-    ("BlockWitness", Category::BlockSetup),
-    ("WitnessDb", Category::BlockSetup),
-    ("revm_block", Category::BlockSetup),
-    // --- the EVM's state layer --------------------------------------------
-    ("instructions::host", Category::EvmState),
-    ("instructions::contract", Category::EvmState),
-    ("revm_state", Category::EvmState),
-    ("revm_database", Category::EvmState),
-    ("revm_context", Category::EvmState),
-    ("revm_handler", Category::EvmState),
-    ("journal", Category::EvmState),
-    ("Journal", Category::EvmState),
-    // --- the interpreter, after every specific revm rule ------------------
-    ("revm_interpreter", Category::Interpreter),
-    ("revm_precompile", Category::Interpreter),
-    // Jump-destination analysis: the interpreter's own setup for a contract.
-    ("revm_bytecode", Category::Interpreter),
-    ("revm_primitives", Category::Interpreter),
-    ("alloy_primitives", Category::Interpreter),
-    ("revm", Category::Interpreter),
-    // --- the runtime ------------------------------------------------------
+/// Each pattern is a substring of the demangled path. The order is the whole of
+/// the semantics.
+pub const RULES: [(&str, Category); 4] = [
     ("memcpy", Category::MemoryCopy),
     ("memmove", Category::MemoryCopy),
     ("memset", Category::MemoryCopy),
@@ -182,8 +62,8 @@ pub const RULES: [(&str, Category); 53] = [
 ];
 
 /// The rules that only apply after every rule above has missed: the generic
-/// runtime ones, which would otherwise swallow a `core::` path that a specific
-/// rule should have claimed (`alloc::vec::Vec::<ruint::Uint>::push`, say).
+/// runtime ones, which would otherwise swallow a path that a specific rule
+/// should have claimed (`compiler_builtins::mem::memcpy`, say).
 pub const FALLBACK_RULES: [(&str, Category); 9] = [
     ("core::ptr", Category::MemoryCopy),
     ("core::slice", Category::MemoryCopy),
@@ -218,104 +98,4 @@ pub fn classify(path: &str, raw: &str) -> Category {
         }
     }
     Category::Other
-}
-
-/// A candidate accelerator: the category it would remove, the symbols whose
-/// **calls** are its entry points, and the frame it would pass.
-///
-/// `removable = cycles − calls · (4 + 2·frame_words)`: every guest cycle in the
-/// category goes, and what stays is the shim — the frame's stores, the ecall,
-/// and the results' loads (`docs/tools.md` §2.3).
-pub struct Candidate {
-    pub category: Category,
-    /// Substrings of the demangled path whose **entry** cycle count is a call
-    /// into the candidate. Empty means the call count is unknown, and then the
-    /// removable figure is the category's whole cycle count with no shim charged
-    /// — a ceiling the report labels as such.
-    pub entries: &'static [&'static str],
-    /// The frame the delegation would take, in 32-bit words.
-    pub frame_words: u32,
-}
-
-/// The candidates this profiler prices, and what each would cost per call.
-///
-/// The frame widths are the shapes `docs/spec/delegation.md` §4 allows: a
-/// delegation reads and writes one contiguous block of guest memory at fixed
-/// offsets, so the width is the operands plus the results.
-pub const CANDIDATES: [Candidate; 5] = [
-    Candidate {
-        category: Category::Secp256k1,
-        // One `ecrecover` per transaction signature and per `0x01` call.
-        entries: &["ec_recover", "ecrecover", "recover_verify_key"],
-        // 32-byte hash, 64-byte signature, recovery id, 20-byte address out.
-        //
-        // This is the **ceiling** and it models a whole-`ecrecover` delegation,
-        // which is not how secp256k1 runs here: `MOD_MUL` replaces the field
-        // *multiply* inside it, one call per multiply over a 25-word frame, and
-        // `EC_ADD` the point additions, and no family verifies a signature
-        // (`docs/spec/delegation.md` §10, §11). What is left is guest code
-        // around them: the ladder's bookkeeping, `conditional_select` and
-        // `memcpy`. So the figure below is a ceiling and is labelled one; it is
-        // not a prediction.
-        frame_words: 8 + 16 + 1 + 5,
-    },
-    Candidate {
-        category: Category::U256Arith,
-        // No single entry: the arithmetic is inlined into 27 opcode handlers,
-        // so this one's figure is a ceiling with no shim charged.
-        //
-        // **`MOD_MUL` is not this category's accelerator.** The EVM's `MULMOD`
-        // takes an arbitrary modulus, which `MOD_MUL`'s frame has no
-        // representation for; what would serve this category is a different
-        // family. The frame below is therefore a hypothetical one — two
-        // operands, a modulus and a result — and not
-        // `constants::mod_mul::FRAME_WORDS`.
-        entries: &[],
-        frame_words: 8 * 4,
-    },
-    Candidate {
-        category: Category::Bn254,
-        entries: &["bn128", "run_pair", "run_add", "run_mul"],
-        // This category's field multiply **is** delegated, through
-        // `guests/vendor/ark-ff`'s two `MOD_MUL` calls a Montgomery multiply,
-        // and so are its `0x06` and `0x07` group operations, through the
-        // vendored `revm-precompile`'s `Crypto::{bn254_g1_add, bn254_g1_mul}`
-        // over `EC_ADD` (`docs/spec/delegation.md` §10). What is left is the
-        // **pairing**, `0x08`, which is where the measured BN254 cycles in every
-        // profiled block are: `sum_of_products` call counts pin block
-        // 26,059,700's to one ~4-pair pairing plus some thirteen cheap G1 calls,
-        // so ECADD and ECMUL together were 0.7–2.7% of that block and not the
-        // 18% the category as a whole reads. This figure is a ceiling on what a
-        // pairing family could remove.
-        frame_words: 8 * 8,
-    },
-    Candidate {
-        category: Category::OtherHash,
-        entries: &["sha256_run", "ripemd160_run", "compress256"],
-        // `constants::sha256::FRAME_WORDS`, `SHA256_COMP`'s frame: the round
-        // group, eight words of state and a sixteen-word schedule window, this
-        // category's SHA-256 half being delegated through it four rounds a call
-        // (`docs/spec/delegation-circuits.md` §6.1). What is left is
-        // RIPEMD-160, which shares the category and nothing else: it is
-        // little-endian where SHA-256 is big-endian, five words of state where
-        // SHA-256 has eight, and a different round function, so one frame does
-        // not serve both and this figure is a ceiling on the **ripemd**
-        // remainder rather than a prediction for the pair.
-        frame_words: constants::sha256::FRAME_WORDS as u32,
-    },
-    Candidate {
-        category: Category::Keccak,
-        // The permutation is already delegated. What is left in this category is
-        // the **sponge** -- padding, the rate's byte order, the absorb and
-        // squeeze loops -- which is the number this candidate exists to
-        // surface, and a wider frame is what would remove it.
-        entries: &["keccak256"],
-        frame_words: 50,
-    },
-];
-
-/// The modelled cost of one delegation call: the frame's stores, the ecall, and
-/// the results' loads.
-pub fn shim_cycles(frame_words: u32) -> u64 {
-    4 + 2 * frame_words as u64
 }

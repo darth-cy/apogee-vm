@@ -1,6 +1,12 @@
 //! The proof-side types: `PublicInputs`, `ShardProof`, `VerifyingKey`,
-//! `VerifyError`, and the opening claim the core hands its wrapper. Their byte
+//! `VerifyError`, and the column claims the core hands its wrapper. Their byte
 //! layouts are `docs/spec/proof.md` §9, and a key's load rules §7.2.
+//!
+//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** None of these
+//! types carries a commitment: not the statement's memory columns, not a proof's
+//! witness columns, not the key's setup columns, and no proof carries an
+//! opening. Each is a void a commitment scheme must fill
+//! (`docs/architecture.md` §0).
 
 use alloc::format;
 use alloc::string::String;
@@ -16,16 +22,8 @@ use field::Fr;
 use gkr_verify::{BoundaryFinals, GkrProof, SumcheckProof};
 use transcript::Transcript;
 
-use crate::statement::{identity_digest, srs_digest, ProgramIdentity, VmConfig};
+use crate::statement::{identity_digest, ProgramIdentity, VmConfig};
 use crate::wire::{Read, Reader, Writer};
-
-/// The bytes of one Mercury proof: 8 `G1` points and 6 `Fr`,
-/// `pcs::PROOF_BYTES`. The core holds it opaque; `crates/verifier` decodes it.
-pub const OPENING_BYTES: usize = 704;
-
-/// The bytes of an `SrsVerifier`: `g1_gen ‖ g2_gen ‖ g2_tau`,
-/// `docs/spec/srs.md` §5's layout.
-pub const SRS_VERIFIER_BYTES: usize = 320;
 
 // ---------------------------------------------------------------------------
 // The error classes
@@ -48,8 +46,6 @@ pub enum VerifyError {
     /// The memory argument: the shard's roots, the boundary, the exit status
     /// or the reconciliation.
     MemoryArgument(&'static str),
-    /// The Mercury opening, or a point it reads, is refused.
-    Opening,
 }
 
 impl fmt::Display for VerifyError {
@@ -69,7 +65,6 @@ impl fmt::Display for VerifyError {
                     .unwrap_or("?")
             ),
             VerifyError::MemoryArgument(why) => write!(f, "memory argument: {why}"),
-            VerifyError::Opening => write!(f, "opening: the batched Mercury opening is refused"),
         }
     }
 }
@@ -80,9 +75,13 @@ impl fmt::Display for VerifyError {
 
 /// What a statement is about, `docs/spec/proof.md` §1.1: the two public
 /// payloads and the exit status the outside world asserts, then the record the
-/// prover's global commit phase fixed — every shard's memory commitments and
-/// roots, the boundary, the counts and the window list. Every shard of a
-/// statement is verified against one `PublicInputs`.
+/// prover's global phase fixed — every shard's roots, the boundary, the counts
+/// and the window list. Every shard of a statement is verified against one
+/// `PublicInputs`.
+///
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The record
+/// is meant to carry every statement shard's memory-column commitments, between
+/// `boundary` and `memory_roots`; it carries none (`docs/architecture.md` §0).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicInputs {
     pub input: Vec<u8>,
@@ -91,8 +90,6 @@ pub struct PublicInputs {
     pub shard_counts: Vec<u32>,
     pub windows: Vec<u32>,
     pub boundary: BoundaryFinals,
-    /// Per shard, in statement order, its `M` commitments in layout order.
-    pub memory_commitments: Vec<Vec<[u8; 64]>>,
     /// Per shard, in statement order, `[read_root, write_root]`.
     pub memory_roots: Vec<[Fr; 2]>,
 }
@@ -118,10 +115,6 @@ impl PublicInputs {
         w.u32s(&self.windows);
         for x in crate::statement::boundary_scalars(&self.boundary) {
             w.fr(&x);
-        }
-        w.count(self.memory_commitments.len());
-        for list in &self.memory_commitments {
-            w.g1s(list);
         }
         w.count(self.memory_roots.len());
         for [read, write] in &self.memory_roots {
@@ -160,10 +153,6 @@ impl PublicInputs {
                 .and_then(|v| u32::try_from(v).ok())
                 .ok_or("a boundary value is not below 2^32")?;
         }
-        let shards = r.count(4)?;
-        let memory_commitments = (0..shards)
-            .map(|_| r.g1s())
-            .collect::<Result<Vec<_>, _>>()?;
         let roots = r.count(64)?;
         let memory_roots = (0..roots)
             .map(|_| Ok([r.fr()?, r.fr()?]))
@@ -176,7 +165,6 @@ impl PublicInputs {
             shard_counts,
             windows,
             boundary,
-            memory_commitments,
             memory_roots,
         })
     }
@@ -187,8 +175,12 @@ impl PublicInputs {
 // ---------------------------------------------------------------------------
 
 /// One shard's proof, `docs/spec/proof.md` §4 and §9. Its lengths are
-/// fixed by the key's circuit for `family`, and it holds exactly one Mercury
-/// proof. No accumulator entries: a base verification pairs inside `pcs`.
+/// fixed by the key's circuit for `family`.
+///
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A shard's
+/// proof is meant to carry its `W` columns' commitments, after
+/// `global_digest`, and the opening of every committed column at the GKR
+/// pass's point, after `gkr`. It carries neither (`docs/architecture.md` §0).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShardProof {
     pub family: u32,
@@ -198,14 +190,10 @@ pub struct ShardProof {
     pub ts_window: [u64; 2],
     /// The global state digest the prover seeded this shard with.
     pub global_digest: Fr,
-    /// The circuit's `W` columns' commitments, in layout order.
-    pub witness_commitments: Vec<[u8; 64]>,
     /// The top layer: one value per output-map entry, in its order.
     pub outputs: Vec<Fr>,
     /// One sumcheck per gate list, transition 0 first.
     pub gkr: GkrProof,
-    /// The batched Mercury opening, `pcs::MercuryProof::to_bytes`.
-    pub opening: [u8; OPENING_BYTES],
 }
 
 impl ShardProof {
@@ -216,10 +204,8 @@ impl ShardProof {
         w.u64(self.ts_window[0]);
         w.u64(self.ts_window[1]);
         w.fr(&self.global_digest);
-        w.g1s(&self.witness_commitments);
         w.frs(&self.outputs);
         write_gkr(&mut w, &self.gkr);
-        w.raw(&self.opening);
         w.bytes
     }
 
@@ -229,21 +215,16 @@ impl ShardProof {
         let shard_index = r.u32()?;
         let ts_window = [r.u64()?, r.u64()?];
         let global_digest = r.fr()?;
-        let witness_commitments = r.g1s()?;
         let outputs = r.frs()?;
         let gkr = read_gkr(&mut r)?;
-        let mut opening = [0u8; OPENING_BYTES];
-        opening.copy_from_slice(r.take(OPENING_BYTES)?);
         r.finish()?;
         Ok(ShardProof {
             family,
             shard_index,
             ts_window,
             global_digest,
-            witness_commitments,
             outputs,
             gkr,
-            opening,
         })
     }
 }
@@ -288,22 +269,19 @@ pub fn read_gkr(r: &mut Reader) -> Read<GkrProof> {
 /// Everything `verify_shard` needs beyond a proof and its public inputs,
 /// `docs/spec/proof.md` §7. A key comes from a channel the prover does
 /// not control, and a verifier compares its `identity` with a registered one.
+///
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A key is
+/// meant to carry, after `identity`, one list of setup-column commitments per
+/// config family — which identity digests — and the packed generic table's
+/// commitments, with whatever public parameters the commitment scheme's verifier
+/// reads. It carries none: nothing ties a shard's setup columns, the decoded
+/// tables and the image among them, to the key (`docs/architecture.md` §0).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifyingKey {
     pub code_version: u32,
     pub config: VmConfig,
     pub entry_pc: u32,
     pub identity: ProgramIdentity,
-    /// Program identity's commitment lists, one per config family.
-    pub setup_commitments: Vec<Vec<[u8; 64]>>,
-    pub srs_verifier: [u8; SRS_VERIFIER_BYTES],
-    /// The packed generic table's commitments, key column first: one set for
-    /// every key, the same at every height, which a family that reads the
-    /// generic channel opens its last setup columns against. Not in identity;
-    /// the SRS digest covers them (`docs/spec/proof.md` §3, §7).
-    pub generic_table: [[u8; 64]; generic_table::WIDTH],
-    /// The digest of `srs_verifier` and `generic_table`.
-    pub srs_digest: Fr,
     /// One per config family, in its order.
     pub circuits: Vec<FamilyCircuit>,
 }
@@ -322,9 +300,6 @@ fn write_address(w: &mut Writer, a: PolyAddress) {
                 VirtualKind::RamLive => 1,
                 VirtualKind::Range19 => 2,
                 VirtualKind::Range16 => 3,
-                VirtualKind::Xor8A => 4,
-                VirtualKind::Xor8B => 5,
-                VirtualKind::Xor8Out => 6,
             },
         ),
         other => panic!("a channel spec names committed and virtual columns only, not {other}"),
@@ -344,9 +319,6 @@ fn read_address(r: &mut Reader) -> Read<PolyAddress> {
             1 => VirtualKind::RamLive,
             2 => VirtualKind::Range19,
             3 => VirtualKind::Range16,
-            4 => VirtualKind::Xor8A,
-            5 => VirtualKind::Xor8B,
-            6 => VirtualKind::Xor8Out,
             _ => return Err("an unknown virtual table"),
         }),
         _ => return Err("an unknown address tag"),
@@ -365,15 +337,6 @@ impl VerifyingKey {
         w.bytes(&self.config.to_bytes());
         w.u32(self.entry_pc);
         w.fr(&self.identity.0);
-        w.count(self.setup_commitments.len());
-        for list in &self.setup_commitments {
-            w.g1s(list);
-        }
-        w.raw(&self.srs_verifier);
-        for point in &self.generic_table {
-            w.raw(point);
-        }
-        w.fr(&self.srs_digest);
         w.count(self.circuits.len());
         for c in &self.circuits {
             w.u32(c.family);
@@ -391,8 +354,7 @@ impl VerifyingKey {
         w.bytes
     }
 
-    /// Decode, then [`VerifyingKey::check`]. Curve points are not decoded here:
-    /// `verifier::load_verifying_key` does that too.
+    /// Decode, then [`VerifyingKey::check`].
     pub fn from_bytes(bytes: &[u8]) -> Result<VerifyingKey, String> {
         let key = Self::decode(bytes).map_err(String::from)?;
         if key.to_bytes() != bytes {
@@ -408,15 +370,6 @@ impl VerifyingKey {
         let config = VmConfig::from_bytes(r.bytes()?).ok_or("the VmConfig does not decode")?;
         let entry_pc = r.u32()?;
         let identity = ProgramIdentity(r.fr()?);
-        let lists = r.count(4)?;
-        let setup_commitments = (0..lists).map(|_| r.g1s()).collect::<Read<Vec<_>>>()?;
-        let mut srs_verifier = [0u8; SRS_VERIFIER_BYTES];
-        srs_verifier.copy_from_slice(r.take(SRS_VERIFIER_BYTES)?);
-        let mut generic_table = [[0u8; 64]; generic_table::WIDTH];
-        for point in generic_table.iter_mut() {
-            point.copy_from_slice(r.take(64)?);
-        }
-        let srs_digest = r.fr()?;
         let n = r.count(12)?;
         let mut circuits = Vec::new();
         for _ in 0..n {
@@ -450,16 +403,12 @@ impl VerifyingKey {
             config,
             entry_pc,
             identity,
-            setup_commitments,
-            srs_verifier,
-            generic_table,
-            srs_digest,
             circuits,
         })
     }
 
-    /// The load rules of `docs/spec/proof.md` §7.2, everything but the
-    /// curve points. Run once, where a key is built or loaded.
+    /// The load rules of `docs/spec/proof.md` §7.2. Run once, where a key is
+    /// built or loaded.
     pub fn check(&self) -> Result<(), String> {
         if VmConfig::from_bytes(&self.config.to_bytes()).as_ref() != Some(&self.config) {
             return Err("the key's VmConfig is not one a program derives".into());
@@ -472,33 +421,18 @@ impl VerifyingKey {
             ));
         }
         let families = &self.config.families;
-        if self.setup_commitments.len() != families.len() {
-            return Err("the key has not one setup list per config family".into());
-        }
-        let identity = identity_digest(
-            self.code_version,
-            &self.config,
-            self.entry_pc,
-            &self.setup_commitments,
-        );
+        // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The key's
+        // setup-commitment lists, one per config family, are counted against
+        // the config HERE, and digested into the identity just below, once a
+        // commitment scheme exists (`docs/architecture.md` §0).
+        let identity = identity_digest(self.code_version, &self.config, self.entry_pc);
         if identity != self.identity {
-            return Err("the identity is not the digest of the key's setup commitments".into());
-        }
-        if srs_digest(&self.srs_verifier, &self.generic_table) != self.srs_digest {
-            return Err(
-                "the SRS digest is not the digest of the key's SrsVerifier and generic table"
-                    .into(),
-            );
+            return Err("the identity is not the digest of the key's config and entry pc".into());
         }
         if self.circuits.len() != families.len() {
             return Err("the key has not one circuit per config family".into());
         }
-        for ((c, (family, height)), setup) in self
-            .circuits
-            .iter()
-            .zip(families)
-            .zip(&self.setup_commitments)
-        {
+        for (c, (family, height)) in self.circuits.iter().zip(families) {
             let name = format!("family {family}");
             if c.family != *family {
                 return Err(format!(
@@ -516,32 +450,27 @@ impl VerifyingKey {
             c.artifact.validate().map_err(|e| format!("{name}: {e}"))?;
             check_memory(&c.artifact).map_err(|e| format!("{name}: {e}"))?;
             check_discharge(&c.artifact, &c.channels).map_err(|e| format!("{name}: {e}"))?;
-            // A family that reads the generic channel opens the key's generic
-            // table after identity's commitments (`reduce_shard`'s step 11).
+            // The registry's own consistency, which no key can break once its
+            // circuit is the registry's: a family that reads the generic channel
+            // names the packed generic table as its last setup columns, after
+            // the family's own (`docs/spec/lookup.md` §9).
             let generic = if c.reads_generic_table() {
                 generic_table::WIDTH
             } else {
                 0
             };
-            if setup.len() + generic != c.artifact.setup.len() {
-                return Err(format!(
-                    "{name}: {} setup commitments and {generic} of the generic table for {} \
-                     setup columns",
-                    setup.len(),
-                    c.artifact.setup.len()
-                ));
-            }
-            // The registry's own consistency, which no key can break once its
-            // circuit is the registry's: the table is the setup columns right
-            // after identity's, the order the opening lists them in.
-            let after_identity: Vec<PolyAddress> = (0..generic as u32)
-                .map(|j| PolyAddress::Setup(setup.len() as u32 + j))
+            let own = c.artifact.setup.len().checked_sub(generic).ok_or(format!(
+                "{name}: {} setup columns cannot hold the generic table's {generic}",
+                c.artifact.setup.len()
+            ))?;
+            let last: Vec<PolyAddress> = (0..generic as u32)
+                .map(|j| PolyAddress::Setup(own as u32 + j))
                 .collect();
             let named = c
                 .channels
                 .iter()
                 .filter(|spec| spec.channel == lookup_channel::GENERIC)
-                .all(|spec| spec.table == after_identity);
+                .all(|spec| spec.table == last);
             if !named {
                 return Err(format!(
                     "{name}: the circuit does not name the generic table as its last setup columns"
@@ -553,16 +482,24 @@ impl VerifyingKey {
 }
 
 // ---------------------------------------------------------------------------
-// The opening claim
+// The column claims
 // ---------------------------------------------------------------------------
 
-/// What `reduce_shard` leaves for the wrapper: one batched opening of every
-/// committed column of the shard at one point, and the shard transcript to run
-/// it in. `docs/spec/proof.md` §5.
-pub struct OpeningClaim {
-    /// Layout order: `M`, `W`, `S`.
-    pub commitments: Vec<[u8; 64]>,
+/// What `reduce_shard` leaves: every committed column's claimed value at the one
+/// point the GKR pass ends on, and the shard transcript a discharge would run
+/// in. `docs/spec/proof.md` §5.
+///
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** These are the
+/// claims a commitment scheme's opening must prove against the shard's committed
+/// columns — `M` from the statement, `W` from the proof, `S` from the key.
+/// Nothing proves them: every verifier entry point drops them, so the values are
+/// whatever the prover said and a shard's proof is **UNSOUND**
+/// (`docs/architecture.md` §0).
+pub struct ColumnClaims {
+    /// The committed columns, in layout order: `M`, `W`, `S`.
+    pub columns: Vec<PolyAddress>,
     pub point: Vec<Fr>,
+    /// One per column, in the same order.
     pub values: Vec<Fr>,
     pub transcript: Transcript,
 }

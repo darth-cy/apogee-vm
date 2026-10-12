@@ -7,7 +7,7 @@ use field::Fr;
 use test_support::{hex_to_32, sha256, to_hex};
 
 const KAT_PATH: &str = "tests/vectors/fr_kats.txt";
-const KAT_SHA256: &str = "cfb9db2443dc6d803104f7d89924235bcb2fa56cf6cfc04fc2e24cd31d0ce1df";
+const KAT_SHA256: &str = "f245dfb27cdb35ca69c111f736e53b7de2ecb27744f60b9eb24f0c6db662f2cd";
 
 /// One parsed line: an operator and its whitespace-separated fields, the last
 /// of which is the expected result.

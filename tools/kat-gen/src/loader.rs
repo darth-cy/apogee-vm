@@ -16,7 +16,7 @@ use std::process::Command;
 use crate::write_vectors;
 
 /// The guest ELFs the loader tests read, and what each is for.
-pub const ELF_FIXTURES: [(&str, &str); 22] = [
+pub const ELF_FIXTURES: [(&str, &str); 15] = [
     (
         "fib",
         "real compiler output: the address and boundary oracle",
@@ -37,8 +37,8 @@ pub const ELF_FIXTURES: [(&str, &str); 22] = [
     ),
     (
         "vault",
-        "field and transcript inside the proof: Poseidon2, Fr::inverse, deep \
-         recursion",
+        "field and transcript inside the proof: software Poseidon2, \
+         Fr::inverse, and the deepest call chain in guests/",
     ),
     (
         "atomics",
@@ -82,50 +82,9 @@ pub const ELF_FIXTURES: [(&str, &str); 22] = [
          1,064,970 cycles, so one execution is two shards of one family",
     ),
     (
-        "keccak-test",
-        "`guest_sdk::keccak256` over the sponge's six shapes, self-checking: \
-         the KECCAK_F delegation's fixture",
-    ),
-    (
-        "keccak-unused",
-        "a zero-shard fixture: it links the keccak shim, so its image \
-         declares the family, and never calls it",
-    ),
-    (
-        "recursion-ops",
-        "`field::Fr` arithmetic and `transcript::poseidon2_permute`, which \
-         the guest-target backends route through the two delegations",
-    ),
-    (
-        "recursion-unused",
-        "a zero-shard fixture: it links both backends, so its image declares \
-         both families, and reaches neither",
-    ),
-    (
         "public-io",
         "its public input and its advice are ordinary loads and its journal \
          ordinary stores, so it issues no ecall but EXIT",
-    ),
-    (
-        "mod-mul-ops",
-        "the MOD_MUL delegation by name over all four selectors, each answer \
-         computed a second way in software and compared, and the three vendored \
-         callers that name no shim at all -- `k256`'s group arithmetic and its \
-         scalar, and ark-bn254's two fields",
-    ),
-    (
-        "sha256-ops",
-        "the SHA256_COMP delegation by name against FIPS 180-4's own \
-         one-block vector, and the digest surface at every length that moves \
-         the Merkle-Damgard padding, each answer checked against a published \
-         digest and against `sha2`",
-    ),
-    (
-        "ec-ops",
-        "the EC_ADD delegation by name on both curves, every addition computed \
-         a second way in software and compared limb for limb, the point checked \
-         against `k256` and `ark-bn254` by cross-multiplication, and all four \
-         completeness cases",
     ),
 ];
 

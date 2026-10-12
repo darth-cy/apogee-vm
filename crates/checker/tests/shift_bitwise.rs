@@ -14,7 +14,7 @@
 //! The shift edges are here in full — their honest half as the shift-edge rows
 //! of [`honest_rows`], their negative half as the forgeries the truncation, the
 //! free shamt, the residue and the sign extension each admit. The AND table
-//! against an independent recomputation over the ceremony's SRS is
+//! against an independent recomputation is
 //! `crates/program/tests/lookup_tables.rs`'.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -1801,9 +1801,8 @@ fn filled(
             .1
             .clone()
     };
-    // The setup columns are the tables the key's commitments are of: the
-    // decoded table identity binds, then the packed table the SRS digest
-    // covers.
+    // The setup columns are the family's decoded table, then the packed
+    // generic table.
     let table = program
         .tables
         .family(family::SHIFT_BITWISE)

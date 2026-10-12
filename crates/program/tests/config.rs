@@ -192,8 +192,7 @@ fn the_descriptor_needs_one_shard_count_per_family() {
 /// Derivation puts `INIT_TEARDOWN` and `ZERO_WINDOWS` in every config at one
 /// height, so derivation refuses to produce a config without either or with
 /// the two apart, and the wire form refuses to read one — the empty config
-/// included. Presence is what is checked, not position: delegation families
-/// are appended above both ids.
+/// included. Presence is what is checked, not position.
 #[test]
 fn a_config_without_both_init_families_at_one_height_is_refused() {
     let image = common::guest("fib");

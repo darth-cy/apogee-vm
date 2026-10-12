@@ -1,8 +1,7 @@
 #![no_std]
 #![no_main]
 //! The heap fixture: an echo of the advice region into the journal, run
-//! through the bump allocator, plus the one delegation call that is not an
-//! echo.
+//! through the bump allocator.
 //!
 //! Its buffers are heap-allocated on purpose. Almost nothing else in `guests/`
 //! needs `alloc`, so without this the bump allocator would be dead-stripped
@@ -36,15 +35,6 @@
 //! # The public input
 //!
 //! Unused.
-//!
-//! # The delegation
-//!
-//! One `poseidon2_permute` over a three-lane state, compared against the same
-//! permutation reached through `crates/transcript`. Both entry points are
-//! linked here, which is what makes this guest's image declare the `POSEIDON2`
-//! and `FR_ARITH` families (`docs/spec/delegation.md` §7) — `crates/program/
-//! tests/delegation.rs` holds it to exactly those two — and what proves those
-//! two `no_std` crates compile and run on RV32.
 
 extern crate alloc;
 
@@ -52,7 +42,6 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use constants::guest_memory;
-use field::Fr;
 
 guest_sdk::entry!(main);
 
@@ -84,37 +73,4 @@ fn main() {
         words[3], 0xdead_beef,
         "the heap did not hand back what it was given"
     );
-
-    // The delegation and the software twin, behind one signature. On an
-    // executor with the circuit both reach it; on one without, both take the
-    // software path inside `transcript`. The states agree either way, which is
-    // the property the fallback exists to have.
-    let mut state = [0u8; 96];
-    state[0] = 1;
-    state[32] = 2;
-    state[64] = 3;
-    let mut want = state;
-    software_poseidon2(&mut want);
-    if !guest_sdk::poseidon2_permute(&mut state) {
-        software_poseidon2(&mut state);
-    }
-    assert_eq!(
-        state, want,
-        "the delegated permutation is not the software permutation"
-    );
-}
-
-/// The delegation's software twin: `transcript`'s permutation, over the same
-/// 96-byte canonical little-endian state the ecall takes.
-fn software_poseidon2(bytes: &mut [u8; 96]) {
-    let mut state = [Fr::ZERO; 3];
-    for (i, lane) in state.iter_mut().enumerate() {
-        let mut w = [0u8; 32];
-        w.copy_from_slice(&bytes[32 * i..32 * (i + 1)]);
-        *lane = Fr::from_bytes(&w).expect("precompile state lanes are canonical");
-    }
-    transcript::poseidon2_permute(&mut state);
-    for (i, lane) in state.iter().enumerate() {
-        bytes[32 * i..32 * (i + 1)].copy_from_slice(&lane.to_bytes());
-    }
 }

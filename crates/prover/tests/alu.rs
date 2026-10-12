@@ -11,11 +11,10 @@
 mod common;
 
 use constants::family;
-use program::lookup_tables::generic_commitments;
 use prover::ProverSetup;
 use trace::TraceArchive;
 use verifier::{verify_shard, PublicInputs, ShardProof};
-use verifier_core::{reduce_shard, srs_digest};
+use verifier_core::reduce_shard;
 
 const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
 const JBS: u32 = family::JUMP_BRANCH_SLT;
@@ -44,14 +43,7 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
             4 + 128 * a.layer_vars(k + 1) as usize + 4 + 32 * claims
         })
         .sum();
-    4 + 4
-        + 16
-        + 32
-        + (4 + 64 * a.witness.len())
-        + (4 + 32 * a.outputs.len())
-        + 4
-        + transitions
-        + 704
+    4 + 4 + 16 + 32 + (4 + 32 * a.outputs.len()) + 4 + transitions
 }
 
 /// The guest decodes into four execution families — add/sub, jump/branch/slt,
@@ -121,7 +113,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             (family::PUBLIC_INPUT, 0),
             (family::PUBLIC_OUTPUT, 0)
         ],
-        "one shard per family that runs, in the global transcript's group order"
+        "one shard per family that runs, in statement order"
     );
 
     for proof in &proofs {
@@ -148,7 +140,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     assert_eq!(shb.gkr.layers[0].rounds.len(), 20);
     assert_eq!(shb.gkr.layers[0].final_evals.len(), 21 + 61 + 10);
     assert_eq!(shb.outputs.len(), 2 + 2 * 4);
-    assert_eq!(shb.to_bytes().len(), 68_564);
+    assert_eq!(shb.to_bytes().len(), 63_952);
 
     // The mul/div family: the same depth for the same reason — its `range16`
     // tree's 16 obligations and its table fraction pad to 32 leaves — its base
@@ -158,42 +150,35 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     assert_eq!(md.gkr.layers[0].rounds.len(), 20);
     assert_eq!(md.gkr.layers[0].final_evals.len(), 21 + 54 + 9);
     assert_eq!(md.outputs.len(), 2 + 2 * 4);
-    assert_eq!(md.to_bytes().len(), 67_412);
+    assert_eq!(md.to_bytes().len(), 63_248);
 
-    // The generic table's binding. Both families read the channel — the
-    // shift family for `U16GetSign`, the shift powers and the four AND bytes,
-    // the mul/div family for its two operand signs — so each opens the key's
-    // three table commitments after its own identity-committed setup columns.
-    // The add/sub family reads no generic lookup and opens none of them.
-    let table = generic_commitments(&setup.srs).map(|p| p.to_bytes());
-    assert_eq!(setup.vk.generic_table, table);
-    assert_eq!(
-        setup.vk.srs_digest,
-        srs_digest(&setup.vk.srs_verifier, &table)
-    );
+    // Each shard reduces to one claim per committed column, in layout order:
+    // memory, witness, setup. The add/sub family's is 21 + 28 + 7.
+    //
+    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. Those claims
+    // are meant to be opened against the statement's memory commitments, the
+    // shard's witness commitments and the key's setup and generic-table
+    // commitments. Nothing is opened, so these lengths are all that can be
+    // held (`docs/architecture.md` §0).
     let reduced = |proof: &ShardProof| match reduce_shard(&setup.vk, proof, &public) {
-        Ok(claim) => claim.commitments,
+        Ok(claim) => claim,
         Err(e) => panic!("the honest shard reduces: {e}"),
     };
-
-    let claim = reduced(shb);
-    assert_eq!(claim.len(), 21 + 61 + 10);
-    assert_eq!(&claim[..21], &public.memory_commitments[3][..]);
-    assert_eq!(&claim[21..82], &shb.witness_commitments[..]);
-    assert_eq!(&claim[82..89], &setup.vk.setup_commitments[2][..]);
-    assert_eq!(&claim[89..], &table[..]);
-
-    let claim = reduced(md);
-    assert_eq!(claim.len(), 21 + 54 + 9);
-    assert_eq!(&claim[..21], &public.memory_commitments[4][..]);
-    assert_eq!(&claim[21..75], &md.witness_commitments[..]);
-    assert_eq!(&claim[75..81], &setup.vk.setup_commitments[3][..]);
-    assert_eq!(&claim[81..], &table[..]);
-
-    let claim = reduced(&proofs[1]);
-    // The add/sub claim: 27 memory and 35 witness commitments, the witness
-    // count moving by one for every registered delegation type
-    // (`docs/spec/delegation.md` §3), then identity's seven setup ones.
-    assert_eq!(claim.len(), 27 + 35 + 7);
-    assert_eq!(&claim[62..], &setup.vk.setup_commitments[0][..]);
+    for (proof, (m, w, s)) in [
+        (shb, (21, 61, 10)),
+        (md, (21, 54, 9)),
+        (&proofs[1], (21, 28, 7)),
+    ] {
+        let claim = reduced(proof);
+        let a = &setup.vk.circuit(proof.family).expect("a circuit").artifact;
+        assert_eq!(claim.columns, a.committed());
+        assert_eq!(
+            (a.memory.len(), a.witness.len(), a.setup.len()),
+            (m, w, s),
+            "family {}",
+            proof.family
+        );
+        assert_eq!(claim.values.len(), m + w + s);
+        assert_eq!(claim.point.len(), 20);
+    }
 }

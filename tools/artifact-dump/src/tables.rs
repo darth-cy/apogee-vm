@@ -2,9 +2,9 @@
 //! mnemonic, decoded fields and owning family, the derived `VmConfig`, and the
 //! program identity.
 //!
-//! The listing is read **out of the tables** — the columns program identity
-//! commits to — and not re-derived from the image, so the page shows the thing
-//! that is committed. The one exception is the mnemonic: a table stores a
+//! The listing is read **out of the tables** — the columns program identity is
+//! meant to commit to — and not re-derived from the image, so the page shows
+//! the thing a proof reads. The one exception is the mnemonic: a table stores a
 //! one-hot kind bit, not a name, so the name comes from decoding the slot's
 //! word, which is what put the bit there. `tests/tables.rs` parses the listing
 //! back and holds it to the tables row for row.
@@ -17,26 +17,16 @@ use program::{
     decode_program, family_name, field_mask, program_identity, DecodedTables, ProgramParams,
     RowField,
 };
-use srs::Srs;
 use test_support::{sha256, to_hex};
 
 /// The printed tables of `elf`, or the named loader or decoder error that
-/// stopped them. With `srs`, the identity is computed over it; without, the
-/// page says what is needed.
-pub fn render(
-    elf: &[u8],
-    source_label: &str,
-    params: &ProgramParams,
-    srs: Option<&Srs>,
-) -> Result<String, String> {
+/// stopped them.
+pub fn render(elf: &[u8], source_label: &str, params: &ProgramParams) -> Result<String, String> {
     let image =
         load_elf(elf).map_err(|e| format!("{source_label}: the loader refused it: {e:?}"))?;
     let (tables, config) =
         decode_program(&image, params).map_err(|e| format!("{source_label}: {e}"))?;
-    let identity = match srs {
-        Some(srs) => to_hex(&program_identity(&image, &tables, &config, srs).to_bytes()),
-        None => "not computed: pass --ptau <ppot_0080_24.ptau>, the PSE ceremony file".to_string(),
-    };
+    let identity = to_hex(&program_identity(&image, &tables, &config).to_bytes());
 
     let mut out = String::new();
     let _ = write!(
@@ -50,13 +40,14 @@ pub fn render(
          bytecode ceiling  {} words\n\
          program identity  {identity}\n\
          \n\
-         The identity is one Fr, canonical little-endian: the Mercury commitments to\n\
-         every column below and to the image's words in RAM window 0, with the\n\
+         The identity is one Fr, canonical little-endian: the code version, the\n\
          VmConfig and the entry point, digested by the recipe in docs/spec/program.md\n\
-         section 8. It is a function of the decoded instructions, the file-backed\n\
-         bytes (.text, .rodata, .data), the entry point and the parameters -- not of\n\
-         the ELF's symbols, its section headers or the size of a segment with no file\n\
-         bytes.\n",
+         section 8.\n\
+         \n\
+         ALARM - UNFINISHED - WARNING - TODO: NO COMMITMENT SCHEME. The identity is\n\
+         meant to commit to every column below and to the image's words in RAM\n\
+         window 0. With no commitment scheme it binds neither, so two programs with\n\
+         one VmConfig and one entry point share it (docs/architecture.md section 0).\n",
         to_hex(&sha256(elf)),
         tables.code_version,
         config.bytecode_size_words,

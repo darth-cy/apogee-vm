@@ -8,34 +8,10 @@ publish.workspace = true
 test-support.workspace = true
 constants.workspace = true
 field.workspace = true
-curve.workspace = true
 poly.workspace = true
 sumcheck.workspace = true
 transcript.workspace = true
 constraints.workspace = true
 gkr.workspace = true
-srs.workspace = true
-pcs.workspace = true
-# The `prove` verb runs a real proving job and reads its per-stage timings out
-# of the prover itself, `prover::StreamingReport`'s four clocks, which are in
-# the default build. No cargo feature is enabled from here: a feature turned on
-# from a dependency entry is on for every `cargo build --workspace`.
-host.workspace = true
-prover.workspace = true
-verifier-core.workspace = true
-# `recurse`: a recursion program's ELF decoded, a node's proof verified, and
-# the decider's key made and read.
-groth16.workspace = true
-loader.workspace = true
-verifier.workspace = true
-emulator.workspace = true
-program.workspace = true
-trace.workspace = true
-revm-block = { path = "../../guests/revm-block" }
-rayon.workspace = true
-serde = { workspace = true, features = ["derive", "alloc"] }
-serde_json.workspace = true
 
-ark-bn254.workspace = true
-ark-ec.workspace = true
 ark-ff.workspace = true

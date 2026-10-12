@@ -21,6 +21,11 @@
 //!
 //! Exit 0 when everything verifies; 1 naming the first file refused and why,
 //! or the shards missing or repeated; 2 on a usage error.
+//!
+//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** "Verifies"
+//! here means the GKR passes and the arguments over them hold for the column
+//! values the prover stated; nothing checks those values, so it is no proof of
+//! anything. Every run says so on stderr (`docs/architecture.md` §0).
 
 use std::fs;
 
@@ -31,6 +36,10 @@ use verifier::{
 use verifier_core::statement_shards;
 
 fn main() {
+    eprintln!(
+        "verifier: WARNING: UNFINISHED: there is no commitment scheme, so a proof that \
+         verifies here is UNSOUND (docs/architecture.md §0)"
+    );
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("block") => match args.as_slice() {

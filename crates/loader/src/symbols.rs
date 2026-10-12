@@ -1,9 +1,9 @@
 //! The ELF **symbol table**, read beside the image and never into it.
 //!
 //! A [`crate::ProgramImage`] is the post-load memory, the entry pc and the
-//! instruction stream, and program identity is a commitment over exactly that
+//! instruction stream, and program identity is meant to bind exactly that
 //! (`docs/spec/program.md` §8). A symbol table is what a linker wrote for a
-//! debugger: it is not part of the image, it is not committed, and nothing here
+//! debugger: it is not part of the image, nothing binds it, and nothing here
 //! can change what a proof is about. What it is for is reading — a listing of
 //! four thousand hex words with no names in it is a listing nobody can
 //! navigate — and **attributing cycles**: `tools/profiler` turns a
@@ -52,9 +52,8 @@ impl FuncSymbol {
 /// A zero-size entry owns no instruction and would make an interval nothing
 /// falls in; an undefined one (`st_shndx == 0`) is an import, which a statically
 /// linked guest has none of. Two symbols can share an address and a size — an
-/// alias, and `guests/revm-block` has 28 groups of them — so the result is a
-/// list rather than a map and a caller that wants one name per address picks by
-/// its own rule.
+/// alias — so the result is a list rather than a map and a caller that wants
+/// one name per address picks by its own rule.
 pub fn function_symbols(elf: &[u8]) -> Vec<FuncSymbol> {
     let mut out = Vec::new();
     for_each_symbol(elf, |name, value, size, info, _shndx| {

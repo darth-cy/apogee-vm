@@ -2,29 +2,34 @@
 //! trace ever being live. `docs/spec/streaming.md` specifies it.
 //!
 //! ```text
-//! PASS 1 -- EXECUTE + PRECOMMIT          PASS 2 -- REEXECUTE + PROVE
+//! PASS 1 -- EXECUTE                      PASS 2 -- REEXECUTE + PROVE
 //!   max_in_flight workers, one executor    the same, over the same execution
 //!   a worker with no shard claims one:     a worker with no shard claims one:
 //!     it steps the guest until a buffer      it steps the guest until a buffer
-//!     fills, builds that shard's M,          fills, fills that shard's
-//!     commits it, drops it                   columns, proves it, drops it
-//!   at exit: the window shards             at exit: the window shards
-//!   the statement, then G1-G11             the block
+//!     fills, and drops the shard             fills, fills that shard's
+//!                                            columns, proves it, drops it
+//!                                          at exit: the window shards
+//!   the statement, then G1-G9              the block
 //! ```
 //!
+//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** Pass 1 is
+//! where each shard's `M` columns are filled and committed as the shard fills —
+//! the window families' after the execution ends — so that the global
+//! transcript absorbs every commitment before the memory challenges exist. With
+//! nothing to commit, pass 1 only fixes the statement, and nothing ties pass 2's
+//! columns to it (`docs/architecture.md` §0).
+//!
 //! What differs from the archived path (`docs/spec/streaming.md` §6) is
-//! **when** a column exists. Every commitment, every absorption, every
-//! challenge and every proof byte is what [`crate::prove_block`] produces over
-//! the same execution, by construction; `crates/prover/tests/block.rs` holds the
-//! global commit phase and every shard's proof, rebuilt from an archive, to the
-//! streamed block's bytes.
+//! **when** a column exists. Every absorption, every challenge and every proof
+//! byte is what [`crate::prove_block`] produces over the same execution, by
+//! construction; `crates/prover/tests/block.rs` holds the global commit phase
+//! and every shard's proof, rebuilt from an archive, to the streamed block's
+//! bytes.
 //!
 //! What it buys is a peak that does not grow with the shard or cycle count.
-//! The archived path holds every shard's memory columns at once
-//! (`prover::statement_inputs`, `global_commit_phase`), about 300 MB a shard,
-//! and `emulator::trace_run`'s output, about 300 bytes a cycle between the
-//! memory event log and the family buffers. Neither exists here: the executor
-//! is [`emulator::StreamingRun`], which holds one partial buffer per family and
+//! `emulator::trace_run`'s output, about 300 bytes a cycle between the memory
+//! event log and the family buffers, does not exist here: the executor is
+//! [`emulator::StreamingRun`], which holds one partial buffer per family and
 //! the last-access tables, and this module holds at most `max_in_flight` shards
 //! at a time (`docs/spec/streaming.md` §1).
 //!
@@ -33,7 +38,7 @@
 //! shard claims the next one, and only then — and only if no shard the executor
 //! already filled is waiting — does it step the guest, under the pipeline's one
 //! lock, until a buffer fills. Everything a shard grows into —
-//! its columns, its commitments, its forward pass and its proof — is built by
+//! its columns, its forward pass and its proof — is built by
 //! the worker that claimed it, after it claimed it, so `max_in_flight` bounds
 //! every shard heavier than rows. And no worker waits on another: there is no
 //! batch, so no barrier for the slowest shard of one to hold the rest behind.
@@ -42,9 +47,9 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use emulator::{ChunkRows, GuestIo, ShardChunk, StreamedExecution, StreamingRun};
+use emulator::{GuestIo, ShardChunk, StreamedExecution, StreamingRun};
 use rayon::prelude::*;
-use trace::{build_boundary_finals, init_windows, plan_shards, FrameSlice, RowSlice};
+use trace::{build_boundary_finals, init_windows, plan_shards, RowSlice};
 use verifier_core::{statement_shards, window_height, BlockProof, PublicInputs, ShardProof};
 
 use program::FamilyId;
@@ -52,8 +57,8 @@ use program::FamilyId;
 #[cfg(feature = "debug-info")]
 use crate::debug;
 use crate::{
-    global_commit_from_commitments, public_inputs, shard_counts, window_of, GlobalCommitState,
-    ProverError, ProverSetup, ProvingContext, ShardRows, ShardSource,
+    global_commit_of, public_inputs, shard_counts, window_of, GlobalCommitState, ProverError,
+    ProverSetup, ProvingContext, ShardRows, ShardSource,
 };
 
 /// What a streaming run measured about itself.
@@ -71,8 +76,8 @@ pub struct StreamingReport {
     pub shards: usize,
     /// The most shards held at once in either pass, each claimed by a worker —
     /// or in one of the window families' batches — and not yet finished: its
-    /// rows, and whatever columns, commitments, forward pass and proof it had
-    /// grown into so far. At most `max_in_flight`, which is what the peak is a
+    /// rows, and whatever columns, forward pass and proof it had grown into so
+    /// far. At most `max_in_flight`, which is what the peak is a
     /// function of.
     ///
     /// It does not count a shard the executor has filled and no worker has
@@ -80,8 +85,7 @@ pub struct StreamingReport {
     /// per family — the executor's own buffers, under a new owner.
     pub peak_in_flight: usize,
     pub max_in_flight: usize,
-    /// Pass 1's wall clock: the execution, every shard's memory commitments,
-    /// the statement and G1-G11.
+    /// Pass 1's wall clock: the execution, the statement and G1-G9.
     pub pass1_ns: u64,
     /// The executor's time in pass 1, summed over every step any worker took.
     /// A part of `pass1_ns`.
@@ -98,17 +102,16 @@ pub struct StreamingReport {
 /// most one shard at a time, and therefore what bounds the peak. It is an
 /// argument and not a constant because the caller is the only one that knows
 /// the machine — a `2^20` `SHIFT_BITWISE` shard's forward pass alone is
-/// 8.4 GiB, and a `2^18` `KECCAK_F` shard's 42 GiB (`docs/spec/streaming.md`
-/// §1). The work inside each shard runs on rayon's pool, so
+/// 8.4 GiB (`docs/spec/streaming.md` §1). The work inside each shard runs on
+/// rayon's pool, so
 /// `RAYON_NUM_THREADS` is the cores the shards share and `max_in_flight` is
 /// how many shards share them. It must be at least 1.
 ///
 /// A worker claims a shard **before** anything heavier than its rows exists: it
 /// steps the executor itself, and only when no filled shard is waiting. So the
-/// shards no worker holds are rows, at most one per family — a delegating ecall
-/// fills two buffers in one step, and at exit every family's partial buffer
-/// becomes a shard at once — and those are the buffers the executor held
-/// anyway.
+/// shards no worker holds are rows, at most one per family — at exit every
+/// family's partial buffer becomes a shard at once — and those are the buffers
+/// the executor held anyway.
 ///
 /// The block does not depend on it. Shards are placed by their statement
 /// position, each proof is a function of the global state and its own columns
@@ -148,15 +151,14 @@ pub fn prove_block_streaming(
 /// Which shard of which family, and where it sits in statement order.
 type ShardId = (FamilyId, u32);
 
-/// PASS 1: execute, and commit each shard's `M` columns as it fills.
+/// PASS 1: execute, and fix the statement.
 ///
-/// The commitments come back in the order the workers finish them, which is
-/// neither execution order nor statement order (`INIT_TEARDOWN` and
-/// `ZERO_WINDOWS` come first there and are built last here), so they are
-/// collected against their `(family, index)` and placed afterwards. A
-/// commitment is an MSM over the SRS and reads no transcript, so when it is
-/// computed cannot matter; the order they are **absorbed** in is the
-/// statement's (`docs/spec/proof.md` §2).
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** Each filled
+/// shard's `M` columns are meant to be built and committed HERE, as it fills,
+/// and the window families' after the pipeline, collected against their
+/// `(family, index)` and placed in statement order for the global transcript to
+/// absorb (`docs/spec/proof.md` §2). With nothing to commit, a filled shard is
+/// dropped unbuilt (`docs/architecture.md` §0).
 fn pass1(
     setup: &ProverSetup,
     io: &GuestIo,
@@ -169,21 +171,19 @@ fn pass1(
 
     let run = StreamingRun::new(&setup.program.image, io, &setup.program.tables, config)
         .map_err(|e| ProverError::Trace(e.to_string()))?;
-    let piped = pipeline(1, run, max_in_flight, |chunk| {
-        let height = setup.registration(chunk.family).height;
-        let source = chunk_source(setup, io, chunk, height);
-        commit_source(setup, chunk.family, chunk.index, &source)
-    })?;
+    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The shard's `M`
+    // columns are committed HERE. Nothing is committed, so the chunk is dropped.
+    let piped = pipeline(1, run, max_in_flight, |_chunk| Ok(()))?;
     report.pass1_execute_ns = piped.execute_ns;
-    let mut peak = piped.peak_in_flight;
+    let peak = piped.peak_in_flight;
     let done = piped.done;
-    let mut committed = piped.results;
+    let filled = piped.results;
 
     // The statement's variable-length record, all of it a function of the
     // last-access tables and the profile: the window list, the shard counts and
     // the register/pc boundary (`docs/spec/memory.md` §3.4, §4.1).
     let windows = init_windows(&done.state, h);
-    let counts = shard_counts(config, &done.profile, &done.state, &io.advice, &windows, h);
+    let counts = shard_counts(config, &done.profile, &io.advice, &windows, h);
     let boundary = build_boundary_finals(&done.state);
     report.cycles = done.execution.cycle_count;
 
@@ -193,73 +193,16 @@ fn pass1(
     // check `flush_family` against `plan_shards`.
     let plan = plan_shards(&done.profile, config);
     for (family, count) in &plan.shards {
-        let filled = committed.iter().filter(|((f, _), _)| f == family).count();
+        let n = filled.iter().filter(|((f, _), _)| f == family).count();
         assert_eq!(
-            filled,
+            n,
             *count as usize,
-            "streaming: {} filled {filled} shards and the plan counts {count}",
+            "streaming: {} filled {n} shards and the plan counts {count}",
             program::family_name(*family)
         );
     }
-
-    // The window families' shards, which no chunk carries: their rows are
-    // addresses and their teardown columns are every address's LAST write, so
-    // they are not a fact until the execution is over. Committed after the
-    // pipeline, in batches under the same bound.
-    let pending: Vec<ShardId> = statement_shards(config, &counts)
-        .into_iter()
-        .filter(|(family, _)| committed.iter().all(|((f, _), _)| f != family))
-        .collect();
-    for batch in pending.chunks(max_in_flight) {
-        peak = peak.max(batch.len());
-        let commitments = first_error(
-            batch
-                .par_iter()
-                .map(|&(family, index)| {
-                    let height = setup.registration(family).height;
-                    let source = ShardSource {
-                        program: &setup.program,
-                        input: &done.execution.io.input,
-                        advice: &io.advice,
-                        rows: ShardRows::Window(&done.state),
-                        index,
-                        height: height as usize,
-                        window: window_of(family, index, &windows, height),
-                    };
-                    commit_source(setup, family, index, &source)
-                })
-                .collect(),
-        )?;
-        committed.extend(batch.iter().copied().zip(commitments));
-    }
     report.peak_in_flight = report.peak_in_flight.max(peak);
-
-    // Statement order, from the list the two steps filled.
-    let order = statement_shards(config, &counts);
-    report.shards = order.len();
-    let memory_commitments: Vec<Vec<[u8; 64]>> = order
-        .iter()
-        .map(|shard| {
-            committed
-                .iter()
-                .find(|(id, _)| id == shard)
-                .map(|(_, c)| c.clone())
-                .unwrap_or_else(|| {
-                    panic!(
-                        "streaming: the statement holds shard ({}, {}) and pass 1 committed none",
-                        program::family_name(shard.0),
-                        shard.1
-                    )
-                })
-        })
-        .collect();
-    assert_eq!(
-        committed.len(),
-        order.len(),
-        "streaming: pass 1 committed {} shards and the statement holds {}",
-        committed.len(),
-        order.len()
-    );
+    report.shards = statement_shards(config, &counts).len();
 
     // **A nonzero exit status, on a line of its own**, as the archived path's
     // statement phase prints one. A guest that panicked exits 101 having
@@ -284,10 +227,9 @@ fn pass1(
         shard_counts: counts,
         windows,
         boundary,
-        memory_commitments,
         memory_roots: Vec::new(),
     };
-    let global = global_commit_from_commitments(&setup.vk, statement);
+    let global = global_commit_of(&setup.vk, statement);
     report.pass1_ns = started.elapsed().as_nanos() as u64;
     dlog!(
         Phase,
@@ -301,40 +243,6 @@ fn pass1(
     Ok((global, done))
 }
 
-/// One shard's `M` columns, built, committed and dropped: pass 1's work on a
-/// shard, for a chunk a worker claimed and for a window shard alike.
-///
-/// The fill is one thread and the commitments are rayon's, so while one worker
-/// fills, the others' MSMs have the pool.
-fn commit_source(
-    setup: &ProverSetup,
-    family: FamilyId,
-    index: u32,
-    source: &ShardSource,
-) -> Result<Vec<[u8; 64]>, ProverError> {
-    // Declared under the `cfg` and read only inside one, so the default build
-    // has neither the binding nor the `Instant::now` behind it.
-    #[cfg(feature = "debug-info")]
-    let clock = debug::Clock::start();
-    let memory = crate::memory_columns_of(setup, family, index, source)?;
-    #[cfg(feature = "debug-info")]
-    let fill_ms = clock.ms();
-    let commitments = crate::commit_phase(
-        &setup.srs,
-        &memory.iter().collect::<Vec<_>>(),
-        crate::sigma_of(setup, family),
-    );
-    dlog!(
-        Phase,
-        family = family,
-        "apogee stream   pass 1 committed {:<22} M={} fill_ms={fill_ms} ms={}",
-        debug::shard(family, index),
-        commitments.len(),
-        clock.ms()
-    );
-    Ok(commitments)
-}
-
 /// The fill's view of a shard a streaming run has just filled.
 ///
 /// The chunk's rows **are** the shard's, so the cut is index 0 over the chunk
@@ -346,12 +254,7 @@ fn chunk_source<'a>(
     chunk: &'a ShardChunk,
     height: u32,
 ) -> ShardSource<'a> {
-    let rows = match &chunk.rows {
-        ChunkRows::Cycles(t) => ShardRows::Cycles(RowSlice::shard(t, 0, height as usize)),
-        ChunkRows::Invocations(t) => {
-            ShardRows::Invocations(FrameSlice::shard(t, 0, height as usize))
-        }
-    };
+    let rows = ShardRows::Cycles(RowSlice::shard(&chunk.rows, 0, height as usize));
     ShardSource {
         program: &setup.program,
         input: &io.input,
@@ -371,12 +274,11 @@ fn chunk_source<'a>(
 /// pass 1's, absorbed and challenged already, and this pass asserts its own
 /// execution agrees with it rather than recomputing it.
 ///
-/// **The `M` columns are not recommitted.** A shard's opening builds `cm*` from
-/// the statement's memory commitments — pass 1's — while its polynomial side is
-/// this pass's columns, so a pass that built different columns produces an
-/// opening that **fails verification**. That is a stronger check than a prover
-/// assertion and it costs nothing: the prover checks nothing
-/// (`docs/spec/gkr.md` §5.1) and the verifier checks this already.
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A shard's
+/// opening is meant to hold this pass's columns to pass 1's memory commitments,
+/// so that a pass which built different columns produces a proof that fails
+/// verification. With no commitments and no opening, nothing does
+/// (`docs/architecture.md` §0).
 fn pass2(
     setup: &ProverSetup,
     io: &GuestIo,
@@ -414,16 +316,15 @@ fn pass2(
     }
 
     // The two passes ran the same execution. Everything the statement carries
-    // that is not a commitment is checked here, cheaply, because a divergence
-    // would otherwise show up as a proof nobody can verify and no message
-    // saying why.
+    // is checked here, cheaply, because a divergence would otherwise show up as
+    // a proof nobody can verify and no message saying why.
     //
     // What is NOT compared is the last-access tables themselves: they are
-    // `O(touched addresses)`, which for a real block is tens of millions of
-    // entries, and what the statement actually carries out of them is the two
-    // things below. The window families' teardown *columns* are the residue, and
-    // the opening is what catches those — `cm*` is built from pass 1's
-    // commitments (`docs/spec/streaming.md` §2).
+    // `O(touched addresses)`, which for a large execution is tens of millions
+    // of entries, and what the statement actually carries out of them is the
+    // two things below. The window families' teardown *columns* are the
+    // residue, which a commitment to pass 1's columns would catch — UNFINISHED
+    // (`docs/architecture.md` §0).
     assert_eq!(
         done.profile, pass1.profile,
         "streaming: the two passes ran different executions"
@@ -506,8 +407,8 @@ fn pass2(
 }
 
 /// One shard's proof from its fill's source: the committed columns, then the
-/// GKR proof and the opening over one base layer. Pass 2's work on a shard, for
-/// a chunk a worker claimed and for a window shard alike.
+/// GKR proof over one base layer. Pass 2's work on a shard, for a chunk a worker
+/// claimed and for a window shard alike.
 fn prove_source(
     ctx: &ProvingContext,
     family: FamilyId,
@@ -803,9 +704,8 @@ impl<'a> Source<'a> {
     /// Shards the executor has just filled, in the order it filled them.
     ///
     /// **At most one waits per family, and this is where that is enforced.** The
-    /// executor steps only when nothing is waiting; one step fills at most two
-    /// buffers — the requesting family's and, for a delegating ecall, the
-    /// delegation family's — and the exit fills at most one per family. So a
+    /// executor steps only when nothing is waiting; one step fills at most one
+    /// buffer, and the exit fills at most one per family. So a
     /// second shard of a family arriving while the first waits would mean
     /// production had run ahead of demand, which is the one thing it may not do.
     fn admit(&mut self, filled: Vec<ShardChunk>) {
@@ -904,10 +804,7 @@ mod tests {
     }
 
     fn rows(chunk: &ShardChunk) -> usize {
-        match &chunk.rows {
-            ChunkRows::Cycles(t) => t.len(),
-            ChunkRows::Invocations(t) => t.len(),
-        }
+        chunk.rows.len()
     }
 
     /// Every shard the execution fills, in fill order, with its row count: the

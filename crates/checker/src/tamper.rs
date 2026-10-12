@@ -8,9 +8,15 @@
 //! then recounted over the tampered columns, **channel by channel**, unless that
 //! channel's multiplicity column is itself tampered or its recount is
 //! impossible — a tuple its table does not hold — in which case that channel
-//! keeps its honest counts and every other channel is still recounted; a memory
-//! column's change is recommitted in a new global commit phase; and every shard
-//! of the new statement is proved again.
+//! keeps its honest counts and every other channel is still recounted; a
+//! boundary change runs a new global commit phase; and every shard of the new
+//! statement is proved again.
+//!
+//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A memory
+//! column's change is meant to be recommitted in that new global phase, which
+//! moves every challenge. Nothing is committed, so a tampered `M` cell leaves
+//! the global transcript as it was, and a twin whose refusal rests on a
+//! commitment cannot be refused here at all (`docs/architecture.md` §0).
 //! So the proof that reaches the verifier is the best one the tampered witness
 //! has, and the class of the check that refuses it is the class of what the
 //! tamper broke (`docs/spec/proof.md` §6). A tamper that breaks nothing
@@ -140,9 +146,8 @@ impl<'a> TamperHarness<'a> {
     ///
     /// What a linkage twin needs that [`run`] cannot give it. `run` verifies
     /// one shard, so a tamper whose only symptom is the cross-shard read/write
-    /// root product — one delegation invocation dropped, say — reaches no check
-    /// there: step 10b is the statement's, not a shard's (`docs/spec/proof.md`
-    /// §6). A block reads every shard's roots against the boundary at once,
+    /// root product reaches no check there: step 10b is the statement's, not a
+    /// shard's (`docs/spec/proof.md` §6). A block reads every shard's roots against the boundary at once,
     /// which is where such a tamper lands.
     ///
     /// [`run`]: TamperHarness::run
@@ -183,25 +188,12 @@ impl<'a> TamperHarness<'a> {
     /// The statement re-proved with `tamper` applied: every shard's proof, in
     /// statement order, and the public inputs they were proved against.
     fn reprove(&self, tamper: &Tamper) -> (Vec<ShardProof>, PublicInputs) {
-        let global_changes = tamper.boundary.is_some()
-            || tamper
-                .cells
-                .iter()
-                .any(|c| matches!(c.address, PolyAddress::Memory(_)));
-        let (_, proofs, public) = if global_changes {
+        // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. A tampered
+        // `M` cell is meant to reach the global transcript through its shard's
+        // recommitted memory columns; with none, only the boundary does.
+        let (_, proofs, public) = if let Some(b) = tamper.boundary {
             let mut inputs = self.inputs.clone();
-            if let Some(b) = tamper.boundary {
-                inputs.boundary = b;
-            }
-            let shards = statement_shards(&self.setup.vk.config, &inputs.shard_counts);
-            for c in &tamper.cells {
-                let PolyAddress::Memory(i) = c.address else {
-                    continue;
-                };
-                let at = position(&shards, (c.family, c.shard));
-                let column = &mut inputs.memory_columns[at][i as usize];
-                *column = with_cell(column, c.row, c.value);
-            }
+            inputs.boundary = b;
             prove_all(self.setup, self.archive, &inputs, &tamper.cells, true, None)
         } else {
             let honest = (self.global.clone(), self.proofs.clone());
@@ -216,168 +208,6 @@ impl<'a> TamperHarness<'a> {
         };
         (proofs, public)
     }
-}
-
-// ---------------------------------------------------------------------------
-// The delegation anchor's twins
-// ---------------------------------------------------------------------------
-
-/// What one delegation family's anchor twins need to know: which shards, which
-/// rows, and the columns the three request-side zeroings sit on.
-///
-/// One shape for every delegation family (`docs/spec/delegation.md` §5.2): a
-/// family fills it with its own addresses and calls
-/// [`assert_anchor_twins_refused`]. Nothing here is one family's: the anchor is
-/// one mechanism, and a family with an anchor of its own would have a pairing
-/// nobody had argued. The families' request rows are told apart by the frame's
-/// `deleg_space` column.
-#[derive(Clone, Copy, Debug)]
-pub struct AnchorTwins {
-    /// The family that owns ecall cycles, and the shard holding the requests.
-    pub requester: (FamilyId, u32),
-    /// The delegation family, and the shard holding its invocations.
-    pub delegation: (FamilyId, u32),
-    /// A live request row, and the invocation row that pairs with it — the one
-    /// at the same cycle and the same frame base.
-    pub request: usize,
-    pub invocation: usize,
-    /// A second live request row, whose mirror write the replay twin chains to.
-    pub other_request: usize,
-    /// `rd_selected`: the value the requesting row writes to `rd`, which a
-    /// delegation request must not write. Zeroing one.
-    pub rd_selected: PolyAddress,
-    /// The requesting shard's cycle column, `M[0]`.
-    pub cycle: PolyAddress,
-    /// The mirror query's read timestamp. Zeroing two.
-    pub mirror_read_ts: PolyAddress,
-    /// The mirror query's read value. Zeroing three.
-    pub mirror_read_value: PolyAddress,
-    /// The mirror query's write value, which the invocation's teardown reads.
-    pub mirror_write_value: PolyAddress,
-    /// The delegation family's row mask, and the value its teardown consumes.
-    pub live: PolyAddress,
-    pub anchor_value: PolyAddress,
-}
-
-/// The anchor twins and their control.
-///
-/// **Each twin is run at the level that names what refuses it**, and the two
-/// levels answer differently on purpose. `verify_block` runs
-/// `verify_global_memory` **before** any shard's own checks
-/// (`docs/spec/proof.md` §6), so at block level a forgery that unbalances
-/// the multiset is `MemoryArgument` whatever else is also wrong;
-/// `verify_shard`'s order puts `Constraint` first, so at shard level the same
-/// witness names the gate. A twin that asserted `Constraint` at block level
-/// would be asserting something false.
-///
-/// 1. **A request with no invocation**, at block level. The invocation's row is
-///    switched off, so its answer tuple is not written and the request's read
-///    of it matches nothing. `MemoryArgument`, and that check reads every
-///    shard's roots at once, which is why this twin needs the block.
-/// 2. **The same forgery with the anchor side repaired**, at block level: the
-///    orphaned request's mirror chained onto another request's write, the way
-///    it would chain if the timestamp zeroing were not there. Still
-///    `MemoryArgument` — and *why* is the point. Switching an invocation off
-///    drops its RAM frame accesses with it, so the word at `base + 4j` loses a
-///    write that the next access to it still names as its `read_ts`. Repairing
-///    the anchor does not repair that, and repairing *that* means re-pointing
-///    those reads and re-deriving everything computed from them — which is
-///    proving the execution, not eliding it. So the chain cannot be mounted by
-///    editing cells at all, and the multiset is what says so.
-/// 3. **Each zeroing alone**, all three, at **shard** level so the gate is the
-///    first failure and not the multiset: a request that writes a register, one
-///    whose mirror read is stamped, and one whose mirror read carries a value,
-///    each `Constraint`. This is the direct evidence that the gates are
-///    load-bearing: they make the pairing 1:1 **locally**, without leaning on
-///    the RAM side of twin 2.
-///
-/// The control is the pair the zeroings leave free — the mirror's write value
-/// and the invocation's teardown value, moved **together** — which must still
-/// verify as a block, or the twins above would prove nothing about *which*
-/// cell matters.
-pub fn assert_anchor_twins_refused(h: &TamperHarness, t: &AnchorTwins) {
-    let (rf, rs) = t.requester;
-    let (df, ds) = t.delegation;
-    let cell = |address, row| h.cell(rf, rs, address, row);
-    let drop_invocation = Cell {
-        family: df,
-        shard: ds,
-        address: t.live,
-        row: t.invocation,
-        value: Fr::ZERO,
-    };
-    let request = |address, value| Cell {
-        family: rf,
-        shard: rs,
-        address,
-        row: t.request,
-        value,
-    };
-
-    // 1: the request has no invocation to pair with.
-    h.assert_block_rejects(
-        &Tamper {
-            cells: vec![drop_invocation],
-            ..Tamper::default()
-        },
-        VerifyError::MemoryArgument(""),
-    );
-
-    // 2: and the orphan chains onto another request's write instead, which is
-    // what a missing timestamp zeroing would let it do. The anchor side is then
-    // consistent and the RAM side is not, so the multiset still refuses it.
-    let other_ts = cell(t.cycle, t.other_request) * Fr::from_u64(constants::memory::TS_STEP)
-        + Fr::from_u64(constants::delegation::ANCHOR_DELTA);
-    h.assert_block_rejects(
-        &Tamper {
-            cells: vec![
-                drop_invocation,
-                request(t.mirror_read_ts, other_ts),
-                request(
-                    t.mirror_read_value,
-                    cell(t.mirror_write_value, t.other_request),
-                ),
-            ],
-            ..Tamper::default()
-        },
-        VerifyError::MemoryArgument(""),
-    );
-
-    // 3: each zeroing on its own, at shard level, where `Constraint` precedes
-    // `MemoryArgument` and the gate is therefore the answer. Each of these
-    // unbalances the multiset too — a stamped mirror read matches no write —
-    // so at block level all three would read `MemoryArgument` and say nothing
-    // about the gates.
-    for (what, address) in [
-        ("a request that writes a register", t.rd_selected),
-        ("a mirror read with a timestamp", t.mirror_read_ts),
-        ("a mirror read with a value", t.mirror_read_value),
-    ] {
-        let tamper = Tamper {
-            cells: vec![request(address, Fr::ONE)],
-            ..Tamper::default()
-        };
-        match h.run(&tamper, t.requester) {
-            Err(VerifyError::Constraint { .. }) => {}
-            other => panic!("{what} was not refused by a gate: {other:?}"),
-        }
-    }
-
-    // The control: the one value the anchor leaves free, moved on both sides.
-    let free = Fr::from_u64(0x5eed);
-    h.assert_block_verifies(&Tamper {
-        cells: vec![
-            request(t.mirror_write_value, free),
-            Cell {
-                family: df,
-                shard: ds,
-                address: t.anchor_value,
-                row: t.invocation,
-                value: free,
-            },
-        ],
-        ..Tamper::default()
-    });
 }
 
 /// `assert_rejects`' comparison: the variant, and a `Lookup`'s channel.
@@ -408,7 +238,7 @@ fn prove_all(
 ) -> (GlobalCommitState, Vec<ShardProof>, PublicInputs) {
     let (global, old) = match (recommit, honest) {
         (false, Some((global, proofs))) => (global, Some(proofs)),
-        _ => (global_commit_phase(&setup.vk, &setup.srs, inputs), None),
+        _ => (global_commit_phase(&setup.vk, inputs), None),
     };
     let ctx = ProvingContext {
         setup,
@@ -482,10 +312,8 @@ mod tests {
             &Constraint { layer: 3 },
             &Constraint { layer: 0 }
         ));
-        assert!(same_class(&Opening, &Opening));
         assert!(same_class(&Lookup { channel: 1 }, &Lookup { channel: 1 }));
         assert!(!same_class(&Lookup { channel: 0 }, &Lookup { channel: 3 }));
         assert!(!same_class(&Statement("a"), &Malformed("a")));
-        assert!(!same_class(&Opening, &MemoryArgument("a")));
     }
 }

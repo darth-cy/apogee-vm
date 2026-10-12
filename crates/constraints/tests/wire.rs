@@ -311,8 +311,8 @@ fn a_nonzero_unused_address_field_is_refused() {
         ((2, 3, 0), PolyAddress::Setup(3)),
         ((3, 0, 0), PolyAddress::Virtual(VirtualKind::RowIndex)),
         ((3, 1, 0), PolyAddress::Virtual(VirtualKind::RamLive)),
-        ((3, 4, 0), PolyAddress::Virtual(VirtualKind::Xor8A)),
-        ((3, 6, 0), PolyAddress::Virtual(VirtualKind::Xor8Out)),
+        ((3, 2, 0), PolyAddress::Virtual(VirtualKind::Range19)),
+        ((3, 3, 0), PolyAddress::Virtual(VirtualKind::Range16)),
         ((4, 3, 1), common::inner(3, 1)),
         ((5, 3, 0), PolyAddress::Scratch(3)),
         ((6, 3, 1), common::cached(3, 1)),
@@ -361,13 +361,13 @@ fn a_nonzero_unused_address_field_is_refused() {
     );
 }
 
-/// Virtual kinds are 0 (`V[row]`), 1 (`V[ram_live]`), 2 (`V[range19]`),
-/// 3 (`V[range16]`), and 4, 5 and 6, the `XOR8` table's three columns; a tag
-/// is never reassigned, and a kind is printed by its short name.
+/// Virtual kinds are 0 (`V[row]`), 1 (`V[ram_live]`), 2 (`V[range19]`) and
+/// 3 (`V[range16]`); a tag is never reassigned, and a kind is printed by its
+/// short name.
 ///
 /// The `kinds.len()` refusal at the end is what makes this a fixed numbering
 /// and not merely a list: adding a kind without a tag, or a tag without a decoder arm,
-/// fails here. `crates/verifier-core/src/types.rs` carries the **same** seven
+/// fails here. `crates/verifier-core/src/types.rs` carries the **same** four
 /// tags for a `ChannelSpec`'s table addresses, and
 /// `the_two_virtual_tag_tables_agree` below holds the two equal.
 #[test]
@@ -377,9 +377,6 @@ fn virtual_kind_tags_are_append_only() {
         (VirtualKind::RamLive, 1, "V[ram_live]"),
         (VirtualKind::Range19, 2, "V[range19]"),
         (VirtualKind::Range16, 3, "V[range16]"),
-        (VirtualKind::Xor8A, 4, "V[xor8_a]"),
-        (VirtualKind::Xor8B, 5, "V[xor8_b]"),
-        (VirtualKind::Xor8Out, 6, "V[xor8_out]"),
     ];
     for (kind, tag, name) in kinds {
         assert_eq!(encode(&kind), [tag], "{kind:?}");

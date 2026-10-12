@@ -15,9 +15,9 @@
 
 use constants::{address_space, challenge_slot, family, lookup_channel, memory};
 use constraints::memory::{
-    check_memory, deleg_space, family_frame_artifact, frame, frame_artifact, frame_queries,
-    frame_query_takes, gap_hi, image_window_artifact, rd_inv, rd_is_zero, rd_selected, read_tuple,
-    zero_window_artifact, CYCLE, DELEG, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE,
+    check_memory, family_frame_artifact, frame, frame_artifact, frame_queries, frame_query_takes,
+    gap_hi, image_window_artifact, rd_inv, rd_is_zero, rd_selected, read_tuple,
+    zero_window_artifact, CYCLE, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE,
     FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_MIN_ADVANCE, FRAME_NAMES, FRAME_QUERIES, FRAME_READ_ONLY,
     FRAME_SPACE, LOAD, PC, RAM, RD, RS1, RS2,
 };
@@ -30,7 +30,6 @@ use field::Fr;
 use std::collections::HashSet;
 use test_support::{sha256, to_hex};
 
-const FRAME_ALU_SHA256: &str = "0d8a7618dae7f40f978ad6f108009bc0068f632119c0d7db1975bbfc5af9d453";
 const FRAME_REG_SHA256: &str = "bd55a15ee9b2d7fc5afd11ba5d4dbca6ce876bc8cce784570555500bf6829308";
 const FRAME_MEM_SHA256: &str = "f4ab6499b1a476ada2a8ef338ac019b983828eb97f2c41431134fd94f0e3ec68";
 const FRAME_ATOMICS_SHA256: &str =
@@ -57,23 +56,18 @@ const EXECUTION_FAMILIES: [u32; 7] = [
 /// `frame_queries`: per family, its query list and, derived from it by hand,
 /// `w`, the `M` and `W` column counts, the leaves a side, the obligations and
 /// the enforcing gates — `w` booleanity gates, one write-back per read-only
-/// query the family holds, and the four x0 gates.
-///
-/// The `M` count is `1 + 5w`, and `1 + 5w + 1` for the one family whose frame
-/// holds the delegation mirror: that query's leaf names the requested type
-/// through the `deleg_space` column rather than through a literal
-/// (`docs/spec/delegation.md` §5.1).
+/// query the family holds, and the four x0 gates. The `M` count is `1 + 5w`.
 #[allow(clippy::type_complexity)]
 const FRAME_SHAPES: [(u32, &[usize], usize, usize, usize, usize, usize); 7] = [
     //  family                      queries                                w    M   W  side  lk  enf
     (
         family::ADD_SUB_LUI_AUIPC,
-        &[PC, RS1, RS2, RD, DELEG],
-        27,
-        8,
+        &[PC, RS1, RS2, RD],
+        21,
+        7,
+        4,
         8,
         10,
-        11,
     ),
     (
         family::JUMP_BRANCH_SLT,
@@ -107,15 +101,10 @@ const FRAME_SHAPES: [(u32, &[usize], usize, usize, usize, usize, usize); 7] = [
     (family::ATOMICS, &[PC, RS1, RS2, RAM, RD], 26, 8, 8, 10, 11),
 ];
 
-/// The four *distinct* frames: families sharing a query list share their
-/// artifact byte for byte, so these four stand for all seven.
-/// `the_seven_families_frames_are_the_four_fixtures` is what holds that.
-const DISTINCT_FRAMES: [u32; 4] = [
-    family::ADD_SUB_LUI_AUIPC,
-    family::JUMP_BRANCH_SLT,
-    family::MEM_WORD,
-    family::ATOMICS,
-];
+/// The three *distinct* frames: families sharing a query list share their
+/// artifact byte for byte, so these three stand for all seven.
+/// `the_seven_families_frames_are_the_three_fixtures` is what holds that.
+const DISTINCT_FRAMES: [u32; 3] = [family::JUMP_BRANCH_SLT, family::MEM_WORD, family::ATOMICS];
 
 /// Every memory artifact there is, at `trace_vars`: one frame per execution
 /// family, then the two windows. The label names the artifact in a failure.
@@ -146,17 +135,12 @@ fn fixture(name: &str) -> Vec<u8> {
 }
 
 /// Each committed fixture is pinned, then held to its constructor's bytes at
-/// `trace_vars` 22 — the four distinct frames and the two windows. The
+/// `trace_vars` 22 — the three distinct frames and the two windows. The
 /// constructors are the only definition; the pin is what makes a changed
 /// circuit a deliberate refresh.
 #[test]
 fn the_fixtures_are_the_constructors_bytes() {
     let fixtures = [
-        (
-            "memory_frame_alu.bin",
-            FRAME_ALU_SHA256,
-            family_frame_artifact(family::ADD_SUB_LUI_AUIPC, 22),
-        ),
         (
             "memory_frame_reg.bin",
             FRAME_REG_SHA256,
@@ -196,16 +180,16 @@ fn the_fixtures_are_the_constructors_bytes() {
     }
 }
 
-/// Four files pin seven families: a family's frame is decided by its query
+/// Three files pin seven families: a family's frame is decided by its query
 /// list alone, so families sharing one share their artifact byte for byte —
-/// `JUMP_BRANCH_SLT`, `SHIFT_BITWISE` and `MUL_DIV` are one frame, `MEM_WORD`
-/// and `MEM_SUBWORD` another. Every execution family is held to the fixture
-/// `kat-gen` writes for it, and the four fixtures are pairwise distinct, so a
-/// family quietly re-pointed at another's frame fails here.
+/// `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE` and `MUL_DIV` are one
+/// frame, `MEM_WORD` and `MEM_SUBWORD` another. Every execution family is held
+/// to the fixture `kat-gen` writes for it, and the three fixtures are pairwise
+/// distinct, so a family quietly re-pointed at another's frame fails here.
 #[test]
-fn the_seven_families_frames_are_the_four_fixtures() {
+fn the_seven_families_frames_are_the_three_fixtures() {
     let files = [
-        (family::ADD_SUB_LUI_AUIPC, "memory_frame_alu.bin"),
+        (family::ADD_SUB_LUI_AUIPC, "memory_frame_reg.bin"),
         (family::JUMP_BRANCH_SLT, "memory_frame_reg.bin"),
         (family::SHIFT_BITWISE, "memory_frame_reg.bin"),
         (family::MUL_DIV, "memory_frame_reg.bin"),
@@ -225,7 +209,7 @@ fn the_seven_families_frames_are_the_four_fixtures() {
         .iter()
         .map(|&id| family_frame_artifact(id, 22).to_bytes())
         .collect();
-    assert_eq!(distinct.len(), 4, "the four fixtures are four circuits");
+    assert_eq!(distinct.len(), 3, "the three fixtures are three circuits");
 }
 
 /// Every constructor there is — the seven families' frames and the two
@@ -289,12 +273,8 @@ fn every_artifact_has_two_named_roots_and_an_all_zero_padding_row() {
 fn the_read_tuples_parts_are_at_their_named_positions() {
     let slot = Coeff::Challenge;
     // `read_tuple` is the tuple a frame holding *every* query would address,
-    // and the verifier's boundary reads it for queries 0 and 1 alone. The
-    // delegation mirror is the one query it cannot build: its `AS` term names
-    // a column whose address depends on the family's frame width, so
-    // `read_tuple(DELEG)` panics by design rather than answering with a
-    // literal that would be wrong (`docs/spec/delegation.md` §5.1).
-    for (q, space) in FRAME_SPACE.iter().enumerate().filter(|(q, _)| *q != DELEG) {
+    // and the verifier's boundary reads it for queries 0 and 1 alone.
+    for (q, space) in FRAME_SPACE.iter().enumerate() {
         let GateDef::Linear { terms, constant } = read_tuple(q) else {
             panic!("a tuple is Linear");
         };
@@ -329,35 +309,22 @@ fn the_read_tuples_parts_are_at_their_named_positions() {
     }
 }
 
-/// The query table itself, §2.1: seven entries, their names, address spaces
+/// The query table itself, §2.1: six entries, their names, address spaces
 /// and Δ, their least advances (§2.4: 4 for the pc, 1 for the rest), the three
-/// read-only queries, `rd` and then `deleg` last, and `M[0]` the cycle. These
-/// are indexed by a query's *id*, never by its slot in a family.
-///
-/// `deleg` is a delegation request's mirror query
-/// (`docs/spec/delegation.md` §5.1): the last role, at slot 3 like `ram` and
-/// `rd`, in the delegation family's own address space, and read-write — the
-/// value it writes back is not the value it read.
+/// read-only queries, `rd` last, and `M[0]` the cycle. These are indexed by a
+/// query's *id*, never by its slot in a family.
 #[test]
 fn the_query_table_is_the_documents() {
-    assert_eq!(FRAME_QUERIES, 7);
-    assert_eq!(
-        FRAME_NAMES,
-        ["pc", "rs1", "rs2", "load", "ram", "rd", "deleg"]
-    );
-    assert_eq!([PC, RS1, RS2, LOAD, RAM, RD, DELEG], [0, 1, 2, 3, 4, 5, 6]);
-    assert_eq!(FRAME_DELTA, [0, 1, 2, 2, 3, 3, 3]);
-    assert_eq!(FRAME_MIN_ADVANCE, [4, 1, 1, 1, 1, 1, 1]);
+    assert_eq!(FRAME_QUERIES, 6);
+    assert_eq!(FRAME_NAMES, ["pc", "rs1", "rs2", "load", "ram", "rd"]);
+    assert_eq!([PC, RS1, RS2, LOAD, RAM, RD], [0, 1, 2, 3, 4, 5]);
+    assert_eq!(FRAME_DELTA, [0, 1, 2, 2, 3, 3]);
+    assert_eq!(FRAME_MIN_ADVANCE, [4, 1, 1, 1, 1, 1]);
     let (pc, reg, ram) = (address_space::PC, address_space::REG, address_space::RAM);
-    // The `deleg` query names **no** space: one query serves every delegation
-    // type and the row's `deleg_space` column carries the tag. 0 is a value no
-    // real tag takes, so a stale comparison against this entry matches nothing
-    // and reaches a panic rather than dropping an event
-    // (`docs/spec/delegation.md` §5.1).
-    assert_eq!(FRAME_SPACE, [pc, reg, reg, ram, ram, reg, 0]);
-    for space in address_space::DELEGATION {
-        assert!(frame_query_takes(DELEG, space, FRAME_DELTA[DELEG]));
-        assert!(!frame_query_takes(RAM, space, FRAME_DELTA[RAM]));
+    assert_eq!(FRAME_SPACE, [pc, reg, reg, ram, ram, reg]);
+    for q in 0..FRAME_QUERIES {
+        assert!(frame_query_takes(q, FRAME_SPACE[q], FRAME_DELTA[q]));
+        assert!(!frame_query_takes(q, FRAME_SPACE[q], FRAME_DELTA[q] + 1));
     }
     assert_eq!(FRAME_READ_ONLY, [RS1, RS2, LOAD]);
     assert_eq!(CYCLE, PolyAddress::Memory(0));
@@ -391,11 +358,6 @@ fn the_frame_layout_is_the_documents() {
             for f in ["mask", "addr", "read_ts", "read_value", "write_value"] {
                 columns.push(format!("{}_{f}", FRAME_NAMES[q]));
             }
-        }
-        // The one extra memory column: the delegation mirror's leaf names the
-        // requested type through it rather than through a literal.
-        if queries.contains(&DELEG) {
-            columns.push(String::from("deleg_space"));
         }
         assert_eq!(a.memory, columns, "family {id}");
         assert_eq!(a.memory.len(), memory_columns, "family {id}");
@@ -476,7 +438,7 @@ fn the_frame_layout_is_the_documents() {
 /// product's identity — reading no column at all, named `<tree>_pad_<i>` after
 /// that side's real leaves, in the gate and in its relation alike. A family
 /// whose width is already a power of two has none. 5 queries is the widest
-/// gap: 3 pads a side, which `ADD_SUB_LUI_AUIPC` and `ATOMICS` both pay.
+/// gap: 3 pads a side, which `ATOMICS` pays.
 ///
 /// Kills a pad that carries a column (which would commit and open it, and let
 /// a value of the trace reach the product unconstrained), a pad whose constant
@@ -488,13 +450,7 @@ fn the_pad_leaves_are_the_constant_one_and_read_nothing() {
         terms: vec![],
         constant: Coeff::Literal(Fr::ONE),
     };
-    for (id, pads) in [
-        // The add/sub frame is five queries, so it pays three a side like
-        // `ATOMICS`.
-        (family::ADD_SUB_LUI_AUIPC, 3),
-        (family::MEM_WORD, 2),
-        (family::ATOMICS, 3),
-    ] {
+    for (id, pads) in [(family::MEM_WORD, 2), (family::ATOMICS, 3)] {
         let w = frame_queries(id).len();
         let side = w.next_power_of_two();
         assert_eq!(side - w, pads, "family {id}");
@@ -511,11 +467,14 @@ fn the_pad_leaves_are_the_constant_one_and_read_nothing() {
             }
         }
     }
-    // A width that is already a power of two pads with nothing.
-    let a = family_frame_artifact(family::JUMP_BRANCH_SLT, 12);
-    assert_eq!(a.layers[0].producing.len(), 8);
-    assert!(a.scratch[..8].iter().all(|s| !s.name.contains("pad")));
-    assert!(a.relations.iter().all(|r| !r.name.contains("pad")));
+    // A width that is already a power of two pads with nothing: the four-query
+    // frame, which the add/sub family shares with jump/branch/slt.
+    for id in [family::ADD_SUB_LUI_AUIPC, family::JUMP_BRANCH_SLT] {
+        let a = family_frame_artifact(id, 12);
+        assert_eq!(a.layers[0].producing.len(), 8, "family {id}");
+        assert!(a.scratch[..8].iter().all(|s| !s.name.contains("pad")));
+        assert!(a.relations.iter().all(|r| !r.name.contains("pad")));
+    }
 }
 
 /// The distinction the whole layout turns on, §2.1: **a query's address space
@@ -549,19 +508,13 @@ fn a_query_at_a_slot_that_is_not_its_id_keeps_its_own_space_and_delta() {
         for (at, &q) in queries.iter().enumerate() {
             displaced += (at != q) as usize;
             let m = frame(at, FIELD_MASK);
-            // The `AS` term: a literal on the mask for every query but the
-            // delegation mirror, whose type is the row's and rides the frame's
-            // `deleg_space` column, so its term is a product of two `M`
-            // columns instead (`docs/spec/delegation.md` §5.1).
-            let mut head = vec![
+            // The `AS` term: a literal on the mask.
+            let head = vec![
                 (Coeff::Challenge(challenge_slot::MEM_GAMMA), m),
                 (Coeff::Literal(Fr::MINUS_ONE), m),
+                (lit(FRAME_SPACE[q] as u64), m),
             ];
-            let mut space: Vec<(Coeff, PolyAddress, PolyAddress)> = Vec::new();
-            match q {
-                DELEG => space.push((lit(1), deleg_space(queries.len()), m)),
-                _ => head.push((lit(FRAME_SPACE[q] as u64), m)),
-            }
+            let space: Vec<(Coeff, PolyAddress, PolyAddress)> = Vec::new();
             let mut read_products = space.clone();
             read_products.push((
                 Coeff::Challenge(challenge_slot::MEM_ALPHA_ADDR),
@@ -623,14 +576,13 @@ fn a_query_at_a_slot_that_is_not_its_id_keeps_its_own_space_and_delta() {
 /// `read_ts` — while the constant is `Δ − 1` for the query's **id**, and `−4`
 /// for the pc, which every frame holds at slot 0. `ATOMICS` is the witness
 /// that the two differ: its `ram` sits at slot 3, whose table entry `arg1` has
-/// Δ 2, and its obligation's constant is Δ(`ram`) − 1 = 2. Each registry's
-/// circuit for the family, base and recursion format, opens its obligation
-/// list with exactly these.
+/// Δ 2, and its obligation's constant is Δ(`ram`) − 1 = 2. The registry's
+/// circuit for the family opens its obligation list with exactly these.
 ///
 /// Fails if an obligation were keyed to the wrong slot's columns, if a query
 /// took the Δ of the slot it happens to sit at, if the pc's constant admitted
 /// a pc write fewer than 4 after the one it reads, if a family carried the
-/// table's sixteen obligations rather than its own `2w`, or if a registry's
+/// table's twelve obligations rather than its own `2w`, or if the registry's
 /// circuit carried other ones.
 #[test]
 fn the_frame_carries_two_gap_obligations_per_query() {
@@ -687,17 +639,15 @@ fn the_frame_carries_two_gap_obligations_per_query() {
             minus(4),
             "family {id}: gap_lo_pc's constant is −4"
         );
-        for registry in [constraints::family_circuit, constraints::recursion_circuit] {
-            let circuit = registry(id, 20)
-                .expect("an execution family at 2^20")
-                .artifact;
-            let bare = family_frame_artifact(id, 20);
-            assert_eq!(
-                circuit.lookups[..bare.lookups.len()],
-                bare.lookups[..],
-                "family {id}: the registry's circuit opens with its frame's obligations"
-            );
-        }
+        let circuit = constraints::family_circuit(id, 20)
+            .expect("an execution family at 2^20")
+            .artifact;
+        let bare = family_frame_artifact(id, 20);
+        assert_eq!(
+            circuit.lookups[..bare.lookups.len()],
+            bare.lookups[..],
+            "family {id}: the registry's circuit opens with its frame's obligations"
+        );
     }
     // `ram` at slot 3 of ATOMICS keeps Δ = 3, not slot 3's `arg1` Δ = 2.
     let atomics = family_frame_artifact(family::ATOMICS, 12);
@@ -855,11 +805,7 @@ fn the_read_sets_are_pinned() {
         );
         for &id in &EXECUTION_FAMILIES {
             let w = frame_queries(id).len() as u32;
-            // `1 + 5w`, and one more where the frame holds the delegation
-            // mirror: its leaf reads `deleg_space` too.
-            let extra = u32::from(frame_queries(id).contains(&DELEG));
-            let mut expected: Vec<PolyAddress> =
-                (0..1 + 5 * w + extra).map(PolyAddress::Memory).collect();
+            let mut expected: Vec<PolyAddress> = (0..1 + 5 * w).map(PolyAddress::Memory).collect();
             expected.extend((0..w + 3).map(PolyAddress::Witness));
             assert_eq!(
                 read_set(&family_frame_artifact(id, trace_vars)),
@@ -1332,16 +1278,4 @@ fn a_global_slot_over_an_inner_column_is_refused() {
                 .to_string()
         )
     );
-}
-
-/// `read_tuple` refuses the delegation mirror, loudly.
-///
-/// Its `AS` term is not a literal of the query table but the `deleg_space`
-/// column of the family's own frame, whose address depends on that frame's
-/// width. A `read_tuple(DELEG)` that answered anything would be answering with
-/// the wrong term, so it panics instead (`docs/spec/delegation.md` §5.1).
-#[test]
-#[should_panic(expected = "a frame holding the deleg query carries a deleg_space column")]
-fn the_delegation_mirror_has_no_standalone_read_tuple() {
-    read_tuple(DELEG);
 }

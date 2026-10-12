@@ -5,7 +5,8 @@ edition.workspace = true
 publish.workspace = true
 
 # The shard prover and the global commit phase. `docs/spec/proof.md` specifies
-# what it proves. std + rayon: commitments and the forward pass are data-parallel.
+# what it proves. std + rayon: the column fills and the forward pass are
+# data-parallel.
 
 # THE WORKSPACE'S ONE CARGO FEATURE, for `src/debug`, the proving debug log. It
 # is off by default, it enables no dependency and it changes no proof byte --
@@ -21,39 +22,28 @@ debug-info = []
 [dependencies]
 constants.workspace = true
 constraints.workspace = true
-curve.workspace = true
 # The streaming prover drives the executor: `emulator::StreamingRun` hands back
 # one shard at a time, so the prover's loop is what decides when a column
-# exists (`docs/spec/streaming.md` §2). The `KECCAK_F` fill also reads
-# `emulator::lanes_of`.
+# exists (`docs/spec/streaming.md` §2).
 emulator.workspace = true
 field.workspace = true
 gkr.workspace = true
 loader.workspace = true
-pcs.workspace = true
 poly.workspace = true
 # The phase snapshots hold the transcript's `TranscriptSnapshot` in its
 # `postcard` form.
 postcard.workspace = true
 program.workspace = true
 rayon.workspace = true
-srs.workspace = true
 trace.workspace = true
 transcript.workspace = true
-# `encode_srs_verifier`, the key's `SrsVerifier` bytes.
-verifier.workspace = true
 verifier-core.workspace = true
 
 [dev-dependencies]
-# Hex, for printing the revm guest's identity.
 test-support.workspace = true
 # The transcript-tape validator over the statement the block was actually
 # proved for. A dev-dependency cycle -- `checker` depends on this crate --
 # which cargo resolves: the dev graph is built separately.
 checker.workspace = true
-# The revm workload guest. `tests/revm.rs` -- and not `tests/common`, which stays
-# free of the guest workspace because `crates/checker` includes it too -- builds
-# the guest's own binary and checks the output commitment it leaves in the
-# journal against the same library's own answer, byte for byte. A path into the
-# guest workspace, and a test dependency only.
-revm-block = { path = "../../guests/revm-block" }
+# `verify_shard` and `verify_block`, which every proving suite ends in.
+verifier.workspace = true

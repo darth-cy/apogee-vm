@@ -25,42 +25,12 @@ const _: fn(
     &verifier_core::GlobalChallenges,
     &ShardProof,
     &PublicInputs,
-) -> Result<verifier_core::OpeningClaim, VerifyError> = verifier_core::verify_shard_local;
+) -> Result<verifier_core::ColumnClaims, VerifyError> = verifier_core::verify_shard_local;
 
-/// The no_std core's entry point takes the same three and returns the opening
-/// claim the wrapper finishes.
+/// The no_std core's entry point takes the same three and returns the column
+/// claims the wrapper discharges.
 const _: fn(
     &VerifyingKey,
     &ShardProof,
     &PublicInputs,
-) -> Result<verifier_core::OpeningClaim, VerifyError> = verifier_core::reduce_shard;
-
-/// The SRS verifier's bytes are `docs/spec/srs.md` §5's layout, and every point
-/// goes back through its validating decoder.
-#[test]
-fn the_srs_verifier_round_trips_through_its_layout() {
-    use curve::{G1Affine, G2Affine};
-    // Three distinct points, so a decoder that read one field at another's
-    // offset would not give the same verifier back.
-    let tau = G2Affine::GENERATOR.double();
-    let vsrs = srs::SrsVerifier {
-        g1_gen: G1Affine::GENERATOR,
-        g2_gen: G2Affine::GENERATOR,
-        g2_tau: tau,
-    };
-    let bytes = verifier::encode_srs_verifier(&vsrs);
-    assert_eq!(&bytes[..64], &G1Affine::GENERATOR.to_bytes());
-    assert_eq!(&bytes[64..192], &G2Affine::GENERATOR.to_bytes());
-    assert_eq!(&bytes[192..], &tau.to_bytes());
-    assert_eq!(verifier::decode_srs_verifier(&bytes), Some(vsrs));
-    // One low bit of a coordinate of each point, flipped: none is a point.
-    for (at, which) in [(0, "g1_gen"), (64, "g2_gen"), (192 + 96, "g2_tau")] {
-        let mut off = bytes;
-        off[at] ^= 1;
-        assert_eq!(
-            verifier::decode_srs_verifier(&off),
-            None,
-            "{which} with a bit flipped is not a point"
-        );
-    }
-}
+) -> Result<verifier_core::ColumnClaims, VerifyError> = verifier_core::reduce_shard;

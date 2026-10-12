@@ -74,7 +74,7 @@ fn restore_mid_message() {
     let mut t = Transcript::new();
     // Three absorbs — tag, length, payload — so the rate fills once and the
     // third element is left pending.
-    t.append_scalar(tags::COMMITMENT, Fr::from_u64(11));
+    t.append_scalar(tags::SUMCHECK_ROUND, Fr::from_u64(11));
 
     let snap = t.snapshot();
     let bytes = encode(&snap);
@@ -110,7 +110,7 @@ fn snapshot_round_trips_through_bytes() {
     let mut t = Transcript::new();
     t.append_bytes(tags::PUBLIC_INPUTS, b"a statement");
     let _ = t.challenge_scalar(tags::SUMCHECK_CHALLENGE);
-    t.append_scalars(tags::COMMITMENT, &[Fr::ONE, Fr::MINUS_ONE]);
+    t.append_scalars(tags::SUMCHECK_ROUND, &[Fr::ONE, Fr::MINUS_ONE]);
 
     let snap = t.snapshot();
     let bytes = encode(&snap);
@@ -150,7 +150,7 @@ fn observe_drops_unread_output() {
 #[test]
 fn restore_starts_a_fresh_event_log() {
     let mut t = Transcript::new();
-    t.append_scalar(tags::COMMITMENT, Fr::from_u64(7));
+    t.append_scalar(tags::SUMCHECK_ROUND, Fr::from_u64(7));
     assert_eq!(t.event_log().len(), 1);
 
     let restored = Transcript::restore(&t.snapshot());

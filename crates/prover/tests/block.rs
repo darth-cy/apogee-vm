@@ -49,7 +49,7 @@ fn proved() -> (ProverSetup, TraceArchive, BlockProof) {
 
 /// One execution split across two shards of one family proves to a
 /// `BlockProof` and verifies; the global challenges are squeezed exactly once,
-/// after every commitment; nothing chains a pc across the shard boundary; a
+/// after every absorb; nothing chains a pc across the shard boundary; a
 /// family with zero shards is valid; and the public data reads through the
 /// serialized proof alone.
 #[test]
@@ -149,10 +149,8 @@ fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
         shard_index: _,
         ts_window: _,
         global_digest: _,
-        witness_commitments: _,
         outputs: _,
         gkr: _,
-        opening: _,
     } = block.shard_proofs()[0].clone();
     let BlockProof {
         config: _,
@@ -187,20 +185,17 @@ fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
         assert!(
             [
                 "PROTOCOL_SUITE",
-                "SRS_DIGEST",
                 "VM_CONFIG",
                 "SHARD_COUNTS",
                 "MEMORY_WINDOWS",
                 "PROGRAM_IDENTITY",
                 "PUBLIC_INPUTS",
-                "MEMORY_GROUP",
-                "COMMITMENT",
                 "MEMORY_BOUNDARY",
                 "MEMORY_CHALLENGE",
                 "GLOBAL_STATE_DIGEST",
             ]
             .contains(tag),
-            "the global tape carries {tag}, which G1-G11 does not"
+            "the global tape carries {tag}, which G1-G9 does not"
         );
     }
 
@@ -253,7 +248,7 @@ fn a4_a6_every_block_twin_is_refused() {
     //
     // **The block's answer is check 5's, not the shard loop's**, and that is
     // the verifier's split at work (`docs/spec/proof.md` §6): the four memory
-    // challenges are drawn from the statement's own transcript (G10), so
+    // challenges are drawn from the statement's own transcript (G8), so
     // re-deriving them from a different statement makes the honest roots' two
     // products disagree, and `verify_global_memory` runs before any shard is
     // verified (`verify_block`'s doc comment). The seed is still named, one
@@ -276,7 +271,7 @@ fn a4_a6_every_block_twin_is_refused() {
 
     // (b) Another `ProgramIdentity`. An in-memory edit: such a key would not
     // load (`docs/spec/proof.md` §7.2), and checks 1 to 5 refuse it
-    // anyway because G6 absorbs the identity.
+    // anyway because G5 absorbs the identity.
     let mut other = setup.vk.clone();
     other.identity.0 += Fr::ONE;
     assert_eq!(
@@ -284,7 +279,7 @@ fn a4_a6_every_block_twin_is_refused() {
         Err(VerifyError::MemoryArgument(
             "the statement's roots do not reconcile"
         )),
-        "G6 absorbs the identity, so check 5's challenges move with it"
+        "G5 absorbs the identity, so check 5's challenges move with it"
     );
     assert_eq!(
         verify_shard(&other, &block.shards[0], &honest),
@@ -299,29 +294,23 @@ fn a4_a6_every_block_twin_is_refused() {
         statement("the block's VmConfig is not the key's")
     );
 
-    // (c) A descriptor with one family's shard count altered, the lists
-    // padded so the totals still line up: the count is absorbed at G4, so the
+    // (c) A descriptor with one family's shard count altered, the root list
+    // padded so the totals still line up: the count is absorbed at G3, so the
     // digest moves, and the shard set the counts describe is no longer the
-    // proofs'.
+    // proofs'. The pad is `JUMP_BRANCH_SLT`'s own pair, at its own position.
     let mut counted = block.clone();
     counted.statement.shard_counts[1] = 2;
-    // Pad with **`JUMP_BRANCH_SLT`'s own** list, at its own position, and not
-    // with the statement's last one: that is `PUBLIC_OUTPUT`'s, whose memory
-    // width is a window family's, so step 3 would refuse the width before
-    // reaching the count check this case is about.
     let at = block
         .shards
         .iter()
         .position(|s| s.family == JBS)
         .expect("the statement proves one JUMP_BRANCH_SLT shard");
-    let list = counted.statement.memory_commitments[at].clone();
-    counted.statement.memory_commitments.insert(at + 1, list);
     let root = counted.statement.memory_roots[at];
     counted.statement.memory_roots.insert(at + 1, root);
     let claimed = counted.statement.clone();
     assert_eq!(
         verify_block(&setup.vk, &counted, &claimed),
-        statement("the block has not one proof, commitment list and root pair per shard")
+        statement("the block has not one proof and root pair per shard")
     );
     // The same count change without the padding is refused earlier still.
     let mut bare = block.clone();
@@ -329,7 +318,7 @@ fn a4_a6_every_block_twin_is_refused() {
     let bare_statement = bare.statement.clone();
     assert_eq!(
         verify_block(&setup.vk, &bare, &bare_statement),
-        statement("the statement has not one commitment list per shard")
+        statement("the statement has not one root pair per shard")
     );
 
     // Exchange two shards' claimed windows. The block's window rule catches it
@@ -354,8 +343,8 @@ fn a4_a6_every_block_twin_is_refused() {
 }
 
 /// Omit one shard, **as an honest prover would prove the truncated
-/// statement** — its counts, its commitment lists and its roots all
-/// adjusted, its global commit phase rerun, its remaining shards proved
+/// statement** — its counts and its roots adjusted, its global commit phase
+/// rerun, its remaining shards proved
 /// against it. Verification then fails on the global read/write root product,
 /// because the omitted shard's tuples are missing from one side of the
 /// multiset.
@@ -368,14 +357,10 @@ fn a5_a_block_missing_a_shard_does_not_reconcile() {
     // The statement without `(ADD_SUB_LUI_AUIPC, 1)`: the last add/sub shard.
     let mut inputs = statement_inputs(&setup, &archive).expect("the statement");
     let shards = statement_shards(&setup.program.config, &inputs.shard_counts);
-    let dropped = shards
-        .iter()
-        .position(|s| *s == (ADD, 1))
-        .expect("the second add/sub shard");
-    inputs.memory_columns.remove(dropped);
+    assert!(shards.contains(&(ADD, 1)), "the second add/sub shard");
     inputs.shard_counts[0] = 1;
 
-    let global = global_commit_phase(&setup.vk, &setup.srs, &inputs);
+    let global = global_commit_phase(&setup.vk, &inputs);
     let ctx = ProvingContext {
         setup: &setup,
         global,
@@ -412,16 +397,16 @@ fn a7_a_corrupted_cell_in_the_second_shard_refuses_the_block() {
     let (setup, archive, honest) = proved();
     assert_eq!(verify_block(&setup.vk, &honest, honest.statement()), Ok(()));
 
-    // A witness column is committed inside the shard, after the global phase,
-    // so tampering one leaves the statement and the global state exactly where
-    // they were. The rerun's digest being the honest proofs' is the assertion
-    // that says so, and it is what lets the twin reuse five honest shards.
+    // A witness column is not part of the statement, so tampering one leaves
+    // the statement and the global state exactly where they were. The rerun's
+    // digest being the honest proofs' is the assertion that says so, and it is
+    // what lets the twin reuse five honest shards.
     let inputs = statement_inputs(&setup, &archive).expect("the statement");
-    let mut global = global_commit_phase(&setup.vk, &setup.srs, &inputs);
+    let mut global = global_commit_phase(&setup.vk, &inputs);
     assert_eq!(
         global.digest,
         honest.shard_proofs()[0].global_digest,
-        "a witness cell is not committed before the challenges"
+        "a witness cell does not reach the global phase"
     );
     // The honest statement, whose roots the shards' proofs filled in.
     global.statement = honest.statement().clone();
@@ -493,7 +478,7 @@ fn the_block_does_not_depend_on_the_thread_count() {
         .expect("a one-thread pool");
     let serial: Vec<ShardProof> = pool.install(|| {
         let inputs = statement_inputs(&setup, &archive).expect("the statement");
-        let mut global = global_commit_phase(&setup.vk, &setup.srs, &inputs);
+        let mut global = global_commit_phase(&setup.vk, &inputs);
         assert_eq!(
             global.digest,
             reference.shard_proofs()[0].global_digest,
@@ -556,17 +541,6 @@ fn a2_a_multi_family_block_proves_and_verifies() {
     // each one shard beside the execution families'.
     assert_eq!(records.len(), execution.len() + 4);
     for r in &records {
-        assert_eq!(
-            r.memory_commitments.len(),
-            setup
-                .vk
-                .circuit(r.family)
-                .expect("a config family")
-                .artifact
-                .memory
-                .len(),
-            "every record carries its family's memory commitments"
-        );
         assert_ne!(r.roots[0], Fr::ZERO, "a read root is present");
         assert_ne!(r.roots[1], Fr::ZERO, "a write root is present");
     }

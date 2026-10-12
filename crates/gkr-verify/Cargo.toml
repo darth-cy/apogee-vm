@@ -4,9 +4,9 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# The verifier half of the GKR engine, `#![no_std]` + alloc: the recursion
-# guest links this crate. `crates/gkr` is the std + rayon prover half and
-# re-exports everything public here, so `gkr::verify` is this `verify`.
+# The verifier half of the GKR engine, `#![no_std]` + alloc. `crates/gkr` is the
+# std + rayon prover half and re-exports everything public here, so
+# `gkr::verify` is this `verify`.
 [dependencies]
 constants.workspace = true
 constraints.workspace = true

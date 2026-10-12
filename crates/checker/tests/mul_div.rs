@@ -2134,8 +2134,8 @@ fn filled(
             .1
             .clone()
     };
-    // The setup columns are the tables the key's commitments are of: the
-    // decoded table identity binds, then the packed table the SRS digest does.
+    // The setup columns are the family's decoded table, then the packed
+    // generic table.
     let table = program
         .tables
         .family(family::MUL_DIV)

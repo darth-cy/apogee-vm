@@ -15,13 +15,10 @@ mod lookup;
 mod memory;
 
 pub use archive::{IoStreams, Phase, PhaseTiming, TraceArchive, PHASES};
-pub use family::{
-    Access, AccessColumns, AccessSlice, DelegationTrace, FamilyTrace, FamilyTraces, FrameSlice,
-    Query, QueryColumns, Role, Row, RowSlice, WordSlice, ROLES,
-};
+pub use family::{FamilyTrace, FamilyTraces, Query, QueryColumns, Role, Row, RowSlice, ROLES};
 pub use log::{
     addressable, in_ram, AddressSpace, FinalValue, InitialMemory, MemoryEvent, MemoryEventLog,
-    MemoryState, SelfCheckError, DELEGATION_SPACES,
+    MemoryState, SelfCheckError,
 };
 
 pub use lookup::{build_multiplicities, check_multiplicities};
@@ -35,12 +32,9 @@ use program::{FamilyId, VmConfig};
 /// How many rows each family filled: one count per family of the `VmConfig`,
 /// in its order, zero for a family the execution never reached.
 ///
-/// A cycle-owning family's count is its cycles, and
-/// those counts sum to the execution's cycle count — [`CycleProfile::total`].
-/// A **delegation** family's count is its *invocations*, which are not cycles:
-/// they ride a requesting cycle that the add/sub family already counts
-/// (`docs/spec/delegation.md` §1), so they are outside that sum. Either way
-/// the count is what [`plan_shards`] divides by the family's height.
+/// A cycle-owning family's count is its cycles, and those counts sum to the
+/// execution's cycle count — [`CycleProfile::total`]. The count is what
+/// [`plan_shards`] divides by the family's height.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CycleProfile {
     pub counts: Vec<(FamilyId, u64)>,
@@ -51,7 +45,7 @@ impl CycleProfile {
     pub fn total(&self) -> u64 {
         self.counts
             .iter()
-            .filter(|(f, _)| program::claims_pcs(*f))
+            .filter(|(f, _)| program::owns_cycles(*f))
             .map(|(_, n)| n)
             .sum()
     }
@@ -74,10 +68,8 @@ pub struct ShardPlan {
 /// A window family runs no cycles, so it plans 0 shards here. Its rows are
 /// addresses rather than cycles, and its count is the prover's: exactly 1
 /// `INIT_TEARDOWN` shard, RAM window 0; one `ZERO_WINDOWS` shard per entry of
-/// [`init_windows`]; one each of `PUBLIC_INPUT` and `PUBLIC_OUTPUT`;
-/// [`advice_window_count`] of `ADVICE_WINDOWS`; and
-/// [`MemoryState::field_windows`] of `FIELD_WINDOWS` (`docs/spec/memory.md`
-/// §3).
+/// [`init_windows`]; one each of `PUBLIC_INPUT` and `PUBLIC_OUTPUT`; and
+/// [`advice_window_count`] of `ADVICE_WINDOWS` (`docs/spec/memory.md` §3).
 pub fn plan_shards(profile: &CycleProfile, config: &VmConfig) -> ShardPlan {
     assert!(
         profile.counts.len() == config.families.len()

@@ -1,9 +1,10 @@
 //! Regenerates the committed fixtures (`docs/tools.md` §7): known-answer
-//! vectors from arkworks, listings from the pinned toolchain's LLVM tools, and
-//! regression pins of this repository's own constructions.
+//! vectors from arkworks' field and polynomial crates, listings from the pinned
+//! toolchain's LLVM tools, and regression pins of this repository's own
+//! constructions.
 //!
 //!     cargo run -p kat-gen              # the default groups, which is what CI runs
-//!     cargo run -p kat-gen -- tower     # just crates/curve's Fq6/Fq12 vectors
+//!     cargo run -p kat-gen -- field     # just crates/field's Fr vectors
 //!
 //! Deterministic: same toolchain and same arkworks version produce
 //! byte-identical output, so a refresh is `cargo run -p kat-gen && git diff`.
@@ -16,35 +17,22 @@
 //! | --- | --- |
 //! | `field`   | `crates/field/tests/vectors/fr_kats.txt` |
 //! | `poly`    | `crates/poly/tests/vectors/*` |
-//! | `curve`   | `crates/curve/tests/vectors/{fq,g1,g2}_kats.txt` |
-//! | `tower`   | `crates/curve/tests/vectors/{fq6,fq12}_kats.txt` |
-//! | `pairing` | `crates/curve/tests/vectors/pairing_kats.txt` |
-//! | `msm`     | `crates/curve/tests/vectors/msm_kats.txt` |
-//! | `srs`     | `crates/srs/tests/vectors/*` (needs the gitignored ceremony file) |
-//! | `pcs`     | `crates/pcs/tests/vectors/*` |
 //! | `loader`  | `crates/loader/tests/vectors/*` (from the committed guest ELFs) |
 //! | `isa`     | `crates/isa/tests/vectors/*` (the hand-encoded corpus, via llvm-objdump) |
-//! | `program` | `crates/program/tests/vectors/*` (the identities need the ceremony file) |
+//! | `program` | `crates/program/tests/vectors/*` |
 //! | `gkr`     | `crates/constraints/tests/vectors/toy_*` (the toy circuit, cached and cache-free) |
-//! | `memory`  | `crates/constraints/tests/vectors/{memory_frame_*,image_window,zero_window}.bin` (the four execution-family frames and two window circuits) |
+//! | `memory`  | `crates/constraints/tests/vectors/{memory_frame_*,image_window,zero_window}.bin` (the three distinct execution-family frames and two window circuits) |
 //! | `lookup`  | `crates/constraints/tests/vectors/lookup_toy.bin` (the combined lookup toy) |
 //! | `family`  | `crates/constraints/tests/vectors/{add_sub,jump_branch_slt,shift_bitwise,mul_div,mem_word,mem_subword,atomics}.bin` (the seven execution-family circuits) |
-//! | `delegation` | `crates/constraints/tests/vectors/{keccak,poseidon2,fr_arith,mod_mul,sha256,ec_add}.txt` (the six delegation circuits, by digest: the artifacts are megabytes) |
-//! | `moduli`  | `crates/constants/tests/vectors/moduli.txt` (`MOD_MUL`'s four moduli) |
 //! | `tape`    | `crates/checker/tests/vectors/global_tape.txt` (the global commit phase's absorb sequence) |
-//! | `revm`    | `crates/emulator/tests/vectors/revm_block_*` (a synthetic block, what native revm makes of it, and the keccak-f frames the guest delegates) |
-//! | `block`   | `crates/host/tests/vectors/*` (the recorded mini-block). **Needs `ETH_RPC_URL`; opt-in only, see `DEFAULT_GROUPS`** |
 //! | `guests`  | the guest ELFs themselves -- opt-in only, see `DEFAULT_GROUPS` |
-//! | `zkevm`   | `crates/host/tests/vectors/zkevm-subset.json` (a `tests-zkevm` release's stateless pairs, one per rule the validator applies). **Needs `APOGEE_ZKEVM_FIXTURES`; opt-in only** |
 
 use std::fs;
 use std::path::PathBuf;
 
 use test_support::{sha256, to_hex};
 
-mod block;
-mod curve;
-mod delegation;
+mod ark_fr;
 mod family;
 mod field;
 mod gkr;
@@ -53,29 +41,14 @@ mod isa;
 mod loader;
 mod lookup;
 mod memory;
-mod moduli;
-mod msm;
-mod pairing;
-mod pcs;
 mod poly;
 mod program;
-mod revm;
-mod shared;
-mod srs;
 mod tape;
-mod tower;
-mod zkevm;
 
-/// Every group, in the order a reader of the tower would meet them.
-const GROUPS: [(&str, fn()); 22] = [
+/// Every group, in the order a reader of the stack would meet them.
+const GROUPS: [(&str, fn()); 11] = [
     ("field", field::generate),
     ("poly", poly::generate),
-    ("curve", curve::generate),
-    ("tower", tower::generate),
-    ("pairing", pairing::generate),
-    ("msm", msm::generate),
-    ("srs", srs::generate),
-    ("pcs", pcs::generate),
     ("loader", loader::generate),
     ("isa", isa::generate),
     ("program", program::generate),
@@ -83,13 +56,8 @@ const GROUPS: [(&str, fn()); 22] = [
     ("memory", memory::generate),
     ("lookup", lookup::generate),
     ("family", family::generate),
-    ("delegation", delegation::generate),
-    ("moduli", moduli::generate),
     ("tape", tape::generate),
-    ("revm", revm::generate),
-    ("block", block::generate),
     ("guests", guests::generate),
-    ("zkevm", zkevm::generate),
 ];
 
 /// The groups a bare `cargo run -p kat-gen` runs, which is what CI runs.
@@ -104,26 +72,8 @@ const GROUPS: [(&str, fn()); 22] = [
 /// with `cargo run -p kat-gen -- guests`, and everything CI can reproduce from
 /// them -- the objdump and nm listings -- is in `loader`, which does run by
 /// default.
-const DEFAULT_GROUPS: [&str; 19] = [
-    "field",
-    "poly",
-    "curve",
-    "tower",
-    "pairing",
-    "msm",
-    "srs",
-    "pcs",
-    "loader",
-    "isa",
-    "program",
-    "gkr",
-    "memory",
-    "lookup",
-    "family",
-    "delegation",
-    "moduli",
-    "tape",
-    "revm",
+const DEFAULT_GROUPS: [&str; 10] = [
+    "field", "poly", "loader", "isa", "program", "gkr", "memory", "lookup", "family", "tape",
 ];
 
 fn main() {
@@ -183,24 +133,6 @@ pub fn write_bytes(relative_path: &str, contents: &[u8]) {
     let digest = to_hex(&sha256(contents));
     fs::write(&path, contents).expect("writing a fixture file");
     println!("wrote {relative_path} (sha256 {digest})");
-}
-
-/// The same as [`write_bytes`], but at an absolute path.
-///
-/// The `block` group writes into `crates/host/tests/vectors/`, which it names
-/// itself rather than as a string relative to the workspace root, because it
-/// also reads that directory back.
-pub fn write_bytes_at(path: &std::path::Path, contents: &[u8]) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).unwrap_or_else(|e| panic!("creating {}: {e}", parent.display()));
-    }
-    fs::write(path, contents).unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
-    println!(
-        "  {} ({} bytes, sha256 {})",
-        path.display(),
-        contents.len(),
-        to_hex(&sha256(contents))
-    );
 }
 
 /// A generator whose input stream had collapsed would still write a thousand

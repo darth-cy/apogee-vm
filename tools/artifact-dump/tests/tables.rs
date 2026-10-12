@@ -140,10 +140,10 @@ fn every_committed_guest_renders_and_the_listing_is_the_tables() {
     ] {
         let elf = loader_vector(&format!("{name}.elf"));
         let params = fitting(&elf);
-        let page = render(&elf, name, &params, None).unwrap();
+        let page = render(&elf, name, &params).unwrap();
         let (tables, _) = decode_program(&load_elf(&elf).unwrap(), &params).unwrap();
         check_listing(&page, &elf, &tables);
-        assert!(page.contains("program identity  not computed"), "{name}");
+        assert!(page.contains("ALARM - UNFINISHED"), "{name}");
     }
 }
 
@@ -156,7 +156,7 @@ fn an_arbitrary_elf_renders() {
         0x00b1_262f, // amoadd.w a2, a1, (sp)
         0x0000_0073, // ecall
     ]);
-    let page = render(&elf, "handmade", &ProgramParams::defaults(), None).unwrap();
+    let page = render(&elf, "handmade", &ProgramParams::defaults()).unwrap();
     let (tables, _) = decode_program(&load_elf(&elf).unwrap(), &ProgramParams::defaults()).unwrap();
     check_listing(&page, &elf, &tables);
     for family in [
@@ -172,15 +172,14 @@ fn an_arbitrary_elf_renders() {
 
 #[test]
 fn a_file_the_loader_refuses_is_a_named_loader_error() {
-    let err = render(b"not an elf", "junk", &ProgramParams::defaults(), None).unwrap_err();
+    let err = render(b"not an elf", "junk", &ProgramParams::defaults()).unwrap_err();
     assert!(err.contains("the loader refused it: Truncated"), "{err}");
-    let err = render(&[0u8; 64], "zeros", &ProgramParams::defaults(), None).unwrap_err();
+    let err = render(&[0u8; 64], "zeros", &ProgramParams::defaults()).unwrap_err();
     assert!(err.contains("the loader refused it: NotAnElf"), "{err}");
     let err = render(
         &loader_vector("not_riscv.elf"),
         "arm",
         &ProgramParams::defaults(),
-        None,
     )
     .unwrap_err();
     assert!(err.contains("the loader refused it: NotRiscV"), "{err}");
@@ -189,28 +188,18 @@ fn a_file_the_loader_refuses_is_a_named_loader_error() {
 #[test]
 fn an_instruction_nobody_decodes_is_a_named_decode_error() {
     let flw = 0x0005_a507;
-    let err = render(&elf_of(&[flw]), "float", &ProgramParams::defaults(), None).unwrap_err();
+    let err = render(&elf_of(&[flw]), "float", &ProgramParams::defaults()).unwrap_err();
     assert!(
         err.contains("Not all opcodes supported: pc=0x00010000"),
         "{err}"
     );
 }
 
-/// With the ceremony, the identity line is the program identity: the value
-/// `crates/program`'s pinned fixture holds for fib at the defaults.
+/// The identity line is the program identity: the value `crates/program`'s
+/// pinned fixture holds for fib at the defaults.
 #[test]
-#[ignore = "needs assets/ptau/ppot_0080_24.ptau; run with --ignored"]
 fn the_identity_line_is_the_program_identity() {
-    let ptau = root().join("assets/ptau/ppot_0080_24.ptau");
-    assert!(ptau.exists(), "{} is absent", ptau.display());
-    let srs = srs::Srs::from_ptau(&ptau, 22).unwrap();
-    let page = render(
-        &loader_vector("fib.elf"),
-        "fib",
-        &ProgramParams::defaults(),
-        Some(&srs),
-    )
-    .unwrap();
+    let page = render(&loader_vector("fib.elf"), "fib", &ProgramParams::defaults()).unwrap();
     let pinned = fs::read_to_string(root().join("crates/program/tests/vectors/identity.txt"))
         .unwrap()
         .lines()
@@ -229,7 +218,7 @@ fn the_identity_line_is_the_program_identity() {
 fn the_vm_config_section_is_the_config() {
     for name in ["fib", "atomics"] {
         let elf = loader_vector(&format!("{name}.elf"));
-        let page = render(&elf, name, &ProgramParams::defaults(), None).unwrap();
+        let page = render(&elf, name, &ProgramParams::defaults()).unwrap();
         let (tables, config) =
             decode_program(&load_elf(&elf).unwrap(), &ProgramParams::defaults()).unwrap();
 

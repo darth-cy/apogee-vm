@@ -10,7 +10,6 @@ publish.workspace = true
 [dependencies]
 constants.workspace = true
 emulator.workspace = true
-host.workspace = true
 isa.workspace = true
 loader.workspace = true
 program.workspace = true
