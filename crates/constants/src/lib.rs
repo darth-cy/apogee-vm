@@ -7,11 +7,8 @@
 //!
 //! Changing any value here is a protocol change.
 
-/// Protocol version: the one scalar of the global transcript's first message,
-/// G1 (`docs/spec/proof.md` §2).
-///
-/// A placeholder, 0.
-pub const PROTOCOL_VERSION: u32 = 0;
+/// Protocol version
+pub const PROTOCOL_VERSION: u32 = 1;
 
 /// BN254 scalar field modulus `p`, little-endian 64-bit limbs.
 ///
