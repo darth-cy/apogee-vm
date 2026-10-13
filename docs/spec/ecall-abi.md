@@ -2,7 +2,8 @@
 
 The ecall convention, every ecall number, the guest's address space and the SDK over them. A guest
 has no file descriptors and no I/O syscall: its public input, journal and advice are memory
-([public-values.md](public-values.md)), so an ecall only ends the execution.
+([public-values.md](public-values.md)), so an ecall ends the execution or hands a frame to a
+delegation.
 `crates/constants/tests/ecall_abi.rs` holds this page's tables to `constants::ecall` and its
 `MEMORY` line to `link.ld`.
 
@@ -11,7 +12,7 @@ has no file descriptors and no I/O syscall: its public input, journal and advice
 | Register | Role |
 | --- | --- |
 | `a7` | the number |
-| `a0` | in: the one argument, the exit status |
+| `a0` | in: the one argument, the exit status or a delegation frame's base |
 | `a0` | out: the result, a negated errno |
 
 `a1`–`a5` are reserved for a call that needs more arguments; none does. An ecall preserves every
@@ -25,10 +26,14 @@ Every number this VM implements.
 | Number | Constant | Class | What |
 | --- | --- | --- | --- |
 | 93 | `EXIT` | deterministic | end the execution with status `a0`, the statement's exit status; nonzero is a failed execution, still provable |
+| 0x0507 | `PRECOMPILE_KECCAK_F` | deterministic | one keccak-f[1600] round over the `KECCAK_F` frame at `a0`, in place; `a0` is 0 after |
+| 0x0508 | `PRECOMPILE_SHA256_COMP` | deterministic | four SHA-256 rounds over the `SHA256_COMP` frame at `a0`, in place; `a0` is 0 after |
 
 A class says who chooses the result. **deterministic**: a function of the guest's own state, which
-a circuit proves. **advice**: chosen by the prover; no number has it. These are exactly the ecalls a
-proof admits: `ADD_SUB_LUI_AUIPC` holds every ecall row's `a7` to 93 ([add-sub.md](add-sub.md)).
+a circuit proves. **advice**: chosen by the prover; no number has it. A proof admits `EXIT` alone:
+`ADD_SUB_LUI_AUIPC` holds every ecall row's `a7` to 93 ([add-sub.md](add-sub.md)). The two
+delegation calls execute, and their families' circuits exist, but **UNFINISHED**: no ecall row
+requests them yet (`constants::delegation`).
 
 ## 3. Retired numbers
 
@@ -105,8 +110,8 @@ makes them true:
 
 ## 6. The guest-sdk surface
 
-`crates/guest-sdk` is the guest's runtime. Only `exit` issues an ecall; the rest is loads and
-stores.
+`crates/guest-sdk` is the guest's runtime. Only `exit` and the two delegation shims issue an
+ecall; the rest is loads and stores.
 
 | Item | What |
 | --- | --- |
@@ -117,5 +122,7 @@ stores.
 | `journal()` | what has been committed |
 | `advice()` | the advice payload, its length clamped to the region; bound by nothing, so the guest checks it |
 | `exit(code)` | `EXIT`; publishes nothing beyond what was committed |
+| `keccak_f(lanes)` | keccak-f[1600] in place: 24 `PRECOMPILE_KECCAK_F` calls on one frame; exits 72 on a nonzero answer |
+| `sha256_compress(state, block)` | one SHA-256 compression into `state`: 16 `PRECOMPILE_SHA256_COMP` calls, then the feed-forward; exits 72 likewise |
 | allocator | bumps up from `__heap_start`, never frees; exits 71 when a block would end above `__stack_top − STACK_RESERVE` or the live `sp` |
 | panic handler | exits 101 and writes nothing: a panicking guest is provable, having published what it committed |

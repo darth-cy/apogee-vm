@@ -15,7 +15,10 @@ mod lookup;
 mod memory;
 
 pub use archive::{IoStreams, Phase, PhaseTiming, TraceArchive, PHASES};
-pub use family::{FamilyTrace, FamilyTraces, Query, QueryColumns, Role, Row, RowSlice, ROLES};
+pub use family::{
+    DelegationTrace, FamilyTrace, FamilyTraces, FrameSlice, Query, QueryColumns, Role, Row,
+    RowSlice, WordSlice, ROLES,
+};
 pub use log::{
     addressable, in_ram, AddressSpace, FinalValue, InitialMemory, MemoryEvent, MemoryEventLog,
     MemoryState, SelfCheckError,
@@ -33,8 +36,10 @@ use program::{FamilyId, VmConfig};
 /// in its order, zero for a family the execution never reached.
 ///
 /// A cycle-owning family's count is its cycles, and those counts sum to the
-/// execution's cycle count — [`CycleProfile::total`]. The count is what
-/// [`plan_shards`] divides by the family's height.
+/// execution's cycle count — [`CycleProfile::total`]. A delegation family's
+/// count is its invocations, which ride cycles already counted and so are
+/// outside that sum. The count is what [`plan_shards`] divides by the family's
+/// height.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CycleProfile {
     pub counts: Vec<(FamilyId, u64)>,

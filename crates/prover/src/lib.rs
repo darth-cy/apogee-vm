@@ -499,9 +499,9 @@ pub fn shard_columns(
 /// execution's two unbound inputs, and **this shard's rows**, cut out of the
 /// archive by `docs/spec/streaming.md` §4's rule.
 ///
-/// Which arm of [`ShardRows`] a family takes: a family that owns cycles takes
-/// its cut of them, and every other is a window family whose rows are
-/// addresses.
+/// Which arm of [`ShardRows`] a family takes: a delegation family takes its
+/// cut of its invocations, a family that owns cycles its cut of them, and
+/// every other is a window family whose rows are addresses.
 fn shard_source<'a>(
     setup: &'a ProverSetup,
     archive: &'a TraceArchive,

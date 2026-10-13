@@ -24,6 +24,9 @@
 //!               present [u8], [(addr [u32], read_ts [u64], read_value [u32],
 //!                               write_value [u32]); 8]
 //!             )],
+//!   delegations: [(family u32, height u32, cycle [u64], base [u32],
+//!                  [(addr [u32], read_ts [u64], read_value [u32],
+//!                    write_value [u32])])],
 //!   events:   [(space tag u8, addr u32, ts u64, read_ts u64, read_value u32,
 //!               write_value u32)],
 //!   profile:  [(family u32, count u64)],
@@ -62,7 +65,7 @@ use constants::{family, memory};
 use serde::de::{Deserialize, Deserializer, SeqAccess, Visitor};
 use serde::Serialize;
 
-use crate::family::{FamilyTrace, FamilyTraces, Query, QueryColumns, Row, ROLES};
+use crate::family::{DelegationTrace, FamilyTrace, FamilyTraces, Query, QueryColumns, Row, ROLES};
 use crate::log::{AddressSpace, MemoryEvent, MemoryEventLog};
 use crate::CycleProfile;
 
@@ -358,8 +361,11 @@ type FamilyWire = (
     [QueryWire; 8],
 );
 type EventWire = (u8, u32, u64, u64, u32, u32);
+type DelegationRef<'a> = (u32, u32, &'a [u64], &'a [u32], &'a [QueryRef<'a>]);
+type DelegationWire = (u32, u32, Seq<u64>, Seq<u32>, Seq<QueryWire>);
 type PostExecutionWire = (
     Seq<FamilyWire>,
+    Seq<DelegationWire>,
     Seq<EventWire>,
     Seq<(u32, u64)>,
     Seq<u8>,
@@ -408,8 +414,32 @@ fn post_execution_wire(
             )
         })
         .collect();
+    let words: Vec<Vec<QueryRef>> = traces
+        .delegations
+        .iter()
+        .map(|t| {
+            t.words
+                .iter()
+                .map(|q| {
+                    (
+                        &q.addr[..],
+                        &q.read_ts[..],
+                        &q.read_value[..],
+                        &q.write_value[..],
+                    )
+                })
+                .collect()
+        })
+        .collect();
+    let delegations: Vec<DelegationRef> = traces
+        .delegations
+        .iter()
+        .zip(&words)
+        .map(|(t, w)| (t.family, t.height, &t.cycle[..], &t.base[..], &w[..]))
+        .collect();
     encode(&(
         &families[..],
+        &delegations[..],
         events,
         counts,
         &io.input[..],
@@ -436,7 +466,13 @@ fn decode_post_execution(
     if !rest.is_empty() {
         return Err("bytes follow the post-execution payload".into());
     }
-    let (families, events, counts, input, output, advice) = wire;
+    let (families, delegations, events, counts, input, output, advice) = wire;
+    let columns = |(addr, read_ts, read_value, write_value): QueryWire| QueryColumns {
+        addr: addr.0,
+        read_ts: read_ts.0,
+        read_value: read_value.0,
+        write_value: write_value.0,
+    };
 
     let traces = FamilyTraces {
         families: families
@@ -458,6 +494,17 @@ fn decode_post_execution(
                     }),
                 },
             )
+            .collect(),
+        delegations: delegations
+            .0
+            .into_iter()
+            .map(|(family, height, cycle, base, words)| DelegationTrace {
+                family,
+                height,
+                cycle: cycle.0,
+                base: base.0,
+                words: words.0.into_iter().map(columns).collect(),
+            })
             .collect(),
     };
     let mut log_events = Vec::with_capacity(events.0.len().min(4096));
@@ -567,6 +614,30 @@ fn check_parts(
             }
         }
     }
+    // The delegation buffers: one row per invocation, whose frame events ride
+    // the requesting cycle and are checked against the log at that cycle.
+    let mut invocations: Vec<(u64, &DelegationTrace, usize)> = Vec::new();
+    for t in &traces.delegations {
+        let n = t.cycle.len();
+        if program::delegation_frame_words(t.family) != Some(t.words.len()) {
+            return Err(format!(
+                "family {}'s buffer is not a delegation frame",
+                t.family
+            ));
+        }
+        let columns_agree = t.base.len() == n
+            && t.words.iter().all(|q| {
+                q.addr.len() == n
+                    && q.read_ts.len() == n
+                    && q.read_value.len() == n
+                    && q.write_value.len() == n
+            });
+        if !columns_agree {
+            return Err(format!("family {}'s columns differ in length", t.family));
+        }
+        invocations.extend((0..n).map(|r| (t.cycle[r], t, r)));
+    }
+    invocations.sort_by_key(|(cycle, ..)| *cycle);
     consistent(traces, profile)?;
 
     let mut rows: Vec<Row> = traces
@@ -600,6 +671,7 @@ fn check_parts(
     }
 
     let mut next = 0usize;
+    let mut pending = invocations.iter().peekable();
     for row in &rows {
         let base = memory::TS_STEP * row.cycle;
         let pc = MemoryEvent {
@@ -620,7 +692,20 @@ fn check_parts(
                 write_value: q.write_value,
             })
         });
-        for want in std::iter::once(pc).chain(queries) {
+        // An invocation's frame events follow the pc query and precede the
+        // row's roles: they are at slot `delegation::FRAME_DELTA`, which is 0.
+        let mut frame: Vec<MemoryEvent> = Vec::new();
+        while let Some((_, t, r)) = pending.next_if(|(cycle, ..)| *cycle == row.cycle) {
+            frame.extend(t.words.iter().map(|q| MemoryEvent {
+                space: AddressSpace::Ram,
+                addr: q.addr[*r],
+                ts: base + constants::delegation::FRAME_DELTA,
+                read_ts: q.read_ts[*r],
+                read_value: q.read_value[*r],
+                write_value: q.write_value[*r],
+            }));
+        }
+        for want in std::iter::once(pc).chain(frame).chain(queries) {
             if events.get(next) != Some(&want) {
                 return Err(format!(
                     "the log disagrees with the row of cycle {} at event {next}",
@@ -629,6 +714,9 @@ fn check_parts(
             }
             next += 1;
         }
+    }
+    if pending.next().is_some() {
+        return Err("a delegation invocation claims a cycle no row has".into());
     }
     if next != events.len() {
         return Err(format!(
@@ -716,6 +804,7 @@ mod tests {
         TraceArchive::from_execution(
             FamilyTraces {
                 families: vec![trace],
+                delegations: Vec::new(),
             },
             log,
             CycleProfile {

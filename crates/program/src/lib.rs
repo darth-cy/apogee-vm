@@ -32,7 +32,7 @@ use constants::extra_mask::{
     add_sub_lui_auipc as alu, atomics, jump_branch_slt as jbs, mem_subword, mem_word, mul_div,
     shift_bitwise as sb, system_code,
 };
-use constants::{family, guest_memory};
+use constants::{delegation, family, guest_memory};
 use field::Fr;
 use isa::{decode, Instr};
 use loader::{ProgramImage, Slot};
@@ -59,7 +59,27 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::PUBLIC_INPUT,
     family::PUBLIC_OUTPUT,
     family::ADVICE_WINDOWS,
+    family::KECCAK_F,
+    family::SHA256_COMP,
 ];
+
+/// The delegation family that answers ecall `number`, or `None`. The registry
+/// is `constants::delegation::TYPES`.
+pub fn delegation_family(number: u32) -> Option<FamilyId> {
+    delegation::TYPES
+        .iter()
+        .find(|(_, n, ..)| *n == number)
+        .map(|(f, ..)| *f)
+}
+
+/// `family`'s frame in 32-bit words, or `None` if it is not a delegation
+/// family.
+pub fn delegation_frame_words(family: FamilyId) -> Option<usize> {
+    delegation::TYPES
+        .iter()
+        .find(|(f, ..)| *f == family)
+        .map(|(.., words)| *words)
+}
 
 /// Whether `family`'s rows are cycles, and so whether the decoder routes
 /// instructions — and their pc values — to it.
@@ -86,6 +106,8 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::PUBLIC_INPUT => "PUBLIC_INPUT",
         family::PUBLIC_OUTPUT => "PUBLIC_OUTPUT",
         family::ADVICE_WINDOWS => "ADVICE_WINDOWS",
+        family::KECCAK_F => "KECCAK_F",
+        family::SHA256_COMP => "SHA256_COMP",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -209,8 +231,8 @@ pub const ROW_FIELDS: [RowField; 8] = [
 /// This is the one place a family's columns are chosen; [`field_mask`] and
 /// the committed column order are both read off it. `funct3` is in no tuple:
 /// the extra mask is one-hot per mnemonic, which leaves it nothing to say.
-/// A family that claims no pc — every window family — has an empty table with
-/// no columns.
+/// A family that claims no pc — every window family and every delegation
+/// family — has an empty table with no columns.
 pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
     use RowField::*;
     match family {
@@ -224,7 +246,9 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::ZERO_WINDOWS
         | family::PUBLIC_INPUT
         | family::PUBLIC_OUTPUT
-        | family::ADVICE_WINDOWS => &[],
+        | family::ADVICE_WINDOWS
+        | family::KECCAK_F
+        | family::SHA256_COMP => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -377,6 +401,9 @@ pub enum ProgramError {
     /// A RAM window rule of `docs/spec/memory.md` §3.2 or §3.5 is broken;
     /// `rule` says which.
     WindowRule { rule: &'static str },
+    /// A declaration record at `addr` names an ecall number no delegation
+    /// family answers: the guest and this preprocessor disagree on the ABI.
+    UnknownDelegation { addr: u32, number: u32 },
 }
 
 impl fmt::Display for ProgramError {
@@ -418,6 +445,11 @@ impl fmt::Display for ProgramError {
                 4 * height as u64
             ),
             ProgramError::WindowRule { rule } => write!(f, "RAM window rule broken: {rule}"),
+            ProgramError::UnknownDelegation { addr, number } => write!(
+                f,
+                "the declaration record at {addr:#x} names ecall {number:#x}, which no \
+                 delegation family answers"
+            ),
         }
     }
 }
@@ -523,6 +555,42 @@ fn narrowest(values: Vec<u32>) -> PolyBacking {
 // Derivation
 // ---------------------------------------------------------------------------
 
+/// The delegation families the image **declares**, ascending.
+///
+/// A delegation family claims no pc — its ecall number is in `a7` at run time,
+/// not in any instruction word — so what puts one in the config is the record
+/// its SDK shim emits: `delegation::MARKER_MAGIC`, then the ecall number, in
+/// an allocated `.rodata` section the linker keeps exactly when the shim is
+/// linked. The scan is over the file-backed bytes at every byte offset, since
+/// a `static`'s alignment is the linker's choice.
+pub fn declared_delegations(image: &ProgramImage) -> Result<Vec<FamilyId>, ProgramError> {
+    let n = delegation::MARKER_MAGIC.len();
+    let mut found: Vec<FamilyId> = Vec::new();
+    for segment in &image.segments {
+        let bytes = &segment.bytes;
+        for at in 0..bytes.len().saturating_sub(delegation::MARKER_BYTES - 1) {
+            if bytes[at..at + n] != delegation::MARKER_MAGIC {
+                continue;
+            }
+            let number = u32::from_le_bytes([
+                bytes[at + n],
+                bytes[at + n + 1],
+                bytes[at + n + 2],
+                bytes[at + n + 3],
+            ]);
+            let family = delegation_family(number).ok_or(ProgramError::UnknownDelegation {
+                addr: segment.vaddr.wrapping_add(at as u32),
+                number,
+            })?;
+            if !found.contains(&family) {
+                found.push(family);
+            }
+        }
+    }
+    found.sort_unstable();
+    Ok(found)
+}
+
 /// The height derivation gives `family`: the caller's, except where the height
 /// is not a choice.
 ///
@@ -549,8 +617,9 @@ fn height_of(family: FamilyId, params: &ProgramParams) -> u32 {
 /// Decode a program into its family tables, and derive its `VmConfig`.
 ///
 /// The family set is derived, never chosen: an instruction family is present
-/// exactly when it claims at least one pc, and a window family always
-/// (`docs/spec/program.md` §7).
+/// exactly when it claims at least one pc, a delegation family exactly when
+/// the image declares it ([`declared_delegations`]), and a window family
+/// always (`docs/spec/program.md` §7).
 /// [`ProgramError`] names every refusal.
 ///
 /// `image` must satisfy `ProgramImage`'s documented invariants, which
@@ -636,18 +705,21 @@ pub fn decode_program_detaching(
         code_version: params.code_version,
         families: Vec::new(),
     };
+    let declared = declared_delegations(image)?;
     for family in FAMILIES {
         let rows = &claims[family as usize];
-        // Two presence rules, and no third. A family that claims a pc is
+        // Three presence rules, and no fourth. A family that claims a pc is
         // present because it claims one. A **window** family is present in
         // every config — the two RAM window ones (`docs/spec/memory.md` §3.2),
         // the two public value ones and `ADVICE_WINDOWS`
-        // (`docs/spec/public-values.md` §4) — never because a caller asked.
+        // (`docs/spec/public-values.md` §4). A **delegation** family is present
+        // exactly when the image declares it — never because a caller asked.
         let always = (family == family::INIT_TEARDOWN
             || family == family::ZERO_WINDOWS
             || family == family::ADVICE_WINDOWS
             || family == family::PUBLIC_INPUT
-            || family == family::PUBLIC_OUTPUT)
+            || family == family::PUBLIC_OUTPUT
+            || declared.contains(&family))
             && !detached.contains(&family);
         if rows.is_empty() && !always {
             continue;

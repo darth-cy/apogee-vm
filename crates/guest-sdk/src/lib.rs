@@ -1,6 +1,6 @@
 #![no_std]
 //! The guest-side runtime: crt0, the entry macro, a bump allocator, a panic
-//! handler and the exit call.
+//! handler, the exit call and the delegation shims.
 //!
 //! Everything here runs *inside* the proof. It compiles only for
 //! `riscv32imac-unknown-none-elf` and links only into guest binaries.
@@ -14,9 +14,9 @@
 //! and bound by nothing, and [`commit`] appends to the verifier-bound journal.
 //! `docs/spec/public-values.md` specifies all three.
 //!
-//! The ecall ABI is [`exit`] alone. An ecall carries its number in `a7` and its
-//! argument in `a0`; `docs/spec/ecall-abi.md` is the table and the number comes
-//! from [`constants::ecall`].
+//! The ecall ABI is [`exit`] and the delegation shims, [`keccak_f`] and
+//! [`sha256_compress`]. An ecall carries its number in `a7` and its argument in
+//! `a0`; `docs/spec/ecall-abi.md` is the table, every number [`constants::ecall`]'s.
 //!
 //! # `unsafe`, and global state
 //!
@@ -27,7 +27,7 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::arch::global_asm;
 
-use constants::{ecall, guest_memory};
+use constants::{delegation, ecall, guest_memory, keccak, sha256};
 
 // ---------------------------------------------------------------------------
 // crt0
@@ -105,8 +105,8 @@ macro_rules! entry {
 // Raw ecall
 // ---------------------------------------------------------------------------
 
-// One shim, one argument: the one ecall a guest may issue, `EXIT`, takes a
-// status. A six-argument shim with zeroes passed in would be strictly worse --
+// One shim, one argument: `EXIT` takes a status, and a delegation call its
+// frame's base. A six-argument shim with zeroes passed in would be strictly worse --
 // an unused `in(...)` register is still a constraint on the register
 // allocator.
 //
@@ -406,4 +406,102 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     // What this buys is worth more than the message: with no write on the
     // panic path, **a panicking guest is provable**.
     exit(EXIT_PANIC)
+}
+
+// ---------------------------------------------------------------------------
+// Delegation shims
+// ---------------------------------------------------------------------------
+//
+// Last in the file, so a guest that calls no delegation links none of it and
+// the line numbers -- the panic locations -- of everything above stay put.
+
+/// Status used when a delegation call answers anything but 0.
+const EXIT_DELEGATION_ERROR: i32 = 72;
+
+/// A declaration record (`constants::delegation`): the magic, then `number`
+/// little-endian. `const`-evaluated, so it is `.rodata` and not code.
+const fn record(number: u32) -> [u8; delegation::MARKER_BYTES] {
+    let magic = delegation::MARKER_MAGIC;
+    let number = number.to_le_bytes();
+    let mut out = [0u8; delegation::MARKER_BYTES];
+    let mut i = 0;
+    while i < delegation::MARKER_BYTES {
+        out[i] = if i < magic.len() {
+            magic[i]
+        } else {
+            number[i - magic.len()]
+        };
+        i += 1;
+    }
+    out
+}
+
+// The records, one section each: the linker keeps or drops sections whole, so
+// two records in one would declare both families for a guest that reaches
+// either. And no `#[used]`: a record must be in the image exactly when its shim
+// is, so what keeps it is the shim reading its ecall number out of it.
+
+#[link_section = ".rodata.apogee.delegations.keccak_f"]
+static DECLARE_KECCAK_F: [u8; delegation::MARKER_BYTES] = record(ecall::PRECOMPILE_KECCAK_F);
+
+#[link_section = ".rodata.apogee.delegations.sha256_comp"]
+static DECLARE_SHA256_COMP: [u8; delegation::MARKER_BYTES] = record(ecall::PRECOMPILE_SHA256_COMP);
+
+/// One delegation call over `frame`, its ecall number read back out of
+/// `declared`. Through `black_box`: folded to an immediate, the read would
+/// leave the record unreferenced and the declaration out of the image.
+fn delegate(declared: &'static [u8; delegation::MARKER_BYTES], frame: &mut [u32]) {
+    let declared = core::hint::black_box(declared);
+    let n = delegation::MARKER_MAGIC.len();
+    let number = u32::from_le_bytes([
+        declared[n],
+        declared[n + 1],
+        declared[n + 2],
+        declared[n + 3],
+    ]);
+    // SAFETY: `frame` is live, writable and word-aligned, and the caller sizes
+    // it to the frame `number`'s family reads and writes in place.
+    if unsafe { ecall1(number, frame.as_mut_ptr() as u32) } != 0 {
+        exit(EXIT_DELEGATION_ERROR);
+    }
+}
+
+/// keccak-f[1600] over 25 lanes, lane `x + 5y` at index `x + 5y`: 24
+/// `KECCAK_F` delegation calls on one frame, one round each.
+pub fn keccak_f(lanes: &mut [u64; keccak::LANES]) {
+    let mut frame = [0u32; keccak::FRAME_WORDS];
+    for (i, lane) in lanes.iter().enumerate() {
+        frame[keccak::STATE_WORD + 2 * i] = *lane as u32;
+        frame[keccak::STATE_WORD + 2 * i + 1] = (*lane >> 32) as u32;
+    }
+    for round in 0..keccak::ROUNDS as u32 {
+        frame[keccak::ROUND_WORD] = round;
+        delegate(&DECLARE_KECCAK_F, &mut frame);
+    }
+    for (i, lane) in lanes.iter_mut().enumerate() {
+        let (lo, hi) = (
+            frame[keccak::STATE_WORD + 2 * i],
+            frame[keccak::STATE_WORD + 2 * i + 1],
+        );
+        *lane = lo as u64 | (hi as u64) << 32;
+    }
+}
+
+/// One SHA-256 compression of `block`, big-endian decoded, into `state`: 16
+/// `SHA256_COMP` delegation calls on one frame, four rounds each, then the
+/// feed-forward. Padding and the block loop are the caller's.
+pub fn sha256_compress(state: &mut [u32; sha256::STATE_WORDS], block: &[u32; sha256::BLOCK_WORDS]) {
+    let mut frame = [0u32; sha256::FRAME_WORDS];
+    frame[sha256::STATE_WORD..sha256::WINDOW_WORD].copy_from_slice(state);
+    frame[sha256::WINDOW_WORD..].copy_from_slice(block);
+    for group in 0..sha256::GROUPS as u32 {
+        frame[sha256::GROUP_WORD] = group;
+        delegate(&DECLARE_SHA256_COMP, &mut frame);
+    }
+    for (h, v) in state
+        .iter_mut()
+        .zip(&frame[sha256::STATE_WORD..sha256::WINDOW_WORD])
+    {
+        *h = h.wrapping_add(*v);
+    }
 }

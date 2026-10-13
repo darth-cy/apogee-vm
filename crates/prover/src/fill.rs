@@ -12,16 +12,20 @@ use constants::extra_mask::mem_word as kind_mem;
 use constants::extra_mask::mul_div as md;
 use constants::extra_mask::shift_bitwise as sb;
 use constants::extra_mask::system_code;
-use constants::{ecall, family, guest_memory, memory};
+use constants::sha256 as sh;
+use constants::{delegation, ecall, family, guest_memory, keccak, memory};
 use constraints::add_sub::{
     DECODED, IS_ECALL, IS_FENCE, KINDS, NEXT_PC_HI, PC_WRAP, RD_HI, TABLE_WIDTH, WRAP,
 };
 use constraints::atomics as at_circuit;
+use constraints::delegation as deleg;
 use constraints::jump_branch_slt as jbs_circuit;
+use constraints::keccak as kec_circuit;
 use constraints::mem_subword as ms_circuit;
 use constraints::mem_word as mw_circuit;
 use constraints::memory::{frame_queries, rd_selected};
 use constraints::mul_div as md_circuit;
+use constraints::sha256 as sh_circuit;
 use constraints::shift_bitwise as sb_circuit;
 use constraints::PolyAddress;
 use field::Fr;
@@ -30,7 +34,7 @@ use program::lookup_tables::generic_table;
 use program::FamilyId;
 use trace::{
     build_frame_witness, build_init_teardown_columns, build_memory_columns,
-    build_value_window_columns, MemoryState, Role, RowSlice, TraceArchive,
+    build_value_window_columns, FrameSlice, MemoryState, Role, RowSlice, TraceArchive,
 };
 
 use crate::Program;
@@ -58,10 +62,12 @@ pub struct ShardSource<'a> {
 }
 
 /// The rows a shard proves, by the kind of family it belongs to — the two
-/// kinds `docs/spec/memory.md` §3 names.
+/// kinds `docs/spec/memory.md` §3 names, and a delegation family's invocations.
 pub enum ShardRows<'a> {
     /// A cycle-owning family's shard: its cut of that family's buffer.
     Cycles(RowSlice<'a>),
+    /// A delegation family's shard: its cut of that family's invocations.
+    Invocations(FrameSlice<'a>),
     /// A window family's shard: its rows are addresses rather than trace rows,
     /// and what fills them is the execution's **final** memory state.
     ///
@@ -77,9 +83,9 @@ impl<'a> ShardSource<'a> {
     /// program, the archive's two unbound inputs, and this shard's rows cut out
     /// of the archive by `docs/spec/streaming.md` §4's rule.
     ///
-    /// Which arm of [`ShardRows`] a family takes: a family that owns cycles takes
-    /// its cut of them, and every other is a window family whose rows are
-    /// addresses. A
+    /// Which arm of [`ShardRows`] a family takes: a delegation family takes its
+    /// cut of its invocations, a family that owns cycles its cut of them, and
+    /// every other is a window family whose rows are addresses. A
     /// streaming prover builds the same struct from a chunk it has just filled,
     /// which is the whole of what the two paths do differently
     /// (`docs/spec/streaming.md` §3).
@@ -93,7 +99,13 @@ impl<'a> ShardSource<'a> {
     ) -> Result<ShardSource<'a>, String> {
         let missing = || format!("the archive has no {} buffer", program::family_name(family));
         let traces = archive.family_traces();
-        let rows = if program::owns_cycles(family) {
+        let rows = if program::delegation_frame_words(family).is_some() {
+            ShardRows::Invocations(FrameSlice::shard(
+                traces.delegation(family).ok_or_else(missing)?,
+                index,
+                height as usize,
+            ))
+        } else if program::owns_cycles(family) {
             ShardRows::Cycles(RowSlice::shard(
                 traces.family(family).ok_or_else(missing)?,
                 index,
@@ -119,6 +131,17 @@ impl<'a> ShardSource<'a> {
             ShardRows::Cycles(rows) if rows.family() == family => Ok(rows),
             _ => Err(format!(
                 "this shard holds no {} rows",
+                program::family_name(family)
+            )),
+        }
+    }
+
+    /// This shard's invocations, or why it has none of `family`'s.
+    fn invocations(&self, family: FamilyId) -> Result<&FrameSlice<'a>, String> {
+        match &self.rows {
+            ShardRows::Invocations(frames) if frames.family() == family => Ok(frames),
+            _ => Err(format!(
+                "this shard holds no {} invocations",
                 program::family_name(family)
             )),
         }
@@ -154,8 +177,563 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
         family::INIT_TEARDOWN | family::ZERO_WINDOWS | family::PUBLIC_OUTPUT => Some(window),
         family::PUBLIC_INPUT => Some(public_input),
         family::ADVICE_WINDOWS => Some(advice),
+        family::KECCAK_F => Some(keccak_f),
+        family::SHA256_COMP => Some(sha256_comp),
         _ => None,
     }
+}
+
+/// One `KECCAK_F` row's intermediates, as 64-bit lanes.
+///
+/// Every field is a stage of `emulator::keccak_round` over the frame's read
+/// values, and the circuit's byte columns are this struct's bytes: byte `b` of
+/// lane `i` is `(lane >> (8·b)) as u8`. Recomputing the round here is not
+/// re-deciding what the row says — the frame words come from the buffer, which
+/// the tracer filled from the log — it is producing the intermediates the
+/// circuit's obligations read, which no log event carries.
+struct KeccakRow {
+    round: usize,
+    state_in: [u64; keccak::LANES],
+    /// `parity[x][s]`: `s + 2` lanes of column `x` folded, so `parity[x][3]` is
+    /// `C[x]`.
+    parity: [[u64; 4]; 5],
+    c_mask: [u64; 5],
+    theta_d: [u64; 5],
+    theta_a: [u64; keccak::LANES],
+    rho_mask: [u64; keccak::LANES],
+    rho_out: [u64; keccak::LANES],
+    chi_and: [u64; keccak::LANES],
+    chi_out: [u64; keccak::LANES],
+}
+
+/// Each byte of a `u64` masked to its top `s` bits, which is what one `XOR8`
+/// obligation against the literal mask gives the circuit.
+fn keccak_byte_mask(s: u32) -> u64 {
+    let byte = (256u64 - (1u64 << (8 - s))) as u8;
+    u64::from_le_bytes([byte; 8])
+}
+
+fn keccak_row(frames: &FrameSlice, r: usize) -> Result<KeccakRow, String> {
+    let round = frames.word(keccak::ROUND_WORD).read_value[r] as usize;
+    if round >= keccak::ROUNDS {
+        return Err(format!(
+            "keccak fill: invocation {r} claims round {round}, and a keccak-f round is below {}",
+            keccak::ROUNDS
+        ));
+    }
+    let words: [u32; keccak::STATE_WORDS] =
+        core::array::from_fn(|j| frames.word(keccak::STATE_WORD + j).read_value[r]);
+    let state_in = emulator::lanes_of(&words);
+
+    let mut parity = [[0u64; 4]; 5];
+    for (x, chain) in parity.iter_mut().enumerate() {
+        let mut acc = state_in[x];
+        for (s, slot) in chain.iter_mut().enumerate() {
+            acc ^= state_in[x + 5 * (s + 1)];
+            *slot = acc;
+        }
+    }
+    let c: [u64; 5] = core::array::from_fn(|x| parity[x][3]);
+    let c_mask: [u64; 5] = core::array::from_fn(|x| c[x] ^ keccak_byte_mask(1));
+    let theta_d: [u64; 5] =
+        core::array::from_fn(|x| c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1));
+    let theta_a: [u64; keccak::LANES] = core::array::from_fn(|i| state_in[i] ^ theta_d[i % 5]);
+    let rho_mask: [u64; keccak::LANES] = core::array::from_fn(|i| {
+        let s = keccak::ROTATIONS[i / 5][i % 5] % 8;
+        match s {
+            0 => 0,
+            _ => theta_a[i] ^ keccak_byte_mask(s),
+        }
+    });
+    let mut rho_out = [0u64; keccak::LANES];
+    for x in 0..5 {
+        for y in 0..5 {
+            rho_out[y + 5 * ((2 * x + 3 * y) % 5)] =
+                theta_a[x + 5 * y].rotate_left(keccak::ROTATIONS[y][x]);
+        }
+    }
+    let chi_and: [u64; keccak::LANES] = core::array::from_fn(|i| {
+        let (x, y) = (i % 5, i / 5);
+        rho_out[(x + 1) % 5 + 5 * y] ^ rho_out[(x + 2) % 5 + 5 * y]
+    });
+    let chi_out: [u64; keccak::LANES] = core::array::from_fn(|i| {
+        let (x, y) = (i % 5, i / 5);
+        rho_out[i] ^ (!rho_out[(x + 1) % 5 + 5 * y] & rho_out[(x + 2) % 5 + 5 * y])
+    });
+    Ok(KeccakRow {
+        round,
+        state_in,
+        parity,
+        c_mask,
+        theta_d,
+        theta_a,
+        rho_mask,
+        rho_out,
+        chi_and,
+        chi_out,
+    })
+}
+
+/// A `KECCAK_F` shard: the delegation frame over `RANGE16`, the 24 round
+/// selectors, the round constant's four bytes, and the
+/// round's nine byte-wide stages.
+///
+/// Every column here is a **byte**, a `RANGE16` chunk or a selector: there is
+/// no bit decomposition in this fill.
+fn keccak_f(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    let (frames, h) = (src.invocations(family::KECCAK_F)?, src.height);
+    let mut out = delegation_frame_range16(
+        frames,
+        h,
+        keccak::FRAME_WORDS,
+        keccak::FRAME_BYTES as u64,
+        kec_circuit::gap_chunk,
+        [
+            kec_circuit::base_low(),
+            kec_circuit::base_low_hi(),
+            kec_circuit::base_room(),
+            kec_circuit::base_room_hi(),
+        ],
+    );
+    let witness: Vec<KeccakRow> = (0..frames.len())
+        .map(|r| keccak_row(frames, r))
+        .collect::<Result<Vec<_>, String>>()?;
+
+    // The round selector, one-hot, and the round constant it names.
+    for round in 0..keccak::ROUNDS {
+        let values: Vec<u32> = witness
+            .iter()
+            .map(|w| u32::from(w.round == round))
+            .collect();
+        out.push((kec_circuit::round_sel(round), u32_column(values, h)));
+    }
+    for (t, b) in keccak::IOTA_BYTES.iter().enumerate() {
+        let values: Vec<u32> = witness
+            .iter()
+            .map(|w| ((keccak::ROUND_CONSTANTS[w.round] >> (8 * b)) & 0xff) as u32)
+            .collect();
+        out.push((kec_circuit::rc(t), u32_column(values, h)));
+    }
+
+    // The round's stages, byte by byte, in the circuit's layout order.
+    let byte = |lane: u64, b: usize| ((lane >> (8 * b)) & 0xff) as u32;
+    let push_state = |out: &mut Vec<(PolyAddress, MultilinearPoly)>,
+                      address: &dyn Fn(usize, usize) -> PolyAddress,
+                      lane: &dyn Fn(&KeccakRow) -> [u64; keccak::LANES]| {
+        for i in 0..keccak::LANES {
+            for b in 0..8 {
+                let values: Vec<u32> = witness.iter().map(|w| byte(lane(w)[i], b)).collect();
+                out.push((address(i, b), u32_column(values, h)));
+            }
+        }
+    };
+    push_state(&mut out, &kec_circuit::state_in, &|w| w.state_in);
+    for x in 0..5 {
+        for b in 0..8 {
+            for s in 0..4 {
+                let values: Vec<u32> = witness.iter().map(|w| byte(w.parity[x][s], b)).collect();
+                out.push((kec_circuit::parity(x, b, s), u32_column(values, h)));
+            }
+        }
+    }
+    for x in 0..5 {
+        for b in 0..8 {
+            let values: Vec<u32> = witness.iter().map(|w| byte(w.c_mask[x], b)).collect();
+            out.push((kec_circuit::c_mask(x, b), u32_column(values, h)));
+        }
+    }
+    for x in 0..5 {
+        for b in 0..8 {
+            let values: Vec<u32> = witness.iter().map(|w| byte(w.theta_d[x], b)).collect();
+            out.push((kec_circuit::theta_d(x, b), u32_column(values, h)));
+        }
+    }
+    push_state(&mut out, &kec_circuit::theta_a, &|w| w.theta_a);
+    for i in 0..keccak::LANES {
+        if keccak::ROTATIONS[i / 5][i % 5].is_multiple_of(8) {
+            continue;
+        }
+        for b in 0..8 {
+            let values: Vec<u32> = witness.iter().map(|w| byte(w.rho_mask[i], b)).collect();
+            out.push((kec_circuit::rho_mask(i, b), u32_column(values, h)));
+        }
+    }
+    push_state(&mut out, &kec_circuit::rho_out, &|w| w.rho_out);
+    push_state(&mut out, &kec_circuit::chi_and, &|w| w.chi_and);
+    push_state(&mut out, &kec_circuit::chi_out, &|w| w.chi_out);
+    for (t, b) in keccak::IOTA_BYTES.iter().enumerate() {
+        let values: Vec<u32> = witness
+            .iter()
+            .map(|w| {
+                byte(w.chi_out[0], *b)
+                    ^ ((keccak::ROUND_CONSTANTS[w.round] >> (8 * b)) & 0xff) as u32
+            })
+            .collect();
+        out.push((kec_circuit::iota_out(t), u32_column(values, h)));
+    }
+    Ok(out)
+}
+
+/// The frame's columns for a family that range-checks through `RANGE16`.
+///
+/// The `M` side is `delegation_frame`'s exactly; the witness side is two gap
+/// chunks a word and one value plus one halfword for each of the base's two
+/// decompositions, where that one writes 38 bits a word and 29 plus 31.
+fn delegation_frame_range16(
+    frames: &FrameSlice,
+    h: usize,
+    words: usize,
+    frame_bytes: u64,
+    chunk: fn(usize, usize) -> PolyAddress,
+    base: [PolyAddress; 4],
+) -> Vec<(PolyAddress, MultilinearPoly)> {
+    let rows = 0..frames.len();
+    let mut out: Vec<(PolyAddress, MultilinearPoly)> = Vec::new();
+    let cycles: Vec<Fr> = frames.cycles().iter().map(|c| Fr::from_u64(*c)).collect();
+    out.push((deleg::CYCLE, fr_column(cycles, h)));
+    out.push((
+        deleg::LIVE,
+        u32_column(rows.clone().map(|_| 1).collect(), h),
+    ));
+    out.push((deleg::BASE, u32_column(frames.bases().to_vec(), h)));
+    out.push((deleg::ANCHOR_VALUE, u32_column(Vec::new(), h)));
+    for j in 0..words {
+        let w = frames.word(j);
+        for (field, values) in [
+            (
+                deleg::WORD_ADDR,
+                rows.clone().map(|r| w.addr[r]).collect::<Vec<u32>>(),
+            ),
+            (
+                deleg::WORD_READ_VALUE,
+                rows.clone().map(|r| w.read_value[r]).collect(),
+            ),
+            (
+                deleg::WORD_WRITE_VALUE,
+                rows.clone().map(|r| w.write_value[r]).collect(),
+            ),
+        ] {
+            out.push((deleg::word(j, field), u32_column(values, h)));
+        }
+        let read_ts: Vec<Fr> = rows.clone().map(|r| Fr::from_u64(w.read_ts[r])).collect();
+        out.push((deleg::word(j, deleg::WORD_READ_TS), fr_column(read_ts, h)));
+    }
+    for j in 0..words {
+        for c in 0..2 {
+            let values: Vec<u32> = rows
+                .clone()
+                .map(|r| {
+                    let ts = memory::TS_STEP * frames.cycles()[r] + delegation::FRAME_DELTA;
+                    let gap = ts - frames.word(j).read_ts[r] - 1;
+                    ((gap >> (16 * (c as u32 + 1))) & 0xffff) as u32
+                })
+                .collect();
+            out.push((chunk(j, c), u32_column(values, h)));
+        }
+    }
+    let low: Vec<u32> = rows
+        .clone()
+        .map(|r| (frames.bases()[r] - guest_memory::RAM_ORIGIN) / 4)
+        .collect();
+    out.push((base[0], u32_column(low.clone(), h)));
+    out.push((
+        base[1],
+        u32_column(low.iter().map(|v| v >> 16).collect(), h),
+    ));
+    let room: Vec<u32> = rows
+        .clone()
+        .map(|r| ((1u64 << 31) - frame_bytes - frames.bases()[r] as u64) as u32)
+        .collect();
+    out.push((base[2], u32_column(room.clone(), h)));
+    out.push((
+        base[3],
+        u32_column(room.iter().map(|v| v >> 16).collect(), h),
+    ));
+    out
+}
+
+/// One `SHA256_COMP` row's intermediates: four rounds and four derived
+/// schedule words, as `u32` words whose bytes are the circuit's columns.
+///
+/// Every field is a stage of `emulator::sha256_call` over the frame's read
+/// values, written the way the circuit splits it — the big sigmas nested, the
+/// small sigmas through their shifts, `Ch` and `Maj` through the XORs their
+/// linear forms read. Recomputing them here is not re-deciding what the row
+/// says: the frame words come from the buffer, which the tracer filled from
+/// the log, and [`sha256_row`] refuses a row whose writes are not this.
+struct Sha256Row {
+    group: usize,
+    /// `A_{-3}..A_4`, so `a[j + 3]` is `A_j`.
+    a: [u32; 8],
+    /// `E_{-3}..E_4`.
+    e: [u32; 8],
+    /// The window, then the four words this call derives.
+    x: [u32; sh::BLOCK_WORDS + sh::ROUNDS_PER_CALL],
+    /// Per round: `[bs0_m1, bs0_y, bs0_m3, bs0_x, bs1_m6, bs1_y, bs1_m5,
+    /// bs1_x, ch_ef, ch_eg, maj_ab, maj_cab]`, then the two carries.
+    round: [[u32; 12]; sh::ROUNDS_PER_CALL],
+    carries: [[u32; 2]; sh::ROUNDS_PER_CALL],
+    /// Per derived word: `[ss0_m3, ss0_y, ss0_m7, ss0_shr, ss0_z, ss1_m2,
+    /// ss1_y, ss1_m1, ss1_shr, ss1_z]`, then its carry.
+    sched: [[u32; 10]; sh::ROUNDS_PER_CALL],
+    carry_w: [u32; sh::ROUNDS_PER_CALL],
+}
+
+/// Each byte of a `u32` XORed with the low mask `2^s − 1`, which is what one
+/// `XOR8` obligation against that literal gives the circuit.
+fn sha256_byte_mask(s: u32) -> u32 {
+    let byte = (1u32 << s) - 1;
+    u32::from_le_bytes([byte as u8; 4])
+}
+
+fn sha256_row(frames: &FrameSlice, r: usize) -> Result<Sha256Row, String> {
+    let read = |j: usize| frames.word(j).read_value[r];
+    let group = read(sh::GROUP_WORD) as usize;
+    if group >= sh::GROUPS {
+        return Err(format!(
+            "sha256 fill: invocation {r} claims round group {group}, and a group is below {}",
+            sh::GROUPS
+        ));
+    }
+    // `A_0..A_{-3}` are `a..d` and `E_0..E_{-3}` are `e..h`.
+    let mut a = [0u32; 8];
+    let mut e = [0u32; 8];
+    for j in 0..4 {
+        a[3 - j] = read(sh::STATE_WORD + j);
+        e[3 - j] = read(sh::STATE_WORD + 4 + j);
+    }
+    let mut round = [[0u32; 12]; sh::ROUNDS_PER_CALL];
+    let mut carries = [[0u32; 2]; sh::ROUNDS_PER_CALL];
+    for k in 0..sh::ROUNDS_PER_CALL {
+        let (ak, bk, ck, dk) = (a[k + 3], a[k + 2], a[k + 1], a[k]);
+        let (ek, fk, gk, hk) = (e[k + 3], e[k + 2], e[k + 1], e[k]);
+        let bs0_y = ak ^ ak.rotate_right(9);
+        let bs0_x = ak ^ bs0_y.rotate_right(11);
+        let bs1_y = ek ^ ek.rotate_right(14);
+        let bs1_x = ek ^ bs1_y.rotate_right(5);
+        let sigma0 = bs0_x.rotate_right(2);
+        let sigma1 = bs1_x.rotate_right(6);
+        let ch = (ek & fk) ^ (!ek & gk);
+        let maj = (ak & bk) ^ (ak & ck) ^ (bk & ck);
+        let t1 = hk as u64
+            + sigma1 as u64
+            + ch as u64
+            + sh::ROUND_CONSTANTS[sh::ROUNDS_PER_CALL * group + k] as u64
+            + read(sh::WINDOW_WORD + k) as u64;
+        let t2 = sigma0 as u64 + maj as u64;
+        a[k + 4] = (t1 + t2) as u32;
+        e[k + 4] = (dk as u64 + t1) as u32;
+        carries[k] = [((t1 + t2) >> 32) as u32, ((dk as u64 + t1) >> 32) as u32];
+        round[k] = [
+            ak ^ sha256_byte_mask(1),
+            bs0_y,
+            bs0_y ^ sha256_byte_mask(3),
+            bs0_x,
+            ek ^ sha256_byte_mask(6),
+            bs1_y,
+            bs1_y ^ sha256_byte_mask(5),
+            bs1_x,
+            ek ^ fk,
+            ek ^ gk,
+            ak ^ bk,
+            ck ^ ak ^ bk,
+        ];
+    }
+
+    let mut x = [0u32; sh::BLOCK_WORDS + sh::ROUNDS_PER_CALL];
+    for (i, slot) in x.iter_mut().take(sh::BLOCK_WORDS).enumerate() {
+        *slot = read(sh::WINDOW_WORD + i);
+    }
+    let mut sched = [[0u32; 10]; sh::ROUNDS_PER_CALL];
+    let mut carry_w = [0u32; sh::ROUNDS_PER_CALL];
+    for m in 0..sh::ROUNDS_PER_CALL {
+        let t = sh::BLOCK_WORDS + m;
+        let (p, q) = (x[t - 15], x[t - 2]);
+        let ss0_y = p ^ p.rotate_right(11);
+        let ss0_z = ss0_y.rotate_right(7) ^ (p >> 3);
+        let ss1_y = q ^ q.rotate_right(2);
+        let ss1_z = ss1_y.rotate_right(17) ^ (q >> 10);
+        let total = ss1_z as u64 + x[t - 7] as u64 + ss0_z as u64 + x[t - 16] as u64;
+        x[t] = total as u32;
+        carry_w[m] = (total >> 32) as u32;
+        sched[m] = [
+            p ^ sha256_byte_mask(3),
+            ss0_y,
+            ss0_y ^ sha256_byte_mask(7),
+            p >> 3,
+            ss0_z,
+            q ^ sha256_byte_mask(2),
+            ss1_y,
+            ss1_y ^ sha256_byte_mask(1),
+            q >> 10,
+            ss1_z,
+        ];
+    }
+
+    // **The one comparison this fill is in a position to make**: what it
+    // computed against what the frame says the invocation wrote. A
+    // disagreement is a trace this circuit cannot prove, and naming the word
+    // here is better than a `LayerInconsistency` hours into a block.
+    let write = |j: usize| frames.word(j).write_value[r];
+    for j in 0..4 {
+        if write(sh::STATE_WORD + j) != a[7 - j] || write(sh::STATE_WORD + 4 + j) != e[7 - j] {
+            return Err(format!(
+                "sha256 fill: invocation {r}'s frame DISAGREES with rounds {}..{}: a working \
+                 variable it wrote is not what those rounds compute",
+                sh::ROUNDS_PER_CALL * group,
+                sh::ROUNDS_PER_CALL * (group + 1)
+            ));
+        }
+    }
+    for i in 0..sh::BLOCK_WORDS {
+        if write(sh::WINDOW_WORD + i) != x[i + sh::ROUNDS_PER_CALL] {
+            return Err(format!(
+                "sha256 fill: invocation {r}'s frame DISAGREES with its schedule: window \
+                 word {i} is not the shifted window"
+            ));
+        }
+    }
+    Ok(Sha256Row {
+        group,
+        a,
+        e,
+        x,
+        round,
+        carries,
+        sched,
+        carry_w,
+    })
+}
+
+/// A `SHA256_COMP` shard: the delegation frame over `RANGE16`, the 16 one-hot
+/// group selectors, the bytes of the twelve
+/// working variables and eight schedule words the call's XORs read, every
+/// round's and derived word's byte-wide stages, and the high halfwords of the
+/// four written words that carry a `RANGE16` pair.
+///
+/// Every column here is a byte, a chunk or a selector. There is no bit.
+fn sha256_comp(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use sh_circuit::{Round, Sched};
+    let (frames, h) = (src.invocations(family::SHA256_COMP)?, src.height);
+    let mut out = delegation_frame_range16(
+        frames,
+        h,
+        sh::FRAME_WORDS,
+        sh::FRAME_BYTES as u64,
+        sh_circuit::gap_chunk,
+        [
+            sh_circuit::base_low(),
+            sh_circuit::base_low_hi(),
+            sh_circuit::base_room(),
+            sh_circuit::base_room_hi(),
+        ],
+    );
+    let witness: Vec<Sha256Row> = (0..frames.len())
+        .map(|r| sha256_row(frames, r))
+        .collect::<Result<Vec<_>, String>>()?;
+
+    let byte = |v: u32, b: usize| (v >> (8 * b)) & 0xff;
+    let mut push = |address: PolyAddress, of: &dyn Fn(&Sha256Row) -> u32| {
+        let values: Vec<u32> = witness.iter().map(of).collect();
+        out.push((address, u32_column(values, h)));
+    };
+
+    for g in 0..sh::GROUPS {
+        push(sh_circuit::group_sel(g), &|w| u32::from(w.group == g));
+    }
+    for j in -2..=3isize {
+        for b in 0..4 {
+            push(sh_circuit::a_byte(j, b), &|w| {
+                byte(w.a[(j + 3) as usize], b)
+            });
+            push(sh_circuit::e_byte(j, b), &|w| {
+                byte(w.e[(j + 3) as usize], b)
+            });
+        }
+    }
+    for i in [1usize, 2, 3, 4, 14, 15] {
+        for b in 0..4 {
+            push(sh_circuit::w_byte(i, b), &|w| byte(w.x[i], b));
+        }
+    }
+    for m in 0..2 {
+        for b in 0..4 {
+            push(sh_circuit::n_byte(m, b), &|w| {
+                byte(w.x[sh::BLOCK_WORDS + m], b)
+            });
+        }
+    }
+    let round_blocks = [
+        Round::Bs0M1,
+        Round::Bs0Y,
+        Round::Bs0M3,
+        Round::Bs0X,
+        Round::Bs1M6,
+        Round::Bs1Y,
+        Round::Bs1M5,
+        Round::Bs1X,
+        Round::ChEf,
+        Round::ChEg,
+        Round::MajAb,
+        Round::MajCab,
+    ];
+    for k in 0..sh::ROUNDS_PER_CALL {
+        for (slot, block) in round_blocks.iter().enumerate() {
+            for b in 0..4 {
+                push(sh_circuit::round_col(k, *block, b), &|w| {
+                    byte(w.round[k][slot], b)
+                });
+            }
+        }
+        // `x_0 ^ (2^s − 1)`, the one byte each word rotation splits.
+        push(sh_circuit::round_col(k, Round::Bs0Mx, 0), &|w| {
+            byte(w.round[k][3], 0) ^ 0x03
+        });
+        push(sh_circuit::round_col(k, Round::Bs1Mx, 0), &|w| {
+            byte(w.round[k][7], 0) ^ 0x3f
+        });
+        push(sh_circuit::round_col(k, Round::CarryA, 0), &|w| {
+            w.carries[k][0]
+        });
+        push(sh_circuit::round_col(k, Round::CarryE, 0), &|w| {
+            w.carries[k][1]
+        });
+    }
+    let sched_blocks = [
+        (Sched::Ss0M3, 4),
+        (Sched::Ss0Y, 4),
+        (Sched::Ss0M7, 4),
+        (Sched::Ss0Shr, 4),
+        (Sched::Ss0Z, 4),
+        (Sched::Ss1M2, 4),
+        (Sched::Ss1Y, 4),
+        (Sched::Ss1M1, 4),
+        (Sched::Ss1Shr, 3),
+        (Sched::Ss1Z, 3),
+    ];
+    for m in 0..sh::ROUNDS_PER_CALL {
+        for (slot, (block, width)) in sched_blocks.iter().enumerate() {
+            for b in 0..*width {
+                push(sh_circuit::sched_col(m, *block, b), &|w| {
+                    byte(w.sched[m][slot], b)
+                });
+            }
+        }
+        push(sh_circuit::sched_col(m, Sched::CarryW, 0), &|w| {
+            w.carry_w[m]
+        });
+    }
+    // The four written words that carry a `RANGE16` pair: `A_4`, `E_4` and the
+    // last two derived schedule words.
+    push(sh_circuit::written_hi(0), &|w| w.a[7] >> 16);
+    push(sh_circuit::written_hi(1), &|w| w.e[7] >> 16);
+    push(sh_circuit::written_hi(2), &|w| {
+        w.x[sh::BLOCK_WORDS + 2] >> 16
+    });
+    push(sh_circuit::written_hi(3), &|w| {
+        w.x[sh::BLOCK_WORDS + 3] >> 16
+    });
+    Ok(out)
 }
 
 /// A RAM window shard: `trace::build_init_teardown_columns` over its window,

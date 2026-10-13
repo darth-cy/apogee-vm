@@ -422,8 +422,9 @@ fn parameters_off_the_menu_and_unknown_versions_are_refused() {
 }
 
 /// The per-family field masks, pinned. `funct3` is bit 6 and no family keeps
-/// it; mul/div and the atomics have no immediate; the window families have no
-/// decoded table at all, so their tuple is empty and their mask 0.
+/// it; mul/div and the atomics have no immediate; the window and delegation
+/// families have no decoded table at all, so their tuple is empty and their
+/// mask 0.
 ///
 /// The list is every family, in canonical ascending order, and is held to
 /// `FAMILIES` by count *and* by order: a family appended to
@@ -431,7 +432,7 @@ fn parameters_off_the_menu_and_unknown_versions_are_refused() {
 /// silently.
 #[test]
 fn the_field_masks_are_frozen() {
-    let want: [(FamilyId, u8); 12] = [
+    let want: [(FamilyId, u8); 14] = [
         (family::ADD_SUB_LUI_AUIPC, 0b1011_1111),
         (family::JUMP_BRANCH_SLT, 0b1011_1111),
         (family::SHIFT_BITWISE, 0b1011_1111),
@@ -444,6 +445,8 @@ fn the_field_masks_are_frozen() {
         (family::PUBLIC_INPUT, 0),
         (family::PUBLIC_OUTPUT, 0),
         (family::ADVICE_WINDOWS, 0),
+        (family::KECCAK_F, 0),
+        (family::SHA256_COMP, 0),
     ];
     assert_eq!(want.map(|(f, _)| f), FAMILIES, "every family, in order");
     for (family, mask) in want {

@@ -23,7 +23,12 @@ use constants::{ecall, guest_memory};
 
 /// Every `constants::ecall` item, by the name the document uses.
 fn constants_table() -> BTreeMap<&'static str, u32> {
-    BTreeMap::from([("EXIT", ecall::EXIT), ("ENOSYS", ecall::ENOSYS)])
+    BTreeMap::from([
+        ("EXIT", ecall::EXIT),
+        ("PRECOMPILE_KECCAK_F", ecall::PRECOMPILE_KECCAK_F),
+        ("PRECOMPILE_SHA256_COMP", ecall::PRECOMPILE_SHA256_COMP),
+        ("ENOSYS", ecall::ENOSYS),
+    ])
 }
 
 #[test]

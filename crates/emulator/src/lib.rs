@@ -28,13 +28,13 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use constants::{ecall, guest_memory, memory};
+use constants::{delegation, ecall, family, guest_memory, keccak, memory, sha256};
 use isa::{decode, Instr};
 use loader::{ProgramImage, Slot};
 use program::{row_kind, DecodedTables, FamilyId, VmConfig};
 use trace::{
-    AddressSpace, CycleProfile, FamilyTrace, FamilyTraces, IoStreams, MemoryEvent, MemoryEventLog,
-    MemoryState, Query, Role, Row, ROLES,
+    AddressSpace, CycleProfile, DelegationTrace, FamilyTrace, FamilyTraces, IoStreams, MemoryEvent,
+    MemoryEventLog, MemoryState, Query, Role, Row, ROLES,
 };
 
 /// What a guest is given to read. **Two fields, because there are two things,
@@ -89,7 +89,8 @@ pub enum EmuError {
     /// its width.
     Misaligned { pc: u32, addr: u32, width: u32 },
     /// A data access outside the addressable regions — RAM, the two public
-    /// windows, and the advice words the host supplied.
+    /// windows, and the advice words the host supplied — or a delegation frame
+    /// not wholly in RAM.
     OutOfBounds { pc: u32, addr: u32 },
     /// Cycle `cycle`'s timestamps would pass the 38-bit clock.
     ClockOverflow { cycle: u64 },
@@ -110,6 +111,14 @@ pub enum EmuError {
     /// `guest_sdk::commit` refuses to overflow the window rather than reach
     /// here.
     JournalTooLong { len: u32 },
+    /// A delegation ecall whose family the `VmConfig` does not hold: the
+    /// program calls a delegation its image does not declare, so no trace
+    /// can describe it. Only the tracing path raises it.
+    DelegationFamilyAbsent { pc: u32, number: u32 },
+    /// A delegation frame its family cannot answer: a `KECCAK_F` round word
+    /// or a `SHA256_COMP` group word out of range, which the circuit has no
+    /// selector for.
+    DelegationFrame { pc: u32, detail: &'static str },
 }
 
 impl fmt::Display for EmuError {
@@ -145,6 +154,15 @@ impl fmt::Display for EmuError {
                 f,
                 "cycle {cycle} would pass the {}-bit timestamp clock",
                 memory::TS_BITS
+            ),
+            EmuError::DelegationFamilyAbsent { pc, number } => write!(
+                f,
+                "the delegation ecall {number:#x} at pc {pc:#010x} has no family in this \
+                 VmConfig: the image does not declare it"
+            ),
+            EmuError::DelegationFrame { pc, detail } => write!(
+                f,
+                "the delegation frame at pc {pc:#010x} is not a call its family answers: {detail}"
             ),
         }
     }
@@ -283,6 +301,15 @@ impl<'a> StreamingRun<'a> {
                     .all(|(t, (f, h))| t.family == *f && t.height == *h),
             "StreamingRun: the decoded tables and the VmConfig describe different VMs"
         );
+        // UNFINISHED: a delegation family's invocations are not cut into
+        // streamed shards; only `trace_run`'s whole-run path carries them.
+        assert!(
+            config
+                .families
+                .iter()
+                .all(|(f, _)| program::delegation_frame_words(*f).is_none()),
+            "StreamingRun: a delegation family is not streamed yet"
+        );
         check_io(io)?;
         let mut machine = Machine::new(image, io);
         machine.recorder = Some(Recorder::new(
@@ -378,13 +405,24 @@ enum Fetch {
 
 /// One cycle's queries before they are committed, by role:
 /// `(address, value read, value written)`.
+///
+/// `delegation` is the invocation a delegation ecall made, if any. It is the
+/// delegation family's row, not this cycle's.
 struct Cycle {
     queries: [Option<(u32, u32, u32)>; 8],
+    delegation: Option<Invocation>,
 }
+
+/// One delegation invocation: the family, the frame base, and one
+/// `(address, old, new)` per frame word, in frame order.
+type Invocation = (FamilyId, u32, Vec<(u32, u32, u32)>);
 
 impl Cycle {
     fn new() -> Cycle {
-        Cycle { queries: [None; 8] }
+        Cycle {
+            queries: [None; 8],
+            delegation: None,
+        }
     }
 
     fn stage(&mut self, role: Role, addr: u32, read: u32, write: u32) {
@@ -893,6 +931,20 @@ impl<'a> Machine<'a> {
                 self.exit = Some(status as i32);
                 status
             }
+            // A delegation call: `a0` is the frame base, and the frame is
+            // answered in place by an invocation riding this cycle
+            // (`constants::delegation`). `a0` is 0 after it.
+            n if program::delegation_family(n).is_some() => {
+                let family = program::delegation_family(n).expect("just matched");
+                let base = self.read(&mut row, Role::Rs2, 10);
+                if let Some(recorder) = &self.recorder {
+                    if recorder.traces.delegation(family).is_none() {
+                        return Err(EmuError::DelegationFamilyAbsent { pc, number: n });
+                    }
+                }
+                row.delegation = Some((family, base, self.delegate(family, pc, base)?));
+                0
+            }
             // Every other number is unassigned or retired: answered, and the
             // row refused at proving (`docs/spec/ecall-abi.md` §4).
             _ => ecall::ENOSYS.wrapping_neg(),
@@ -905,6 +957,178 @@ impl<'a> Machine<'a> {
         };
         self.commit(&row, instr, pc, next_pc)
     }
+
+    /// Execute delegation `family` over the frame at `base`, in place,
+    /// returning each frame word as `(address, old, new)`.
+    ///
+    /// The frame must be word-aligned and wholly in RAM, the circuit's two
+    /// frame checks; both are fatal guest errors, as a misaligned load is.
+    /// The one dispatch: a family with no arm here is a
+    /// `constants::delegation::TYPES` row nobody implemented.
+    fn delegate(
+        &mut self,
+        family: FamilyId,
+        pc: u32,
+        base: u32,
+    ) -> Result<Vec<(u32, u32, u32)>, EmuError> {
+        let words = program::delegation_frame_words(family).expect("a delegation family");
+        if !base.is_multiple_of(4) {
+            return Err(EmuError::Misaligned {
+                pc,
+                addr: base,
+                width: 4,
+            });
+        }
+        // In `u64`, because `base + frame bytes` wraps a `u32` at the top.
+        let end = guest_memory::RAM_ORIGIN as u64 + guest_memory::RAM_LENGTH as u64;
+        if base < guest_memory::RAM_ORIGIN || base as u64 + 4 * words as u64 > end {
+            return Err(EmuError::OutOfBounds { pc, addr: base });
+        }
+        let old: Vec<u32> = (0..words).map(|j| self.word(base + 4 * j as u32)).collect();
+        let new = match family {
+            family::KECCAK_F => keccak_frame(pc, &old)?,
+            family::SHA256_COMP => sha256_frame(pc, &old)?,
+            other => panic!("emulator: delegation family {other} has no implementation"),
+        };
+        Ok((0..words)
+            .map(|j| {
+                let addr = base + 4 * j as u32;
+                self.set_word(addr, new[j]);
+                (addr, old[j], new[j])
+            })
+            .collect())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The delegations
+// ---------------------------------------------------------------------------
+
+/// One `KECCAK_F` invocation: the round frame word 0 names, applied to the
+/// state in the words after it, written back in place. A round at or above 24
+/// has no selector in the circuit, so it is refused; the round word is written
+/// back unchanged, the guest's own loop advancing it.
+fn keccak_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
+    let round = old[keccak::ROUND_WORD];
+    if round as usize >= keccak::ROUNDS {
+        return Err(EmuError::DelegationFrame {
+            pc,
+            detail: "the round word is not a keccak-f round",
+        });
+    }
+    let state: [u32; keccak::STATE_WORDS] = core::array::from_fn(|j| old[keccak::STATE_WORD + j]);
+    let mut lanes = lanes_of(&state);
+    keccak_round(&mut lanes, round as usize);
+    let mut new = Vec::with_capacity(keccak::FRAME_WORDS);
+    new.push(round);
+    new.extend((0..keccak::STATE_WORDS).map(|j| (lanes[j / 2] >> (32 * (j % 2))) as u32));
+    Ok(new)
+}
+
+/// The 50 state words as 25 lanes: state word `2i` is lane `i`'s low half.
+pub fn lanes_of(words: &[u32; keccak::STATE_WORDS]) -> [u64; keccak::LANES] {
+    core::array::from_fn(|i| words[2 * i] as u64 | (words[2 * i + 1] as u64) << 32)
+}
+
+/// **One round** of keccak-f[1600] over 25 little-endian lanes, lane `x + 5y`
+/// at index `x + 5y`: what one `KECCAK_F` invocation performs, and so the
+/// function the circuit and the fill are held to.
+fn keccak_round(lanes: &mut [u64; keccak::LANES], round: usize) {
+    // theta
+    let mut c = [0u64; 5];
+    for (x, c) in c.iter_mut().enumerate() {
+        *c = lanes[x] ^ lanes[x + 5] ^ lanes[x + 10] ^ lanes[x + 15] ^ lanes[x + 20];
+    }
+    for x in 0..5 {
+        let d = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
+        for y in 0..5 {
+            lanes[x + 5 * y] ^= d;
+        }
+    }
+    // rho and pi
+    let mut b = [0u64; keccak::LANES];
+    for x in 0..5 {
+        for y in 0..5 {
+            b[y + 5 * ((2 * x + 3 * y) % 5)] =
+                lanes[x + 5 * y].rotate_left(keccak::ROTATIONS[y][x]);
+        }
+    }
+    // chi
+    for x in 0..5 {
+        for y in 0..5 {
+            lanes[x + 5 * y] = b[x + 5 * y] ^ (!b[(x + 1) % 5 + 5 * y] & b[(x + 2) % 5 + 5 * y]);
+        }
+    }
+    // iota
+    lanes[0] ^= keccak::ROUND_CONSTANTS[round];
+}
+
+/// One `SHA256_COMP` invocation over its frame, in place: the four rounds of
+/// the group frame word 0 names. A group at or above 16 has no selector in the
+/// circuit, so it is refused; the group word is written back unchanged.
+fn sha256_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
+    let group = old[sha256::GROUP_WORD];
+    if group as usize >= sha256::GROUPS {
+        return Err(EmuError::DelegationFrame {
+            pc,
+            detail: "the group word is not a SHA-256 round group",
+        });
+    }
+    let mut state: [u32; sha256::STATE_WORDS] =
+        core::array::from_fn(|j| old[sha256::STATE_WORD + j]);
+    let mut window: [u32; sha256::BLOCK_WORDS] =
+        core::array::from_fn(|i| old[sha256::WINDOW_WORD + i]);
+    sha256_call(group as usize, &mut state, &mut window);
+    let mut new = Vec::with_capacity(sha256::FRAME_WORDS);
+    new.push(group);
+    new.extend_from_slice(&state);
+    new.extend_from_slice(&window);
+    Ok(new)
+}
+
+/// What one `SHA256_COMP` invocation does: rounds `4·group..4·group + 4` of
+/// FIPS 180-4's compression over the working variables, with the window's
+/// first four words as their schedule words, then the window shifted by four
+/// with the four schedule words it unlocks appended.
+fn sha256_call(
+    group: usize,
+    state: &mut [u32; sha256::STATE_WORDS],
+    window: &mut [u32; sha256::BLOCK_WORDS],
+) {
+    let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = *state;
+    for (k, w) in window.iter().take(sha256::ROUNDS_PER_CALL).enumerate() {
+        let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+        let ch = (e & f) ^ (!e & g);
+        let t1 = h
+            .wrapping_add(s1)
+            .wrapping_add(ch)
+            .wrapping_add(sha256::ROUND_CONSTANTS[sha256::ROUNDS_PER_CALL * group + k])
+            .wrapping_add(*w);
+        let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+        let maj = (a & b) ^ (a & c) ^ (b & c);
+        let t2 = s0.wrapping_add(maj);
+        h = g;
+        g = f;
+        f = e;
+        e = d.wrapping_add(t1);
+        d = c;
+        c = b;
+        b = a;
+        a = t1.wrapping_add(t2);
+    }
+    *state = [a, b, c, d, e, f, g, h];
+    let mut x = [0u32; sha256::BLOCK_WORDS + sha256::ROUNDS_PER_CALL];
+    x[..sha256::BLOCK_WORDS].copy_from_slice(window);
+    for m in 0..sha256::ROUNDS_PER_CALL {
+        let t = sha256::BLOCK_WORDS + m;
+        let s0 = x[t - 15].rotate_right(7) ^ x[t - 15].rotate_right(18) ^ (x[t - 15] >> 3);
+        let s1 = x[t - 2].rotate_right(17) ^ x[t - 2].rotate_right(19) ^ (x[t - 2] >> 10);
+        x[t] = x[t - 16]
+            .wrapping_add(s0)
+            .wrapping_add(x[t - 7])
+            .wrapping_add(s1);
+    }
+    window.copy_from_slice(&x[sha256::ROUNDS_PER_CALL..]);
 }
 
 // ---------------------------------------------------------------------------
@@ -963,7 +1187,16 @@ impl<'a> Recorder<'a> {
             families: config
                 .families
                 .iter()
+                .filter(|(family, _)| program::delegation_frame_words(*family).is_none())
                 .map(|(family, height)| FamilyTrace::new(*family, *height))
+                .collect(),
+            delegations: config
+                .families
+                .iter()
+                .filter_map(|(family, height)| {
+                    program::delegation_frame_words(*family)
+                        .map(|width| DelegationTrace::new(*family, *height, width))
+                })
                 .collect(),
         };
         Recorder {
@@ -980,6 +1213,34 @@ impl<'a> Recorder<'a> {
     fn record(&mut self, cycle: u64, pc: u32, next_pc: u32, instr: Instr, queries: &Cycle) {
         let base = memory::TS_STEP * cycle;
         self.memory.record(AddressSpace::Pc, 0, base, pc, next_pc);
+        // An invocation's frame accesses ride this cycle at
+        // `delegation::FRAME_DELTA`, 0: after the pc query, before the roles.
+        if let Some((family, frame_base, frame)) = &queries.delegation {
+            let words: Vec<Query> = frame
+                .iter()
+                .map(|&(addr, read, write)| {
+                    let event = self.memory.record(
+                        AddressSpace::Ram,
+                        addr,
+                        base + delegation::FRAME_DELTA,
+                        read,
+                        write,
+                    );
+                    Query {
+                        addr,
+                        read_ts: event.read_ts,
+                        read_value: read,
+                        write_value: write,
+                    }
+                })
+                .collect();
+            self.traces
+                .delegations
+                .iter_mut()
+                .find(|t| t.family == *family)
+                .expect("the ecall checked the family is in the config")
+                .push(cycle, *frame_base, &words);
+        }
         let mut row = Row {
             cycle,
             pc,
@@ -1067,6 +1328,12 @@ impl<'a> Recorder<'a> {
             .iter()
             .zip(&self.family_rows)
             .map(|(t, n)| (t.family, *n))
+            .chain(
+                self.traces
+                    .delegations
+                    .iter()
+                    .map(|t| (t.family, t.len() as u64)),
+            )
             .collect();
         counts.sort_by_key(|(f, _)| *f);
         CycleProfile { counts }

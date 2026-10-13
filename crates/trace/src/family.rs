@@ -148,6 +148,69 @@ impl<'a> RowSlice<'a> {
     }
 }
 
+/// One shard's invocations of one delegation family: a borrowed window into a
+/// [`DelegationTrace`], the cut [`RowSlice`] takes over a [`FamilyTrace`].
+#[derive(Clone, Copy, Debug)]
+pub struct FrameSlice<'a> {
+    trace: &'a DelegationTrace,
+    start: usize,
+    len: usize,
+}
+
+impl<'a> FrameSlice<'a> {
+    /// Shard `index`'s invocations of `trace` at `height`.
+    pub fn shard(trace: &'a DelegationTrace, index: u32, height: usize) -> FrameSlice<'a> {
+        let start = (index as usize * height).min(trace.len());
+        let len = (start + height).min(trace.len()) - start;
+        FrameSlice { trace, start, len }
+    }
+
+    /// How many invocations this shard holds; at most the height.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The family whose invocations these are.
+    pub fn family(&self) -> FamilyId {
+        self.trace.family
+    }
+
+    /// The requesting cycle of each invocation.
+    pub fn cycles(&self) -> &'a [u64] {
+        &self.trace.cycle[self.start..self.start + self.len]
+    }
+
+    /// The frame base pointer of each invocation.
+    pub fn bases(&self) -> &'a [u32] {
+        &self.trace.base[self.start..self.start + self.len]
+    }
+
+    /// Frame word `j`'s four columns over this shard's invocations.
+    pub fn word(&self, j: usize) -> WordSlice<'a> {
+        let c = &self.trace.words[j];
+        let (a, b) = (self.start, self.start + self.len);
+        WordSlice {
+            addr: &c.addr[a..b],
+            read_ts: &c.read_ts[a..b],
+            read_value: &c.read_value[a..b],
+            write_value: &c.write_value[a..b],
+        }
+    }
+}
+
+/// One frame word's four columns over one shard's invocations.
+#[derive(Clone, Copy, Debug)]
+pub struct WordSlice<'a> {
+    pub addr: &'a [u32],
+    pub read_ts: &'a [u64],
+    pub read_value: &'a [u32],
+    pub write_value: &'a [u32],
+}
+
 /// One role's four columns.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct QueryColumns {
@@ -233,18 +296,88 @@ impl FamilyTrace {
     }
 }
 
+/// One **delegation** family's rows: one per invocation, column-major.
+///
+/// An invocation is not a cycle: it rides the cycle whose ecall requested it,
+/// and its memory queries are the frame's fixed-offset words, `words[j]` at
+/// `base + 4j`, each written at `4·cycle + constants::delegation::FRAME_DELTA`.
+/// A frame does not fit [`Row`]'s query slots, so it lives here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DelegationTrace {
+    pub family: FamilyId,
+    /// The family's `VmConfig` height.
+    pub height: u32,
+    /// The requesting cycle, one per invocation.
+    pub cycle: Vec<u64>,
+    /// The frame base pointer, one per invocation.
+    pub base: Vec<u32>,
+    /// The frame's word queries, in frame order.
+    pub words: Vec<QueryColumns>,
+}
+
+impl DelegationTrace {
+    /// An empty buffer for `family` at `height`, with `width` frame words.
+    pub fn new(family: FamilyId, height: u32, width: usize) -> DelegationTrace {
+        DelegationTrace {
+            family,
+            height,
+            cycle: Vec::new(),
+            base: Vec::new(),
+            words: vec![QueryColumns::default(); width],
+        }
+    }
+
+    /// How many invocations the family made.
+    pub fn len(&self) -> usize {
+        self.cycle.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cycle.is_empty()
+    }
+
+    /// Append one invocation: one query per frame word, in frame order.
+    pub fn push(&mut self, cycle: u64, base: u32, words: &[Query]) {
+        assert_eq!(
+            words.len(),
+            self.words.len(),
+            "delegation buffer: an invocation of {} words in a {}-word frame",
+            words.len(),
+            self.words.len()
+        );
+        self.cycle.push(cycle);
+        self.base.push(base);
+        for (columns, q) in self.words.iter_mut().zip(words) {
+            columns.addr.push(q.addr);
+            columns.read_ts.push(q.read_ts);
+            columns.read_value.push(q.read_value);
+            columns.write_value.push(q.write_value);
+        }
+    }
+}
+
 /// Every family's buffer, one per family of the `VmConfig`, in its order —
 /// including those this execution never reached, which are empty. Ascending by
 /// family id.
+///
+/// A delegation family's buffer is a [`DelegationTrace`] in `delegations`;
+/// every other family's is a [`FamilyTrace`] in `families`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FamilyTraces {
     pub families: Vec<FamilyTrace>,
+    pub delegations: Vec<DelegationTrace>,
 }
 
 impl FamilyTraces {
-    /// The buffer of `family`, or `None` if the config has no such family.
+    /// The buffer of `family`, or `None` if the config has no such family or
+    /// it is a delegation family.
     pub fn family(&self, family: FamilyId) -> Option<&FamilyTrace> {
         self.families.iter().find(|t| t.family == family)
+    }
+
+    /// The delegation buffer of `family`, or `None`.
+    pub fn delegation(&self, family: FamilyId) -> Option<&DelegationTrace> {
+        self.delegations.iter().find(|t| t.family == family)
     }
 
     /// Every buffer's row count, ascending by family id: the shape a
@@ -254,6 +387,7 @@ impl FamilyTraces {
             .families
             .iter()
             .map(|t| (t.family, t.len() as u64))
+            .chain(self.delegations.iter().map(|t| (t.family, t.len() as u64)))
             .collect();
         out.sort_by_key(|(f, _)| *f);
         out

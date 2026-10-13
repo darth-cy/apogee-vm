@@ -479,13 +479,19 @@ pub mod lookup_channel {
     /// `lookup_tuple(family)` columns in their fixed order.
     pub const DECODER: u32 = 3;
 
+    /// Table. The byte table `(a, b, a ^ b)`, all 65,536 triples. The one
+    /// table channel whose table is **virtual**: its three columns are closed
+    /// forms of the row index, so it costs no setup column. The delegation
+    /// circuits, `KECCAK_F` and `SHA256_COMP`, are its only readers.
+    pub const XOR8: u32 = 4;
+
     /// How many channels this table defines.
-    pub const COUNT: u32 = 4;
+    pub const COUNT: u32 = 5;
 
     /// Whether channel `i` is a range channel, indexed by channel. A range
     /// channel's table is the closed form of `docs/spec/lookup.md` §3; a table
-    /// channel's is setup columns.
-    pub const IS_RANGE: [bool; COUNT as usize] = [true, true, false, false];
+    /// channel's is setup columns, or for [`XOR8`] a closed form of its own.
+    pub const IS_RANGE: [bool; COUNT as usize] = [true, true, false, false, false];
 
     /// A range channel's bound, as a bit width, indexed by channel; 0 where
     /// [`IS_RANGE`] is false, which is not a bound of `[0, 1)` but the absence
@@ -494,10 +500,11 @@ pub mod lookup_channel {
     /// This is a **bound**, not a table size: what decides the fewest
     /// variables a circuit declaring a channel may be built at is
     /// `constraints::lookup::table_vars`, which reads this for a range channel.
-    pub const BITS: [u32; COUNT as usize] = [19, 16, 0, 0];
+    pub const BITS: [u32; COUNT as usize] = [19, 16, 0, 0, 0];
 
     /// Every channel's display name, indexed by channel.
-    pub const NAMES: [&str; COUNT as usize] = ["timestamp", "range16", "generic", "decoder"];
+    pub const NAMES: [&str; COUNT as usize] =
+        ["timestamp", "range16", "generic", "decoder", "xor8"];
 
     /// The widest lookup tuple any channel carries: `beta` powers exist for
     /// positions `0 .. MAX_TUPLE`, and `challenge_slot::LOOKUP_BETA_POWERS`
@@ -555,8 +562,9 @@ pub mod generic_table {
 /// A family is one arithmetization shape covering a set of program counters.
 /// The number is what everything else cites: canonical ordering is ascending
 /// `FamilyId`, the program-identity digest absorbs families in that order, and
-/// shard transcripts are seeded with it. Ids 0–6 are the execution families and
-/// 7–11 the window families (`docs/spec/circuits.md` §1).
+/// shard transcripts are seeded with it. Ids 0–6 are the execution families,
+/// 7–11 the window families and 12–13 the delegation families
+/// (`docs/spec/circuits.md` §1).
 ///
 /// Which mnemonic each instruction family claims is `crates/program`'s
 /// `row_kind`, and `docs/spec/program.md` §4 is the table.
@@ -612,9 +620,17 @@ pub mod family {
     /// prover chose; a guest owes a check of it against something public
     /// (`docs/spec/public-values.md` §6).
     pub const ADVICE_WINDOWS: u32 = 11;
+    /// The keccak-f[1600] **delegation** family: one round an invocation.
+    /// Claims no pc and owns no cycle; in a `VmConfig` only when the image
+    /// declares it ([`crate::delegation`]).
+    pub const KECCAK_F: u32 = 12;
+    /// The SHA-256 compression **delegation** family: four rounds an
+    /// invocation. Claims no pc and owns no cycle; in a `VmConfig` only when
+    /// the image declares it ([`crate::delegation`]).
+    pub const SHA256_COMP: u32 = 13;
 
     /// How many families this table defines.
-    pub const COUNT: u32 = 12;
+    pub const COUNT: u32 = 14;
 
     /// The pinned height of [`PUBLIC_INPUT`] and [`PUBLIC_OUTPUT`].
     ///
@@ -668,6 +684,8 @@ pub mod family {
         false, // PUBLIC_INPUT
         false, // PUBLIC_OUTPUT
         false, // ADVICE_WINDOWS
+        false, // KECCAK_F: its rows are invocations
+        false, // SHA256_COMP: likewise
     ];
 
     /// The trace-height menu, ascending: the heights the registries build
@@ -709,6 +727,8 @@ pub mod family {
         1 << 12, // PUBLIC_INPUT, and it is the only admissible one
         1 << 12, // PUBLIC_OUTPUT, likewise
         1 << 22, // ADVICE_WINDOWS, at the window height
+        1 << 18, // KECCAK_F: above its floor of 2^16, RANGE16's and XOR8's
+        1 << 18, // SHA256_COMP: likewise
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -930,20 +950,30 @@ pub mod guest_memory {
 /// streams and no I/O syscall at all. Its public input, its advice and its
 /// journal are *memory the proof system binds* — ordinary loads and stores
 /// against three fixed regions (`docs/spec/public-values.md`) — so the only
-/// ecall a guest issues is [`EXIT`], which is exactly the provable one.
-/// `docs/spec/ecall-abi.md` specifies the table.
+/// ecalls a guest issues are [`EXIT`] and the delegation calls, which are
+/// exactly the provable ones. `docs/spec/ecall-abi.md` specifies the table.
 pub mod ecall {
     /// Terminate. `a0` is the exit status; a nonzero status is a failed
     /// execution, which is still an execution and is reported rather than
     /// refused.
     ///
-    /// The only ecall a guest may issue. Its number is 93, and nothing
-    /// downstream reads any meaning into the value.
+    /// The only ecall a guest may issue besides the delegation calls. Its
+    /// number is 93, and nothing downstream reads any meaning into the value.
     pub const EXIT: u32 = 93;
 
-    /// Linux `ENOSYS`. Every number but [`EXIT`] returns `-ENOSYS` in `a0`:
-    /// a number nobody has assigned, or a retired one
-    /// (`docs/spec/ecall-abi.md` §4). Such a call executes and cannot be
+    /// **One round** of keccak-f[1600], a delegation call: `a0` is the base of
+    /// a `keccak::FRAME_WORDS`-word frame, read and written in place, and `a0`
+    /// is 0 after it. A permutation is 24 calls on one frame.
+    pub const PRECOMPILE_KECCAK_F: u32 = 0x0507;
+
+    /// **Four rounds** of SHA-256's compression, a delegation call: `a0` is
+    /// the base of a `sha256::FRAME_WORDS`-word frame, read and written in
+    /// place, and `a0` is 0 after it. A compression is 16 calls on one frame.
+    pub const PRECOMPILE_SHA256_COMP: u32 = 0x0508;
+
+    /// Linux `ENOSYS`. Every number but [`EXIT`] and the delegation calls
+    /// returns `-ENOSYS` in `a0`: a number nobody has assigned, or a retired
+    /// one (`docs/spec/ecall-abi.md` §4). Such a call executes and cannot be
     /// proved.
     pub const ENOSYS: u32 = 38;
 }
@@ -964,6 +994,12 @@ pub mod address_space {
     /// The program counter: one address, `0`. Every cycle reads `pc` and
     /// writes `next_pc` here.
     pub const PC: u8 = 3;
+    /// `family::KECCAK_F`'s **anchor** space: not memory, but the space whose
+    /// tuple pairs an invocation with the ecall that requested it
+    /// ([`crate::delegation::ANCHOR_DELTA`]). Each delegation has its own.
+    pub const DELEGATION_KECCAK_F: u8 = 4;
+    /// `family::SHA256_COMP`'s anchor space.
+    pub const DELEGATION_SHA256_COMP: u8 = 5;
 }
 
 /// The memory argument's clock and its own numbers.
@@ -1009,4 +1045,251 @@ pub mod memory {
     /// `4 << RAM_LIVE_BIT`, and `ram_live` masks them. `docs/spec/memory.md`
     /// §3.1 and §3.3.
     pub const RAM_LIVE_BIT: u32 = 14;
+}
+
+/// The delegation ABI: an ecall that hands a fixed-width frame of RAM words to
+/// a circuit other than the CPU's.
+///
+/// The ecall is one cycle of the requesting family, `a0` the frame's
+/// word-aligned base. The work is one **invocation**: a row of the delegation
+/// family, which reads and writes every frame word at the requesting cycle's
+/// timestamp plus [`FRAME_DELTA`]. A delegation family claims no pc, so a
+/// guest **declares** what it links: each SDK shim emits a record
+/// ([`MARKER_MAGIC`], then the ecall number) and `program` puts exactly the
+/// declared families in the `VmConfig`.
+///
+/// [`TYPES`] is the registry. A new delegation is a row here and one arm each
+/// in `constraints::family_circuit` (its circuit, over
+/// `constraints::delegation`'s frame), `emulator`'s `delegate` (the function),
+/// `prover`'s `family_fill` (its witness) and a `guest_sdk` shim (the record
+/// and the call).
+pub mod delegation {
+    /// The in-cycle slot of every frame access an invocation makes: 0.
+    /// `(RAM, 0)` is a pair no query of `constraints::memory`'s frame holds.
+    pub const FRAME_DELTA: u64 = 0;
+
+    /// The in-cycle slot at which an invocation's anchor tuple is read back,
+    /// the requesting row's slot 3: the invocation writes
+    /// `(space, base, 0, 0)`, the request is to consume it and write
+    /// `(space, base, 4·cycle + ANCHOR_DELTA, value)`, which the invocation
+    /// reads, pairing the two one to one.
+    ///
+    /// **UNFINISHED: the request side.** The add/sub circuit holds every ecall
+    /// row's `a7` to `EXIT` and has no delegation query, so its fill refuses a
+    /// delegation's ecall row and no row meets either anchor leaf: an
+    /// execution that delegates runs and traces, and is not provable.
+    pub const ANCHOR_DELTA: u64 = 3;
+
+    /// The eight bytes that open a declaration record.
+    pub const MARKER_MAGIC: [u8; 8] = *b"APOGDEL1";
+
+    /// A declaration record's length: [`MARKER_MAGIC`], then the declared
+    /// ecall number as a little-endian `u32`.
+    pub const MARKER_BYTES: usize = 12;
+
+    /// Every delegation as `(family, ecall number, anchor space, frame
+    /// words)`, ascending by family. A row is never reassigned.
+    pub const TYPES: [(u32, u32, u8, usize); 2] = [
+        (
+            super::family::KECCAK_F,
+            super::ecall::PRECOMPILE_KECCAK_F,
+            super::address_space::DELEGATION_KECCAK_F,
+            super::keccak::FRAME_WORDS,
+        ),
+        (
+            super::family::SHA256_COMP,
+            super::ecall::PRECOMPILE_SHA256_COMP,
+            super::address_space::DELEGATION_SHA256_COMP,
+            super::sha256::FRAME_WORDS,
+        ),
+    ];
+}
+
+/// keccak-f[1600]: the permutation's shape, the `KECCAK_F` frame and the two
+/// constant tables.
+pub mod keccak {
+    /// Lanes in the state: 5 by 5.
+    pub const LANES: usize = 25;
+    /// Bits in a lane.
+    pub const LANE_BITS: usize = 64;
+    /// 32-bit words the state takes in the frame: lane `i = x + 5y` is state
+    /// words `2i` and `2i + 1`, low half first.
+    pub const STATE_WORDS: usize = LANES * LANE_BITS / 32;
+    /// Rounds of the permutation.
+    pub const ROUNDS: usize = 24;
+
+    /// Frame word 0: the round this invocation performs, in `0..ROUNDS`. A
+    /// permutation is 24 invocations on one frame, the guest's own loop
+    /// supplying the round.
+    pub const ROUND_WORD: usize = 0;
+    /// The frame's first state word.
+    pub const STATE_WORD: usize = ROUND_WORD + 1;
+    /// The frame, in 32-bit words: the round, then the state.
+    pub const FRAME_WORDS: usize = STATE_WORD + STATE_WORDS;
+    /// The frame, in bytes.
+    pub const FRAME_BYTES: usize = 4 * FRAME_WORDS;
+
+    /// The byte positions of a lane that iota can change. Every round
+    /// constant sets bits `2^j - 1` alone, so iota is four byte XORs rather
+    /// than eight; [`IOTA_BYTES_ARE_THE_ONLY_ONES`] holds the table to it.
+    pub const IOTA_BYTES: [usize; 4] = [0, 1, 3, 7];
+
+    /// Every byte [`IOTA_BYTES`] omits is zero in every round constant,
+    /// checked at compile time because the circuit's shape rests on it.
+    pub const IOTA_BYTES_ARE_THE_ONLY_ONES: () = {
+        let mut mask = 0u64;
+        let mut i = 0;
+        while i < IOTA_BYTES.len() {
+            mask |= 0xffu64 << (8 * IOTA_BYTES[i]);
+            i += 1;
+        }
+        let mut r = 0;
+        while r < ROUNDS {
+            assert!(
+                ROUND_CONSTANTS[r] & !mask == 0,
+                "a round constant sets a bit outside IOTA_BYTES"
+            );
+            r += 1;
+        }
+    };
+
+    /// The rho rotation offsets, `ROTATIONS[y][x]` for lane `A[x][y]`, a
+    /// rotate-left on the 64-bit lane.
+    pub const ROTATIONS: [[u32; 5]; 5] = [
+        [0, 1, 62, 28, 27],
+        [36, 44, 6, 55, 20],
+        [3, 10, 43, 25, 39],
+        [41, 45, 15, 21, 8],
+        [18, 2, 61, 56, 14],
+    ];
+
+    /// The iota round constants, one per round.
+    pub const ROUND_CONSTANTS: [u64; ROUNDS] = [
+        0x0000_0000_0000_0001,
+        0x0000_0000_0000_8082,
+        0x8000_0000_0000_808a,
+        0x8000_0000_8000_8000,
+        0x0000_0000_0000_808b,
+        0x0000_0000_8000_0001,
+        0x8000_0000_8000_8081,
+        0x8000_0000_0000_8009,
+        0x0000_0000_0000_008a,
+        0x0000_0000_0000_0088,
+        0x0000_0000_8000_8009,
+        0x0000_0000_8000_000a,
+        0x0000_0000_8000_808b,
+        0x8000_0000_0000_008b,
+        0x8000_0000_0000_8089,
+        0x8000_0000_0000_8003,
+        0x8000_0000_0000_8002,
+        0x8000_0000_0000_0080,
+        0x0000_0000_0000_800a,
+        0x8000_0000_8000_000a,
+        0x8000_0000_8000_8081,
+        0x8000_0000_0000_8080,
+        0x0000_0000_8000_0001,
+        0x8000_0000_8000_8008,
+    ];
+}
+
+/// SHA-256's compression function (FIPS 180-4): the `SHA256_COMP` frame and
+/// the round constants.
+///
+/// **One invocation is four rounds**, and a compression is [`GROUPS`]
+/// invocations on one frame: invocation `r` runs rounds `4r..4r + 4` with the
+/// window's first four words as their schedule words, derives the next four
+/// schedule words, shifts the window by four and rewrites the working
+/// variables. Padding, the block loop and the final `H + V` stay in the guest.
+pub mod sha256 {
+    /// Words of chaining state, and of working variables `a..h`.
+    pub const STATE_WORDS: usize = 8;
+    /// Words of one block, big-endian decoded, and of the frame's window.
+    pub const BLOCK_WORDS: usize = 16;
+    /// Rounds of the compression function.
+    pub const ROUNDS: usize = 64;
+    /// Rounds one invocation runs.
+    pub const ROUNDS_PER_CALL: usize = 4;
+    /// Invocations a compression takes, and the values the group word holds.
+    pub const GROUPS: usize = ROUNDS / ROUNDS_PER_CALL;
+
+    /// Frame word 0: the round group `r` in `0..GROUPS`, written back
+    /// unchanged. The guest's loop advances it.
+    pub const GROUP_WORD: usize = 0;
+    /// Frame words 1..9: the working variables `a..h`.
+    pub const STATE_WORD: usize = 1;
+    /// Frame words 9..25: the schedule window `W_{4r}..W_{4r+15}`; the
+    /// block, for group 0.
+    pub const WINDOW_WORD: usize = STATE_WORD + STATE_WORDS;
+    /// The frame, in 32-bit words.
+    pub const FRAME_WORDS: usize = WINDOW_WORD + BLOCK_WORDS;
+    /// The frame, in bytes.
+    pub const FRAME_BYTES: usize = 4 * FRAME_WORDS;
+
+    /// The round constants `K[0..64]`.
+    pub const ROUND_CONSTANTS: [u32; ROUNDS] = [
+        0x428a_2f98,
+        0x7137_4491,
+        0xb5c0_fbcf,
+        0xe9b5_dba5,
+        0x3956_c25b,
+        0x59f1_11f1,
+        0x923f_82a4,
+        0xab1c_5ed5,
+        0xd807_aa98,
+        0x1283_5b01,
+        0x2431_85be,
+        0x550c_7dc3,
+        0x72be_5d74,
+        0x80de_b1fe,
+        0x9bdc_06a7,
+        0xc19b_f174,
+        0xe49b_69c1,
+        0xefbe_4786,
+        0x0fc1_9dc6,
+        0x240c_a1cc,
+        0x2de9_2c6f,
+        0x4a74_84aa,
+        0x5cb0_a9dc,
+        0x76f9_88da,
+        0x983e_5152,
+        0xa831_c66d,
+        0xb003_27c8,
+        0xbf59_7fc7,
+        0xc6e0_0bf3,
+        0xd5a7_9147,
+        0x06ca_6351,
+        0x1429_2967,
+        0x27b7_0a85,
+        0x2e1b_2138,
+        0x4d2c_6dfc,
+        0x5338_0d13,
+        0x650a_7354,
+        0x766a_0abb,
+        0x81c2_c92e,
+        0x9272_2c85,
+        0xa2bf_e8a1,
+        0xa81a_664b,
+        0xc24b_8b70,
+        0xc76c_51a3,
+        0xd192_e819,
+        0xd699_0624,
+        0xf40e_3585,
+        0x106a_a070,
+        0x19a4_c116,
+        0x1e37_6c08,
+        0x2748_774c,
+        0x34b0_bcb5,
+        0x391c_0cb3,
+        0x4ed8_aa4a,
+        0x5b9c_ca4f,
+        0x682e_6ff3,
+        0x748f_82ee,
+        0x78a5_636f,
+        0x84c8_7814,
+        0x8cc7_0208,
+        0x90be_fffa,
+        0xa450_6ceb,
+        0xbef9_a3f7,
+        0xc671_78f2,
+    ];
 }
