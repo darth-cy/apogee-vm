@@ -298,6 +298,8 @@ pub fn family_name(f: FamilyId) -> String {
         family::PUBLIC_INPUT => "PUBLIC_INPUT".to_string(),
         family::PUBLIC_OUTPUT => "PUBLIC_OUTPUT".to_string(),
         family::ADVICE_WINDOWS => "ADVICE_WINDOWS".to_string(),
+        family::KECCAK_F => "KECCAK_F".to_string(),
+        family::SHA256_COMP => "SHA256_COMP".to_string(),
         other => format!("family({other})"),
     }
 }
