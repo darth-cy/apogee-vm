@@ -775,12 +775,7 @@ mod tests {
 
     /// `guests/shards`, every family at `2^16`: 1,064,970 add/sub cycles.
     fn shards() -> Guest {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../loader/tests/vectors/shards.elf"
-        );
-        let elf = std::fs::read(path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
-        let image = load_elf(&elf).expect("shards loads");
+        let image = load_elf(&test_support::guest_elf("shards")).expect("shards loads");
         let params = ProgramParams {
             heights: [1 << 16; family::COUNT as usize],
             ..ProgramParams::defaults()

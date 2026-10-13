@@ -31,7 +31,7 @@ verifier-core.workspace = true
 
 [dev-dependencies]
 # `tests/memory.rs`' honest statement and `tests/multiset.rs`' tampers: a
-# committed guest ELF loaded, decoded, traced and filled into the memory
+# guest, built from source, loaded, decoded, traced and filled into the memory
 # columns, then forwarded, reconciled and proved.
 emulator.workspace = true
 loader.workspace = true

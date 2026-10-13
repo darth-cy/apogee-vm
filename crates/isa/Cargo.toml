@@ -9,9 +9,9 @@ publish.workspace = true
 # from the decoder.
 
 [dev-dependencies]
-# The llvm-objdump differential reads the loader's committed guest ELFs and
-# their llvm-objdump listings, and needs the loader's expansion of every
-# compressed instruction to decode it.
+# The llvm-objdump differential reads the guests, built from source, and their
+# llvm-objdump listings, and needs the loader's expansion of every compressed
+# instruction to decode it.
 loader.workspace = true
 test-support.workspace = true
 # The whole-space sweep: 2^30 words, split over the 32 major opcodes.

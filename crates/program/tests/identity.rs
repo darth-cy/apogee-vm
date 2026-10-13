@@ -17,20 +17,11 @@ use constants::{family, transcript_tags as tags};
 use field::Fr;
 use loader::{load_elf, ProgramImage, Slot};
 use program::{decode_program, program_identity, ProgramIdentity, ProgramParams};
-use test_support::to_hex;
 use transcript::Transcript;
 
 fn identity_of(image: &ProgramImage, params: &ProgramParams) -> ProgramIdentity {
     let (tables, config) = decode_program(image, params).unwrap();
     program_identity(image, &tables, &config)
-}
-
-fn pinned(label: &str) -> String {
-    common::pinned_identities()
-        .into_iter()
-        .find(|(l, _)| l == label)
-        .unwrap_or_else(|| panic!("identity.txt has no `{label}`"))
-        .1
 }
 
 /// `image` with the file-backed byte at `addr` flipped. The byte must be one,
@@ -54,20 +45,14 @@ fn flip_byte(image: &ProgramImage, addr: u32) -> ProgramImage {
 }
 
 /// fib's identity at the defaults, computed twice in one process, equals
-/// itself and the committed value.
+/// itself. No value is pinned: the identity is a digest over a build, and the
+/// recipe below is what holds it.
 #[test]
-fn fib_at_the_defaults_is_deterministic_and_pinned() {
+fn fib_at_the_defaults_is_deterministic() {
     let image = common::guest("fib");
     let a = identity_of(&image, &ProgramParams::defaults());
     let b = identity_of(&image, &ProgramParams::defaults());
     assert_eq!(a, b, "two computations in one process");
-    assert_eq!(to_hex(&a.to_bytes()), pinned("fib default"));
-}
-
-#[test]
-fn fib_at_the_smallest_heights_is_pinned() {
-    let identity = identity_of(&common::guest("fib"), &common::smallest());
-    assert_eq!(to_hex(&identity.to_bytes()), pinned("fib smallest"));
 }
 
 /// The digest is exactly the documented recipe, rebuilt here message by
@@ -200,8 +185,7 @@ fn a_segment_without_file_bytes_does_not_move_the_identity_by_its_size() {
 }
 
 /// fib rebuilt from source, twice, into fresh target directories, has one
-/// identity — and on the machine the fixture was built on, it is the committed
-/// one. `#[ignore]`d because it builds the guest twice from source.
+/// identity. `#[ignore]`d because it builds the guest twice more.
 #[test]
 #[ignore = "builds guests/fib twice from source; run with --ignored"]
 fn a_rebuilt_guest_has_the_same_identity() {
@@ -210,13 +194,4 @@ fn a_rebuilt_guest_has_the_same_identity() {
     let ia = identity_of(&load_elf(&a).unwrap(), &common::smallest());
     let ib = identity_of(&load_elf(&b).unwrap(), &common::smallest());
     assert_eq!(ia, ib, "two clean builds");
-    if a == common::loader_vector("fib.elf") {
-        assert_eq!(to_hex(&ia.to_bytes()), pinned("fib smallest"));
-        println!("the rebuild is the committed fixture, and so is its identity");
-    } else {
-        println!(
-            "the rebuild differs from the committed fixture in bytes -- rustc embeds \
-             absolute paths -- so only the two rebuilds are compared"
-        );
-    }
 }

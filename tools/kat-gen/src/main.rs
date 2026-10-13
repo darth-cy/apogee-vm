@@ -17,7 +17,7 @@
 //! | --- | --- |
 //! | `field`   | `crates/field/tests/vectors/fr_kats.txt` |
 //! | `poly`    | `crates/poly/tests/vectors/*` |
-//! | `loader`  | `crates/loader/tests/vectors/*` (from the committed guest ELFs) |
+//! | `loader`  | `crates/loader/tests/vectors/*` (the synthetic ELFs and fib's public-I/O record) |
 //! | `isa`     | `crates/isa/tests/vectors/*` (the hand-encoded corpus, via llvm-objdump) |
 //! | `program` | `crates/program/tests/vectors/*` |
 //! | `gkr`     | `crates/constraints/tests/vectors/toy_*` (the toy circuit, cached and cache-free) |
@@ -25,7 +25,9 @@
 //! | `lookup`  | `crates/constraints/tests/vectors/lookup_toy.bin` (the combined lookup toy) |
 //! | `family`  | `crates/constraints/tests/vectors/{add_sub,jump_branch_slt,shift_bitwise,mul_div,mem_word,mem_subword,atomics}.bin` (the seven execution-family circuits) |
 //! | `tape`    | `crates/checker/tests/vectors/global_tape.txt` (the global commit phase's absorb sequence) |
-//! | `guests`  | the guest ELFs themselves -- opt-in only, see `DEFAULT_GROUPS` |
+//!
+//! No guest ELF is generated or committed: `guests/` is source, and a suite
+//! that runs a guest builds it (`test_support::guest_elf`).
 
 use std::fs;
 use std::path::PathBuf;
@@ -36,7 +38,6 @@ mod ark_fr;
 mod family;
 mod field;
 mod gkr;
-mod guests;
 mod isa;
 mod loader;
 mod lookup;
@@ -46,7 +47,7 @@ mod program;
 mod tape;
 
 /// Every group, in the order a reader of the stack would meet them.
-const GROUPS: [(&str, fn()); 11] = [
+const GROUPS: [(&str, fn()); 10] = [
     ("field", field::generate),
     ("poly", poly::generate),
     ("loader", loader::generate),
@@ -57,29 +58,12 @@ const GROUPS: [(&str, fn()); 11] = [
     ("lookup", lookup::generate),
     ("family", family::generate),
     ("tape", tape::generate),
-    ("guests", guests::generate),
-];
-
-/// The groups a bare `cargo run -p kat-gen` runs, which is what CI runs.
-///
-/// `guests` is not one of them. It rebuilds the guest ELFs, and a guest ELF is
-/// **not** reproducible across machines: rustc embeds absolute paths in the
-/// panic-location strings of every crate outside the guest workspace, and of
-/// `core` itself, and the guest build does not remap them. Two clean builds on
-/// one machine agree exactly -- `crates/loader/tests/reproducible.rs` checks
-/// it -- but a CI regeneration would diff against fixtures built elsewhere and
-/// fail every time. So the ELFs are refreshed deliberately, on one machine,
-/// with `cargo run -p kat-gen -- guests`, and everything CI can reproduce from
-/// them -- the objdump and nm listings -- is in `loader`, which does run by
-/// default.
-const DEFAULT_GROUPS: [&str; 10] = [
-    "field", "poly", "loader", "isa", "program", "gkr", "memory", "lookup", "family", "tape",
 ];
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let chosen: Vec<&str> = match args.len() {
-        0 => DEFAULT_GROUPS.to_vec(),
+        0 => GROUPS.iter().map(|(name, _)| *name).collect(),
         1 => vec![args[0].as_str()],
         _ => {
             usage("one subcommand at a time, or none for all of them");

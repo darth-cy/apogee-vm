@@ -706,6 +706,7 @@ dependencies = [
  "postcard",
  "program",
  "serde",
+ "test-support",
 ]
 
 [[package]]
@@ -742,6 +743,7 @@ dependencies = [
  "loader",
  "program",
  "prover",
+ "test-support",
  "trace",
  "verifier-core",
 ]

@@ -1,16 +1,27 @@
 //! Fixture plumbing shared by the test suites and the fixture generators:
 //! a seeded RNG, SHA-256, and the hex codec that turns a digest or a field
-//! element into the text a committed vector file holds.
+//! element into the text a committed vector file holds; and the guests, built
+//! from source.
 //!
 //! Every committed fixture is pinned by hash and regenerates byte for byte, so
 //! every crate that writes or reads one needs the same three things. This crate
-//! is where they live, once.
+//! is where they live, once. **No guest ELF is a committed fixture**: `guests/`
+//! holds the programs as source, and a suite that runs one builds it with
+//! [`guest_elf`].
 //!
 //! **It has no dependencies.** That is what lets the reference oracles,
 //! `tools/transcript-ref` and `tools/stateless-ref` — deliberately outside the
 //! workspace so their dependency graphs cannot unify a feature into its
 //! crates — link it without linking anything of ours that they are supposed to
 //! be checking. `no_dependencies` below holds it to that.
+
+use std::collections::BTreeMap;
+use std::ffi::OsStr;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 // ---------------------------------------------------------------------------
 // Deterministic RNG
@@ -189,6 +200,187 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
         out[4 * i..4 * i + 4].copy_from_slice(&h[i].to_be_bytes());
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// Guests, built from source
+//
+// A guest ELF is not reproducible across machines -- rustc embeds absolute
+// paths in panic-location strings -- and every edit to `crates/guest-sdk`
+// changes every guest's bytes, so a committed ELF could only ever be a fixture
+// to rebuild and re-pin. The source in `guests/` is the fixture instead, and
+// so is every listing of one: it is taken from the build, not committed.
+// ---------------------------------------------------------------------------
+
+/// `guests/<name>`'s ELF, built from source with the guest manual's command --
+/// `cargo build --target riscv32imac-unknown-none-elf` from the guest's own
+/// directory, the target and linker flags from `guests/.cargo/config.toml` --
+/// at the dev profile, into `target/guests`.
+///
+/// Built once per process, behind one lock so a suite's threads do not race
+/// cargo, and cargo's own cache makes every later process's build a no-op.
+/// Everything that could reach rustc from the ambient environment is cleared.
+pub fn guest_elf(name: &str) -> Vec<u8> {
+    static BUILT: OnceLock<Mutex<BTreeMap<String, Vec<u8>>>> = OnceLock::new();
+    let mut built = BUILT
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(elf) = built.get(name) {
+        return elf.clone();
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let target = root.join("target/guests");
+    let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    command
+        .current_dir(root.join("guests").join(name))
+        .args(["build", "--target", "riscv32imac-unknown-none-elf"])
+        .env("CARGO_TARGET_DIR", &target);
+    for key in [
+        "RUSTFLAGS",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CARGO_BUILD_RUSTFLAGS",
+        "CARGO_BUILD_TARGET",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+    ] {
+        command.env_remove(key);
+    }
+    let out = command
+        .output()
+        .unwrap_or_else(|e| panic!("running cargo for guests/{name}: {e}"));
+    assert!(
+        out.status.success(),
+        "guests/{name} does not build:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let path = target.join("riscv32imac-unknown-none-elf/debug").join(name);
+    let elf = fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+    built.insert(name.to_string(), elf.clone());
+    elf
+}
+
+/// `llvm-objdump -d -M no-aliases` of `elf`: one `(address, encoding, text)`
+/// per instruction, the encoding as the hex digits the file holds.
+pub fn objdump(elf: &[u8]) -> Vec<(u32, String, String)> {
+    let path = scratch_file(elf);
+    let out = run(
+        llvm_tool("llvm-objdump"),
+        &[
+            "--disassemble",
+            "--no-print-imm-hex",
+            "-M",
+            "no-aliases",
+            path.to_str().expect("a temp path is UTF-8"),
+        ],
+    );
+    let _ = fs::remove_file(&path);
+    out.lines().filter_map(parse_objdump_line).collect()
+}
+
+/// `llvm-nm` of `elf`: its text symbols, `(address, name)`, sorted, each once.
+/// Absolute and data symbols are not instruction addresses, and are left out.
+pub fn nm_text(elf: &[u8]) -> Vec<(u32, String)> {
+    let path = scratch_file(elf);
+    let out = run(
+        llvm_tool("llvm-nm"),
+        &[path.to_str().expect("a temp path is UTF-8")],
+    );
+    let _ = fs::remove_file(&path);
+    let mut rows: Vec<(u32, String)> = out
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let (addr, kind, symbol) = (fields.next()?, fields.next()?, fields.next()?);
+            let addr = u32::from_str_radix(addr, 16).ok()?;
+            matches!(kind, "t" | "T").then(|| (addr, symbol.to_string()))
+        })
+        .collect();
+    rows.sort();
+    rows.dedup();
+    rows
+}
+
+/// Split one `llvm-objdump -d` body line into `(address, encoding, text)`.
+///
+/// Returns `None` for the file banner, the section banner, symbol headers and
+/// blank lines — everything that is not an instruction.
+pub fn parse_objdump_line(line: &str) -> Option<(u32, String, String)> {
+    // An instruction line starts with whitespace, then `address:`.
+    if !line.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let (addr, rest) = line.split_once(':')?;
+    let addr = u32::from_str_radix(addr.trim(), 16).ok()?;
+
+    let mut fields = rest.split_whitespace();
+    let encoding = fields.next()?.to_string();
+    // The raw encoding is 4 or 8 hex digits; anything else is not an
+    // instruction line we understand, and silently skipping one would make the
+    // differential weaker without saying so.
+    assert!(
+        (encoding.len() == 4 || encoding.len() == 8)
+            && encoding.chars().all(|c| c.is_ascii_hexdigit()),
+        "unexpected objdump line: {line}"
+    );
+    let text = fields.collect::<Vec<_>>().join(" ");
+    Some((addr, encoding, text))
+}
+
+/// Absolute path to a tool from the pinned toolchain's `llvm-tools` component.
+///
+/// Not `PATH`: the disassembler has to be the one that matches the compiler,
+/// and `rust-toolchain.toml` is what pins it.
+pub fn llvm_tool(name: &str) -> PathBuf {
+    let sysroot = run("rustc", &["--print", "sysroot"]);
+    let version = run("rustc", &["-vV"]);
+    let host = version
+        .lines()
+        .find_map(|l| l.strip_prefix("host: "))
+        .expect("`rustc -vV` always reports a host triple")
+        .trim();
+    let path = PathBuf::from(sysroot.trim())
+        .join("lib/rustlib")
+        .join(host)
+        .join("bin")
+        .join(name);
+    assert!(
+        path.exists(),
+        "{} is missing: run `rustup component add llvm-tools`. \
+         It is in rust-toolchain.toml, so this should not happen.",
+        path.display()
+    );
+    path
+}
+
+/// Run a command and return its stdout, or die saying which one failed.
+pub fn run<S: AsRef<OsStr>>(program: S, args: &[&str]) -> String {
+    let program = program.as_ref();
+    let out = Command::new(program)
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("running {}: {e}", program.to_string_lossy()));
+    assert!(
+        out.status.success(),
+        "{} {:?} failed: {}",
+        program.to_string_lossy(),
+        args,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).expect("tool output is UTF-8")
+}
+
+/// `bytes` in a file of its own under the system temp directory, for a tool
+/// that reads a path.
+fn scratch_file(bytes: &[u8]) -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "apogee-elf-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::write(&path, bytes).unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
+    path
 }
 
 #[cfg(test)]

@@ -49,9 +49,9 @@ one cut off by the end of the file bytes (`TextTruncated`) or a halfword `rvc::e
 bytes at its own pc, so every `Instruction` slot is what a hart fetching there would decode; data
 that shifts the sweep off the true boundaries can only lose true instruction starts, whose pcs
 then have no table row (§5), or meet an unclaimed encoding and refuse the image.
-`crates/loader/tests/differential.rs` holds committed guests' slots to `llvm-objdump`'s listing,
-and the expansion to LLVM's own encoder over `guests/rvc-dense`, one sequence assembled compressed
-and not: a wrong expansion would be a valid proof of another program.
+`crates/loader/tests/differential.rs` holds the guests' slots, built from source, to
+`llvm-objdump`'s listing, and the expansion to LLVM's own encoder over `guests/rvc-dense`, one
+sequence assembled compressed and not: a wrong expansion would be a valid proof of another program.
 
 ## 3. `ProgramImage` and its wire form
 

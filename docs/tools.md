@@ -170,22 +170,24 @@ UNSOUND**: there is no commitment scheme ([architecture.md](architecture.md) §0
 
 ## 7. kat-gen and the committed fixtures
 
-`cargo run -p kat-gen` regenerates the default groups, `cargo run -p kat-gen -- <group>` one.
+`cargo run -p kat-gen` regenerates every group, `cargo run -p kat-gen -- <group>` one.
 Each file written prints its SHA-256, which the tests reading it pin.
 
 | group | writes | from |
 | --- | --- | --- |
 | `field`, `poly` | `Fr` arithmetic and multilinear-polynomial vectors | arkworks' `ark-ff` and `ark-poly` |
-| `loader`, `isa` | listings of the committed guest ELFs, synthetic ELFs; an RV32IMA corpus, words that must not decode | the pinned toolchain's `llvm-objdump`, `llvm-nm` |
-| `program`, `tape` | program identities; `guests/shards`' global tape | `program`; `checker` |
+| `loader`, `isa` | synthetic ELFs, fib's public-I/O record; an RV32IMA corpus, words that must not decode | the pinned toolchain's `llvm-objdump` |
+| `program`, `tape` | a mul-free program; `guests/shards`' global tape | `program`; `checker` |
 | `gkr`, `memory`, `lookup`, `family` | `CircuitArtifact` files: toy circuits; the three distinct frames, the two RAM-window circuits and the seven execution circuits, at `2^22` | `constraints` |
-| opt-in: `guests` | the guest ELFs, each built twice and compared | |
 
-CI runs the default groups and the oracle (§8) and fails on any `git diff` in the vector
-directories. A guest ELF is not reproducible across machines, since rustc embeds absolute paths in
-the panic-location strings of `core` and of crates outside the guest workspace, which the guest
-build does not remap; two clean builds on one machine agree. So `guests` is run by hand on one
-machine, and CI regenerates only what derives from the ELFs.
+CI runs every group and the oracle (§8) and fails on any `git diff` in the vector directories.
+**No guest ELF is committed**, nor anything derived from one. A guest ELF is not reproducible across
+machines, since rustc embeds absolute paths in the panic-location strings of `core` and of crates
+outside the guest workspace, which the guest build does not remap, and every guest-sdk edit moves
+every guest's bytes. So `guests/` is source only: a suite that runs a guest builds it with
+`test_support::guest_elf`, into `target/guests`, and lists it with the pinned toolchain's
+`llvm-objdump` and `llvm-nm` as it runs. Two clean builds on one machine agree
+(`crates/loader/tests/reproducible.rs`).
 
 ## 8. The reference oracle
 

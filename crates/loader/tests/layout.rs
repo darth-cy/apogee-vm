@@ -22,15 +22,14 @@
 //! them, which is why this suite parses them itself and needs nothing
 //! installed.
 //!
-//! These tests read the committed ELFs and parse the headers here rather than
-//! through `loader`, for two reasons: `ProgramImage` deliberately drops the
+//! These tests build every guest from `guests/` and parse the headers here
+//! rather than through `loader`, for two reasons: `ProgramImage` deliberately drops the
 //! flags, the file offsets and the alignments these rules are about, and a
 //! check that went through the crate under test would be a second reading of
 //! the same parser rather than an independent one.
 //!
-//! Nothing here needs a compiler or an emulator, so it runs everywhere.
-//! [`a_freshly_linked_guest_has_the_same_layout`] is the exception and is
-//! `#[ignore]`d: it invokes the cross-compiler, which not every machine has.
+//! Nothing here needs an emulator. The guests are linked as the suite runs,
+//! so a `link.ld` regression fails here at once.
 
 mod common;
 
@@ -197,7 +196,7 @@ const GUESTS: [&str; 13] = [
 ];
 
 /// Every rule above, over one image. The single place the rules are composed,
-/// so the committed fixtures and a fresh link are held to exactly one standard.
+/// so every guest is held to exactly one standard.
 fn check(elf: &[u8], name: &str) {
     let loads = loads(elf);
     assert!(!loads.is_empty(), "{name} declares no PT_LOAD");
@@ -263,14 +262,14 @@ fn check(elf: &[u8], name: &str) {
     }
 }
 
-/// Every committed guest is loadable by a host program loader.
+/// Every guest is loadable by a host program loader.
 ///
 /// This is the test that fails when the linker script regresses, and it needs
 /// neither a cross-compiler nor an emulator to say so.
 #[test]
-fn every_committed_guest_is_host_loadable() {
+fn every_guest_is_host_loadable() {
     for name in GUESTS {
-        check(&common::bytes(&format!("{name}.elf")), name);
+        check(&common::guest(name), name);
     }
 }
 
@@ -283,7 +282,7 @@ fn every_committed_guest_is_host_loadable() {
 #[test]
 fn the_heap_and_the_stack_share_one_writable_segment() {
     for name in GUESTS {
-        let elf = common::bytes(&format!("{name}.elf"));
+        let elf = common::guest(name);
         let loads = loads(&elf);
         let heap = *symbols(&elf).get("__heap_start").expect("__heap_start") as u64;
 
@@ -406,32 +405,12 @@ fn the_layout_that_failed_in_ci_is_rejected() {
 
     // The controls are controls: the shipping layout passes every one of them.
     for name in GUESTS {
-        let loads = loads(&common::bytes(&format!("{name}.elf")));
+        let loads = loads(&common::guest(name));
         page_alignment(&loads).unwrap_or_else(|e| panic!("{name} must pass: {e}"));
         page_separation(&loads).unwrap_or_else(|e| panic!("{name} must pass: {e}"));
         zero_fill_is_writable(&loads).unwrap_or_else(|e| panic!("{name} must pass: {e}"));
         writable_at(&loads, RAM_END - 1, "the first stack byte")
             .unwrap_or_else(|e| panic!("{name} must pass: {e}"));
-    }
-}
-
-/// The same rules, over a guest linked right now.
-///
-/// The committed ELFs are refreshed by hand, so on their own they would go on
-/// passing after `link.ld` regressed and until someone remembered to rebuild.
-/// This closes that window. It is `#[ignore]`d because it shells out to the
-/// cross-compiler: it needs the `riscv32imac-unknown-none-elf` target installed
-/// and a cargo that can run offline, which is a property of the machine rather
-/// than of the repository.
-///
-/// ```text
-/// cargo test -p loader --test layout -- --ignored
-/// ```
-#[test]
-#[ignore = "invokes the cross-compiler; run with --ignored after editing link.ld"]
-fn a_freshly_linked_guest_has_the_same_layout() {
-    for name in GUESTS {
-        check(&common::build(name, "layout"), name);
     }
 }
 

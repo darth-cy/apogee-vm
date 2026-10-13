@@ -1,15 +1,11 @@
 //! Fixture plumbing for `crates/loader`'s suites.
 //!
-//! Every committed fixture is pinned by SHA-256 in [`PINS`], in source, so a
-//! hand-edited fixture fails the build and a deliberate refresh is a code edit
-//! a reviewer can see. Refresh is:
-//!
-//! ```text
-//! cargo run -p kat-gen -- guests    # the guest ELFs; one machine, deliberately
-//! cargo run -p kat-gen -- loader    # everything derived from them
-//! ```
-//!
-//! and then the digests those commands print go here.
+//! The guests are built from `guests/` and listed by the pinned toolchain's
+//! `llvm-objdump` and `llvm-nm` as the tests run ([`guest`], [`objdump`],
+//! [`nm`]); nothing derived from a guest build is committed. The committed
+//! fixtures are the synthetic ELFs, their index and fib's public-I/O record,
+//! which `cargo run -p kat-gen -- loader` regenerates byte for byte and
+//! `differential.rs` pins.
 
 #![allow(dead_code)]
 
@@ -21,89 +17,11 @@ use std::process::Command;
 use loader::{ProgramImage, Slot};
 use test_support::{sha256, to_hex};
 
-/// Every committed fixture, and the digest it must have.
-///
-/// The synthetic ELFs are not listed one by one: `synthetic_elfs.txt` carries
-/// their digests and is itself pinned here, so the chain is one constant long
-/// either way and the index stays readable.
-pub const PINS: [(&str, &str); 19] = [
-    (
-        "fib.elf",
-        "c0bba75ac74f00d376c3536082bdd9a647d02db011ab429f2fad614844a1a41d",
-    ),
-    (
-        "echo.elf",
-        "476c47fc4828aa383ee429c9df315e2533dd5016aa026096575c4583a23c8272",
-    ),
-    (
-        "rvc-dense.elf",
-        "2f87f02c47f3b9b6169dac8ac5496df92c211bd1c9404641fa3d4fa5451f743f",
-    ),
-    (
-        "amm.elf",
-        "276f63d6a686e7b09855aec418d5444c9cf315e3a3d32b85c415e1858896c287",
-    ),
-    (
-        "orderbook.elf",
-        "5ce9d08788f7728aaa6183b553b72eddd3d9dad456349c3cab20aafad1dc4c77",
-    ),
-    (
-        "vault.elf",
-        "ad780295900f2d4f57cbe7f29a9b0aa450b869379bb7e2328c36458a02e1af65",
-    ),
-    (
-        "atomics.elf",
-        "14f551fed2b773e98a19494c73543ca3f877a34141dd2dc1a2dcffcc6a278bdd",
-    ),
-    (
-        "opcodes.elf",
-        "bb701cfad147fa2d9d20f7b704c44f028990161edd71c5c770e7534d9098b0bb",
-    ),
-    (
-        "heap.elf",
-        "a4a9cebd677c5613c5271c4c559fa03c95a6dd4f730b62ff65d8da5bf452deab",
-    ),
-    (
-        "addsub.elf",
-        "587f6bd45be8f242015a8870be2b765ede1e87d94219758dc9bc996a38827145",
-    ),
-    (
-        "control.elf",
-        "88f5b0ccf00b889c50ec81892a44550b5d19bde75f5fa388cea4027898aecdaa",
-    ),
-    (
-        "alu.elf",
-        "32f85c1799425f5de1a0ac04368e1e6b952289627710b804202f53895dccc168",
-    ),
-    (
-        "mem.elf",
-        "c8b5d5e79fa11571661cf11258ebee8cb450e7de8b9043d55b46d45a8f2d9dc1",
-    ),
-    (
-        "fib.objdump.txt",
-        "2b454440bb766cb99e9374d8f48540054dba64fc11964a9f208873438dd3d1c6",
-    ),
-    (
-        "rvc-dense.objdump.txt",
-        "d23941e188e4eac494d4c5b2d3602895542d5c25a390e9ab7bf66142c2935f70",
-    ),
-    (
-        "amm.objdump.txt",
-        "c02036b6428522dd7adc6b983e96a01a86d67d62e8c1bd68772b018f551d0d5c",
-    ),
-    (
-        "rvc-dense.nm.txt",
-        "c341f4616913cef515a793ff5a730567ba46a963694fb35d49cb51faca0187aa",
-    ),
-    (
-        "shards.elf",
-        "6b05f589f3726b8f7b42cd67547227a23640041eefa2e66d5277618735d34241",
-    ),
-    (
-        "public-io.elf",
-        "52cd0da87d6c3a7fa37b8c334d7940ed2f3db3f8b98eb33b17957803bbd028e4",
-    ),
-];
+/// Guest `name`'s ELF, built from `guests/` (`test_support::guest_elf`): no
+/// guest ELF is committed.
+pub fn guest(name: &str) -> Vec<u8> {
+    test_support::guest_elf(name)
+}
 
 pub fn vectors_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/vectors")
@@ -124,8 +42,8 @@ pub fn digest(name: &str) -> String {
 
 /// One synthetic ELF, checked against the digest `synthetic_elfs.txt` records.
 ///
-/// The index is itself pinned in [`PINS`]'s sibling test, so editing a
-/// synthetic fixture means editing both files and a source constant.
+/// The index is itself pinned in `differential.rs`, so editing a synthetic
+/// fixture means editing both files and a source constant.
 pub fn synthetic(name: &str) -> Vec<u8> {
     let want = synthetic_index()
         .remove(name)
@@ -161,32 +79,26 @@ pub type Disassembled = (u32, u32, usize);
 /// One instruction of the image: address, expanded word, whether it was 16-bit.
 pub type Expanded = (u32, u32, bool);
 
-/// `<name>.objdump.txt` as `(address, encoding)` pairs.
+/// `llvm-objdump`'s listing of guest `name`, as `(address, encoding, width)`.
 ///
 /// The disassembly text is deliberately dropped here: the differential is
 /// about addresses and encodings, and comparing mnemonics would be comparing
 /// two spellings of the same table rather than two computations.
 pub fn objdump(name: &str) -> Vec<Disassembled> {
-    rows(&format!("{name}.objdump.txt"))
-        .iter()
-        .map(|f| {
-            let addr = u32::from_str_radix(&f[0], 16).expect("an objdump address is hex");
-            let encoding = u32::from_str_radix(&f[1], 16).expect("an objdump encoding is hex");
-            (addr, encoding, f[1].len() / 2)
+    test_support::objdump(&guest(name))
+        .into_iter()
+        .map(|(addr, encoding, _)| {
+            let word = u32::from_str_radix(&encoding, 16).expect("an objdump encoding is hex");
+            (addr, word, encoding.len() / 2)
         })
         .collect()
 }
 
-/// `<name>.nm.txt` as `symbol -> address`.
+/// `llvm-nm`'s text symbols of guest `name`, as `symbol -> address`.
 pub fn nm(name: &str) -> BTreeMap<String, u32> {
-    rows(&format!("{name}.nm.txt"))
-        .iter()
-        .map(|f| {
-            (
-                f[1].clone(),
-                u32::from_str_radix(&f[0], 16).expect("an nm address is hex"),
-            )
-        })
+    test_support::nm_text(&guest(name))
+        .into_iter()
+        .map(|(addr, symbol)| (symbol, addr))
         .collect()
 }
 

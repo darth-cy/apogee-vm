@@ -3,7 +3,7 @@
 //! when a row under a root changes; every execution family's frame and both
 //! window artifacts keep the laws, the lookup rules and the padding contract,
 //! and each frame its product-tree clause; and an honest statement over a
-//! committed guest — one frame per family that ran, its RAM windows and its
+//! guest — one frame per family that ran, its RAM windows and its
 //! boundary, filled by `trace`'s builders from a real execution — keeps every
 //! gate and every obligation, reconciles, and proves.
 
@@ -211,10 +211,10 @@ fn the_memory_artifacts_keep_the_laws_and_the_padding_contract() {
 }
 
 // ---------------------------------------------------------------------------
-// An honest statement over a committed guest
+// An honest statement over a guest
 // ---------------------------------------------------------------------------
 
-/// The honest statement of a committed guest: every shard's forward pass keeps
+/// The honest statement of a guest: every shard's forward pass keeps
 /// every gate, and its roots are what `memory_roots` recomputes; every artifact
 /// keeps the checker's laws and padding contract, and each frame the
 /// product-tree clause; the witness-row evaluator, `violated_relations`,

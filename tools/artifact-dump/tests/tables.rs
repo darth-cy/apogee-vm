@@ -29,7 +29,7 @@ fn loader_vector(name: &str) -> Vec<u8> {
 /// to reach past its last instruction. This test is about the page, not about
 /// the heights.
 fn fitting(elf: &[u8]) -> ProgramParams {
-    let image = load_elf(elf).expect("a committed guest loads");
+    let image = load_elf(elf).expect("a guest loads");
     let mut params = ProgramParams::defaults();
     if decode_program(&image, &params).is_ok() {
         return params;
@@ -138,7 +138,7 @@ fn every_committed_guest_renders_and_the_listing_is_the_tables() {
         "alu",
         "mem",
     ] {
-        let elf = loader_vector(&format!("{name}.elf"));
+        let elf = test_support::guest_elf(name);
         let params = fitting(&elf);
         let page = render(&elf, name, &params).unwrap();
         let (tables, _) = decode_program(&load_elf(&elf).unwrap(), &params).unwrap();
@@ -195,20 +195,21 @@ fn an_instruction_nobody_decodes_is_a_named_decode_error() {
     );
 }
 
-/// The identity line is the program identity: the value `crates/program`'s
-/// pinned fixture holds for fib at the defaults.
+/// The identity line is the program identity: fib's at the defaults, as
+/// `crates/program` computes it.
 #[test]
 fn the_identity_line_is_the_program_identity() {
-    let page = render(&loader_vector("fib.elf"), "fib", &ProgramParams::defaults()).unwrap();
-    let pinned = fs::read_to_string(root().join("crates/program/tests/vectors/identity.txt"))
-        .unwrap()
-        .lines()
-        .find_map(|l| l.strip_prefix("fib default "))
-        .unwrap()
-        .to_string();
+    let elf = test_support::guest_elf("fib");
+    let page = render(&elf, "fib", &ProgramParams::defaults()).unwrap();
+    let image = load_elf(&elf).unwrap();
+    let (tables, config) = decode_program(&image, &ProgramParams::defaults()).unwrap();
+    let identity = program::program_identity(&image, &tables, &config);
     assert!(
-        page.contains(&format!("program identity  {pinned}")),
-        "the page's identity is not the pinned one"
+        page.contains(&format!(
+            "program identity  {}",
+            test_support::to_hex(&identity.to_bytes())
+        )),
+        "the page's identity is not the program identity"
     );
 }
 
@@ -217,7 +218,7 @@ fn the_identity_line_is_the_program_identity() {
 #[test]
 fn the_vm_config_section_is_the_config() {
     for name in ["fib", "atomics"] {
-        let elf = loader_vector(&format!("{name}.elf"));
+        let elf = test_support::guest_elf(name);
         let page = render(&elf, name, &ProgramParams::defaults()).unwrap();
         let (tables, config) =
             decode_program(&load_elf(&elf).unwrap(), &ProgramParams::defaults()).unwrap();

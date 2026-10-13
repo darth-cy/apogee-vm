@@ -106,7 +106,7 @@ makes them true:
   page two mappings share takes the second's permissions, stripping execute from `.text`'s tail or
   putting zero fill on a read-only page, which a host loader refuses.
 
-`crates/loader/tests/layout.rs` holds the committed guest ELFs to both by parsing their headers.
+`crates/loader/tests/layout.rs` holds every guest, built from source, to both by parsing its headers.
 
 ## 6. The guest-sdk surface
 

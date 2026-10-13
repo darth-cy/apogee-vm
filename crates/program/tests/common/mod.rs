@@ -1,9 +1,9 @@
 //! Fixture plumbing for `crates/program`'s suites.
 //!
-//! The guest ELFs are `crates/loader`'s committed fixtures, pinned there, and
-//! the ISA corpus is `crates/isa`'s; this crate reads both in place rather than
-//! keeping second copies. Its own fixtures live in `tests/vectors/` and are
-//! pinned by SHA-256 in [`PINS`].
+//! The guests are built from `guests/` (`test_support::guest_elf`), and the
+//! ISA corpus is `crates/isa`'s, read in place rather than kept as a second
+//! copy. This crate's own fixture lives in `tests/vectors/` and is pinned by
+//! SHA-256 in [`PINS`].
 
 #![allow(dead_code)]
 
@@ -16,7 +16,7 @@ use loader::{load_elf, ProgramImage, Segment, Slot};
 use program::{decode_program, ProgramParams};
 use test_support::{sha256, to_hex};
 
-/// Every guest with a committed ELF, in `guests/Cargo.toml`'s order.
+/// Every guest, in `guests/Cargo.toml`'s order.
 pub const GUESTS: [&str; 14] = [
     "fib",
     "echo",
@@ -34,18 +34,12 @@ pub const GUESTS: [&str; 14] = [
     "shards",
 ];
 
-/// This crate's committed fixtures and their digests. Refresh with
-/// `cargo run -p kat-gen -- program`, which prints them.
-pub const PINS: [(&str, &str); 2] = [
-    (
-        "mul_free.elf",
-        "17a27f6ea5370cd865bb08afa7b2796274b41f0ede49f63d11a6314d7b4477fb",
-    ),
-    (
-        "identity.txt",
-        "0748de53892a494fe855fceb02eddf928a5431a3331e39b824b96c69dd81dd76",
-    ),
-];
+/// This crate's committed fixture and its digest. Refresh with
+/// `cargo run -p kat-gen -- program`, which prints it.
+pub const PINS: [(&str, &str); 1] = [(
+    "mul_free.elf",
+    "17a27f6ea5370cd865bb08afa7b2796274b41f0ede49f63d11a6314d7b4477fb",
+)];
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -53,10 +47,6 @@ fn root() -> PathBuf {
 
 fn read(path: PathBuf) -> Vec<u8> {
     fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
-}
-
-pub fn loader_vector(name: &str) -> Vec<u8> {
-    read(root().join("crates/loader/tests/vectors").join(name))
 }
 
 pub fn isa_vector(name: &str) -> Vec<u8> {
@@ -71,9 +61,9 @@ pub fn digest(bytes: &[u8]) -> String {
     to_hex(&sha256(bytes))
 }
 
-/// A committed guest, loaded.
+/// A guest, built from `guests/` and loaded.
 pub fn guest(name: &str) -> ProgramImage {
-    load_elf(&loader_vector(&format!("{name}.elf"))).unwrap_or_else(|e| panic!("{name}: {e:?}"))
+    load_elf(&test_support::guest_elf(name)).unwrap_or_else(|e| panic!("{name}: {e:?}"))
 }
 
 /// Every instruction slot of an image, as `(pc, word, compressed)`.
@@ -148,19 +138,6 @@ pub fn image_of(at: u32, words: &[u32]) -> ProgramImage {
         slot_base: at,
         slots,
     }
-}
-
-/// `identity.txt` as `[(label, identity hex)]`.
-pub fn pinned_identities() -> Vec<(String, String)> {
-    let text = String::from_utf8(own_vector("identity.txt")).expect("UTF-8");
-    text.lines()
-        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-        .map(|l| {
-            let f: Vec<&str> = l.split_whitespace().collect();
-            assert_eq!(f.len(), 3, "an identity row is guest, parameters, identity");
-            (format!("{} {}", f[0], f[1]), f[2].to_string())
-        })
-        .collect()
 }
 
 /// Build one guest from source into a fresh target directory, the way

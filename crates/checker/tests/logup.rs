@@ -146,12 +146,7 @@ fn toy() -> Toy {
 
     // fib, decoded with the decoder family's table at the toy's height and
     // every other family at the suites' 2^16.
-    let path = format!(
-        "{}/../loader/tests/vectors/fib.elf",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let elf = std::fs::read(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
-    let image = load_elf(&elf).expect("fib loads");
+    let image = load_elf(&test_support::guest_elf("fib")).expect("fib loads");
     let mut heights = [HEIGHT; family::COUNT as usize];
     heights[FAMILY as usize] = 1 << VARS;
     let params = ProgramParams {

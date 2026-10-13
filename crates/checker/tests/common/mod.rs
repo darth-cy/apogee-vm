@@ -206,7 +206,7 @@ pub fn set_operand(gate: &mut GateDef, from: PolyAddress, to: PolyAddress) -> us
 }
 
 // ---------------------------------------------------------------------------
-// Memory statements over a committed guest
+// Memory statements over a guest
 // ---------------------------------------------------------------------------
 
 use checker::{memory_roots, WitnessRow};
@@ -251,7 +251,7 @@ pub const HEIGHT: u32 = 1 << 16;
 /// fib's is `fib_io.txt`'s `n = 24`, heap's 40.
 pub const GUESTS: [(&str, u32); 2] = [("fib", 24), ("heap", 40)];
 
-/// One committed guest, decoded at `HEIGHT` and traced to its exit: what a
+/// One guest, decoded at `HEIGHT` and traced to its exit: what a
 /// statement's memory shards are built from.
 pub struct Traced {
     pub image: ProgramImage,
@@ -265,12 +265,11 @@ pub struct Traced {
     /// window, whether or not the guest looked (`docs/spec/public-values.md`
     /// §5).
     pub input: Vec<u8>,
-    /// The advice this run was given. Empty for every committed guest.
+    /// The advice this run was given. Empty for every guest here.
     pub advice: Vec<u8>,
 }
 
-/// The ELF is `crates/loader/tests/vectors`', pinned by digest in that crate's
-/// suite. The run must exit 0.
+/// The guest is built from `guests/`. The run must exit 0.
 pub fn traced(name: &str, input: u32) -> Traced {
     traced_exiting(name, input, 0)
 }
@@ -287,12 +286,8 @@ pub fn traced_exiting(name: &str, input: u32, status: i32) -> Traced {
 /// A decoded table's row `i` is pc `2i`, so a guest whose `.text` outgrows
 /// `2·HEIGHT` needs a taller one.
 pub fn traced_exiting_at(name: &str, input: u32, status: i32, height: u32) -> Traced {
-    let path = format!(
-        "{}/../loader/tests/vectors/{name}.elf",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let elf = std::fs::read(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
-    let image = load_elf(&elf).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    let image =
+        load_elf(&test_support::guest_elf(name)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
     let params = ProgramParams {
         heights: [height; family::COUNT as usize],
         ..ProgramParams::defaults()

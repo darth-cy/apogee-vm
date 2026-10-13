@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use artifact_dump::{dump, wire_form};
 use loader::{load_elf, ProgramImage, Slot};
 
-/// The committed guest ELFs, plus the smallest synthetic one.
+/// The guests, built from `guests/`, plus the smallest committed synthetic ELF.
 const FIXTURES: [&str; 14] = [
     "fib",
     "echo",
@@ -29,10 +29,16 @@ const FIXTURES: [&str; 14] = [
     "minimal",
 ];
 
+/// A committed synthetic ELF if `crates/loader/tests/vectors` has one by that
+/// name, and otherwise the guest, built from `guests/`: no guest ELF is
+/// committed.
 fn elf(name: &str) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../crates/loader/tests/vectors")
         .join(format!("{name}.elf"));
+    if !path.is_file() {
+        return test_support::guest_elf(name);
+    }
     std::fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
 }
 
@@ -165,7 +171,7 @@ fn a_refused_elf_produces_no_artifact() {
 
 /// Slots that are not code are folded into one line, and the fold is exact.
 ///
-/// No committed guest reaches this path — with the SDK's linker script `.text`
+/// No guest reaches this path — with the SDK's linker script `.text`
 /// is the lowest loaded segment, so the slot span is all code — so the fixture
 /// is built here: a read-only segment below an executable one leaves a gap of
 /// slots that are addresses in the image and not instructions.

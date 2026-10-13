@@ -1644,11 +1644,7 @@ fn the_legal_masks_are_the_instruction_list() {
         }
     );
     // The masks of the instructions the guest runs, from its decoded table.
-    let elf = std::fs::read(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../loader/tests/vectors/control.elf"
-    ))
-    .expect("the control guest");
+    let elf = test_support::guest_elf("control");
     let image = loader::load_elf(&elf).expect("control loads");
     let (tables, _) =
         program::decode_program(&image, &program::ProgramParams::defaults()).expect("decodes");
@@ -1671,11 +1667,7 @@ fn the_legal_masks_are_the_instruction_list() {
 /// it for its proof, and traced into an archive. The exit status is 16, the
 /// number of checks the guest made and passed.
 fn control() -> (prover::Program, trace::TraceArchive) {
-    let elf = std::fs::read(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../loader/tests/vectors/control.elf"
-    ))
-    .expect("the control guest");
+    let elf = test_support::guest_elf("control");
     let image = loader::load_elf(&elf).expect("control loads");
     let (program, archive, exit_code) = traced(image, 1 << VARS);
     assert_eq!(exit_code, 16, "control passes its 16 checks");
@@ -2253,7 +2245,7 @@ fn image_of(at: u32, words: &[(u32, &str)]) -> loader::ProgramImage {
 }
 
 /// A taken branch, a `jal` and a `jalr`, each landing in another `2^16`-byte
-/// page than its fall-through — which no committed guest does, `control`'s
+/// page than its fall-through — which no guest does, `control`'s
 /// code lying in one page — fill and hold: `next_pc`'s high halfword is the
 /// target's, not the fall-through's.
 #[test]

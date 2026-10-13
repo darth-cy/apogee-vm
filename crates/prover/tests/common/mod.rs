@@ -1,6 +1,6 @@
 //! The statements the proving suites prove. Test-only.
 //!
-//! - `guests/addsub`'s committed ELF, decoded with its execution family at
+//! - `guests/addsub`, built from source, decoded with its execution family at
 //!   `2^20` rows — the timestamp channel's floor — and everything else at
 //!   `2^16`, traced into an archive.
 //! - `guests/control`'s, the same way, with both of its execution families —
@@ -15,12 +15,11 @@
 //!   family** — and it touches no RAM, so it has a family the config carries
 //!   and no shard proves.
 //!
-//! The module stays free of the guest workspace — every guest here is a
-//! committed ELF — because `crates/checker`'s suites include it too.
+//! Every guest here is built from `guests/` by `test_support::guest_elf`;
+//! `crates/checker`'s and `crates/verifier`'s suites include this module too,
+//! and depend on `test-support` for it.
 
 #![allow(dead_code)]
-
-use std::path::PathBuf;
 
 use constants::family;
 use emulator::{trace_run, GuestIo};
@@ -56,11 +55,9 @@ pub const SHARDS_RESULT: u32 = 2;
 /// `guests/shards`' add/sub occupancy, which is what makes it two shards.
 pub const SHARDS_ADD_CYCLES: u64 = 1_064_970;
 
-/// The committed ELF of guest `name`.
+/// Guest `name`'s ELF, built from `guests/`.
 pub fn fixture(name: &str) -> Vec<u8> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join(format!("../loader/tests/vectors/{name}.elf"));
-    std::fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
+    test_support::guest_elf(name)
 }
 
 pub fn elf() -> Vec<u8> {

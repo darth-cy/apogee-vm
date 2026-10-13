@@ -21,4 +21,7 @@ prover.workspace = true
 emulator.workspace = true
 loader.workspace = true
 program.workspace = true
+# `guest_elf`, through `crates/prover/tests/common`: the guests are built from
+# `guests/`.
+test-support.workspace = true
 trace.workspace = true

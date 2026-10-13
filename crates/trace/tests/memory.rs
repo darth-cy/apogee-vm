@@ -407,11 +407,7 @@ fn the_gap_columns_hold_the_high_chunk_at_the_chunks_edge() {
 /// if a window took the first word of the next one.
 #[test]
 fn the_first_word_of_a_window_is_that_windows_alone() {
-    let path = format!(
-        "{}/../loader/tests/vectors/fib.elf",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let image = load_elf(&std::fs::read(path).expect("fib.elf")).expect("fib loads");
+    let image = load_elf(&test_support::guest_elf("fib")).expect("fib loads");
     let h = 1usize << 16;
     let mut log = MemoryEventLog::new();
     log.record(AddressSpace::Pc, 0, 4, image.entry, 1);

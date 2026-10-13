@@ -1,7 +1,7 @@
 //! Shared plumbing for the emulator's suites.
 //!
-//! Every guest here is the committed ELF under `crates/loader/tests/vectors`,
-//! pinned by digest in `crates/loader/tests/common/mod.rs`.
+//! Every guest here is built from `guests/` (`test_support::guest_elf`); the
+//! one committed file read is fib's public-I/O record.
 
 #![allow(dead_code)]
 
@@ -21,8 +21,7 @@ pub fn vectors() -> PathBuf {
 }
 
 pub fn elf(name: &str) -> Vec<u8> {
-    let path = vectors().join(format!("{name}.elf"));
-    fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
+    test_support::guest_elf(name)
 }
 
 pub fn image(name: &str) -> ProgramImage {

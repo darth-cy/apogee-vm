@@ -1,5 +1,5 @@
 //! The memory argument's tampers and its controls, over a real execution:
-//! fib's committed ELF traced with every family at `h = 2^16` — one frame per
+//! fib, built from source, traced with every family at `h = 2^16` — one frame per
 //! family that ran, each over that family's cycles at the smallest power-of-two
 //! height holding them, `INIT_TEARDOWN`'s window 0, `ZERO_WINDOWS`' stack
 //! window 8191, and its boundary — each tampered as an adversarial prover

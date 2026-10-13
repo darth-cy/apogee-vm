@@ -9,10 +9,8 @@
 //! embeds absolute paths in the panic-location strings of every crate outside
 //! the guest workspace and of `core` itself, and the guest build does not
 //! remap them — no `--remap-path-prefix` is passed, and `trim-paths` is
-//! unstable in the pinned cargo. That is
-//! why `crates/loader/tests/vectors/*.elf` are refreshed on one machine, by
-//! `cargo run -p kat-gen -- guests`, and are not regenerated in CI. Everything
-//! derived from them is.
+//! unstable in the pinned cargo. That is why no guest ELF is committed: every
+//! suite builds the guests it runs from `guests/` (`test_support::guest_elf`).
 
 mod common;
 
@@ -43,34 +41,5 @@ fn two_clean_builds_agree() {
             "{name}: two clean builds with fresh target directories disagree"
         );
         assert!(a.len() > 1024, "{name}: the ELF is implausibly small");
-    }
-}
-
-/// The committed RVC fixture is a build of the current assembly.
-///
-/// Not a byte comparison of the whole ELF — the module docs say why that
-/// cannot hold across machines. What is compared is the two paired regions,
-/// which are hand-written assembly with no relocations into `.rodata`, so
-/// their bytes *and* their addresses are the same on any machine. They are
-/// also exactly what `differential.rs`'s expansion oracle reads, so this is the
-/// staleness guard where staleness would matter.
-#[test]
-fn the_committed_rvc_regions_are_the_current_assembly() {
-    let fresh =
-        loader::load_elf(&build("rvc-dense", "repro-fresh")).expect("the fresh build loads");
-    let committed =
-        loader::load_elf(&common::bytes("rvc-dense.elf")).expect("the committed fixture loads");
-    let nm = common::nm("rvc-dense");
-
-    for (begin, end) in [
-        ("__rvcpair_begin", "__rvcpair_end"),
-        ("__norvcpair_begin", "__norvcpair_end"),
-    ] {
-        assert_eq!(
-            common::instructions_in(&fresh, nm[begin], nm[end]),
-            common::instructions_in(&committed, nm[begin], nm[end]),
-            "{begin}..{end} has moved or changed. Rerun \
-             `cargo run -p kat-gen -- guests` and then `-- loader`."
-        );
     }
 }

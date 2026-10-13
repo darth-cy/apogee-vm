@@ -124,29 +124,6 @@ fn build(name: &str, slot: &str) -> PathBuf {
 // The checks that need no compiler
 // ---------------------------------------------------------------------------
 
-/// Every guest the workspace builds is a guest the fixtures carry.
-///
-/// This is the staleness that actually happens: someone adds a crate to
-/// `guests/`, and the loader's suites, this tool's suites and the manual go on
-/// describing the set that existed before. It runs everywhere and in no time,
-/// which is the point — the walkthrough below needs a cross-compiler, and the
-/// list going stale should not wait for one.
-#[test]
-fn every_guest_in_the_workspace_is_a_committed_fixture() {
-    let vectors = repo_root().join("crates/loader/tests/vectors");
-    let missing: Vec<String> = guest_members()
-        .into_iter()
-        .filter(|name| !vectors.join(format!("{name}.elf")).is_file())
-        .collect();
-    assert!(
-        missing.is_empty(),
-        "guests/Cargo.toml lists {missing:?}, which have no committed ELF. \
-         Add them to `ELF_FIXTURES` in tools/kat-gen/src/loader.rs, run \
-         `cargo run -p kat-gen -- guests` and then `-- loader`, and move the \
-         digests it prints into crates/loader/tests/common/mod.rs."
-    );
-}
-
 /// The manual accounts for every guest the workspace has, and invents none.
 ///
 /// Both directions matter and they rot in opposite ways. A guest added to
