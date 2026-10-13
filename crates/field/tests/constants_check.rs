@@ -7,7 +7,7 @@ mod common;
 use std::str::FromStr;
 
 use common::{ark_to_bytes, ArkFr};
-use constants::{FR_INV, FR_MODULUS, FR_MODULUS_MINUS_TWO, FR_R, FR_R2, PROTOCOL_VERSION};
+use constants::{FR_INV, FR_MODULUS, FR_MODULUS_MINUS_TWO, FR_R, FR_R2};
 use field::Fr;
 use test_support::to_hex;
 
@@ -82,9 +82,4 @@ fn montgomery_inverse_constant_is_right() {
     // ...which is equivalent to (p * FR_INV) + 1 == 0 mod 2^64.
     assert_eq!(FR_MODULUS[0].wrapping_mul(FR_INV).wrapping_add(1), 0);
     assert_eq!(FR_MODULUS[0] & 1, 1, "Montgomery needs an odd modulus");
-}
-
-#[test]
-fn protocol_version_is_the_placeholder() {
-    assert_eq!(PROTOCOL_VERSION, 0);
 }

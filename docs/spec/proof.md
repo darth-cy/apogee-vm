@@ -78,7 +78,7 @@ transcript, tag values in [transcript.md](transcript.md) §4.
 
 | # | op | tag | message |
 | --- | --- | --- | --- |
-| G1 | absorb | `PROTOCOL_SUITE` | `[PROTOCOL_VERSION]`, 0 |
+| G1 | absorb | `PROTOCOL_SUITE` | `[PROTOCOL_VERSION]` |
 | G2 | absorb | `VM_CONFIG` | the config ([program.md](program.md) §7) |
 | G3 | absorb | `SHARD_COUNTS` | `shard_counts` |
 | G4 | absorb | `MEMORY_WINDOWS` | `windows` |
