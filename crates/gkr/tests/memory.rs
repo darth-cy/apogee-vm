@@ -34,12 +34,10 @@ use sumcheck::{absorb_witness_digest, witness_digest};
 use test_support::Rng;
 use transcript::Transcript;
 
-/// The query table, by **global query id**: pc, rs1, rs2, load, ram, rd, and
-/// deleg, a delegation request's mirror, in the keccak family's own address
-/// space 4 (`docs/spec/delegation.md` §5.1).
-/// No family holds all seven.
-const SPACE: [u64; 7] = [3, 1, 1, 2, 2, 1, 4];
-const DELTA: [u64; 7] = [0, 1, 2, 2, 3, 3, 3];
+/// The query table, by **global query id**: pc, rs1, rs2, load, ram, rd.
+/// No family holds all six.
+const SPACE: [u64; 6] = [3, 1, 1, 2, 2, 1];
+const DELTA: [u64; 6] = [0, 1, 2, 2, 3, 3];
 
 /// The query ids, in the table's order.
 const PC: usize = 0;
@@ -48,18 +46,15 @@ const RS2: usize = 2;
 const LOAD: usize = 3;
 const RAM: usize = 4;
 const RD: usize = 5;
-const DELEG: usize = 6;
 
 /// The queries that write back what they read, `docs/spec/memory.md` §2.4.
 const READ_ONLY: [usize; 3] = [RS1, RS2, LOAD];
 
 /// Every execution family and the queries its frame holds, `docs/spec/memory.md`
-/// §2.1's table written out, with `deleg` on the family that owns ecall rows
-/// (`docs/spec/delegation.md` §5.1). Widths 5, 4, 6 and 5: the ones that are
-/// not powers of two carry constant-1 pad leaves, and only the 4-wide one
-/// carries none.
+/// §2.1's table written out. Widths 4, 6 and 5: the ones that are not powers of
+/// two carry constant-1 pad leaves, and only the 4-wide one carries none.
 const FAMILIES: [(u32, &[usize]); 7] = [
-    (family::ADD_SUB_LUI_AUIPC, &[PC, RS1, RS2, RD, DELEG]),
+    (family::ADD_SUB_LUI_AUIPC, &[PC, RS1, RS2, RD]),
     (family::JUMP_BRANCH_SLT, &[PC, RS1, RS2, RD]),
     (family::SHIFT_BITWISE, &[PC, RS1, RS2, RD]),
     (family::MUL_DIV, &[PC, RS1, RS2, RD]),
@@ -78,17 +73,9 @@ fn column(slot: usize, field: usize) -> usize {
     1 + 5 * slot + field
 }
 
-/// `M[1 + 5w]`, the delegation mirror's type tag, on the one family whose frame
-/// holds that query (`docs/spec/delegation.md` §5.1). A frame without `deleg`
-/// does not carry the column.
-fn deleg_space(queries: &[usize]) -> Option<usize> {
-    queries.contains(&DELEG).then(|| 1 + 5 * queries.len())
-}
-
-/// The memory columns of a frame over `queries`: `1 + 5w`, and one more where
-/// the delegation mirror's tag rides.
+/// The memory columns of a frame over `queries`: `1 + 5w`.
 fn memory_columns(queries: &[usize]) -> usize {
-    1 + 5 * queries.len() + usize::from(queries.contains(&DELEG))
+    1 + 5 * queries.len()
 }
 
 /// `W[s]`, the gap's high chunk of the query at slot `s`, in a frame over
@@ -156,9 +143,8 @@ fn t(c: &[Fr; 4], space: Fr, addr: Fr, ts: Fr, value: Fr) -> Fr {
 /// masked by another query's mask, a pad leaf that reads anything, and — the
 /// mutant the per-family frames add — a leaf taking its AS or Δ from its slot
 /// instead of its query id, which differs at `ATOMICS`' slot 3 (`ram`, AS 2,
-/// Δ 3, against slot 3's `load`, AS 2 Δ 2) and at `ADD_SUB_LUI_AUIPC`'s slots
-/// 3 and 4 — the second of them `deleg`, whose AS is the row's `deleg_space`
-/// column against slot 4's `ram` AS 2 (`docs/spec/delegation.md` §5.1).
+/// Δ 3, against slot 3's `load`, AS 2 Δ 2) and at every 4-wide frame's slot 3
+/// (`rd`, AS 1, against slot 3's `load`, AS 2).
 /// Each family's query list is the test's own; `frame_artifact` over it is
 /// asserted equal to `family_frame_artifact`, so a changed `frame_queries` fails
 /// here rather than quietly moving what is swept.
@@ -190,15 +176,7 @@ fn frame_leaves_are_one_when_masked_and_the_tuple_when_live() {
                 let (addr, read_ts) = (row[column(s, 1)], row[column(s, 2)]);
                 let (read_value, write_value) = (row[column(s, 3)], row[column(s, 4)]);
                 let write_ts = int(4) * cycle + int(DELTA[q]);
-                // The mirror's `AS` is not a literal of the table: one `deleg`
-                // query serves every delegation type, so the tag is the row's
-                // own `deleg_space` column (`docs/spec/delegation.md` §5.1).
-                // Here that column is one more random cell, which is exactly
-                // the sweep this test wants of it.
-                let space = match q {
-                    DELEG => row[deleg_space(queries).expect("the frame holds deleg")],
-                    _ => int(SPACE[q]),
-                };
+                let space = int(SPACE[q]);
                 let (read, write) = if live[s] {
                     (
                         t(&c, space, addr, read_ts, read_value),
@@ -457,10 +435,8 @@ fn window_artifacts_prove_and_verify() {
 /// every column; a read-only query writes back; `rd` is at address 0 on row 0
 /// and wherever a coin says, with its x0 witnesses consistent. Every column is
 /// addressed by the query's **slot** in this family, its behaviour chosen by the
-/// query's id: `ram` and `deleg` fall through to the last arm and write what
-/// they like, the frame constraining neither — the mirror's three zeroings are
-/// the requesting family's own circuit, not its frame
-/// (`docs/spec/delegation.md` §5.2).
+/// query's id: `ram` falls through to the last arm and writes what it likes,
+/// the frame not constraining it.
 fn frame_columns(queries: &[usize], rng: &mut Rng) -> Vec<Vec<Fr>> {
     let n = committed(queries);
     let (inv, is_zero, selected) = (rd_inv(queries), rd_is_zero(queries), rd_selected(queries));
@@ -495,14 +471,6 @@ fn frame_columns(queries: &[usize], rng: &mut Rng) -> Vec<Vec<Fr>> {
             };
             row[column(s, 1)] = addr;
             row[column(s, 4)] = write_value;
-            // The mirror's leaf reads the requested type's tag from the frame's
-            // own `deleg_space` column, so a live `deleg` query needs one; any
-            // delegation tag will do here, the frame constraining none of them
-            // (`docs/spec/delegation.md` §5.1).
-            if q == DELEG {
-                let at = deleg_space(queries).expect("the frame holds deleg");
-                row[at] = int(constants::address_space::DELEGATION_KECCAK_F as u64);
-            }
         }
         for (column, value) in cols.iter_mut().zip(row) {
             column.push(value);
@@ -516,8 +484,7 @@ fn frame_columns(queries: &[usize], rng: &mut Rng) -> Vec<Vec<Fr>> {
 /// unpadded gate list 0 are proven. Then row 0's `rd` write, at address 0, is
 /// set to 5: the self-check names `rd_write_masked` and `verify` rejects at
 /// transition 0. `rd`'s **slot** is its position in that family's own ascending
-/// list — the last one for every family but `ADD_SUB_LUI_AUIPC`, where the
-/// `deleg` query follows it — so it is looked up rather than assumed.
+/// list, so it is looked up rather than assumed.
 #[test]
 fn every_frame_proves_and_verifies_and_rejects_a_write_to_x0() {
     let mut rng = Rng::new(0x5714_3106);

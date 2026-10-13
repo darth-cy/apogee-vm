@@ -1,14 +1,27 @@
-//! `Fr` arithmetic against ark-bn254, element for element.
+//! `Fr` arithmetic against arkworks' Montgomery field over the same modulus,
+//! element for element.
 //!
 //! Both libraries are handed the same canonical bytes, so the ratio is a
 //! statement about the implementations and not about the inputs.
 
+// `#[derive(MontConfig)]` emits a `cfg(feature = "asm")` this crate does not
+// declare.
+#![allow(unexpected_cfgs)]
+
 use std::hint::black_box;
 
+use ark_ff::fields::{Fp256, MontBackend, MontConfig};
 use ark_ff::Field as _;
 use test_support::Rng;
 
 use crate::timing::{best, next_canonical, ns_per_op, REPS, SEED};
+
+/// arkworks' field over `Fr`'s modulus, derived from it.
+#[derive(MontConfig)]
+#[modulus = "21888242871839275222246405745257275088548364400416034343698204186575808495617"]
+#[generator = "5"]
+struct FrConfig;
+type ArkFr = Fp256<MontBackend<FrConfig, 4>>;
 
 const N: usize = 1 << 20;
 /// One inversion is ~380 muls; `N` of them would take minutes.
@@ -27,17 +40,17 @@ pub fn run() {
         .iter()
         .map(|b| field::Fr::from_bytes(b).unwrap())
         .collect();
-    let axs: Vec<ark_bn254::Fr> = bytes
+    let axs: Vec<ArkFr> = bytes
         .iter()
         .map(|b| ark_ff::PrimeField::from_le_bytes_mod_order(b))
         .collect();
-    let ays: Vec<ark_bn254::Fr> = bytes_b
+    let ays: Vec<ArkFr> = bytes_b
         .iter()
         .map(|b| ark_ff::PrimeField::from_le_bytes_mod_order(b))
         .collect();
 
     let mut out = vec![field::Fr::ZERO; N];
-    let mut aout = vec![ark_bn254::Fr::from(0u64); N];
+    let mut aout = vec![ArkFr::from(0u64); N];
 
     let mul = best(|| {
         for i in 0..N {

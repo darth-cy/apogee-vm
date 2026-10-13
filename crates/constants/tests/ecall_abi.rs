@@ -1,7 +1,7 @@
 //! `docs/spec/ecall-abi.md` is the ABI, and this holds it to `constants::ecall`.
 //!
 //! The single source of truth is in code, and the document is checked against
-//! it. So the document's tables — the numbers and the ranges — are parsed here
+//! it. So the document's tables — the numbers — are parsed here
 //! and compared to the constants, in both directions: a number in the document
 //! that is not a constant fails, and a constant the document does not mention
 //! fails too.
@@ -25,32 +25,8 @@ use constants::{ecall, guest_memory};
 fn constants_table() -> BTreeMap<&'static str, u32> {
     BTreeMap::from([
         ("EXIT", ecall::EXIT),
-        ("PRECOMPILE_POSEIDON2", ecall::PRECOMPILE_POSEIDON2),
         ("PRECOMPILE_KECCAK_F", ecall::PRECOMPILE_KECCAK_F),
-        ("PRECOMPILE_FR_ARITH", ecall::PRECOMPILE_FR_ARITH),
-        ("PRECOMPILE_MOD_MUL", ecall::PRECOMPILE_MOD_MUL),
         ("PRECOMPILE_SHA256_COMP", ecall::PRECOMPILE_SHA256_COMP),
-        ("PRECOMPILE_EC_ADD", ecall::PRECOMPILE_EC_ADD),
-        ("PRECOMPILE_FR_OP", ecall::PRECOMPILE_FR_OP),
-        ("PRECOMPILE_P2_FIELD", ecall::PRECOMPILE_P2_FIELD),
-        ("PRECOMPILE_FIELD_IO", ecall::PRECOMPILE_FIELD_IO),
-        ("PRECOMPILE_FQ_OP", ecall::PRECOMPILE_FQ_OP),
-        (
-            "RETIRED_MOD_MUL_WITNESSED_MODULUS",
-            ecall::RETIRED_MOD_MUL_WITNESSED_MODULUS,
-        ),
-        (
-            "RETIRED_KECCAK_F_WHOLE_PERMUTATION",
-            ecall::RETIRED_KECCAK_F_WHOLE_PERMUTATION,
-        ),
-        (
-            "RETIRED_SHA256_COMP_WHOLE_COMPRESSION",
-            ecall::RETIRED_SHA256_COMP_WHOLE_COMPRESSION,
-        ),
-        ("ZKVM_IO_FIRST", ecall::ZKVM_IO_FIRST),
-        ("ZKVM_IO_LAST", ecall::ZKVM_IO_LAST),
-        ("PRECOMPILE_FIRST", ecall::PRECOMPILE_FIRST),
-        ("PRECOMPILE_LAST", ecall::PRECOMPILE_LAST),
         ("ENOSYS", ecall::ENOSYS),
     ])
 }
@@ -82,15 +58,14 @@ fn the_document_and_the_constants_agree() {
 }
 
 /// Every implemented number carries a nondeterminism class
-/// (`docs/spec/ecall-abi.md` §3).
+/// (`docs/spec/ecall-abi.md` §2).
 #[test]
 fn every_implemented_number_is_classified() {
     let text = document();
-    let rows = table_rows(section_of(&text, "## 3. Syscall numbers"));
+    let rows = table_rows(section_of(&text, "## 2. Syscall numbers"));
     assert!(
-        rows.len() >= 4,
-        "the syscall table parsed to {} rows, so this check is nearly vacuous",
-        rows.len()
+        !rows.is_empty(),
+        "the syscall table parsed to no rows, so this check is vacuous"
     );
     for row in rows {
         // `| Number | Constant | Class | What |`
@@ -115,50 +90,10 @@ fn every_implemented_number_is_classified() {
     }
 }
 
-/// The two non-Linux ranges sit above every Linux number, and are disjoint.
-#[test]
-fn the_ranges_are_above_linux_and_disjoint() {
-    // `const` blocks: these are relations between constants, so a violation
-    // should stop the build rather than wait for a test run.
-    const {
-        assert!(
-            ecall::ZKVM_IO_FIRST > 1023,
-            "the zkVM range must sit above the whole Linux number space, not \
-             just the numbers implemented today"
-        );
-        assert!(ecall::ZKVM_IO_FIRST <= ecall::ZKVM_IO_LAST);
-        assert!(ecall::PRECOMPILE_FIRST <= ecall::PRECOMPILE_LAST);
-        assert!(
-            ecall::ZKVM_IO_LAST < ecall::PRECOMPILE_FIRST,
-            "the two ranges must be disjoint: a reviewer has to tell host \
-             advice from a proven function at a glance"
-        );
-        assert!(
-            ecall::PRECOMPILE_FIRST <= ecall::PRECOMPILE_POSEIDON2
-                && ecall::PRECOMPILE_POSEIDON2 <= ecall::PRECOMPILE_LAST,
-            "every shim must land inside the precompile range"
-        );
-    }
-    assert_eq!(
-        (ecall::ZKVM_IO_FIRST, ecall::ZKVM_IO_LAST),
-        (0x0400, 0x04FF)
-    );
-    assert_eq!(
-        (ecall::PRECOMPILE_FIRST, ecall::PRECOMPILE_LAST),
-        (0x0500, 0x05FF)
-    );
-
-    // Every shim lands inside the precompile range.
-    assert!(
-        (ecall::PRECOMPILE_FIRST..=ecall::PRECOMPILE_LAST).contains(&ecall::PRECOMPILE_POSEIDON2),
-        "PRECOMPILE_POSEIDON2 is outside the precompile range"
-    );
-}
-
 /// The guest memory map is written down three times. They must agree.
 ///
 /// `link.ld` is what the linker reads, `constants::guest_memory` is what
-/// `crates/loader` enforces, and `docs/spec/ecall-abi.md` §6 is what a
+/// `crates/loader` enforces, and `docs/spec/ecall-abi.md` §5 is what a
 /// reader believes. A map that can disagree with itself is a map that will.
 #[test]
 fn the_memory_map_agrees_across_its_three_copies() {
@@ -226,36 +161,25 @@ fn the_memory_map_agrees_across_its_three_copies() {
     }
 }
 
-/// `guest-sdk`'s shims reach the constants rather than owning a second copy.
+/// `guest-sdk`'s exit shim reaches the constant rather than owning a second
+/// copy.
 #[test]
 fn the_shims_use_the_constants() {
     let source = fs::read_to_string(repo_root().join("crates/guest-sdk/src/lib.rs"))
         .expect("crates/guest-sdk/src/lib.rs is readable");
 
-    for name in [
-        "ecall::EXIT",
-        "ecall::PRECOMPILE_POSEIDON2",
-        // The shim does not call this number directly — it reads it out of
-        // the declaration record it emits (`docs/spec/delegation.md` §7) —
-        // but the record is built from the constant, which is the same rule.
-        "ecall::PRECOMPILE_KECCAK_F",
-    ] {
-        assert!(
-            source.contains(name),
-            "guest-sdk does not reference {name}, so either a shim is missing or \
-             it spells a number itself"
-        );
-    }
+    assert!(
+        source.contains("ecall::EXIT"),
+        "guest-sdk does not reference ecall::EXIT, so either the exit shim is missing or \
+         it spells the number itself"
+    );
 
-    // And it spells none of them. The numbers below are the ones a second copy
-    // would most plausibly be written as.
-    for literal in [" 93", "0x0500", "0x0501"] {
-        assert!(
-            !source.contains(&format!("= {}", literal.trim())),
-            "guest-sdk assigns the literal {literal}, which is an ABI number \
-             with a home in constants::ecall"
-        );
-    }
+    // And it does not spell it.
+    assert!(
+        !source.contains("= 93"),
+        "guest-sdk assigns the literal 93, which is an ABI number with a home in \
+         constants::ecall"
+    );
 }
 
 /// The emulator's dispatch — the zkVM's executor — reaches the same constants
@@ -272,7 +196,7 @@ fn the_emulator_dispatches_on_the_constants() {
              or it spells a number itself"
         );
     }
-    for literal in ["93 =>", "== 93", "0x500", "0x501"] {
+    for literal in ["93 =>", "== 93"] {
         assert!(
             !source.contains(literal),
             "the emulator spells `{literal}`, an ABI number with a home in constants::ecall"
@@ -328,7 +252,7 @@ fn the_document_checker_can_fail() {
     let unclassified = text.replace("| 93 | `EXIT` | deterministic |", "| 93 | `EXIT` | free |");
     assert_ne!(unclassified, text);
     assert!(
-        table_rows(section_of(&unclassified, "## 3. Syscall numbers"))
+        table_rows(section_of(&unclassified, "## 2. Syscall numbers"))
             .iter()
             .any(|row| row[2] == "free"),
         "the classification check reads a cell that a wrong document can change"

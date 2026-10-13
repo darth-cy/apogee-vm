@@ -6,7 +6,7 @@ mod common;
 use std::collections::BTreeSet;
 
 use common::{instr_at, traced, TRACED};
-use constants::{delegation, ecall, family, guest_memory, memory};
+use constants::{ecall, family, guest_memory, memory};
 use emulator::trace_run;
 use isa::Instr;
 use program::row_kind;
@@ -383,14 +383,6 @@ fn frame(instr: &Instr, row: &Row) -> u8 {
         | AmomaxuW { .. } => roles(&[Rs1, Rs2, Ram, Rd]),
         Ecall => match row.queries[Rs1 as usize].read_value {
             ecall::EXIT => roles(&[Rs1, Rs2, Rd]),
-            // A delegation call reads its frame base from `a0` and carries the
-            // mirror query besides, at slot 3 in the delegation family's own
-            // address space (`docs/spec/delegation.md` §5.1). Asked of the
-            // registry rather than of a number spelled here, because the
-            // registry is where a delegation's number lives. No guest traced
-            // here makes one — `guests/keccak-test` is the one that does — so
-            // this arm is the restated frame and not coverage of it.
-            n if program::delegation_family(n).is_some() => roles(&[Rs1, Rs2, Rd, Delegate]),
             _ => roles(&[Rs1, Rd]),
         },
         Ebreak => panic!("an ebreak has no row"),
@@ -539,22 +531,12 @@ fn the_exit_row_alone_writes_the_halting_sentinel() {
 /// The buffers carry everything the log does: rebuilt from the rows alone,
 /// in cycle order, the log comes back event for event — the pc query's read
 /// timestamp included, which a row does not store because it is always the
-/// previous cycle's. No guest here delegates, so every event is some row's:
-/// an invocation's frame words are logged too, but they ride the requesting
-/// cycle and live in a `DelegationTrace`, never in a `Row`
-/// (`docs/spec/delegation.md` §4).
+/// previous cycle's. Every event is some row's.
 #[test]
 fn the_rows_rebuild_the_log_exactly() {
-    // Each role's slot, restated from `docs/spec/execution-trace.md` §7 — and,
-    // for the sixth, from `docs/spec/delegation.md` §5.1, the delegation
-    // request's mirror query — rather than read from `Role::delta`, which is
-    // what is under test.
-    const SLOT: [u64; 6] = [1, 2, 2, 3, 3, 3];
-    assert_eq!(
-        SLOT[Role::Delegate as usize],
-        delegation::ANCHOR_DELTA,
-        "the mirror query sits at the slot the invocation's answer is stamped at"
-    );
+    // Each role's slot, restated from `docs/spec/execution-trace.md` §7 rather
+    // than read from `Role::delta`, which is what is under test.
+    const SLOT: [u64; 5] = [1, 2, 2, 3, 3];
     for role in ROLES {
         assert_eq!(role.delta(), SLOT[role as usize], "{role:?}");
     }
@@ -566,19 +548,6 @@ fn the_rows_rebuild_the_log_exactly() {
     );
     for name in TRACED {
         let t = traced(name);
-        // The cycles that made a delegation request, and which family: the
-        // mirror query's address space is the row's, not the role's.
-        let requested: std::collections::HashMap<u64, AddressSpace> = t
-            .traces
-            .delegations
-            .iter()
-            .flat_map(|d| {
-                let space = program::delegation_space(d.family)
-                    .and_then(AddressSpace::from_tag)
-                    .expect("a delegation family has an anchor space");
-                d.cycle.iter().map(move |c| (*c, space))
-            })
-            .collect();
         let mut events = Vec::new();
         for (_, row) in rows_by_cycle(&t) {
             let base = memory::TS_STEP * row.cycle;
@@ -593,7 +562,7 @@ fn the_rows_rebuild_the_log_exactly() {
             for role in ROLES {
                 if let Some(q) = row.query(role) {
                     events.push(MemoryEvent {
-                        space: role.space(requested.get(&row.cycle).copied()),
+                        space: role.space(),
                         addr: q.addr,
                         ts: base + SLOT[role as usize],
                         read_ts: q.read_ts,
@@ -661,12 +630,11 @@ fn fib_touches_only_the_image_window_and_the_stack_window() {
 /// window, and every listed window holds one, at every menu height — and the
 /// list passes the verifier's window rules.
 ///
-/// Every *admissible* window height, that is. `2^8` and `2^12` are on the menu
-/// for the delegation families and the two public value ones, and neither is a
-/// window height: `4h` would be 1 or 16 KiB, so RAM window 0 would not contain
-/// the two public windows and a `ZERO_WINDOWS` id could claim one
-/// (`docs/spec/public-values.md` §2). The rule refuses both by name, which is
-/// asserted here rather than skipped.
+/// Every *admissible* window height, that is. `2^12` is on the menu for the two
+/// public value families, and it is not a window height: `4h` would be 16 KiB,
+/// so RAM window 0 would not contain the two public windows and a
+/// `ZERO_WINDOWS` id could claim one (`docs/spec/public-values.md` §2). The rule
+/// refuses it by name, which is asserted here rather than skipped.
 #[test]
 fn the_window_list_is_exactly_the_touched_windows_above_zero() {
     for name in TRACED {
@@ -737,11 +705,10 @@ fn the_window_list_is_exactly_the_touched_windows_above_zero() {
 /// Every ecall row answers as `docs/spec/ecall-abi.md` says.
 /// Each is `(a7, a0 read, a0 written)`, and the middle is zero where the call
 /// reads no argument at all — an ecall takes one or none. `opcodes`'
-/// `cover_ecall` makes one call at the top of each of the two ranges nothing
-/// answers, in this order; every guest ends in `exit(0)` — `addsub` in
-/// `exit(42)` and `control` in `exit(16)`, their results; and every call
-/// anywhere is an `exit`, a delegation answered 0
-/// (`docs/spec/delegation.md` §2), or answered `-ENOSYS`.
+/// `cover_ecall` makes two calls nobody answers, `0x5ff` then `0x4ff`; every
+/// guest ends in `exit(0)` — `addsub` in `exit(42)` and `control` in
+/// `exit(16)`, their results; and every call anywhere is an `exit` or answered
+/// `-ENOSYS`.
 #[test]
 fn every_ecall_answers_as_the_abi_says() {
     let neg = |errno: u32| errno.wrapping_neg();
@@ -766,12 +733,6 @@ fn every_ecall_answers_as_the_abi_says() {
                 ecall::EXIT => {
                     assert_eq!(result, argument, "{name}: exit writes back its status")
                 }
-                // An executor that has the circuit answers a delegation 0; one
-                // without it answers `-ENOSYS`, which is what sends the shim
-                // down its software path. No guest here calls one.
-                n if program::delegation_family(n).is_some() => {
-                    assert_eq!(result, 0, "{name}: delegation {number:#x}")
-                }
                 // A number the ABI table does not list reads no argument at
                 // all, which is why the middle of the tuple is 0 here and not
                 // whatever `a0` happened to hold.
@@ -783,13 +744,10 @@ fn every_ecall_answers_as_the_abi_says() {
             }
         }
         if name == "opcodes" {
-            // The top of each range nothing answers. Not the *bottom* of the
-            // precompile range: the low numbers are delegations, and
-            // calling one a guest did not declare is fatal rather than
-            // `-ENOSYS`.
+            // The two numbers `cover_ecall` calls, which nobody assigned.
             let edges = [
-                (ecall::PRECOMPILE_LAST, 0, neg(ecall::ENOSYS)),
-                (ecall::ZKVM_IO_LAST, 0, neg(ecall::ENOSYS)),
+                (0x05ff, 0, neg(ecall::ENOSYS)),
+                (0x04ff, 0, neg(ecall::ENOSYS)),
             ];
             assert!(
                 calls.windows(edges.len()).any(|w| w == edges),

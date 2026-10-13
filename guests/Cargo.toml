@@ -11,36 +11,7 @@
 # toolchain, because rustup walks up from the working directory.
 [workspace]
 resolver = "2"
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "keccak-test", "keccak-unused", "recursion-ops", "recursion-unused", "revm-block", "public-io", "mod-mul-ops", "sha256-ops", "ec-ops", "recursion"]
-
-# Three crates are vendored and patched so that a guest's library code reaches
-# a delegation on the guest target; `guests/vendor/README.md` lists every
-# change and the upstream release each copy is.
-#
-#   k256    `FieldElement10x26::mul`/`::square` under the SECP256K1_P selector
-#           and `Scalar::mul` under SECP256K1_N, both `MOD_MUL`, and
-#           `ProjectivePoint`'s group law through `EC_ADD`. Unpatched, the
-#           field's `mul` and `square` are 36.8% and 7.6% of a whole mainnet
-#           block's cycles, one function each. It reaches `revm-precompile`'s
-#           `ecrecover` through cargo's resolution and nothing else changes.
-#   ark-ff  `MontBackend::mul_assign`/`::square_in_place` under BN254_P and
-#           BN254_R, which is `revm-precompile`'s `0x06`, `0x07` and `0x08`.
-#           Patched here rather than in `ark-bn254` because that crate's
-#           `#[derive(MontConfig)]` generates its own multiply.
-#   revm-precompile  the default bodies of `Crypto::sha256`, `::bn254_g1_add`
-#           and `::bn254_g1_mul` -- `0x02`, `0x06` and `0x07` -- through
-#           `SHA256_COMP` and `EC_ADD`, so `DefaultCrypto` stays the only
-#           `Crypto` implementation.
-#
-# The vendored crates are NOT workspace members -- `cargo metadata` lists the 24
-# guests and nothing else, a `[patch]` path being no member's dependency -- so the
-# release profile's `"*"` override below reaches them. `cargo fmt --all` covers
-# them because it formats local path dependencies too; their `[features]` tables
-# are upstream's.
-[patch.crates-io]
-k256 = { path = "vendor/k256" }
-ark-ff = { path = "vendor/ark-ff" }
-revm-precompile = { path = "vendor/revm-precompile" }
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "public-io"]
 
 [workspace.package]
 version = "0.1.0"
@@ -81,9 +52,7 @@ codegen-units = 1
 # optimisation level would be part of the statement being proven, and a suite
 # that builds guests in dev would witness nothing about a release artifact. So
 # the two profiles are pinned to the same *semantics* and differ in `opt-level`
-# and in the one package override below, which reaches no guest's own code. CI
-# builds and runs guests at `--release` through
-# `crates/program/tests/delegation.rs` and `crates/emulator/tests/revm.rs`.
+# alone.
 [profile.release]
 panic = "abort"
 debug = false
@@ -91,21 +60,3 @@ incremental = false
 codegen-units = 1
 overflow-checks = true
 debug-assertions = true
-
-# One exception, and only at `--release`: a DEPENDENCY's
-# `debug_assert!`s are off. `"*"` is every package that is not a guest -- the
-# crates.io dependencies, the vendored ones, and this repository's own library
-# crates a guest links -- so every guest keeps its own assertions,
-# and `overflow-checks` stays on everywhere, a package override inheriting it.
-#
-# It is not a semantic change of the kind the release profile's comment
-# forbids. A dependency's debug assertion is that crate's check of its own
-# invariant: one that fires is a bug in the dependency, and the image is the
-# program its identity names either way. What it buys is cycles: in the
-# stateless guest on block 257510 it is 23.8M of 349.3M, 6.8% -- k256 drops
-# its magnitude-tracking debug field element for the plain 10x26 one, and
-# `core`'s inlined precondition checks (`ub_checks`) compile out of every
-# dependency's copies and slices. The dev profile, which builds every
-# committed fixture, keeps them, so no committed ELF moves.
-[profile.release.package."*"]
-debug-assertions = false

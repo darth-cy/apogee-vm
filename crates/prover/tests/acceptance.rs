@@ -47,14 +47,7 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
             4 + 128 * a.layer_vars(k + 1) as usize + 4 + 32 * claims
         })
         .sum();
-    4 + 4
-        + 16
-        + 32
-        + (4 + 64 * a.witness.len())
-        + (4 + 32 * a.outputs.len())
-        + 4
-        + transitions
-        + 704
+    4 + 4 + 16 + 32 + (4 + 32 * a.outputs.len()) + 4 + transitions
 }
 
 // ---------------------------------------------------------------------------
@@ -152,21 +145,16 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
             assert_eq!(layer.final_evals.len(), claims, "transition {k}");
         }
         assert_eq!(proof.gkr.layers[0].final_evals.len(), a.committed().len());
-        assert_eq!(proof.witness_commitments.len(), a.witness.len());
         assert_eq!(proof.outputs.len(), 2 + 2 * circuit.channels.len());
         assert_eq!(proof.to_bytes().len(), proof_bytes(a));
     }
     let [init, add] = [&proofs[0], &proofs[1]];
-    // The add/sub circuit's shape at `2^20` (`docs/spec/circuits.md` §1). Each
-    // registered delegation type costs it one request selector, so one more
-    // base claim (32 bytes) and one more witness commitment (64): **96** bytes
-    // a type, and no inner column, its gates being enforcing
-    // (`docs/spec/delegation.md` §3).
-    assert_eq!(add.to_bytes().len(), 57_196);
-    assert_eq!(init.to_bytes().len(), 20_524);
+    // The add/sub circuit's shape at `2^20` (`docs/spec/circuits.md` §1).
+    assert_eq!(add.to_bytes().len(), 53_384);
+    assert_eq!(init.to_bytes().len(), 19_816);
     assert_eq!(add.gkr.layers.len(), 25);
     assert_eq!(add.gkr.layers[0].rounds.len(), 20);
-    assert_eq!(add.gkr.layers[0].final_evals.len(), 27 + 35 + 7);
+    assert_eq!(add.gkr.layers[0].final_evals.len(), 21 + 28 + 7);
 }
 
 // ---------------------------------------------------------------------------
@@ -182,9 +170,13 @@ fn statement_refusal(result: Result<(), VerifyError>, what: &str) {
 
 /// The honest proofs, checked against a statement they were not made for:
 /// another program identity, another public I/O digest, another static
-/// `VmConfig`, other shard counts, another SRS digest, one memory commitment
-/// swapped, and other public inputs altogether — each refused as `Statement`,
-/// for every shard.
+/// `VmConfig`, other shard counts and other public inputs altogether — each
+/// refused as `Statement`, for every shard.
+///
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A statement
+/// whose memory commitments are swapped or replaced is meant to be refused
+/// here too. A statement carries no commitment, so there is no such twin
+/// until a commitment scheme fills the void (`docs/architecture.md` §0).
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
 fn a5_every_statement_twin_is_refused_as_statement() {
@@ -212,24 +204,12 @@ fn a5_every_statement_twin_is_refused_as_statement() {
         let mut p = public.clone();
         p.shard_counts[2] = 1;
         p.windows = vec![1];
-        p.memory_commitments
-            .insert(1, p.memory_commitments[0].clone());
         p.memory_roots.insert(1, p.memory_roots[0]);
         statement_refusal(verify_shard(vk, proof, &p), "a zero-window shard added");
 
-        let mut k = vk.clone();
-        k.srs_digest += field::Fr::ONE;
-        statement_refusal(verify_shard(&k, proof, &public), "the SRS digest");
-
-        let mut p = public.clone();
-        p.memory_commitments[1].swap(0, 1);
-        statement_refusal(
-            verify_shard(vk, proof, &p),
-            "two memory commitments swapped",
-        );
-        let mut p = public.clone();
-        p.memory_commitments[0][0] = p.memory_commitments[1][0];
-        statement_refusal(verify_shard(vk, proof, &p), "a memory commitment replaced");
+        // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The
+        // memory-commitment twins — two swapped, one replaced — belong here
+        // (`docs/architecture.md` §0).
 
         let mut p = public.clone();
         p.input = vec![0, 0, 0, 0];
@@ -369,53 +349,49 @@ fn gkr_schedule(a: &constraints::CircuitArtifact) -> Vec<TranscriptEvent> {
     events
 }
 
-/// On every shard's real transcript: the seed, the window and the witness
-/// commitments first; `g` and `β` after every commitment; the GKR schedule
-/// with at most one outstanding point after each batch, top to bottom; then
-/// the one batched opening, whose column-RLC challenge follows every
-/// evaluation claim it combines. The proof holds one
-/// Mercury proof, every base claim is at one point — the prover asserts it, and
-/// the verifier's reduction re-derives the same point — and the global
-/// transcript draws its memory challenges after every memory commitment.
+/// On every shard's real transcript: the seed and the window first, then `g`
+/// and `β`, then the GKR schedule with at most one outstanding point after
+/// each batch, top to bottom, and nothing after it. Every base claim is at one
+/// point — the prover asserts it, and the verifier's reduction re-derives the
+/// same point — and the global transcript draws nothing before the boundary.
+///
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The schedule
+/// is meant to absorb each shard's witness commitments before `g` and `β`, every
+/// statement shard's memory commitments before the memory challenges, and to
+/// end in one batched opening of every committed column at that one point. None
+/// of the three exists, so no challenge here follows anything it protects
+/// (`docs/architecture.md` §0).
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
-fn a6_a8_one_opening_at_one_point_and_every_challenge_after_what_it_protects() {
+fn a6_a8_every_base_claim_is_at_one_point_and_the_schedule_holds() {
     let setup = common::setup();
     let archive = common::archive(&setup.program);
     let inputs = statement_inputs(&setup, &archive).unwrap();
-    let global = global_commit_phase(&setup.vk, &setup.srs, &inputs);
+    let global = global_commit_phase(&setup.vk, &inputs);
     let ctx = ProvingContext {
         setup: &setup,
         global: global.clone(),
     };
 
-    // The global transcript: every memory commitment, the boundary, then the
-    // four challenges and the digest, and nothing drawn before.
+    // The global transcript: the boundary, then the four challenges and the
+    // digest, and nothing drawn before.
     let g = global_commit(&setup.vk, &global.statement);
     let log = g.transcript.event_log();
     let first_challenge = log
         .iter()
         .position(|e| matches!(e, Challenge { .. }))
         .unwrap();
-    let last_commitment = log
-        .iter()
-        .rposition(|e| {
-            matches!(
-                e,
-                Absorb {
-                    tag: tags::COMMITMENT,
-                    ..
-                }
-            )
-        })
-        .unwrap();
-    assert!(last_commitment < first_challenge);
     assert_eq!(
         log[first_challenge - 1],
         Absorb {
             tag: tags::MEMORY_BOUNDARY,
             n_scalars: 64
         }
+    );
+    assert_eq!(
+        first_challenge + 5,
+        log.len(),
+        "four challenges and the digest"
     );
     assert_eq!(g.digest, global.digest);
 
@@ -426,7 +402,7 @@ fn a6_a8_one_opening_at_one_point_and_every_challenge_after_what_it_protects() {
         let a = &setup.vk.circuit(family).unwrap().artifact;
 
         assert_eq!(
-            log[..5],
+            log[..4],
             [
                 Absorb {
                     tag: tags::SHARD_SEED,
@@ -435,10 +411,6 @@ fn a6_a8_one_opening_at_one_point_and_every_challenge_after_what_it_protects() {
                 Absorb {
                     tag: tags::SHARD_TS_WINDOW,
                     n_scalars: 2
-                },
-                Absorb {
-                    tag: tags::COMMITMENT,
-                    n_scalars: 4 * a.witness.len()
                 },
                 Challenge {
                     tag: tags::LOOKUP_CHALLENGE
@@ -449,7 +421,7 @@ fn a6_a8_one_opening_at_one_point_and_every_challenge_after_what_it_protects() {
             ]
         );
         assert_eq!(
-            log[5],
+            log[4],
             Absorb {
                 tag: tags::GKR_OUTPUTS,
                 n_scalars: a.outputs.len()
@@ -460,90 +432,22 @@ fn a6_a8_one_opening_at_one_point_and_every_challenge_after_what_it_protects() {
         // outputs and the top point, then per transition from the top the
         // batch, every round's cubic and challenge, the claims, and a halving
         // transition's child challenge.
-        assert_eq!(log[5..=last_gkr], gkr_schedule(a)[..], "the GKR schedule");
-        // Every GKR challenge — the batches, the rounds, the children — after
-        // every commitment the shard reads.
-        let first_gkr_challenge = log
-            .iter()
-            .position(|e| matches!(e, Challenge { tag } if *tag != tags::LOOKUP_CHALLENGE))
-            .unwrap();
-        assert!(first_gkr_challenge > 2);
-
-        // The opening: B1, B2, B3, then the sixteen steps of
-        // `docs/spec/mercury.md` §3, once.
-        let k = a.committed().len();
-        let tail = &log[last_gkr + 1..];
-        assert_eq!(
-            tail[..3],
-            [
-                Absorb {
-                    tag: tags::COMMITMENT,
-                    n_scalars: 4 * k
-                },
-                Absorb {
-                    tag: tags::EVALUATION_CLAIM,
-                    n_scalars: a.trace_vars as usize + k
-                },
-                Challenge {
-                    tag: tags::MERCURY_BATCH
-                },
-            ]
-        );
-        let batch = last_gkr + 3;
-        // Every claim message — one per transition, then the opening's — is
-        // absorbed before the column-RLC challenge.
-        assert_eq!(
-            log[..batch]
-                .iter()
-                .filter(|e| matches!(
-                    e,
-                    Absorb {
-                        tag: tags::GKR_LAYER_CLAIMS | tags::EVALUATION_CLAIM,
-                        ..
-                    }
-                ))
-                .count(),
-            a.depth() + 1
-        );
-        assert_eq!(
-            log[batch..]
-                .iter()
-                .filter(|e| **e
-                    == Challenge {
-                        tag: tags::MERCURY_BATCH
-                    })
-                .count(),
-            1,
-            "one column-RLC challenge"
-        );
-        assert_eq!(
-            log.iter()
-                .filter(|e| **e
-                    == Challenge {
-                        tag: tags::PAIRING_MERGE
-                    })
-                .count(),
-            1,
-            "one Mercury opening"
-        );
-        assert_eq!(
-            *log.last().unwrap(),
-            Challenge {
-                tag: tags::PAIRING_MERGE
-            }
-        );
-        assert!(pcs::MercuryProof::from_bytes(&proof.opening).is_some());
+        assert_eq!(log[4..=last_gkr], gkr_schedule(a)[..], "the GKR schedule");
+        // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The
+        // opening of every committed column at the pass's point belongs after
+        // the GKR pass, and nothing is there (`docs/architecture.md` §0).
+        assert_eq!(last_gkr + 1, log.len(), "nothing follows the GKR pass");
         proofs.push(proof);
     }
 
-    // The verifier re-derives the one point the prover opened at.
+    // The verifier re-derives the one point every base claim is at.
     let public = public_inputs(&global, &proofs);
     for proof in &proofs {
         let claim = reduce_shard(&setup.vk, proof, &public).expect("the honest shard reduces");
         let a = &setup.vk.circuit(proof.family).unwrap().artifact;
         assert_eq!(claim.point.len(), a.trace_vars as usize);
         assert_eq!(claim.values, proof.gkr.layers[0].final_evals);
-        assert_eq!(claim.commitments.len(), a.committed().len());
+        assert_eq!(claim.columns, a.committed());
         assert_eq!(verify_shard(&setup.vk, proof, &public), Ok(()));
     }
     // And `prove_shard`, the per-shard entry point, is these same steps.

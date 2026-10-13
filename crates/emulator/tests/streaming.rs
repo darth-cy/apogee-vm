@@ -18,33 +18,19 @@
 //!    streaming prover builds are the ones an archived one builds;
 //! 4. the cycle profile and the `Execution` are equal, so the statement's
 //!    descriptor and its public values are the same.
-//!
-//! The delegation guests are here for arm 2 of `ChunkRows`: `keccak-test` and
-//! `recursion-ops` put a `DelegationTrace` in front of it, so the chunker is
-//! exercised on an invocation buffer and not only on `guests/shards`' cycle
-//! ones. What they contribute is the **partial tail chunk** — `keccak-test`'s 240
-//! rounds are one chunk at any height on the menu, and it arrives through
-//! `finish()`'s tail rather than the flush path.
 
 mod common;
 
 use std::collections::BTreeMap;
 
 use common::{exit_code_of, image, input_of, io, uniform};
-use emulator::{trace_run, ChunkRows, ShardChunk, StreamingRun};
+use emulator::{trace_run, ShardChunk, StreamingRun};
 use program::{decode_program, family_name, FamilyId, ProgramParams};
 use trace::{plan_shards, FamilyTraces, MemoryEventLog};
 
-/// The guests this file streams, and the height each family takes.
-///
-/// `smallest` for the plain ones, which puts every family at `2^16` and so cuts
-/// no shard at all for most of them; the two delegation guests take `2^8` for
-/// their delegation families, which is the menu's smallest, so their invocation
-/// buffers flush. For `recursion-ops` that is still what a real statement gives
-/// it — `POSEIDON2` and `FR_ARITH` default to `2^8` — but for `keccak-test` it is
-/// a choice made **here**: `KECCAK_F` defaults to `2^18`
-/// (`docs/spec/delegation.md` §9), where its 240 rounds are one shard.
-const GUESTS: [(&str, u32); 13] = [
+/// The guests this file streams, and the height each family takes: `2^16`,
+/// which cuts no shard at all for most of them.
+const GUESTS: [(&str, u32); 10] = [
     ("fib", 16),
     ("heap", 16),
     ("atomics", 16),
@@ -54,13 +40,6 @@ const GUESTS: [(&str, u32); 13] = [
     ("control", 16),
     ("alu", 16),
     ("mem", 16),
-    ("keccak-test", 16),
-    ("recursion-ops", 16),
-    // **`2^18` and not `2^16`**: its `.text` runs past pc `0x20000`, and a
-    // decoded table's row `i` is pc `2i`, so `2^16` rows stop there. It is
-    // the *only* committed guest that needs a taller table
-    // (`crates/program/tests/partition.rs`).
-    ("mod-mul-ops", 18),
     // The counted loop: 1,064,970 add/sub cycles, so **seventeen** shards at
     // `2^16` and the only committed guest whose buffers fill mid-execution.
     // Without it every chunk here would come from the tail and the flush path
@@ -68,14 +47,9 @@ const GUESTS: [(&str, u32); 13] = [
     ("shards", 16),
 ];
 
-/// Every family at `2^height`, but each **delegation** family at `2^8` so its
-/// invocations are cut into more than one shard.
+/// Every family at `2^height`.
 fn params(height: u32) -> ProgramParams {
-    let mut params = uniform(1 << height);
-    for (family, ..) in program::DELEGATIONS {
-        params.heights[family as usize] = 1 << 8;
-    }
-    params
+    uniform(1 << height)
 }
 
 /// One guest streamed: every chunk in the order it filled, and what the
@@ -142,7 +116,6 @@ fn whole(
 
 #[test]
 fn the_chunks_are_the_planned_shards_row_for_row() {
-    let mut delegation_chunks = 0;
     let mut split_families = 0;
     let mut total_stops = 0;
     for (name, height) in GUESTS {
@@ -185,57 +158,31 @@ fn the_chunks_are_the_planned_shards_row_for_row() {
                 family_name(chunk.family)
             );
             *want += 1;
-            match &chunk.rows {
-                ChunkRows::Cycles(rows) => {
-                    let buffer = traces.family(chunk.family).unwrap_or_else(|| {
-                        panic!("{name}: no {} buffer", family_name(chunk.family))
-                    });
-                    let h = buffer.height as usize;
-                    assert!(
-                        rows.len() <= h,
-                        "{name}: a chunk of {} rows at height {h}",
-                        rows.len()
-                    );
-                    let start = chunk.index as usize * h;
-                    for r in 0..rows.len() {
-                        assert_eq!(
-                            rows.row(r),
-                            buffer.row(start + r),
-                            "{name} {} shard {} row {r}",
-                            family_name(chunk.family),
-                            chunk.index
-                        );
-                    }
-                }
-                ChunkRows::Invocations(rows) => {
-                    delegation_chunks += 1;
-                    let buffer = traces.delegation(chunk.family).unwrap_or_else(|| {
-                        panic!("{name}: no {} buffer", family_name(chunk.family))
-                    });
-                    let h = buffer.height as usize;
-                    assert!(
-                        rows.len() <= h,
-                        "{name}: a chunk of {} rows at height {h}",
-                        rows.len()
-                    );
-                    let start = chunk.index as usize * h;
-                    for r in 0..rows.len() {
-                        assert_eq!(rows.cycle[r], buffer.cycle[start + r], "{name} cycle {r}");
-                        assert_eq!(rows.base[r], buffer.base[start + r], "{name} base {r}");
-                        assert_eq!(rows.frame(r), buffer.frame(start + r), "{name} frame {r}");
-                    }
-                }
+            let rows = &chunk.rows;
+            let buffer = traces
+                .family(chunk.family)
+                .unwrap_or_else(|| panic!("{name}: no {} buffer", family_name(chunk.family)));
+            let h = buffer.height as usize;
+            assert!(
+                rows.len() <= h,
+                "{name}: a chunk of {} rows at height {h}",
+                rows.len()
+            );
+            let start = chunk.index as usize * h;
+            for r in 0..rows.len() {
+                assert_eq!(
+                    rows.row(r),
+                    buffer.row(start + r),
+                    "{name} {} shard {} row {r}",
+                    family_name(chunk.family),
+                    chunk.index
+                );
             }
         }
         total_stops += s.stops;
     }
-    // Both arms of `ChunkRows` are exercised, and at least one family is cut
-    // into more than one shard: a comparison over single-shard families alone
-    // would never test the index arithmetic.
-    assert!(
-        delegation_chunks >= 2,
-        "{delegation_chunks} delegation chunks"
-    );
+    // At least one family is cut into more than one shard: a comparison over
+    // single-shard families alone would never test the index arithmetic.
     assert!(split_families >= 1, "{split_families} families cut in two");
     // And the executor really stopped mid-execution rather than handing
     // everything back from the tail: `shards`' add/sub family fills sixteen
@@ -287,14 +234,7 @@ fn the_executor_holds_one_partial_shard_per_family() {
     // was handed over the moment it filled, which is what the stop count says:
     // had the executor held them, it would have stopped once, at the end.
     let s = stream("shards", 16);
-    let full: usize = s
-        .chunks
-        .iter()
-        .filter(|c| match &c.rows {
-            ChunkRows::Cycles(rows) => rows.len() == 1 << 16,
-            ChunkRows::Invocations(_) => false,
-        })
-        .count();
+    let full: usize = s.chunks.iter().filter(|c| c.rows.len() == 1 << 16).count();
     assert_eq!(full, 16, "sixteen full add/sub shards");
     assert!(
         s.stops >= full,
@@ -308,8 +248,7 @@ fn the_executor_holds_one_partial_shard_per_family() {
     // property holds by construction and not by an argument about which
     // instructions exist.
     for chunk in &s.chunks {
-        if let ChunkRows::Cycles(rows) = &chunk.rows {
-            assert!(rows.len() <= 1 << 16, "a chunk of {} rows", rows.len());
-        }
+        let rows = &chunk.rows;
+        assert!(rows.len() <= 1 << 16, "a chunk of {} rows", rows.len());
     }
 }

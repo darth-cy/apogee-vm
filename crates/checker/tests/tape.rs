@@ -3,25 +3,22 @@
 //! the two-shard statement, and the negative control — a fork that swaps two
 //! absorptions.
 //!
-//! The statement here is built **shape only**, with stand-in points: a tape
-//! carries tags and payload lengths, never values. It is the same shape
+//! The statement here is built **shape only**: a tape carries tags and payload
+//! lengths, never values. It is the same shape
 //! `tools/kat-gen/src/tape.rs` writes the fixture from and the same shape
 //! `guests/shards` proves, and it is written out again here rather than shared,
 //! so a drift between the three fails loudly.
 
+use constants::family;
 use constants::transcript_tags as tags;
-use constants::{family, generic_table};
 use constraints::family_circuit;
 use field::Fr;
-use transcript::{append_g1_points, io_digest, Transcript};
+use transcript::{io_digest, Transcript};
 use verifier_core::{
     absorb_statement_descriptor, boundary_scalars, derive_global_phase, global_commit,
-    identity_digest, reduce_shard, srs_digest, statement_shards, BoundaryFinals, GkrProof,
-    PublicInputs, ShardProof, VerifyError, VerifyingKey, VmConfig, OPENING_BYTES,
-    TRIVIAL_TS_WINDOW,
+    identity_digest, reduce_shard, statement_shards, BoundaryFinals, GkrProof, PublicInputs,
+    ShardProof, VerifyError, VerifyingKey, VmConfig, TRIVIAL_TS_WINDOW,
 };
-
-const POINT: [u8; 64] = [0; 64];
 
 /// The two-shard statement's shape: add/sub in two shards, jump/branch/slt in
 /// one, `INIT_TEARDOWN` in one, `ZERO_WINDOWS` in none, the two public value
@@ -45,36 +42,7 @@ fn key_and_statement() -> (VerifyingKey, PublicInputs) {
         .iter()
         .map(|(f, h)| family_circuit(*f, h.trailing_zeros()).expect("a registered family"))
         .collect();
-    let setup: Vec<Vec<[u8; 64]>> = circuits
-        .iter()
-        .map(|c| {
-            let generic = match c.reads_generic_table() {
-                true => generic_table::WIDTH,
-                false => 0,
-            };
-            vec![POINT; c.artifact.setup.len() - generic]
-        })
-        .collect();
-    let generic = [POINT; generic_table::WIDTH];
-    let srs_verifier = [0u8; 320];
     let entry_pc = 0x1_0000;
-    let width = |f: u32| {
-        circuits
-            .iter()
-            .find(|c| c.family == f)
-            .expect("a config family")
-            .artifact
-            .memory
-            .len()
-    };
-    let memory_commitments = vec![
-        vec![POINT; width(family::INIT_TEARDOWN)],
-        vec![POINT; width(family::ADD_SUB_LUI_AUIPC)],
-        vec![POINT; width(family::ADD_SUB_LUI_AUIPC)],
-        vec![POINT; width(family::JUMP_BRANCH_SLT)],
-        vec![POINT; width(family::PUBLIC_INPUT)],
-        vec![POINT; width(family::PUBLIC_OUTPUT)],
-    ];
     let mut boundary = BoundaryFinals {
         reg_ts: [0; 32],
         pc_ts: 4,
@@ -88,18 +56,13 @@ fn key_and_statement() -> (VerifyingKey, PublicInputs) {
         shard_counts: vec![2, 1, 1, 0, 1, 1, 0],
         windows: Vec::new(),
         boundary,
-        memory_commitments,
         memory_roots: vec![[Fr::ZERO; 2]; 6],
     };
     let vk = VerifyingKey {
         code_version: family::CODE_VERSION,
         entry_pc,
-        identity: identity_digest(family::CODE_VERSION, &config, entry_pc, &setup),
+        identity: identity_digest(family::CODE_VERSION, &config, entry_pc),
         config,
-        setup_commitments: setup,
-        srs_verifier,
-        generic_table: generic,
-        srs_digest: srs_digest(&srs_verifier, &generic),
         circuits,
     };
     (vk, statement)
@@ -128,12 +91,12 @@ fn the_global_tape_is_the_frozen_order_and_the_committed_fixture() {
         &lines[..7],
         &[
             "absorb PROTOCOL_SUITE 1",
-            "absorb SRS_DIGEST 1",
             "absorb VM_CONFIG 15",
             "absorb SHARD_COUNTS 7",
             "absorb MEMORY_WINDOWS 0",
             "absorb PROGRAM_IDENTITY 1",
             "absorb PUBLIC_INPUTS 2",
+            "absorb MEMORY_BOUNDARY 64",
         ]
     );
     assert_eq!(
@@ -147,29 +110,17 @@ fn the_global_tape_is_the_frozen_order_and_the_committed_fixture() {
         ],
         "no challenge is drawn before the statement is absorbed"
     );
-    // G8: a group header per config family, a family with no shards included,
-    // then one commitment message per shard, four limbs to a point. Seven
-    // families, two of which run no shard here.
-    assert_eq!(
-        lines
-            .iter()
-            .filter(|l| *l == "absorb MEMORY_GROUP 2")
-            .count(),
-        7
-    );
-    assert_eq!(
-        lines
-            .iter()
-            .filter(|l| l.starts_with("absorb COMMITMENT"))
-            .count(),
-        6,
-        "one message per statement shard"
-    );
+    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. Between
+    // `PUBLIC_INPUTS` and `MEMORY_BOUNDARY` belongs every statement shard's
+    // memory-column commitment list. Nothing is there, so the tape is twelve
+    // lines and binds no column (`docs/architecture.md` §0).
+    assert_eq!(lines.len(), 12);
 }
 
 /// The expectation is a function of the statement's shape, not a constant: a
-/// changed shard count, window list or commitment width moves both tapes
-/// together, and the phase still keeps the order.
+/// changed window list moves both tapes together, and the phase still keeps
+/// the order. A changed shard count moves neither, the counts being one
+/// message of one scalar per family whatever their values.
 #[test]
 fn the_expected_tape_follows_the_statement_shape() {
     let (vk, base) = key_and_statement();
@@ -177,26 +128,14 @@ fn the_expected_tape_follows_the_statement_shape() {
 
     let mut three = base.clone();
     three.shard_counts[0] = 3;
-    three
-        .memory_commitments
-        .insert(3, three.memory_commitments[1].clone());
     three.memory_roots.push([Fr::ZERO; 2]);
     let grown = checker::expected_global_tape(&vk, &three);
-    assert_eq!(grown.len(), baseline.len() + 1, "one more COMMITMENT line");
+    assert_eq!(grown, baseline, "a count is a value, not a shape");
     assert_eq!(checker::global_tape(&vk, &three), grown);
 
     let mut windowed = base.clone();
     windowed.shard_counts[3] = 1;
     windowed.windows = vec![7];
-    let zero_width = vk
-        .circuit(family::ZERO_WINDOWS)
-        .expect("a config family")
-        .artifact
-        .memory
-        .len();
-    windowed
-        .memory_commitments
-        .insert(1, vec![POINT; zero_width]);
     windowed.memory_roots.push([Fr::ZERO; 2]);
     let with_window = checker::expected_global_tape(&vk, &windowed);
     assert!(with_window.contains(&"absorb MEMORY_WINDOWS 1".to_string()));
@@ -213,7 +152,7 @@ fn the_expected_tape_follows_the_statement_shape() {
 /// its digest all differ, and a proof carrying its digest is refused as
 /// `Statement`.
 ///
-/// The fork absorbs G7, the public-I/O digest, before G6, the program
+/// The fork absorbs G6, the public-I/O digest, before G5, the program
 /// identity, and is otherwise `verifier_core::global_commit` written out.
 fn swapped_global_commit(vk: &VerifyingKey, statement: &PublicInputs) -> Transcript {
     let mut t = Transcript::new();
@@ -221,35 +160,16 @@ fn swapped_global_commit(vk: &VerifyingKey, statement: &PublicInputs) -> Transcr
         tags::PROTOCOL_SUITE,
         Fr::from_u64(constants::PROTOCOL_VERSION as u64),
     );
-    t.append_scalar(tags::SRS_DIGEST, vk.srs_digest);
     absorb_statement_descriptor(
         &mut t,
         &vk.config,
         &statement.shard_counts,
         &statement.windows,
     );
-    // The swap: G7 then G6, where the order is G6 then G7.
+    // The swap: G6 then G5, where the order is G5 then G6.
     let io = io_digest(&statement.input, &statement.output);
     t.append_bytes(tags::PUBLIC_INPUTS, &io.to_bytes());
     t.append_scalar(tags::PROGRAM_IDENTITY, vk.identity.0);
-
-    let mut lists = statement.memory_commitments.iter();
-    let ids = || vk.config.families.iter().map(|(f, _)| *f);
-    let order = ids()
-        .filter(|f| *f == family::INIT_TEARDOWN)
-        .chain(ids().filter(|f| *f == family::ZERO_WINDOWS))
-        .chain(ids().filter(|f| *f != family::INIT_TEARDOWN && *f != family::ZERO_WINDOWS));
-    let shards = statement_shards(&vk.config, &statement.shard_counts);
-    for f in order {
-        let count = shards.iter().filter(|(g, _)| *g == f).count();
-        t.append_scalars(
-            tags::MEMORY_GROUP,
-            &[Fr::from_u64(f as u64), Fr::from_u64(count as u64)],
-        );
-        for _ in 0..count {
-            append_g1_points(&mut t, tags::COMMITMENT, lists.next().expect("a list"));
-        }
-    }
     t.append_scalars(
         tags::MEMORY_BOUNDARY,
         &boundary_scalars(&statement.boundary),
@@ -294,10 +214,8 @@ fn swapping_two_absorptions_is_caught_and_changes_every_challenge() {
         shard_index: 0,
         ts_window: TRIVIAL_TS_WINDOW,
         global_digest: digest,
-        witness_commitments: Vec::new(),
         outputs: Vec::new(),
         gkr: GkrProof { layers: vec![] },
-        opening: [0; OPENING_BYTES],
     };
     assert_eq!(
         reduce_shard(&vk, &proof, &statement).err(),
@@ -369,17 +287,14 @@ fn the_tape_verb_reads_a_key_and_a_statement_from_files() {
     );
     assert!(!stderr.contains("panicked"), "{stderr}");
 
-    // And one whose commitment lists do not match its counts.
-    let mut lists = statement.clone();
-    lists.memory_commitments.pop();
-    let bad = write("lists.public", &lists.to_bytes());
+    // And one whose root pairs do not match its counts.
+    let mut roots = statement.clone();
+    roots.memory_roots.pop();
+    let bad = write("roots.public", &roots.to_bytes());
     let out = run([&key, &bad]);
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("not one commitment list per shard"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("not one root pair per shard"), "{stderr}");
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -389,11 +304,7 @@ fn the_tape_verb_reads_a_key_and_a_statement_from_files() {
 fn the_tape_is_the_script_and_not_the_values() {
     let (vk, statement) = key_and_statement();
     let mut other = statement.clone();
-    for list in other.memory_commitments.iter_mut() {
-        for point in list.iter_mut() {
-            point[0] = 9;
-        }
-    }
+    other.output = vec![9, 9, 9];
     other.boundary.pc_ts = 400;
     assert_eq!(
         checker::global_tape(&vk, &other),

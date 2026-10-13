@@ -18,18 +18,14 @@
 //!
 //! # What this is a fixture for
 //!
-//! This repository's own `no_std` crates, running inside the proof. `guests/echo`
-//! links `crates/field` and `crates/transcript` to show that they compile for
-//! RV32; this one puts them under a computation with the shape a real circuit
-//! has. At the format's limits — 32 withdrawals at depth 16 — it is 1,088
-//! Poseidon2 permutations and one field inversion, which this VM delegates
-//! (`POSEIDON2`, `FR_ARITH`) and an executor without those circuits runs in
-//! software: every Montgomery multiply sixteen 32x32 partial products, and
-//! `Fr::inverse` Fermat, `Fr::pow` over a 254-bit exponent. On such an
-//! executor it is the guest that takes the Poseidon2 software fallback in
-//! anger rather than once for show, and its path walk is the deepest call chain
-//! in `guests/`, which is the only thing here that puts the stack reservation
-//! `link.ld` declares under any load at all.
+//! This repository's own `no_std` crates, running inside the proof:
+//! `crates/field` and `crates/transcript` under a computation with the shape a
+//! real circuit has. At the format's limits — 32 withdrawals at depth 16 — it
+//! is 1,088 Poseidon2 permutations and one field inversion, all of it ordinary
+//! RV32 code: every Montgomery multiply sixteen 32x32 partial products, and
+//! `Fr::inverse` Fermat, `Fr::pow` over a 254-bit exponent. Its path walk is
+//! the deepest call chain in `guests/`, which is the only thing here that puts
+//! the stack reservation `link.ld` declares under any load at all.
 //!
 //! # The public input: the header, and nothing else
 //!
@@ -130,51 +126,20 @@ const RECORD_FIXED_LEN: usize = 100;
 /// `final_root`, `total_withdrawn`, `shares_burned`, `accepted`, `rejected`.
 const OUTPUT_LEN: usize = 104;
 
-/// Status for a precompile that reported success and returned a state lane that
-/// is not a field element. It continues `crates/guest-sdk`'s 70-72 series of
-/// executor-fault codes without colliding with one.
-const EXIT_PRECOMPILE_NONCANONICAL: i32 = 73;
-
 // ---------------------------------------------------------------------------
 // The hash
 // ---------------------------------------------------------------------------
 
-/// The tree's compression function: permute `[a, b, 0]` and take lane 0.
-///
-/// The permutation is asked of the executor first, as
-/// `constants::ecall::PRECOMPILE_POSEIDON2` over the 96-byte canonical
-/// little-endian state, and computed with `transcript::poseidon2_permute` when
-/// the executor answers `false`, as one without the `POSEIDON2` circuit does.
-/// This VM's executor has the circuit, so the delegated path is the one a
-/// proof of this guest covers. The two compute the same permutation, so the
-/// committed output does not depend on which one ran, and an executor without
-/// the circuit runs this guest unchanged.
-///
-/// A precompile that reports success and hands back a lane outside `[0, p)` has
-/// broken its own contract, and that is an executor fault rather than a
-/// malformed input. It exits nonzero instead of substituting a value: carrying
-/// on would mean folding something that is not a field element into a root, and
-/// producing a proof of a tree nobody else can reconstruct.
+/// The tree's compression function: permute `[a, b, 0]` with
+/// `transcript::poseidon2_permute` and take lane 0.
 fn hash2(a: Fr, b: Fr) -> Fr {
-    let mut state_bytes = [0u8; 96];
-    state_bytes[0..32].copy_from_slice(&a.to_bytes());
-    state_bytes[32..64].copy_from_slice(&b.to_bytes());
-    // The third lane is written rather than left as the zeros the buffer
-    // already holds, because it is the capacity and its value is part of what
-    // this hash *is*. Two-to-one compression has no domain separator to put
-    // there, and a later decision to add one belongs on this line.
-    state_bytes[64..96].copy_from_slice(&Fr::ZERO.to_bytes());
-
-    if guest_sdk::poseidon2_permute(&mut state_bytes) {
-        match decode_fr(&state_bytes[0..32]) {
-            Some(lane) => lane,
-            None => guest_sdk::exit(EXIT_PRECOMPILE_NONCANONICAL),
-        }
-    } else {
-        let mut state = [a, b, Fr::ZERO];
-        transcript::poseidon2_permute(&mut state);
-        state[0]
-    }
+    // The third lane is written out rather than left implicit, because it is
+    // the capacity and its value is part of what this hash *is*. Two-to-one
+    // compression has no domain separator to put there, and a later decision
+    // to add one belongs on this line.
+    let mut state = [a, b, Fr::ZERO];
+    transcript::poseidon2_permute(&mut state);
+    state[0]
 }
 
 // ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@ jobs:
       - name: toolchain
         run: rustup show && cargo --version
 
-      # Five workspaces, all gated: the root, the two reference oracles,
+      # Four workspaces, all gated: the root, the transcript reference oracle,
       # `crates/guest-sdk` and `guests/`. The last two compile only for the
       # guest target, and guest-sdk holds nearly all of the repository's
       # `unsafe`, so it is the one that most needs the lints. Neither takes
@@ -27,7 +27,6 @@ jobs:
         run: |
           cargo fmt --all -- --check
           cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
-          cargo fmt --manifest-path tools/stateless-ref/Cargo.toml --all -- --check
           cargo fmt --manifest-path crates/guest-sdk/Cargo.toml --all -- --check
           cargo fmt --manifest-path guests/Cargo.toml --all -- --check
 
@@ -35,7 +34,6 @@ jobs:
         run: |
           cargo clippy --workspace --all-targets -- -D warnings
           cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
-          cargo clippy --manifest-path tools/stateless-ref/Cargo.toml --all-targets -- -D warnings
           (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
           (cd guests && cargo clippy --bins -- -D warnings)
           # `debug-info` is the workspace's one cargo feature. A configuration
@@ -54,29 +52,9 @@ jobs:
           cargo test -p prover --features debug-info --test debug_info
           cargo test -p prover --features debug-info --lib
 
-      # Static detachment at both optimisation levels. The `test` step covers
-      # every committed guest at its committed profile; this builds guests from
-      # source at `opt-level = 0` and `3`, where LLVM folds a declaration
-      # record's read into an immediate unless it is barred and the declaration
-      # disappears from the guests that need it (`docs/spec/delegation.md` §7).
-      # `#[ignore]`d because it builds into target directories it wipes.
-      - name: static detachment survives the optimiser
-        run: cargo test -p program --test delegation -- --ignored --test-threads=1
-
-      # `guests/revm-block` against native revm. The guest has no committed ELF,
-      # so the suite builds it from source at `--release`, the profile whose
-      # image fits a `2^20` table, and is `#[ignore]`d and asked for by name;
-      # the half that needs no build runs in the `test` step.
-      - name: the revm guest against native revm
-        run: APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --test-threads=1
-
       # Not run here: the suites that prove real shards. Each is `#[ignore]`d,
-      # proves over a toy SRS it builds itself but needs tens of GiB, and runs
-      # by hand, one file at a time; what needs no proof runs in the `test`
-      # step.
-      #
-      # - name: a mainnet mini-block, proved and verified, and the advice tamper twin
-      #   run: RAYON_NUM_THREADS=6 cargo test --release -p host --test prove -- --include-ignored --test-threads=1
+      # needs tens of GiB, and runs by hand, one file at a time; what needs no
+      # proof runs in the `test` step.
       #
       # - name: the LogUp channels over the combined toy
       #   run: cargo test -p checker --test logup -- --include-ignored --test-threads=1
@@ -104,21 +82,8 @@ jobs:
       # - name: the streamed block, at two backpressure bounds
       #   run: cargo test --release -p prover --test streaming -- --include-ignored --test-threads=1
       #
-      # - name: a block with a delegation shard, proved and verified
-      #   run: cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1
-      #
-      # - name: a block with both Fr delegation shards
-      #   run: cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1
-      #
       # - name: public values, bound end to end
       #   run: cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1
-      #
-      # - name: the revm block, proved and verified
-      #   run: cargo test --release -p prover --test revm -- --include-ignored --test-threads=1
-
-      # The crates the recursion guest links compile unchanged for the guest.
-      - name: guest target builds
-        run: cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p pcs-verify -p verifier-core --target riscv32imac-unknown-none-elf
 
       # A guest builds from its own directory with no flags beyond the target,
       # everything else coming from the template config.
@@ -126,22 +91,14 @@ jobs:
         run: cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
 
       # Committed fixtures are regenerated and diffed, so a silently edited
-      # vector file fails the build (`docs/tools.md` §7). `transcript-ref` and
-      # `stateless-ref` are their own workspaces; see their manifests.
+      # vector file fails the build (`docs/tools.md` §7). `transcript-ref` is
+      # its own workspace; see its manifest.
       #
-      # The groups that need the ceremony file -- `srs`, and `program`'s
-      # identities and table commitments -- are skipped without it, so their
-      # vectors regenerate only on a machine that has it. The opt-in groups do
-      # not run: `guests`, because a guest ELF is not byte-reproducible across
-      # machines (two clean builds on one machine agree, and
-      # `crates/loader/tests/reproducible.rs` checks that); `block`, because it
-      # reads RPC; `zkevm`, because it cuts its subset from a 620 MB release.
-      # The `revm` group does run: it builds the revm guest, but what it commits
-      # is the run's behaviour and not the ELF, and it holds the guest's journal
-      # to native revm's answer.
+      # The opt-in `guests` group does not run, because a guest ELF is not
+      # byte-reproducible across machines (two clean builds on one machine
+      # agree, and `crates/loader/tests/reproducible.rs` checks that).
       - name: committed fixtures are reproducible
         run: |
           cargo run -p kat-gen
           cargo run --manifest-path tools/transcript-ref/Cargo.toml
-          cargo run --manifest-path tools/stateless-ref/Cargo.toml
-          git diff --exit-code -- crates/host/tests/vectors/stateless_ref.txt crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constants/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/ crates/emulator/tests/vectors/
+          git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/

@@ -28,3 +28,5 @@ postcard.workspace = true
 # `Instr`, to hold `constraints::memory::frame_queries` to `program::row_kind`
 # instruction by instruction: tests only, never the runtime graph.
 isa.workspace = true
+# `guest_elf`: the suites build the guests they run from `guests/`.
+test-support.workspace = true

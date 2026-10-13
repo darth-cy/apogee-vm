@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 use constants::{address_space, guest_memory, memory};
-use field::Fr;
 use loader::ProgramImage;
 
 /// The address space a query names. The tags are `constants::address_space`.
@@ -16,54 +15,7 @@ pub enum AddressSpace {
     Ram,
     /// The program counter; the one address is 0.
     Pc,
-    /// `family::KECCAK_F`'s **delegation anchor** space: the address is
-    /// a request's frame base pointer.
-    ///
-    /// Not memory. No instruction reaches it, no RAM window initializes it,
-    /// and no chain of writes runs through it: every query here reads the
-    /// invocation's answer tuple, stamped 0, whatever was written at that
-    /// address before (`docs/spec/delegation.md` §5). Each delegation family
-    /// has a space of its own — the tag *is* the delegation type — so a
-    /// keccak request cannot consume another type's answer.
-    KeccakF,
-    /// `family::POSEIDON2`'s delegation anchor space. As [`KeccakF`] in
-    /// every respect but the type it names.
-    ///
-    /// [`KeccakF`]: AddressSpace::KeccakF
-    Poseidon2,
-    /// `family::FR_ARITH`'s delegation anchor space.
-    FrArith,
-    /// `family::MOD_MUL`'s delegation anchor space.
-    ModMul,
-    /// `family::SHA256_COMP`'s delegation anchor space.
-    Sha256Comp,
-    /// `family::EC_ADD`'s delegation anchor space.
-    EcAdd,
-    /// `family::FR_OP`'s delegation anchor space.
-    FrOp,
-    /// `family::P2_FIELD`'s delegation anchor space.
-    P2Field,
-    /// `family::FIELD_IO`'s delegation anchor space.
-    FieldIo,
-    /// `family::FQ_OP`'s delegation anchor space.
-    FqOp,
 }
-
-/// Every delegation anchor space, ascending by tag. One `deleg` frame query
-/// serves them all, and which one a request names is the row's business:
-/// `constraints::memory::frame_query_takes` is the routing rule.
-pub const DELEGATION_SPACES: [AddressSpace; 10] = [
-    AddressSpace::KeccakF,
-    AddressSpace::Poseidon2,
-    AddressSpace::FrArith,
-    AddressSpace::ModMul,
-    AddressSpace::Sha256Comp,
-    AddressSpace::EcAdd,
-    AddressSpace::FrOp,
-    AddressSpace::P2Field,
-    AddressSpace::FieldIo,
-    AddressSpace::FqOp,
-];
 
 impl AddressSpace {
     /// The space's tag.
@@ -72,16 +24,6 @@ impl AddressSpace {
             AddressSpace::Reg => address_space::REG,
             AddressSpace::Ram => address_space::RAM,
             AddressSpace::Pc => address_space::PC,
-            AddressSpace::KeccakF => address_space::DELEGATION_KECCAK_F,
-            AddressSpace::Poseidon2 => address_space::DELEGATION_POSEIDON2,
-            AddressSpace::FrArith => address_space::DELEGATION_FR_ARITH,
-            AddressSpace::ModMul => address_space::DELEGATION_MOD_MUL,
-            AddressSpace::Sha256Comp => address_space::DELEGATION_SHA256_COMP,
-            AddressSpace::EcAdd => address_space::DELEGATION_EC_ADD,
-            AddressSpace::FrOp => address_space::DELEGATION_FR_OP,
-            AddressSpace::P2Field => address_space::DELEGATION_P2_FIELD,
-            AddressSpace::FieldIo => address_space::DELEGATION_FIELD_IO,
-            AddressSpace::FqOp => address_space::DELEGATION_FQ_OP,
         }
     }
 
@@ -91,24 +33,12 @@ impl AddressSpace {
             address_space::REG => Some(AddressSpace::Reg),
             address_space::RAM => Some(AddressSpace::Ram),
             address_space::PC => Some(AddressSpace::Pc),
-            address_space::DELEGATION_KECCAK_F => Some(AddressSpace::KeccakF),
-            address_space::DELEGATION_POSEIDON2 => Some(AddressSpace::Poseidon2),
-            address_space::DELEGATION_FR_ARITH => Some(AddressSpace::FrArith),
-            address_space::DELEGATION_MOD_MUL => Some(AddressSpace::ModMul),
-            address_space::DELEGATION_SHA256_COMP => Some(AddressSpace::Sha256Comp),
-            address_space::DELEGATION_EC_ADD => Some(AddressSpace::EcAdd),
-            address_space::DELEGATION_FR_OP => Some(AddressSpace::FrOp),
-            address_space::DELEGATION_P2_FIELD => Some(AddressSpace::P2Field),
-            address_space::DELEGATION_FIELD_IO => Some(AddressSpace::FieldIo),
-            address_space::DELEGATION_FQ_OP => Some(AddressSpace::FqOp),
             _ => None,
         }
     }
 
     /// Whether `addr` is an address this space has: a register index, a
-    /// 4-aligned word some family initializes, the pc's one address, or — for
-    /// a delegation space — a frame base pointer, which is a 4-aligned word
-    /// address inside ordinary RAM.
+    /// 4-aligned word some family initializes, or the pc's one address.
     ///
     /// The `Ram` space is wider than ordinary RAM: it also holds the
     /// two public windows below `RAM_ORIGIN` and the advice region above RAM.
@@ -120,41 +50,7 @@ impl AddressSpace {
         match self {
             AddressSpace::Reg => addr < 32,
             AddressSpace::Ram => addr.is_multiple_of(4) && addressable(addr),
-            AddressSpace::KeccakF
-            | AddressSpace::Poseidon2
-            | AddressSpace::FrArith
-            | AddressSpace::ModMul
-            | AddressSpace::Sha256Comp
-            | AddressSpace::EcAdd
-            | AddressSpace::FrOp
-            | AddressSpace::P2Field
-            | AddressSpace::FieldIo
-            | AddressSpace::FqOp => addr.is_multiple_of(4) && in_ram(addr),
             AddressSpace::Pc => addr == 0,
-        }
-    }
-
-    /// Whether the space chains: whether a query's read is the last write at
-    /// its address.
-    ///
-    /// True for the three memory spaces and false for every delegation space,
-    /// where a query reads the answer tuple stamped 0 whatever came before, so
-    /// repeated requests at one frame base do **not** chain — which is exactly
-    /// what the three request-side zeroings enforce in the circuit
-    /// (`docs/spec/delegation.md` §5).
-    pub fn chains(self) -> bool {
-        match self {
-            AddressSpace::Reg | AddressSpace::Ram | AddressSpace::Pc => true,
-            AddressSpace::KeccakF
-            | AddressSpace::Poseidon2
-            | AddressSpace::FrArith
-            | AddressSpace::ModMul
-            | AddressSpace::Sha256Comp
-            | AddressSpace::EcAdd
-            | AddressSpace::FrOp
-            | AddressSpace::P2Field
-            | AddressSpace::FieldIo
-            | AddressSpace::FqOp => false,
         }
     }
 }
@@ -239,10 +135,6 @@ pub struct MemoryState {
     /// Per RAM word address. A hash map because it is only ever looked up;
     /// everything that reads it out sorts first.
     ram: HashMap<u32, (u64, u32)>,
-    /// Per field cell (`docs/spec/recursion.md` §2.1): the last write's
-    /// `(ts, value)`. Not an event, a value not being a `u32`: the field
-    /// windows' teardown is filled from here, and nothing else reads it.
-    field: HashMap<u32, (u64, Fr)>,
     /// The last timestamp recorded, so the order rule holds without the events.
     last_ts: Option<u64>,
 }
@@ -284,11 +176,7 @@ impl MemoryState {
                  but ts {ts} follows {last}"
             );
         }
-        let (read_ts, last_value) = if space.chains() {
-            self.last(space, addr).unwrap_or((0, read_value))
-        } else {
-            (0, 0)
-        };
+        let (read_ts, last_value) = self.last(space, addr).unwrap_or((0, read_value));
         assert_eq!(
             last_value, read_value,
             "memory event log: {space:?} {addr:#x} at ts {ts} read {read_value:#x}, \
@@ -310,43 +198,6 @@ impl MemoryState {
         self.remember(&event);
         self.last_ts = Some(ts);
         event
-    }
-
-    /// Record one access to field cell `cell` at `ts`, returning when the cell
-    /// was last written: 0, its window's zero, on a first access.
-    ///
-    /// As [`MemoryState::record`] for a chained space: the value read must be
-    /// the last written there, and the read must strictly precede the write.
-    /// Per cell, not globally — a field access rides its invocation's cycle
-    /// and is ordered with the other field accesses alone.
-    pub fn record_field(&mut self, cell: u32, ts: u64, read: Fr, write: Fr) -> u64 {
-        let (read_ts, last) = self.field.get(&cell).copied().unwrap_or((0, Fr::ZERO));
-        assert_eq!(
-            last, read,
-            "memory event log: field cell {cell} at ts {ts} read a value other than its last"
-        );
-        assert!(
-            read_ts < ts,
-            "memory event log: field cell {cell}: the read at ts {read_ts} does not precede \
-             the write at ts {ts}"
-        );
-        self.field.insert(cell, (ts, write));
-        read_ts
-    }
-
-    /// Field cell `cell`'s last write, or `None` if it was never accessed.
-    pub fn field_cell(&self, cell: u32) -> Option<(u64, Fr)> {
-        self.field.get(&cell).copied()
-    }
-
-    /// How many field windows of `height` cells the execution needs: the
-    /// windows from cell 0 through its highest touched cell, consecutive
-    /// (`docs/spec/recursion.md` §2.2), or none.
-    pub fn field_windows(&self, height: u32) -> u32 {
-        self.field
-            .keys()
-            .max()
-            .map_or(0, |top| (*top as u64 / height as u64) as u32 + 1)
     }
 
     /// Register `r`'s last write, or `None` if it was never queried.
@@ -436,16 +287,6 @@ impl MemoryState {
             AddressSpace::Reg => self.regs[addr as usize],
             AddressSpace::Pc => self.pc,
             AddressSpace::Ram => self.ram.get(&addr).copied(),
-            AddressSpace::KeccakF
-            | AddressSpace::Poseidon2
-            | AddressSpace::FrArith
-            | AddressSpace::ModMul
-            | AddressSpace::Sha256Comp
-            | AddressSpace::EcAdd
-            | AddressSpace::FrOp
-            | AddressSpace::P2Field
-            | AddressSpace::FieldIo
-            | AddressSpace::FqOp => None,
         }
     }
 
@@ -457,18 +298,6 @@ impl MemoryState {
             AddressSpace::Ram => {
                 self.ram.insert(e.addr, last);
             }
-            // An unchained space keeps no last write: there is nothing for a
-            // later query there to read, and nothing to tear down.
-            AddressSpace::KeccakF
-            | AddressSpace::Poseidon2
-            | AddressSpace::FrArith
-            | AddressSpace::ModMul
-            | AddressSpace::Sha256Comp
-            | AddressSpace::EcAdd
-            | AddressSpace::FrOp
-            | AddressSpace::P2Field
-            | AddressSpace::FieldIo
-            | AddressSpace::FqOp => {}
         }
     }
 }
@@ -511,12 +340,6 @@ impl MemoryEventLog {
         let event = self.state.record(space, addr, ts, read_value, write_value);
         self.events.push(event);
         event
-    }
-
-    /// [`MemoryState::record_field`], on this log's state: a field access is
-    /// not an event.
-    pub fn record_field(&mut self, cell: u32, ts: u64, read: Fr, write: Fr) -> u64 {
-        self.state.record_field(cell, ts, read, write)
     }
 
     /// A log holding exactly `events`, with its state rebuilt from them.
@@ -585,14 +408,6 @@ impl MemoryEventLog {
     /// argument's own shape — teardown's values and the cycle count are bound
     /// by other means — and for a snapshot `TraceArchive` holds the log to the
     /// family rows, which is where the cycle count lives.
-    ///
-    /// Nor can it see a **delegation** request without its invocation. An
-    /// invocation is not a log event — its frame accesses are, but the two
-    /// anchor tuples are the delegation circuit's leaves — so this check
-    /// credits each request's pair and every delegation query balances by
-    /// itself. That the requests and the invocations pair 1:1 is the circuit's
-    /// statement and the global multiset's, never the trace's
-    /// (`docs/spec/delegation.md` §5.3).
     pub fn self_check(&self, initial: &InitialMemory) -> Result<(), SelfCheckError> {
         let refuse = |e: &MemoryEvent, reason: String| SelfCheckError {
             space: e.space,
@@ -639,17 +454,6 @@ impl MemoryEventLog {
             *balance
                 .entry((e.space, e.addr, e.read_ts, e.read_value))
                 .or_default() -= 1;
-            if !e.space.chains() {
-                // The invocation's own two tuples, which are not log events:
-                // the answer it writes at timestamp 0, and the read that
-                // consumes what the request wrote back. One pair per request,
-                // not per address, because a delegation space does not chain.
-                *balance.entry((e.space, e.addr, 0, 0)).or_default() += 1;
-                *balance
-                    .entry((e.space, e.addr, e.ts, e.write_value))
-                    .or_default() -= 1;
-                continue;
-            }
             let slot = last
                 .entry((e.space, e.addr))
                 .or_insert((e.ts, e.write_value));
@@ -705,16 +509,6 @@ fn initial_value(initial: &InitialMemory, space: AddressSpace, addr: u32) -> u32
         AddressSpace::Reg => 0,
         AddressSpace::Pc => initial.image.entry,
         AddressSpace::Ram => initial.word(addr),
-        AddressSpace::KeccakF
-        | AddressSpace::Poseidon2
-        | AddressSpace::FrArith
-        | AddressSpace::ModMul
-        | AddressSpace::Sha256Comp
-        | AddressSpace::EcAdd
-        | AddressSpace::FrOp
-        | AddressSpace::P2Field
-        | AddressSpace::FieldIo
-        | AddressSpace::FqOp => 0,
     }
 }
 

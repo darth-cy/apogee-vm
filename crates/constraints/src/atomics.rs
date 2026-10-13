@@ -8,8 +8,8 @@
 //!
 //! One row is one read-modify-write: the RAM query at slot 3 carries the old
 //! word as its read and the new word as its write, and `rd` at the same slot
-//! takes the old word. So its rows, like a delegation request's, carry two
-//! queries in a single Δ slot, and one of its rows makes five
+//! takes the old word. So its rows carry two queries in a single Δ slot, and
+//! one of its rows makes five
 //! (`docs/spec/execution-trace.md` §4).
 //!
 //! ```text
@@ -334,8 +334,7 @@ fn the_comparison() -> Comparison {
 
 /// The family's circuit over `2^trace_vars` rows, `docs/spec/memory-ops.md`
 /// §6. `trace_vars` is at least 19, the timestamp channel's width, which the
-/// registry refuses below; a Mercury opening needs it even as well, and at 19
-/// or more the generic table's rows fit.
+/// registry refuses below, and at 19 or more the generic table's rows fit.
 ///
 /// Panics if the family's frame is not the five queries this file addresses,
 /// if the comparison is not the one over the old word and `rs2` signed on the

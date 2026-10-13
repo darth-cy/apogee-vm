@@ -1,6 +1,5 @@
 //! The byte layouts of `docs/spec/proof.md` §9: little-endian integers,
-//! canonical `Fr`s, opaque 64-byte `G1`s, `u32`-length-prefixed byte strings
-//! and lists.
+//! canonical `Fr`s, `u32`-length-prefixed byte strings and lists.
 //!
 //! Public because the prover's phase snapshots (`docs/spec/streaming.md`
 //! §6) are written in the same primitives, and one set of them is enough.
@@ -107,13 +106,6 @@ impl<'a> Reader<'a> {
         Fr::from_bytes(&b).ok_or("a field element is not canonical")
     }
 
-    /// A 64-byte `G1` encoding, not validated: that is the curve's decoder's.
-    pub fn g1(&mut self) -> Read<[u8; 64]> {
-        let mut b = [0u8; 64];
-        b.copy_from_slice(self.take(64)?);
-        Ok(b)
-    }
-
     /// A count of items of at least `item_bytes` bytes each, refused unless
     /// the bytes left could hold that many.
     pub fn count(&mut self, item_bytes: usize) -> Read<usize> {
@@ -144,12 +136,6 @@ impl<'a> Reader<'a> {
         (0..n).map(|_| self.fr()).collect()
     }
 
-    /// A list of `G1` encodings.
-    pub fn g1s(&mut self) -> Read<Vec<[u8; 64]>> {
-        let n = self.count(64)?;
-        (0..n).map(|_| self.g1()).collect()
-    }
-
     /// Refuse bytes after the value.
     pub fn finish(&self) -> Read<()> {
         match self.left() {
@@ -171,13 +157,6 @@ impl Writer {
         self.count(xs.len());
         for x in xs {
             self.fr(x);
-        }
-    }
-
-    pub fn g1s(&mut self, xs: &[[u8; 64]]) {
-        self.count(xs.len());
-        for x in xs {
-            self.raw(x);
         }
     }
 }

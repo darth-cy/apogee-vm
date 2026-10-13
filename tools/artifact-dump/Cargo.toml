@@ -15,8 +15,6 @@ constants.workspace = true
 postcard.workspace = true
 # sha256 and hex, for the digests that pin an artifact to its ELF.
 test-support.workspace = true
-# The `tables` subcommand: the decoded tables, the VmConfig and the identity,
-# which is Mercury commitments over the ceremony's powers.
+# The `tables` subcommand: the decoded tables, the VmConfig and the identity.
 isa.workspace = true
 program.workspace = true
-srs.workspace = true

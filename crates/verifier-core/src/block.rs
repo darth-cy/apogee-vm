@@ -30,8 +30,6 @@ pub struct ShardRecord {
     pub shard_index: u32,
     /// `[ts_start, ts_end)`, the shard's claimed time window.
     pub ts_window: [u64; 2],
-    /// The shard's `M` commitments in layout order.
-    pub memory_commitments: Vec<[u8; 64]>,
     /// `[read_root, write_root]`.
     pub roots: [Fr; 2],
 }
@@ -49,7 +47,7 @@ pub struct BlockReconciliation {
 ///
 /// The `VmConfig` is carried rather than only read from the key because the
 /// statement descriptor — the static shape plus the per-proof shard counts —
-/// is public data of the proof (`docs/spec/proof.md` §2, G3 and G4), and
+/// is public data of the proof (`docs/spec/proof.md` §2, G2 and G3), and
 /// `verify_block` holds the carried copy to the key's. The statement is
 /// carried for the same reason and held to the one the verifier was given.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,9 +98,7 @@ impl BlockProof {
     pub fn reconciliation(&self) -> BlockReconciliation {
         let shards = statement_shards(&self.config, &self.statement.shard_counts);
         assert!(
-            shards.len() == self.shards.len()
-                && shards.len() == self.statement.memory_commitments.len()
-                && shards.len() == self.statement.memory_roots.len(),
+            shards.len() == self.shards.len() && shards.len() == self.statement.memory_roots.len(),
             "BlockProof::reconciliation: the statement and the proofs are different shard sets"
         );
         let records = shards
@@ -112,7 +108,6 @@ impl BlockProof {
                 family,
                 shard_index,
                 ts_window: self.shards[i].ts_window,
-                memory_commitments: self.statement.memory_commitments[i].clone(),
                 roots: self.statement.memory_roots[i],
             })
             .collect();
@@ -155,8 +150,8 @@ impl BlockProof {
     }
 
     /// The structural rule every decoded block keeps: one shard count per
-    /// config family, one commitment list, one root pair and one proof per
-    /// statement shard, and the proofs naming the statement's shards in its
+    /// config family, one root pair and one proof per statement shard, and the
+    /// proofs naming the statement's shards in its
     /// order. Checked at decode and again by `verify_block`, which takes
     /// blocks built in memory too.
     pub fn shape(&self) -> Result<(), &'static str> {
@@ -166,11 +161,8 @@ impl BlockProof {
         }
         // Bounded before statement_shards builds the list: counts are data.
         let total: u64 = counts.iter().map(|c| *c as u64).sum();
-        if total != self.shards.len() as u64
-            || total != self.statement.memory_commitments.len() as u64
-            || total != self.statement.memory_roots.len() as u64
-        {
-            return Err("the block has not one proof, commitment list and root pair per shard");
+        if total != self.shards.len() as u64 || total != self.statement.memory_roots.len() as u64 {
+            return Err("the block has not one proof and root pair per shard");
         }
         let shards = statement_shards(&self.config, counts);
         if shards
@@ -186,8 +178,7 @@ impl BlockProof {
 
 impl BlockReconciliation {
     /// The wire form, `docs/spec/proof.md` §9: a list of records,
-    /// each `family, shard index, ts_start, ts_end, memory commitments in
-    /// column order, read root, write root`.
+    /// each `family, shard index, ts_start, ts_end, read root, write root`.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut w = Writer::new();
         w.count(self.records.len());
@@ -196,7 +187,6 @@ impl BlockReconciliation {
             w.u32(r.shard_index);
             w.u64(r.ts_window[0]);
             w.u64(r.ts_window[1]);
-            w.g1s(&r.memory_commitments);
             w.fr(&r.roots[0]);
             w.fr(&r.roots[1]);
         }
@@ -205,16 +195,14 @@ impl BlockReconciliation {
 
     pub fn from_bytes(bytes: &[u8]) -> Result<BlockReconciliation, &'static str> {
         let mut r = Reader::new(bytes);
-        // A record is at least two `u32`s, two `u64`s, an empty list and two
-        // field elements.
-        let n = r.count(4 + 4 + 8 + 8 + 4 + 32 + 32)?;
+        // A record is two `u32`s, two `u64`s and two field elements.
+        let n = r.count(4 + 4 + 8 + 8 + 32 + 32)?;
         let records = (0..n)
             .map(|_| {
                 Ok(ShardRecord {
                     family: r.u32()?,
                     shard_index: r.u32()?,
                     ts_window: [r.u64()?, r.u64()?],
-                    memory_commitments: r.g1s()?,
                     roots: [r.fr()?, r.fr()?],
                 })
             })
@@ -232,9 +220,8 @@ impl BlockReconciliation {
 /// Per family, because cycle numbers are global and two families interleave:
 /// `ADD_SUB_LUI_AUIPC` may own cycles 1 and 3 while `JUMP_BRANCH_SLT` owns 2,
 /// so their windows overlap by construction and a block-wide disjointness
-/// rule could never hold. A family that owns no cycles — a window family,
-/// whose rows are words, or a delegation family, whose rows are invocations —
-/// is exempt: its window is not a slice of the execution
+/// rule could never hold. A family that owns no cycles — a window family, whose
+/// rows are words — is exempt: its window is not a slice of the execution
 /// (`constants::family::CYCLE_OWNING`).
 ///
 /// `records` is in statement order, so a family's records are consecutive and
@@ -281,7 +268,6 @@ mod tests {
             family,
             shard_index,
             ts_window: window,
-            memory_commitments: vec![[7; 64]],
             roots: [Fr::from_u64(3), Fr::from_u64(5)],
         }
     }

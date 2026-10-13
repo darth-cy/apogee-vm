@@ -236,7 +236,7 @@ fn key(tuple: &[Fr]) -> Key {
 }
 
 /// The gated value of tuple position `j`. The three conventions of
-/// `docs/spec/lookup.md` §4: a range channel and `XOR8` gate to 0, the generic
+/// `docs/spec/lookup.md` §4: a range channel gates to 0, the generic
 /// channel to the all-zero `ZeroEntry` with its key offset by one, and the
 /// decoder channel to `MINUS_ONE` in every column.
 fn gate(channel: u32, j: usize, s: Fr, raw: Fr) -> Fr {

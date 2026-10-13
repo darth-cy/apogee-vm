@@ -56,8 +56,7 @@ pub struct ChannelSpec {
     pub channel: u32,
     /// The table's columns, one per tuple position and in the same order every
     /// lookup expression of the channel uses: a range channel's one virtual
-    /// table, a table channel's committed `S` columns or, for `XOR8`, its three
-    /// virtual ones.
+    /// table, or a table channel's `S` columns.
     pub table: Vec<PolyAddress>,
     /// `W[i]`: the channel's one multiplicity column, last in the witness
     /// subtree.
@@ -70,11 +69,7 @@ enum Gating {
     /// `flag·expr`, the neutral tuple being the all-zero one, because that
     /// tuple is a **real entry** of the channel's table and so needs no offset
     /// reserving it. A range table's row 0 is the value 0: "0 is in range" is
-    /// what a switched-off row claims, and it is true. `XOR8`'s row 0 is
-    /// `(0, 0, 0)`, and `0 ^ 0 = 0` is true in the same way.
-    ///
-    /// Named for the discipline and not for a channel kind: `XOR8` is a table
-    /// channel that takes it (`docs/spec/lookup.md` §3).
+    /// what a switched-off row claims, and it is true.
     NoOffset,
     /// `flag·(key + 1)` on column 0 and `flag·v_j` on the rest, the neutral
     /// tuple being the all-zero `ZeroEntry` row. The `+ 1` is what keeps a real
@@ -91,6 +86,7 @@ enum Gating {
 
 fn gating(channel: u32) -> Gating {
     match channel {
+        // `XOR8`'s row 0 is `(0, 0, 0)`, and `0 ^ 0 = 0` is a real entry.
         lookup_channel::TIMESTAMP | lookup_channel::RANGE16 | lookup_channel::XOR8 => {
             Gating::NoOffset
         }
@@ -287,10 +283,12 @@ pub(crate) fn channel_trees(
             "channel `{name}`: a table of {width} columns is not between 1 and {}",
             lookup_channel::MAX_TUPLE
         );
-        // The multiplicity is committed per shard, before `g` and `β` are
-        // drawn (`docs/spec/lookup.md` §2 and §7). A setup column is fixed at
-        // key generation and a memory column belongs to the multiset argument;
-        // either would be a count the channel's own witness does not carry.
+        // The multiplicity is the shard's own witness, which must be bound
+        // before `g` and `β` are drawn (`docs/spec/lookup.md` §2 and §7; with
+        // no commitment scheme nothing binds it yet). A setup column is fixed
+        // at key generation and a memory column belongs to the multiset
+        // argument; either would be a count the channel's own witness does not
+        // carry.
         assert!(
             matches!(spec.multiplicity, PolyAddress::Witness(_)),
             "channel `{name}`: its multiplicity is {}, and a multiplicity is a witness column",
@@ -354,28 +352,22 @@ pub fn range_table(channel: u32) -> Option<VirtualKind> {
 /// `n` variables holds `[0, 2^min(bits, n))`, so below `bits` variables it is a
 /// narrower range than the channel declares, and `channel_trees` refuses it.
 ///
-/// A **virtual** table channel's is its key width. `XOR8`'s table is the 65,536
-/// triples `(a, b, a ^ b)` read off the row index, so a circuit with fewer than
-/// 16 variables holds only the part of it with `b` in `[0, 2^{n-8})` and an
-/// honest lookup outside that has nothing to match — a completeness failure, not
-/// a soundness one, and a silent one.
+/// `XOR8`'s is 16, its two key bytes: below that its virtual table holds only
+/// part of the 65,536 triples.
 ///
-/// A **committed** table channel's is 0: its table is a setup column of the
+/// A table channel of setup columns has 0: its table is a setup column of the
 /// circuit's own height, whatever that height is.
 pub fn table_vars(channel: u32) -> u32 {
     match channel {
-        lookup_channel::XOR8 => 2 * XOR8_BYTE_BITS,
+        lookup_channel::XOR8 => 16,
         _ if lookup_channel::IS_RANGE[channel as usize] => lookup_channel::BITS[channel as usize],
         _ => 0,
     }
 }
 
-/// Bits in one operand of the `XOR8` table: a byte.
-const XOR8_BYTE_BITS: u32 = 8;
-
-/// The `XOR8` channel's table, in tuple order: `(a, b, a ^ b)` as closed forms
-/// of the row index. `docs/spec/lookup.md` §3.
-pub fn xor8_table() -> alloc::vec::Vec<PolyAddress> {
+/// The `XOR8` channel's table, in tuple order: `(a, b, a ^ b)`, closed forms
+/// of the row index.
+pub fn xor8_table() -> Vec<PolyAddress> {
     vec![
         PolyAddress::Virtual(VirtualKind::Xor8A),
         PolyAddress::Virtual(VirtualKind::Xor8B),

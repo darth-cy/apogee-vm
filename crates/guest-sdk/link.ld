@@ -1,4 +1,4 @@
-/* The guest memory map, which `docs/spec/ecall-abi.md` §6 documents, symbols
+/* The guest memory map, which `docs/spec/ecall-abi.md` §5 documents, symbols
    included.
 
    The symbol names __bss_start, __bss_end, __heap_start and __stack_top are

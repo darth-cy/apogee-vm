@@ -3,9 +3,8 @@
 //! The prover streams, and streaming has no `TraceArchive` — the whole point is
 //! that no shard's columns outlive the worker that proves them
 //! (`docs/spec/streaming.md`). What a run has to leave behind is the *proof*,
-//! because recursion reads it back: the recursion tree's input is a base proof
-//! (`docs/spec/recursion.md` §8.4), and producing one is a quarter of an hour
-//! that nobody should pay twice.
+//! and producing one can take a quarter of an hour that nobody should pay
+//! twice.
 //!
 //! # Three of the four are the `verifier` CLI's files
 //!
@@ -46,10 +45,10 @@
 //! a file of its own, and a reader should not have to write a script to
 //! produce one.
 //!
-//! The `.vk` is the large file: it carries every registered family's
-//! `CircuitArtifact`, and the delegation artifacts are megabytes. It is written
-//! unconditionally. A key cache nobody validates is worse than tens of MB,
-//! and a proof whose key is missing is not a proof anyone can check.
+//! The `.vk` is the large file: it carries every config family's
+//! `CircuitArtifact`. It is written unconditionally. A key cache nobody
+//! validates is worse than a few MB, and a proof whose key is missing is not a
+//! proof anyone can check.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -124,9 +123,8 @@ pub fn write_proof(
 /// Each file goes through its own type's decoder, so a truncated or corrupted
 /// file is named rather than producing a half-decoded value. The key goes
 /// through `load_verifying_key`: `VerifyingKey::from_bytes`, whose load rules
-/// recompute the SRS digest from the key's own points and revalidate every
-/// circuit against the registry (`docs/spec/proof.md` §7), and then every curve
-/// point the key carries through its validating decoder.
+/// recompute the identity from the key's own contents and revalidate every
+/// circuit against the registry (`docs/spec/proof.md` §7).
 ///
 /// The identity comes back as the 32 bytes, parsed from the file's hex. It is
 /// **not** compared against the key's: a reader that wants that comparison
@@ -231,11 +229,10 @@ mod tests {
                 pc_ts: 0,
                 reg_values: [0; 31],
             },
-            memory_commitments: vec![vec![], vec![], vec![]],
             memory_roots: vec![[field::Fr::ONE, field::Fr::ONE]; 3],
         };
-        // Three shells, because `BlockProof::from_bytes` requires one proof,
-        // one commitment list and one root pair per shard and the statement
+        // Three shells, because `BlockProof::from_bytes` requires one proof and
+        // one root pair per shard and the statement
         // above counts three — `INIT_TEARDOWN` and the two public windows,
         // which every statement carries.
         let shell = |family: u32| ShardProof {
@@ -243,10 +240,8 @@ mod tests {
             shard_index: 0,
             ts_window: [0, 0],
             global_digest: field::Fr::ZERO,
-            witness_commitments: vec![],
             outputs: vec![],
             gkr: GkrProof { layers: vec![] },
-            opening: [0; crate::OPENING_BYTES],
         };
         let block = BlockProof {
             config: vk.config.clone(),
@@ -259,8 +254,7 @@ mod tests {
         };
 
         // Keyed on the pid, which is what every test-side temp directory in
-        // this repository does: a fixed path is what made
-        // `fixture::build_revm_guest` unsafe to run twice at once.
+        // this repository does: a fixed path is unsafe to run twice at once.
         // `CARGO_TARGET_TMPDIR` is an integration-test variable and this is a
         // unit test, so it is not available here.
         let dir = std::env::temp_dir().join(format!("apogee-proof-archive-{}", std::process::id()));

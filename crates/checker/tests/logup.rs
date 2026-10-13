@@ -6,8 +6,8 @@
 //! `--ignored`: the latter runs *only* ignored tests, so a case added here
 //! without the attribute would be filtered out of the one run meant for it. Not
 //! for want of an environment: the timestamp channel's table is `[0, 2^19)`, a
-//! table of `2^n` rows holds at most `2^n` values, and a Mercury opening needs
-//! an even variable count, so the smallest circuit that carries a gap
+//! table of `2^n` rows holds at most `2^n` values, and the height menu's first
+//! entry above `2^19` is `2^20`, so the smallest circuit that carries a gap
 //! obligation is `2^20` rows (`docs/spec/lookup.md` §3). One forward pass over
 //! it holds 144,703,478 inner cells — 4.63 GB as `Fr` — and two at once would
 //! not fit a CI runner.
@@ -35,7 +35,6 @@ use emulator::GuestIo;
 use field::Fr;
 use gkr::{channel_holds, insert_lookup_challenges, BaseLayer, LayerValues};
 use loader::load_elf;
-use pcs::{append_g1, commit, MercuryCommitment};
 use poly::{MultilinearPoly, PolyBacking};
 use program::lookup_tables::{generic_table, GENERIC_WIDTH};
 use program::{decode_program, lookup_tuple, ProgramParams};
@@ -134,8 +133,8 @@ struct Toy {
     specs: Vec<ChannelSpec>,
     /// How many rows are live: the family's cycle count.
     live: usize,
-    /// The shard transcript after every committed column is absorbed and `g`
-    /// and `β` are drawn: what a proof of this shard starts from.
+    /// The shard transcript after `g` and `β` are drawn: what a proof of this
+    /// shard starts from.
     seeded: transcript::TranscriptSnapshot,
 }
 
@@ -147,12 +146,7 @@ fn toy() -> Toy {
 
     // fib, decoded with the decoder family's table at the toy's height and
     // every other family at the suites' 2^16.
-    let path = format!(
-        "{}/../loader/tests/vectors/fib.elf",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let elf = std::fs::read(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
-    let image = load_elf(&elf).expect("fib loads");
+    let image = load_elf(&test_support::guest_elf("fib")).expect("fib loads");
     let mut heights = [HEIGHT; family::COUNT as usize];
     heights[FAMILY as usize] = 1 << VARS;
     let params = ProgramParams {
@@ -283,13 +277,17 @@ fn toy() -> Toy {
     let counted = build_multiplicities(&artifact, &columns, &specs).expect("the toy's tuples");
     columns.extend(counted);
 
-    // The shard's own transcript, in a shard proof's order: every committed
-    // column's commitment absorbed, then `g` and `β` drawn under one challenge
-    // tag. The memory slots are the global argument's and come from a sponge
-    // of their own, as `common::memory_challenges` draws them.
+    // The shard's own transcript, in a shard proof's order: `g` and `β` drawn
+    // under one challenge tag. The memory slots are the global argument's and
+    // come from a sponge of their own, as `common::memory_challenges` draws
+    // them.
+    //
+    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. Every
+    // committed column's commitment is meant to be absorbed HERE, before `g`
+    // and `β`. None is, so the challenges bind no column
+    // (`docs/architecture.md` §0).
     let base = BaseLayer::new(columns);
     let mut t = Transcript::new();
-    absorb_commitments(&mut t, &artifact, &base);
     let mut challenges = common::memory_challenges();
     let g = t.challenge_scalar(transcript_tags::LOOKUP_CHALLENGE);
     let beta = t.challenge_scalar(transcript_tags::LOOKUP_CHALLENGE);
@@ -306,18 +304,6 @@ fn toy() -> Toy {
         specs,
         live,
         seeded: t.snapshot(),
-    }
-}
-
-/// Every committed column's Mercury commitment, absorbed as a `COMMITMENT`
-/// message of four `Fr` limbs — the base binding a shard proof uses, and the
-/// one a shard's local challenges must follow (`docs/spec/lookup.md` §2).
-fn absorb_commitments(t: &mut Transcript, a: &CircuitArtifact, base: &BaseLayer) {
-    let srs = toy_srs(a.trace_vars);
-    for address in a.committed() {
-        let column = base.get(address).expect("a committed column");
-        let MercuryCommitment(point) = commit(&srs, column).expect("the column commits");
-        append_g1(t, transcript_tags::COMMITMENT, &point);
     }
 }
 
@@ -516,11 +502,14 @@ fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
     // The other half: a multiplicity chosen **after** `g` rebalances the
     // channel outright. A multiplicity is a field vector, so a prover who knew
     // `g` could add `δ = (num/den)·(T_0 + g)` at table row 0 and drive the
-    // channel's numerator to 0. What forbids it is the order of
-    // `docs/spec/lookup.md` §2 — every multiplicity commitment absorbed before
-    // `g` is drawn — and nothing in the circuit;
-    // `a_shard_transcript_starts_with_its_seed_its_window_and_its_commitments`
-    // in `crates/verifier-core/tests/reduce.rs` is that order.
+    // channel's numerator to 0. Nothing in the circuit forbids it.
+    //
+    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. What is meant
+    // to forbid it is the order of `docs/spec/lookup.md` §2 — every
+    // multiplicity commitment absorbed before `g` is drawn. There is no
+    // commitment, so **this forgery is accepted today**: the assertions below
+    // pass and they describe a live attack until a commitment scheme fills
+    // the void (`docs/architecture.md` §0).
     let g = toy
         .shard
         .challenges
@@ -550,56 +539,6 @@ fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
     // It is still not a count: no multiset of lookups produces it.
     let recount = build_multiplicities(a, &columns_of(&rebalanced_toy.shard), &toy.specs);
     assert!(recount.is_err(), "and it is still not a recount");
-}
-
-// ---------------------------------------------------------------------------
-// A toy SRS, for the commitments the shard-local challenges follow
-// ---------------------------------------------------------------------------
-
-/// An SRS of `2^power` powers of a `tau` written down here, built the way
-/// `crates/pcs`' suite builds one: real, structurally valid and completely
-/// insecure. Only `commit` is used; nothing here opens.
-fn toy_srs(power: u32) -> srs::Srs {
-    use curve::{G1Projective, G2Affine};
-    use rayon::prelude::*;
-
-    let tau = Fr::from_hex("0x0000000000000000000000000000000000000000000000000000000000abcdef")
-        .expect("a canonical literal");
-    let count = 1usize << power;
-    let mut scalars = Vec::with_capacity(count);
-    let mut acc = Fr::ONE;
-    for _ in 0..count {
-        scalars.push(acc);
-        acc *= tau;
-    }
-    let projective: Vec<G1Projective> = scalars
-        .par_iter()
-        .map(|s| G1Projective::GENERATOR.mul(s))
-        .collect();
-    let g1 = G1Projective::batch_to_affine(&projective);
-    let g2_tau = G2Affine::GENERATOR.mul(&tau);
-
-    let mut bytes = Vec::with_capacity(280 + count * 64);
-    bytes.extend_from_slice(b"APOGESRS");
-    bytes.extend_from_slice(&1u32.to_le_bytes());
-    bytes.extend_from_slice(&power.to_le_bytes());
-    bytes.extend_from_slice(&(count as u64).to_le_bytes());
-    bytes.extend_from_slice(&G2Affine::GENERATOR.to_bytes());
-    bytes.extend_from_slice(&g2_tau.to_bytes());
-    for p in &g1 {
-        bytes.extend_from_slice(&p.to_bytes());
-    }
-    let thread: String = format!("{:?}", std::thread::current().id())
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .collect();
-    let dir = std::env::temp_dir().join(format!("apogee-logup-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("a scratch directory");
-    let path = dir.join(format!("toy-{power}-{thread}.srs"));
-    std::fs::write(&path, &bytes).expect("writing the toy archive");
-    let srs = srs::Srs::load(&path).expect("the toy archive loads");
-    std::fs::remove_file(&path).ok();
-    srs
 }
 
 // ---------------------------------------------------------------------------
@@ -888,8 +827,8 @@ fn one_changed_multiplicity_cell_fails_its_channel() {
 // ---------------------------------------------------------------------------
 
 /// `toy` with `shard` in place of its own: a tampered base, the same specs, the
-/// same live count and the same seeded transcript. The seeding binds the honest
-/// columns, which is exactly what a prover who tampers after committing has.
+/// same live count and the same seeded transcript — the honest shard's, which
+/// is what a prover who tampers after the challenges has.
 fn reshard(toy: &Toy, shard: Shard) -> Toy {
     Toy {
         shard,
@@ -965,8 +904,7 @@ fn decoder_unmatched(toy: &Toy, forged: Shard) -> Vec<(usize, String)> {
 }
 
 /// Prove `values` and verify the proof, both transcripts restored from the
-/// shard's seeded state: every committed column bound by its commitment, and
-/// `g` and `β` drawn, before a single round message.
+/// shard's seeded state: `g` and `β` drawn before a single round message.
 fn prove_and_verify(toy: &Toy, values: &LayerValues) -> Result<(), gkr::GkrError> {
     verify_claiming(toy, values, &[])
 }

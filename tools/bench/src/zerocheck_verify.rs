@@ -8,11 +8,11 @@
 //! what the constants make of it at `2^22` rows.
 //!
 //! Two things stay outside both timed regions, and both are named in the
-//! output. Proving and the witness digest are the prover's cost and the
-//! commitment's, not the verifier's. And discharging the claim
-//! `verify_zerocheck` returns — opening `final_evals` against a commitment — is
-//! a Mercury opening's job and is not measured here, so the sumcheck number is
-//! a floor, not a whole verifier's cost.
+//! output. Proving and the witness digest are the prover's cost, not the
+//! verifier's. And discharging the claim `verify_zerocheck` returns — opening
+//! `final_evals` against a commitment — is a commitment scheme's job and is not
+//! measured here, so the sumcheck number is a floor, not a whole verifier's
+//! cost.
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -212,7 +212,7 @@ pub fn run() {
         ms(digest_time)
     );
     println!("  outside the sumcheck measurement:");
-    println!("    opening final_evals against a commitment (a Mercury opening), so");
+    println!("    opening final_evals against a commitment, so");
     println!("    the sumcheck figure is a floor, and the naive verifier is the only");
     println!("    one of the two that is complete.");
 }

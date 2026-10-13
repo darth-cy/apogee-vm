@@ -1,5 +1,5 @@
 //! The `memory` group: the memory argument's artifacts at `trace_vars` 22, the
-//! largest default height — the four distinct execution-family frames and two
+//! largest default height — the three distinct execution-family frames and two
 //! of the window circuits.
 //!
 //! `constraints::memory`'s constructors are the only definition of these
@@ -16,12 +16,11 @@ use crate::write_bytes;
 const TRACE_VARS: u32 = 22;
 
 /// One fixture per *distinct* frame. Families sharing a query list share their
-/// artifact byte for byte, so `JUMP_BRANCH_SLT` stands for `SHIFT_BITWISE` and
-/// `MUL_DIV`, and `MEM_WORD` for `MEM_SUBWORD`;
+/// artifact byte for byte, so `JUMP_BRANCH_SLT` stands for `ADD_SUB_LUI_AUIPC`,
+/// `SHIFT_BITWISE` and `MUL_DIV`, and `MEM_WORD` for `MEM_SUBWORD`;
 /// `crates/constraints/tests/memory.rs` holds every one of the seven execution
-/// families to one of these four files.
-const FRAMES: [(&str, u32); 4] = [
-    ("memory_frame_alu.bin", family::ADD_SUB_LUI_AUIPC),
+/// families to one of these three files.
+const FRAMES: [(&str, u32); 3] = [
     ("memory_frame_reg.bin", family::JUMP_BRANCH_SLT),
     ("memory_frame_mem.bin", family::MEM_WORD),
     ("memory_frame_atomics.bin", family::ATOMICS),

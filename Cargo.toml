@@ -3,13 +3,9 @@ resolver = "2"
 members = [
     "crates/constants",
     "crates/field",
-    "crates/curve",
     "crates/transcript",
     "crates/poly",
     "crates/sumcheck",
-    "crates/srs",
-    "crates/pcs-verify",
-    "crates/pcs",
     "crates/loader",
     "crates/isa",
     "crates/program",
@@ -22,7 +18,6 @@ members = [
     "crates/verifier-core",
     "crates/verifier",
     "crates/prover",
-    "crates/groth16",
     "crates/host",
     "tools/kat-gen",
     "tools/bench",
@@ -43,12 +38,9 @@ publish = false
 [workspace.dependencies]
 constants = { path = "crates/constants" }
 field = { path = "crates/field" }
-curve = { path = "crates/curve" }
 transcript = { path = "crates/transcript" }
 poly = { path = "crates/poly" }
 sumcheck = { path = "crates/sumcheck" }
-srs = { path = "crates/srs" }
-pcs = { path = "crates/pcs" }
 loader = { path = "crates/loader" }
 isa = { path = "crates/isa" }
 program = { path = "crates/program" }
@@ -56,13 +48,11 @@ trace = { path = "crates/trace" }
 emulator = { path = "crates/emulator" }
 constraints = { path = "crates/constraints" }
 gkr-verify = { path = "crates/gkr-verify" }
-pcs-verify = { path = "crates/pcs-verify" }
 gkr = { path = "crates/gkr" }
 checker = { path = "crates/checker" }
 verifier-core = { path = "crates/verifier-core" }
 verifier = { path = "crates/verifier" }
 prover = { path = "crates/prover" }
-groth16 = { path = "crates/groth16" }
 host = { path = "crates/host" }
 
 # Test-only, and a dev-dependency everywhere it appears: SHA-256 for pinning
@@ -71,8 +61,7 @@ test-support = { path = "tools/test-support" }
 
 # Data parallelism. Beside it the workspace has one thread scope and one lock,
 # the streaming prover's shard pipeline (`docs/spec/streaming.md` §5); no
-# async, no channels. `curve` uses it for the MSM's window and input-chunk
-# fan-out, `srs` for point decoding at ingestion.
+# async, no channels.
 rayon = "1"
 
 # `default-features = false` keeps serde `no_std`, which `constants` and `field`
@@ -80,54 +69,24 @@ rayon = "1"
 # workspace still has exactly one build configuration.
 serde = { version = "1", default-features = false }
 
-# Test / tool only. Reference implementation for differential checks and the
-# KAT fixtures. Never linked by the prover, verifier, or a guest.
-# `parallel` is enabled so `bench`'s MSM comparison is between two rayon
-# implementations rather than ours against a single-threaded arkworks, which
-# would be a comparison we win by not being compared. These are dev-dependencies
-# and tool dependencies only; nothing here is reachable from a prover, a
-# verifier or a guest, and a `features` key selects an upstream oracle's build
-# configuration, not a cargo feature of ours.
-ark-bn254 = "0.6"
-# The secp256k1 oracle, and the only reason it is here: `constants::mod_mul`
-# holds that curve's two moduli as literals, and the group order `n`
-# has no derivation inside this repository. Test/tool only, like every other
-# arkworks crate above.
-ark-secp256k1 = "0.6"
-ark-ec = { version = "0.6", features = ["parallel"] }
-ark-ff = { version = "0.6", features = ["parallel"] }
+# Test / tool only. The reference field arithmetic and multilinear extensions
+# for the differential checks and the KAT fixtures; each user derives its own
+# `Fr` from `ark-ff`'s `MontConfig` over the modulus. Never linked by the
+# prover, the verifier or a guest.
+ark-ff = "0.6"
 ark-poly = "0.6"
-
-# Tooling only, in `kat-gen` alone. The exact final exponent is (q^12 - 1)/r,
-# a 2,790-bit integer, and the fixtures state that definition rather than
-# trusting any library's decomposition of it. Already in the tree as an
-# `ark-ff` dependency; never reachable from the prover, verifier, or a guest.
-num-bigint = { version = "0.4", default-features = false }
 
 # Test only. Exercises the `Fr` serde impls over a real wire format.
 postcard = { version = "1", default-features = false }
 
-# JSON: the Ethereum JSON-RPC responses `host::rpc` reads and the `tests-zkevm`
-# fixtures `host` reads, the zkEVM subset `tools/kat-gen` cuts, and the reports
-# `tools/bench` and `tools/profiler` write. Nothing here is reachable from the
-# prover, the verifier or a guest -- `crates/host`, `tools/kat-gen`,
-# `tools/bench` and `tools/profiler` are the crates that name it, and CI makes
-# no RPC call through any of them.
+# JSON: the reports `tools/bench` and `tools/profiler` write. Nothing here is
+# reachable from the prover, the verifier or a guest.
 serde_json = "1"
 
-# Test only. The reference keccak-f[1600] and keccak256 the emulator's
-# permutation, the guest SDK's software fallback and the delegation circuit's
-# forward pass are each held to. `default-features = false` keeps it `no_std`,
-# which costs nothing here. Never reachable from the prover, the verifier or a
-# guest: a reference implementation is a dev-dependency and nothing else, and
-# `crates/emulator`'s tests are where it is used.
-tiny-keccak = { version = "2", default-features = false, features = ["keccak"] }
-
-# The workspace tests build circuits at their real `2^20` rows, execute guests
-# and run the stateless validator natively. Unoptimized that is minutes per
-# run, which would make `cargo test --workspace` unusable. Optimizing the dev
-# profile keeps `debug-assertions` and `overflow-checks` on, so the tests still
-# run with every check the default dev profile gives them; only the code
-# generation changes.
+# The workspace tests build circuits at their real `2^20` rows and execute
+# guests. Unoptimized that is minutes per run, which would make `cargo test
+# --workspace` unusable. Optimizing the dev profile keeps `debug-assertions` and
+# `overflow-checks` on, so the tests still run with every check the default dev
+# profile gives them; only the code generation changes.
 [profile.dev]
 opt-level = 2

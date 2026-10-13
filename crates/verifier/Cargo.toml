@@ -4,14 +4,10 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# The thin `std` wrapper over `verifier-core`: `verify_shard`, the one
-# verification path, which ends in `pcs::batch_verify`, and the `verifier`
-# CLI. `docs/spec/proof.md` §6.
+# The thin `std` wrapper over `verifier-core`: `verify_shard` and
+# `verify_block`, the proof archive and the `verifier` CLI.
+# `docs/spec/proof.md` §6.
 [dependencies]
-curve.workspace = true
-pcs.workspace = true
-# `SrsVerifier`, the one piece of SRS material a verifier reads.
-srs.workspace = true
 verifier-core.workspace = true
 
 [dev-dependencies]
@@ -25,5 +21,7 @@ prover.workspace = true
 emulator.workspace = true
 loader.workspace = true
 program.workspace = true
-rayon.workspace = true
+# `guest_elf`, through `crates/prover/tests/common`: the guests are built from
+# `guests/`.
+test-support.workspace = true
 trace.workspace = true

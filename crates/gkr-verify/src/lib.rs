@@ -3,9 +3,8 @@
 //! the layer sumcheck's verifier, and `verify`, which reduces a circuit's
 //! output claims to claims about its committed base columns.
 //!
-//! `docs/spec/gkr.md` §5 specifies it. `#![no_std]` + `alloc`: the recursion
-//! guest links this crate. `crates/gkr` is the prover half and re-exports
-//! everything here.
+//! `docs/spec/gkr.md` §5 specifies it. `#![no_std]` + `alloc`. `crates/gkr` is
+//! the prover half and re-exports everything here.
 
 extern crate alloc;
 
@@ -25,9 +24,7 @@ mod lookup;
 mod memory;
 
 pub use lookup::{channel_holds, insert_lookup_challenges};
-pub use memory::{
-    boundary_factors, field_window_challenges, reconciles, window_challenges, BoundaryFinals,
-};
+pub use memory::{boundary_factors, reconciles, window_challenges, BoundaryFinals};
 
 // ---------------------------------------------------------------------------
 // The containers
@@ -75,7 +72,7 @@ pub struct OutputClaims {
 
 /// A claim about a committed base column, left for the caller to discharge.
 /// `point[j]` is the value bound to variable `j`, so it is exactly what
-/// `MultilinearPoly::evaluate` and a Mercury opening take.
+/// `MultilinearPoly::evaluate` takes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BaseClaim {
     pub address: PolyAddress,

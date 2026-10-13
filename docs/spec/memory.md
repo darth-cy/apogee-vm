@@ -23,9 +23,11 @@ verifier and never read from a proof (§3.3). A gate coefficient is one literal 
 Every memory artifact outputs its read product at `outputs[READ_ROOT = 0]` and its write product
 at `outputs[WRITE_ROOT = 1]` (`constants::memory`), before any channel's roots
 ([lookup.md](lookup.md) §6). All tuples of a statement form one multiset, over `REG`, `RAM` and
-`PC`, one anchor space per delegation type, where a request meets its invocation
-([delegation.md](delegation.md) §5), and the recursion format's `FIELD` cells
-([recursion.md](recursion.md) §2.1).
+`PC`.
+
+> **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The argument below is only sound
+> if every tuple is fixed before the challenges, and no column is committed, so none is (§6.1,
+> [proof.md](proof.md) §3).
 
 ## 2. An execution family's memory subtree
 
@@ -43,20 +45,17 @@ query table is `constraints::memory::{FRAME_NAMES, FRAME_SPACE, FRAME_DELTA}`:
 | 3 | `load` | `RAM` | 2 | read-only; a load's word |
 | 4 | `ram` | `RAM` | 3 | a store's or an atomic's word |
 | 5 | `rd` | `REG` | 3 | the x0 rule (§2.4) |
-| 6 | `deleg` | the row's | 3 | a delegation request's mirror ([delegation.md](delegation.md) §5) |
 
 A family's **frame** is exactly the queries its instructions make
 ([execution-trace.md](execution-trace.md) §4), in table order: `constraints::memory::frame_queries`,
 which `crates/trace/tests/memory.rs` holds to the union over all 59 instructions. A missing query
 would leave an instruction's written value unconstrained. No instruction routed to
 `ADD_SUB_LUI_AUIPC` touches RAM, and `ATOMICS` keeps every RAM access at `Δ = 3`, `lr.w`
-included. Window and delegation families have no frame (§3.3;
-[delegation-circuits.md](delegation-circuits.md) §1).
+included. Window families have no frame (§3.3).
 
 | family | queries, in slot order | `w` | leaves a side |
 | --- | --- | --- | --- |
-| `ADD_SUB_LUI_AUIPC` | `pc rs1 rs2 rd deleg` | 5 | 8 |
-| `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV` | `pc rs1 rs2 rd` | 4 | 4 |
+| `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV` | `pc rs1 rs2 rd` | 4 | 4 |
 | `MEM_WORD`, `MEM_SUBWORD` | `pc rs1 rs2 load ram rd` | 6 | 8 |
 | `ATOMICS` | `pc rs1 rs2 ram rd` | 5 | 8 |
 
@@ -65,15 +64,12 @@ Columns are addressed by **slot** `s`, a query's position in its family's list:
 ```text
 M[0]                  cycle
 M[1 + 5s + f]         slot s's <q>_mask, <q>_addr, <q>_read_ts, <q>_read_value, <q>_write_value
-M[1 + 5w]             deleg_space, in the one frame holding deleg
 W[s]                  <q>_gap_hi, for s < w
 W[w], W[w+1], W[w+2]  rd_inv, rd_is_zero, rd_selected
 ```
 
-That is `1 + 5w` `M` columns, plus `deleg_space`, and `w + 3` `W` columns, the family's own
-following ([circuits.md](circuits.md) §2). One `deleg` query serves every delegation type, so its
-space is the value of `deleg_space`, an `M` column the family pins to its type selectors: a leaf
-may read no `W` column (§8). The honest fill (`trace::build_memory_columns`,
+That is `1 + 5w` `M` columns and `w + 3` `W` columns, the family's own following
+([circuits.md](circuits.md) §2). The honest fill (`trace::build_memory_columns`,
 `trace::build_frame_witness`, over a shard's `trace::RowSlice`) sets a mask to 1 where the row is
 live and has the query, and every column of an absent query or a padding row to 0.
 
@@ -81,8 +77,8 @@ live and has the query, and every column of an absent query or a padding row to 
 could rewrite `x10`, the exit status, after the exit row, and a live row could drop a query or
 carry one its instruction lacks. Every execution family makes `m_pc` the row's liveness and its
 decoder lookup's selector ([lookup.md](lookup.md) §10), and holds each other mask to
-`m_q = m_pc·uses_q` (its `<q>_mask_rule` gates), `uses_q` the sum of the row's kind and
-ecall-type selectors that make the query.
+`m_q = m_pc·uses_q` (its `<q>_mask_rule` gates), `uses_q` the sum of the row's kind and ecall
+selectors that make the query.
 
 ### 2.2 The leaves
 
@@ -96,8 +92,7 @@ write_<q>   m·T(AS, addr, 4·cycle + Δ, write_value) + 1 − m
 Each is one flat `Quadratic` of gate list 0, built from the unmasked tuple, a `Linear` whose `AS`
 and `Δ` terms sit on `m` (`constraints::memory::read_tuple` is the read one): constant 1;
 linear terms `(γ_M, m)`, `(−1, m)`, `(AS, m)` and, on the write side, `(α_ts, m)` `Δ` times;
-every other term multiplied by `m`, as is `deleg`'s `AS`, the product `(1, deleg_space, m)`. At
-`m = 0` a leaf is 1 whatever its columns hold, at `m = 1` the tuple, and it is one or the other
+every other term multiplied by `m`. At `m = 0` a leaf is 1 whatever its columns hold, at `m = 1` the tuple, and it is one or the other
 only at a boolean `m` (§2.4).
 
 ### 2.3 The product
@@ -157,11 +152,10 @@ A window family's shard initializes and tears down one window; its rows are addr
 | region | family | id | windows | init value |
 | --- | --- | --- | --- | --- |
 | `[0, 0x8000)` | none: a hole | | | |
-| `[0x8000, 0x10000)` | `PUBLIC_INPUT`, `PUBLIC_OUTPUT` | 12, 13 | 2 and 3 at their pinned `2^12` | the statement's input; 0 ([public-values.md](public-values.md) §4) |
+| `[0x8000, 0x10000)` | `PUBLIC_INPUT`, `PUBLIC_OUTPUT` | 9, 10 | 2 and 3 at their pinned `2^12` | the statement's input; 0 ([public-values.md](public-values.md) §4) |
 | `[RAM_ORIGIN, 4h)` | `INIT_TEARDOWN` | 7 | 0, one shard | `S[0]`, the image column |
 | `[4h, 2^31)` | `ZERO_WINDOWS` | 8 | the listed `w_1 < … < w_k` in `[1, N − 1]` | 0 |
-| `[2^31, 2^32)` | `ADVICE_WINDOWS` | 14 | `N … N + k_a − 1` | `M[2]`, bound to nothing ([public-values.md](public-values.md) §6) |
-| `FIELD` cells | `FIELD_WINDOWS` | 18 | `0 … k_f − 1` | 0 ([recursion.md](recursion.md) §2.2) |
+| `[2^31, 2^32)` | `ADVICE_WINDOWS` | 11 | `N … N + k_a − 1` | `M[2]`, bound to nothing ([public-values.md](public-values.md) §6) |
 
 `INIT_TEARDOWN`, `ZERO_WINDOWS` and `ADVICE_WINDOWS` share the window height `h`, `2^22` by
 default (§3.5). An unlisted RAM window is initialized by nothing. Every statement proves window 0
@@ -178,7 +172,6 @@ ZERO_WINDOWS, PUBLIC_OUTPUT    zero_window_artifact     M[0], M[1]
   read    WC + α_addr·4·row + α_ts·M[0] + α_val·M[1]        write   WC + α_addr·4·row
 PUBLIC_INPUT, ADVICE_WINDOWS   value_window_artifact    M[0], M[1], M[2] init_value
   read    as above                                          write   WC + α_addr·4·row + α_val·M[2]
-FIELD_WINDOWS   field_window_artifact: zero_window_artifact over α_addr·row, one cell a row
 ```
 
 All are `constraints::memory` constructors: one leaf a side, then `n` halving lists; no witness
@@ -188,13 +181,13 @@ window enters only through `WC`, so one artifact serves every window:
 
 ```text
 WC = γ_M + RAM + α_addr·4h·w        gkr_verify::window_challenges
-WC = γ_M + FIELD + α_addr·h·w       gkr_verify::field_window_challenges
 ```
 
 `w` is `verifier_core::shard_window`'s: 0 for `INIT_TEARDOWN`, the list's `i`-th id for
-`ZERO_WINDOWS` shard `i`, 2 and 3 for the public pair, `N + i` for advice shard `i`, `i` for field
-shard `i`. An init column is `S` where program identity binds it and `M` where it is one
-execution's, committed before the challenges (§6.1). A window shard has no inactive rows.
+`ZERO_WINDOWS` shard `i`, 2 and 3 for the public pair, `N + i` for advice shard `i`. An init column
+is `S` where program identity is meant to bind it and `M` where it is one execution's, meant to be
+committed before the challenges (§6.1); **UNFINISHED**, neither is bound. A window shard has no
+inactive rows.
 
 ### 3.4 The columns a prover fills
 
@@ -229,7 +222,6 @@ transcript (`program::check_memory_windows` wraps it):
 | one shard each of `INIT_TEARDOWN`, `PUBLIC_INPUT`, `PUBLIC_OUTPUT` | ([public-values.md](public-values.md) §4 for the pair) |
 | one id per `ZERO_WINDOWS` shard, strictly increasing, in `[1, N − 1]` | disjoint windows; id 0 is unmasked over `[0, RAM_ORIGIN)`; `N` up is advice |
 | `N + k_a ≤ 2^30/h`, `k_a` the advice shard count | advice ends by `2^32`; it needs no list, starting where the zero ids stop |
-| `k_f·h ≤ 2^32` field cells | [recursion.md](recursion.md) §2.2 |
 
 The first three are `verifier_core::window_height`, which `VmConfig::from_bytes` runs too: a
 config breaking them does not decode.
@@ -277,11 +269,10 @@ its own verification.
 written and finals only read, so a balanced multiset is paths from inits to finals plus loops. An
 edge advances the timestamp by an integer in `[1, 2^38 + 3]` (the gap plus the query's least
 advance, 4 at the pc and 1 elsewhere), so a loop needs more than `p/(2^38 + 3) > 2^215` edges,
-and a statement has fewer than `2^67` tuples: under `2^32` shards a family (a `u32` count), 23
-families, at most `2^22` rows (the menu's top), at most 196 tuples a row (`EC_ADD`'s 97 frame
-words and its anchor, both sides), and 66 boundary tuples. So nothing loops: every path starts at
-an init at timestamp 0 and ends at a final, and every timestamp on it is an integer below
-`2^105`.
+and a statement has fewer than `2^62` tuples: under `2^32` shards a family (a `u32` count), 12
+families, at most `2^22` rows (the menu's top), at most 12 tuples a row (`MEM_WORD`'s six
+queries, both sides), and 66 boundary tuples. So nothing loops: every path starts at an init at
+timestamp 0 and ends at a final, and every timestamp on it is an integer below `2^101`.
 
 ## 5. Halting
 
@@ -306,12 +297,14 @@ the final read. With a free final pc every prefix of an execution would balance.
 ### 6.1 What precedes the memory challenges
 
 The four challenges are squeezed once per statement, at the end of the global transcript
-([proof.md](proof.md) §2 is the schedule), after everything a tuple or the reconciliation reads,
-because what is chosen after them can be solved for:
+([proof.md](proof.md) §2 is the schedule), after everything a tuple or the reconciliation reads is
+meant to be fixed, because what is chosen after them can be solved for:
 
-- every shard's `M` commitments, every column a leaf may read but `S` and `V` (§8);
-- program identity, fixing `entry_pc` and the image column (§6.2), and the SRS digest, fixing the
-  generic table's `S` columns ([proof.md](proof.md) §3);
+- **UNFINISHED**: every shard's `M` commitments, every column a leaf may read but `S` and `V` (§8).
+  They are absent ([proof.md](proof.md) §3), so a prover chooses every `M` column after the
+  challenges, and the argument is **UNSOUND**;
+- program identity, fixing `entry_pc` and meant to fix the image column (§6.2); the generic
+  table's `S` columns are meant to be fixed by the key's commitments, and are not;
 - the shard counts and `MEMORY_WINDOWS`, the zero-window ids, fixing every window shard's
   addresses through `WC`: a list chosen afterwards is a union over up to `2^(N − 1)` lists,
   `2^127` at `h = 2^22` and no bound at all at `2^20`;
@@ -323,14 +316,16 @@ The roots are not absorbed: each shard's GKR proof binds its own.
 
 ### 6.2 The image column and the entry pc
 
-Program identity ([program.md](program.md) §8 is the recipe) binds `INIT_TEARDOWN`'s one setup
-commitment, the image column's, and `entry_pc`, under `PROGRAM_ENTRY`. Recomputing identity binds
-a commitment, not the column a proof reads; the `INIT_TEARDOWN` shard's batched opening closes
-that by taking `S[0]`'s commitment from the verifying key, the list identity is recomputed over
-([proof.md](proof.md) §5, §7). Without it a statement over another image, with a trace
-consistent with that image, would verify. Without `entry_pc` in identity, a key carrying the
-registered identity beside another entry pc would verify an execution starting elsewhere.
-Identity binds nothing an execution chooses: no shard count, window list, public or advice word.
+Program identity ([program.md](program.md) §8 is the recipe) binds `entry_pc`, under
+`PROGRAM_ENTRY`. It is meant to bind `INIT_TEARDOWN`'s one setup commitment, the image column's,
+too, and the `INIT_TEARDOWN` shard's opening to take `S[0]`'s commitment from the verifying key, so
+that the column a proof reads is the image's ([proof.md](proof.md) §5, §7). **UNFINISHED**
+([proof.md](proof.md) §3): neither exists, so a statement over another image, with a trace
+consistent with that image, verifies — `checker`'s
+`UNFINISHED_the_image_column_moved_with_its_teardown_is_refused` is that twin. Without `entry_pc`
+in identity, a key carrying the registered identity beside another entry pc would verify an
+execution starting elsewhere. Identity binds nothing an execution chooses: no shard count, window
+list, public or advice word.
 
 ## 7. Range obligations
 
@@ -342,8 +337,7 @@ bound ([lookup.md](lookup.md) §1, §3). Every circuit bounds a value one way:
 - a **result** `r = e mod 2^32` of an exact `0 ≤ e < 2^33`: a witnessed `wrap`, the gates
   `wrap − wrap·wrap = 0` and `e − r − 2^32·wrap = 0`, and `r` bounded as above; a wider carry is
   a family's own construction;
-- a **timestamp gap**: two 19-bit `TIMESTAMP` chunks, no wrap (§2.4). Delegation and recursion
-  families decompose theirs their own way ([delegation-circuits.md](delegation-circuits.md) §1).
+- a **timestamp gap**: two 19-bit `TIMESTAMP` chunks, no wrap (§2.4).
 
 ## 8. Construction-time rules
 
@@ -362,29 +356,31 @@ bound ([lookup.md](lookup.md) §1, §3). Every circuit bounds a value one way:
 
 It runs beside `CircuitArtifact::validate`, whose laws it assumes, wherever a memory artifact is
 built (`constraints::memory`'s assembly panics on a refusal) and in `VerifyingKey::check`. A `W`
-column is committed in a shard's own transcript, after the memory challenges, so a tuple or root
-over one is chosen after them and balances any trace. `M` columns precede the challenges and `V`
-columns are closed forms; `S` columns are admitted because they precede them too, bound by
-identity or, for the generic table, by the SRS digest (§6.1).
+column is meant to be committed in a shard's own transcript, after the memory challenges, so a
+tuple or root over one is chosen after them and balances any trace. `M` columns are meant to
+precede the challenges and `V` columns are closed forms; `S` columns are admitted because they are
+meant to precede them too, bound by identity or, for the generic table, by the key (§6.1).
+**UNFINISHED** ([proof.md](proof.md) §3): the rules still hold every circuit's structure, but no
+column precedes the challenges.
 
 ## 9. What the argument rests on
 
 Both sides of §4.2 are products of linear forms in `(γ_M, α_addr, α_ts, α_val)`, one per distinct
-tuple, every tuple fixed before those are drawn (§6.1, §8). By Schwartz–Zippel they agree on
-unequal multisets with probability at most `N/p`, `N < 2^67` (§4.2), and on equal ones §4.2's
+tuple, every tuple meant to be fixed before those are drawn (§6.1, §8) — **UNFINISHED**: none is,
+so none of what follows holds yet ([proof.md](proof.md) §3). By Schwartz–Zippel they agree on
+unequal multisets with probability at most `N/p`, `N < 2^62` (§4.2), and on equal ones §4.2's
 count gives:
 
-- **One init per address** of `REG`, `PC`, `RAM` and `FIELD`: the 33 boundary inits once per
-  statement, and §3.5's windows, disjoint and of one height. A second init would let a stale read
-  balance. An anchor space has no init: each invocation's answer, stamped 0, starts a path one
-  request long ([delegation.md](delegation.md) §5).
+- **One init per address** of `REG`, `PC` and `RAM`: the 33 boundary inits once per statement,
+  and §3.5's windows, disjoint and of one height. A second init would let a stale read balance.
 - **Coverage.** Every query lies on a path from an init, so nothing reaches an address no family
   initializes: the hole `[0, 0x8000)`, where a null dereference does not balance, an unlisted
   window, a register above `x31`, a pc address but 0. A query reading its own write would balance
   with no init; the gap forbids it.
 - **Consistency per address**: on its one path every read returns the write before it, and the
   final tuple holds the last.
-- **Initial values**: the image's, by §3.4's refusal and §6.2's opening of `S[0]`; 0 in every
+- **Initial values**: the image's, by §3.4's refusal and §6.2's opening of `S[0]` (**UNFINISHED**,
+  absent); 0 in every
   zero window and the journal; the statement's input in its window
   ([public-values.md](public-values.md) §5). Advice is bound to nothing by design
   ([public-values.md](public-values.md) §6).
@@ -397,5 +393,4 @@ count gives:
 Per address, the order is timestamp order, and it is program order: the pc query's gap puts
 consecutive pc writes at least 4 apart (§2.4), so each cycle's four timestamps precede the next
 cycle's whatever value `cycle` takes, and a row never reads an address before its predecessor's
-write there. An invocation rides its requesting row's cycle ([delegation.md](delegation.md) §5)
-and is ordered with it.
+write there.

@@ -6,15 +6,14 @@
 
 mod common;
 
-use common::{blob, jbs_statement, jbs_vk, shell, statement, vk, ADD, INIT, JBS, ZERO};
+use common::{shell, statement, vk, ADD, INIT, ZERO};
 use constants::transcript_tags as tags;
 use field::Fr;
 use gkr_verify::SumcheckProof;
 use transcript::TranscriptEvent::{Absorb, Challenge};
 use verifier_core::{
     derive_global_phase, global_commit, memory_slots, reduce_shard, shard_challenges,
-    shard_transcript, srs_digest, statement_shards, verify_global_memory, VerifyError,
-    TRIVIAL_TS_WINDOW,
+    shard_transcript, statement_shards, verify_global_memory, VerifyError, TRIVIAL_TS_WINDOW,
 };
 
 fn refusal(
@@ -28,10 +27,9 @@ fn refusal(
     }
 }
 
-/// G1 to G11, event for event: the suite, the SRS digest, the descriptor's
-/// three messages, the identity, the I/O digest's bytes, one group per config
-/// family — `INIT_TEARDOWN`, `ZERO_WINDOWS`, then the rest — each a header and
-/// one list per shard, the boundary, four memory challenges, the digest.
+/// G1 to G9, event for event: the suite, the descriptor's three messages, the
+/// identity, the I/O digest's bytes, the boundary, four memory challenges, the
+/// digest.
 #[test]
 fn the_global_transcript_is_the_frozen_order() {
     let (key, public) = (vk(), statement());
@@ -40,7 +38,6 @@ fn the_global_transcript_is_the_frozen_order() {
     let absorb = |tag, n_scalars| Absorb { tag, n_scalars };
     let mut want = vec![
         absorb(tags::PROTOCOL_SUITE, 1),
-        absorb(tags::SRS_DIGEST, 1),
         // Six families: add/sub, the two RAM window ones, the public pair and
         // advice.
         absorb(tags::VM_CONFIG, 2 * 6 + 1),
@@ -48,21 +45,10 @@ fn the_global_transcript_is_the_frozen_order() {
         absorb(tags::MEMORY_WINDOWS, 0),
         absorb(tags::PROGRAM_IDENTITY, 1),
         absorb(tags::PUBLIC_INPUTS, 2),
-        absorb(tags::MEMORY_GROUP, 2),
-        absorb(tags::COMMITMENT, 4 * 2),
-        absorb(tags::MEMORY_GROUP, 2),
-        absorb(tags::MEMORY_GROUP, 2),
-        absorb(tags::COMMITMENT, 4 * 27),
-        // The public pair and advice, in the ascending tail like any other
-        // family. The public input window commits three columns and the
-        // journal two, and `ADVICE_WINDOWS` has no shard here, so it is a
-        // header and nothing else — exactly as `ZERO_WINDOWS` is above
-        // (`docs/spec/public-values.md` §4).
-        absorb(tags::MEMORY_GROUP, 2),
-        absorb(tags::COMMITMENT, 4 * 3),
-        absorb(tags::MEMORY_GROUP, 2),
-        absorb(tags::COMMITMENT, 4 * 2),
-        absorb(tags::MEMORY_GROUP, 2),
+        // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. Every
+        // statement shard's memory-column commitments belong HERE, before the
+        // boundary and the challenges, and none is absorbed
+        // (`docs/architecture.md` §0).
         absorb(tags::MEMORY_BOUNDARY, 64),
     ];
     want.extend(
@@ -93,96 +79,42 @@ fn the_global_transcript_is_the_frozen_order() {
     assert!(moved(|p| p.boundary.reg_ts[3] += 1));
     assert!(moved(|p| p.boundary.pc_ts += 1));
     assert!(moved(|p| p.boundary.reg_values[0] += 1));
-    assert!(moved(|p| p.memory_commitments[1][26] = blob(999)));
-    assert!(moved(|p| p.memory_commitments[1].swap(0, 1)));
-    assert!(moved(|p| p.memory_commitments.swap(0, 1)));
     assert!(moved(|p| {
         p.shard_counts[2] = 1;
         p.windows.push(1);
-        p.memory_commitments.insert(1, vec![blob(500), blob(501)]);
     }));
     assert!(moved(|p| p.windows.push(1)));
     assert!(!moved(|p| p.memory_roots[0][0] += Fr::ONE));
     assert!(!moved(|p| p.exit_status += 1));
     let mut k = vk();
-    k.srs_digest += Fr::ONE;
-    assert_ne!(global_commit(&k, &public).digest, digest);
-    let mut k = vk();
     k.identity.0 += Fr::ONE;
     assert_ne!(global_commit(&k, &public).digest, digest);
 }
 
-/// The generic table is bound through the SRS digest, which G2 absorbs before
-/// every challenge of the statement and of every shard seeded from it. A key
-/// with `JUMP_BRANCH_SLT`, which reads the table, has the same schedule as one
-/// without it, and the statement's digest moves with each of the table's
-/// points and with their order, once the key's SRS digest is recomputed over
-/// them — and a key whose table moved without it does not load.
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The generic
+/// table is meant to be bound into every challenge of the statement and of
+/// every shard seeded from it — through the key's commitments to its three
+/// columns — so that a key whose table moved is another statement. Nothing
+/// commits the table: a key names none, and a key over a family that reads it
+/// draws the same schedule as one over a family that does not. This is held
+/// here, disabled, as the property a commitment scheme must restore
+/// (`docs/architecture.md` §0).
 #[test]
-fn the_generic_table_is_bound_through_the_srs_digest() {
-    let (key, public) = (jbs_vk(), jbs_statement());
-    assert_eq!(key.check(), Ok(()));
-    let g = global_commit(&key, &public);
-    let log = g.transcript.event_log();
-    assert_eq!(
-        &log[..3],
-        &[
-            Absorb {
-                tag: tags::PROTOCOL_SUITE,
-                n_scalars: 1
-            },
-            Absorb {
-                tag: tags::SRS_DIGEST,
-                n_scalars: 1
-            },
-            Absorb {
-                tag: tags::VM_CONFIG,
-                n_scalars: 2 * 7 + 1
-            },
-        ]
-    );
-    assert!(log.iter().all(|e| *e
-        != Absorb {
-            tag: tags::GENERIC_TABLE,
-            n_scalars: 12
-        }));
-    assert_eq!(
-        statement_shards(&key.config, &public.shard_counts),
-        vec![
-            (INIT, 0),
-            (ADD, 0),
-            (JBS, 0),
-            (common::PIN, 0),
-            (common::POUT, 0)
-        ]
-    );
-    let moved = |k: &mut verifier_core::VerifyingKey| {
-        assert!(k.check().is_err(), "a moved table without its digest loads");
-        k.srs_digest = srs_digest(&k.srs_verifier, &k.generic_table);
-        assert_eq!(k.check(), Ok(()));
-        global_commit(k, &public).digest
-    };
-    for i in 0..3 {
-        let mut k = jbs_vk();
-        k.generic_table[i] = blob(900 + i as u32);
-        assert_ne!(moved(&mut k), g.digest, "point {i}");
-    }
-    let mut k = jbs_vk();
-    k.generic_table.swap(0, 2);
-    assert_ne!(moved(&mut k), g.digest, "the order");
+#[ignore = "UNFINISHED: the key commits no generic table until a commitment scheme exists \
+            (docs/architecture.md §0)"]
+#[allow(non_snake_case)]
+fn UNFINISHED_the_generic_table_is_bound_into_every_challenge() {
+    todo!("UNFINISHED: no commitment scheme commits the generic table (docs/architecture.md §0)")
 }
 
-/// S1 to S4: the seed, the window, the witness commitments as one message,
-/// then `g` and `β`.
+/// S1 to S2, then `g` and `β`: the seed, the window, the two challenges.
+///
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The shard's
+/// witness commitments, multiplicities included, belong between the window and
+/// `g`, and none is absorbed (`docs/architecture.md` §0).
 #[test]
-fn a_shard_transcript_starts_with_its_seed_its_window_and_its_commitments() {
-    let (t, g, beta) = shard_transcript(
-        Fr::from_u64(7),
-        ADD,
-        0,
-        TRIVIAL_TS_WINDOW,
-        &[blob(1), blob(2)],
-    );
+fn a_shard_transcript_starts_with_its_seed_and_its_window() {
+    let (t, g, beta) = shard_transcript(Fr::from_u64(7), ADD, 0, TRIVIAL_TS_WINDOW);
     assert_ne!(g, beta);
     assert_eq!(
         t.event_log(),
@@ -195,10 +127,6 @@ fn a_shard_transcript_starts_with_its_seed_its_window_and_its_commitments() {
                 tag: tags::SHARD_TS_WINDOW,
                 n_scalars: 2
             },
-            Absorb {
-                tag: tags::COMMITMENT,
-                n_scalars: 8
-            },
             Challenge {
                 tag: tags::LOOKUP_CHALLENGE
             },
@@ -208,48 +136,27 @@ fn a_shard_transcript_starts_with_its_seed_its_window_and_its_commitments() {
         ]
     );
     // Each part of the seed moves the challenges.
-    let (_, g2, _) = shard_transcript(
-        Fr::from_u64(8),
-        ADD,
-        0,
-        TRIVIAL_TS_WINDOW,
-        &[blob(1), blob(2)],
-    );
-    let (_, g3, _) = shard_transcript(
-        Fr::from_u64(7),
-        INIT,
-        0,
-        TRIVIAL_TS_WINDOW,
-        &[blob(1), blob(2)],
-    );
-    let (_, g4, _) = shard_transcript(
-        Fr::from_u64(7),
-        ADD,
-        1,
-        TRIVIAL_TS_WINDOW,
-        &[blob(1), blob(2)],
-    );
-    let (_, g5, _) = shard_transcript(Fr::from_u64(7), ADD, 0, [0, 4], &[blob(1), blob(2)]);
-    let (_, g6, _) = shard_transcript(Fr::from_u64(7), ADD, 0, TRIVIAL_TS_WINDOW, &[blob(1)]);
-    for other in [g2, g3, g4, g5, g6] {
+    let (_, g2, _) = shard_transcript(Fr::from_u64(8), ADD, 0, TRIVIAL_TS_WINDOW);
+    let (_, g3, _) = shard_transcript(Fr::from_u64(7), INIT, 0, TRIVIAL_TS_WINDOW);
+    let (_, g4, _) = shard_transcript(Fr::from_u64(7), ADD, 1, TRIVIAL_TS_WINDOW);
+    let (_, g5, _) = shard_transcript(Fr::from_u64(7), ADD, 0, [0, 4]);
+    for other in [g2, g3, g4, g5] {
         assert_ne!(other, g);
     }
 }
 
 /// `g` then `β`: the first and the second `LOOKUP_CHALLENGE` squeeze after
-/// the seed, the window and the commitments, replayed by hand.
+/// the seed and the window, replayed by hand.
 #[test]
 fn g_is_the_first_lookup_squeeze_and_beta_the_second() {
-    let commitments = [blob(1), blob(2)];
     let digest = Fr::from_u64(7);
-    let (_, g, beta) = shard_transcript(digest, ADD, 3, TRIVIAL_TS_WINDOW, &commitments);
+    let (_, g, beta) = shard_transcript(digest, ADD, 3, TRIVIAL_TS_WINDOW);
     let mut t = transcript::Transcript::new();
     t.append_scalars(
         tags::SHARD_SEED,
         &[digest, Fr::from_u64(ADD as u64), Fr::from_u64(3)],
     );
     t.append_scalars(tags::SHARD_TS_WINDOW, &[Fr::ZERO, Fr::from_u64(1 << 38)]);
-    transcript::append_g1_points(&mut t, tags::COMMITMENT, &commitments);
     assert_eq!(g, t.challenge_scalar(tags::LOOKUP_CHALLENGE));
     assert_eq!(beta, t.challenge_scalar(tags::LOOKUP_CHALLENGE));
 }
@@ -338,16 +245,6 @@ fn a_statement_the_key_does_not_describe_is_refused_as_statement() {
         honest.clone(),
         proof.clone(),
     ));
-    // A key edited in memory to hold one setup list too few: refused here,
-    // not by a panic where step 11 indexes the lists.
-    let mut k = key.clone();
-    k.setup_commitments.pop();
-    cases.push((
-        "the key's circuits are not its config's families",
-        k,
-        honest.clone(),
-        proof.clone(),
-    ));
     let mut k = key.clone();
     k.config.families.swap(1, 2);
     cases.push((
@@ -392,39 +289,13 @@ fn a_statement_the_key_does_not_describe_is_refused_as_statement() {
     ));
     let mut p = honest.clone();
     p.shard_counts[0] = 2;
-    cases.push((
-        "not one commitment list per shard",
-        key.clone(),
-        p,
-        proof.clone(),
-    ));
+    cases.push(("not one root pair per shard", key.clone(), p, proof.clone()));
     let mut p = honest.clone();
     p.shard_counts[0] = u32::MAX;
-    cases.push((
-        "not one commitment list per shard",
-        key.clone(),
-        p,
-        proof.clone(),
-    ));
+    cases.push(("not one root pair per shard", key.clone(), p, proof.clone()));
     let mut p = honest.clone();
     p.memory_roots.pop();
     cases.push(("not one root pair per shard", key.clone(), p, proof.clone()));
-    let mut p = honest.clone();
-    p.memory_commitments[0].pop();
-    cases.push((
-        "not its family's memory width",
-        key.clone(),
-        p,
-        proof.clone(),
-    ));
-    let mut p = honest.clone();
-    p.memory_commitments.swap(0, 1);
-    cases.push((
-        "not its family's memory width",
-        key.clone(),
-        p,
-        proof.clone(),
-    ));
     // Step 4: a window is `[start, end)` inside the clock. Which
     // windows a block admits is `check_ts_windows`, which needs every shard.
     let mut q = proof.clone();
@@ -447,17 +318,6 @@ fn a_statement_the_key_does_not_describe_is_refused_as_statement() {
     let mut p = honest.clone();
     p.output.push(1);
     cases.push(("made for another statement", key.clone(), p, proof.clone()));
-    let mut p = honest.clone();
-    p.memory_commitments[1].swap(0, 1);
-    cases.push(("made for another statement", key.clone(), p, proof.clone()));
-    let mut k = key.clone();
-    k.srs_digest += Fr::ONE;
-    cases.push((
-        "made for another statement",
-        k,
-        honest.clone(),
-        proof.clone(),
-    ));
     let mut k = key.clone();
     k.config.bytecode_size_words += 1;
     cases.push((
@@ -496,9 +356,6 @@ fn a_proof_shaped_wrong_is_refused_as_malformed() {
     q.family = 3;
     cases.push(("a shard the statement does not have", q));
     let mut q = honest.clone();
-    q.witness_commitments.pop();
-    cases.push(("the witness commitments are not the circuit's width", q));
-    let mut q = honest.clone();
     q.outputs.push(Fr::ZERO);
     cases.push(("the outputs are not the circuit's output map", q));
     cases.push(("a GKR transition is not its layer's shape", honest.clone()));
@@ -520,8 +377,8 @@ fn a_proof_shaped_wrong_is_refused_as_malformed() {
 }
 
 /// Garbage in the fields `reduce_shard` indexes by before the replay — the
-/// statement's shard counts, windows and lists, and the proof's family, shard
-/// index, outputs and witness commitments — two thousand ways: every one is
+/// statement's shard counts, windows and roots, and the proof's family, shard
+/// index and outputs — two thousand ways: every one is
 /// refused, and none panics. The shell carries no GKR transitions, so nothing
 /// here reaches step 7; the proofs that do are the prover's suites.
 #[test]
@@ -538,15 +395,13 @@ fn garbage_is_refused_and_never_panics() {
     };
     for _ in 0..2000 {
         let (mut p, mut q) = (public.clone(), proof.clone());
-        match next() % 8 {
+        match next() % 6 {
             0 => p.shard_counts[(next() % 3) as usize] = next() as u32,
             1 => p.windows = (0..next() % 4).map(|_| next() as u32).collect(),
-            2 => p.memory_commitments.truncate((next() % 3) as usize),
-            3 => p.memory_roots.truncate((next() % 3) as usize),
-            4 => q.family = (next() % 12) as u32,
-            5 => q.shard_index = next() as u32,
-            6 => q.outputs.truncate((next() % 9) as usize),
-            _ => q.witness_commitments.truncate((next() % 35) as usize),
+            2 => p.memory_roots.truncate((next() % 3) as usize),
+            3 => q.family = (next() % 12) as u32,
+            4 => q.shard_index = next() as u32,
+            _ => q.outputs.truncate((next() % 9) as usize),
         }
         assert!(reduce_shard(&key, &q, &p).is_err());
     }

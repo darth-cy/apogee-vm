@@ -81,7 +81,6 @@ fn encode_gkrs(shards: &[ShardGkr]) -> Vec<u8> {
         w.u32(s.index);
         w.u64(s.ts_window[0]);
         w.u64(s.ts_window[1]);
-        w.g1s(&s.witness_commitments);
         w.frs(&s.outputs);
         write_gkr(&mut w, &s.gkr);
         w.frs(&s.point);
@@ -98,7 +97,6 @@ fn decode_gkrs(bytes: &[u8]) -> Read<Vec<ShardGkr>> {
         let family = r.u32()?;
         let index = r.u32()?;
         let ts_window = [r.u64()?, r.u64()?];
-        let witness_commitments = r.g1s()?;
         let outputs = r.frs()?;
         let gkr = read_gkr(&mut r)?;
         let point = r.frs()?;
@@ -107,7 +105,6 @@ fn decode_gkrs(bytes: &[u8]) -> Read<Vec<ShardGkr>> {
             family,
             index,
             ts_window,
-            witness_commitments,
             outputs,
             gkr,
             point,
@@ -204,7 +201,7 @@ pub fn advance(
         None => {
             let since = Instant::now();
             let inputs = statement_inputs(setup, archive)?;
-            let global = global_commit_phase(&setup.vk, &setup.srs, &inputs);
+            let global = global_commit_phase(&setup.vk, &inputs);
             let content = encode_global(&global);
             fill(archive, Phase::PostCommit, content, since)?;
             global
@@ -282,27 +279,15 @@ pub fn advance(
         }
         None => {
             let since = Instant::now();
-            let read_only: &TraceArchive = archive;
-            dlog!(
-                Phase,
-                "apogee block    opening region begin shards={} rayon-threads={}",
-                gkrs.len(),
-                rayon::current_num_threads()
-            );
-            let opened = first_error(
-                gkrs.into_par_iter()
-                    .map(|gkr| {
-                        let shard = (gkr.family, gkr.index);
-                        base(read_only, shard).map(|base| ctx.opening_part(gkr, &base).0)
-                    })
-                    .collect(),
-            )?;
-            dlog!(
-                Phase,
-                "apogee block    opening region done shards={}",
-                opened.len()
-            );
-            let proofs = opened;
+            // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The
+            // opening region: each shard's columns rebuilt from the archive and
+            // opened HERE, in parallel. With nothing to open, a proof is its GKR
+            // pass alone (`docs/architecture.md` §0).
+            let proofs: Vec<ShardProof> = gkrs
+                .into_par_iter()
+                .map(|gkr| ctx.proof_part(gkr).0)
+                .collect();
+            dlog!(Phase, "apogee block    proofs done shards={}", proofs.len());
             let mut w = Writer::new();
             encode_proofs(&mut w, &proofs);
             fill(archive, Phase::PostOpening, w.bytes, since)?;
@@ -404,7 +389,6 @@ mod tests {
                 pc_ts: 4,
                 reg_values: [0; 31],
             },
-            memory_commitments: vec![vec![[7; 64]], vec![]],
             memory_roots: vec![],
         };
         let mut t = Transcript::new();

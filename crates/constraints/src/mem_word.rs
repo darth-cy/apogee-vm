@@ -198,8 +198,7 @@ fn names(list: &[&str]) -> Vec<String> {
 
 /// The family's circuit over `2^trace_vars` rows,
 /// `docs/spec/memory-ops.md` §3. `trace_vars` is at least 19, the timestamp
-/// channel's width, which the registry refuses below; a Mercury opening needs
-/// it even as well.
+/// channel's width, which the registry refuses below.
 ///
 /// Panics if the family's frame is not the six queries this file addresses, if
 /// any channel's obligation count is not the document's — 12 timestamp, 5

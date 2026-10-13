@@ -11,7 +11,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::loader::{llvm_tool, parse_objdump_line, run, ElfBuilder};
+use test_support::{llvm_tool, parse_objdump_line, run};
+
+use crate::loader::ElfBuilder;
 use crate::write_vectors;
 
 // ---------------------------------------------------------------------------

@@ -2,4 +2,4 @@
 
 The zerocheck sumcheck.
 
-Specified in [primitives.md](../../docs/spec/primitives.md) §7.
+Specified in [primitives.md](../../docs/spec/primitives.md) §3.

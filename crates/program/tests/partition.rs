@@ -174,10 +174,10 @@ fn each_program_derives_only_the_families_it_uses() {
 /// The suites that are not about the heights take `common::fitting`, so without
 /// this nothing would notice a guest — or growth in an existing one — crossing
 /// a default. A family's table is indexed by absolute pc, so `2^16` rows run
-/// out at pc `0x20000`, and a guest whose `.text` reaches past that needs a
-/// taller one: `guests/mod-mul-ops` reaches `0x45be6` and takes `2^18`. Every
-/// guest fits at the defaults; the second half shortens one family back
-/// to `2^16` so the refusal keeps a test.
+/// out at pc `0x20000`, and code reaching past that needs a taller one. Every
+/// guest fits at the defaults; the second half shortens one family back to
+/// `2^16` under an image with an instruction at pc `0x20000`, so the refusal
+/// keeps a test.
 #[test]
 fn the_default_heights_hold_every_committed_guest() {
     for name in common::GUESTS {
@@ -187,11 +187,13 @@ fn the_default_heights_hold_every_committed_guest() {
     }
     let mut short = ProgramParams::defaults();
     short.heights[family::ADD_SUB_LUI_AUIPC as usize] = 1 << 16;
-    let image = common::guest("mod-mul-ops");
+    // `addi x0, x0, 0` at pc 0x20000, which is row 2^16: one past a 2^16-row
+    // table's last row.
+    let image = common::image_of(0x2_0000, &[0x0000_0013]);
     let Err(program::ProgramError::TableTooShort { family, height, .. }) =
         decode_program(&image, &short)
     else {
-        panic!("mod-mul-ops' add/sub rows run past pc 0x20000 and cannot fit 2^16 rows");
+        panic!("an add/sub row at pc 0x20000 cannot fit 2^16 rows");
     };
     assert_eq!((family, height), (family::ADD_SUB_LUI_AUIPC, 1 << 16));
 }

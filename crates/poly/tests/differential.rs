@@ -19,7 +19,7 @@ use test_support::Rng;
 use ark_poly::{MultilinearExtension, Polynomial};
 
 const DIFF_PATH: &str = "tests/vectors/evaluate_diff.txt";
-const DIFF_SHA256: &str = "a711842a7df3239df8ed44aa6f690c3ed73ab15daa7ff80d35372cf1bae01271";
+const DIFF_SHA256: &str = "4cc6ec85cdca454ef4225073304b568f19a4638629a2b4f466a2a912d6d7ed20";
 /// Case `i` of the corpus draws from this seed plus `i`; the file header says so.
 const DIFF_SEED: u64 = 20260908;
 
@@ -201,7 +201,7 @@ fn evaluate_matches_arkworks_in_process() {
     for c in &load() {
         let p = rebuild(c);
         let mle = to_ark_mle(&p);
-        let point: Vec<ark_bn254::Fr> = c.point.iter().map(to_ark).collect();
+        let point: Vec<common::ArkFr> = c.point.iter().map(to_ark).collect();
         assert_eq!(
             to_ark(&p.evaluate(&c.point)),
             mle.evaluate(&point),
@@ -243,7 +243,7 @@ fn the_corpus_rebuild_rule_matches_the_arkworks_reduction() {
     let mut theirs = Rng::new(1);
     for _ in 0..1000 {
         let mine = common::next_fr(&mut ours);
-        let ark: ark_bn254::Fr = ark_ff::PrimeField::from_le_bytes_mod_order(&theirs.next_le32());
+        let ark: common::ArkFr = ark_ff::PrimeField::from_le_bytes_mod_order(&theirs.next_le32());
         assert_eq!(to_ark(&mine), ark);
     }
 }

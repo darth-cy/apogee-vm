@@ -5,12 +5,20 @@
 //! ```text
 //! ProverSetup::new        register every family of the program's VmConfig, build its key
 //! prove_block_streaming   one execution as a block, in two passes: how every block is proved
-//! statement_inputs        an archive's shard counts, windows, boundary and memory columns
-//! global_commit_phase     commit every shard's memory columns, run the global transcript
-//! prove_shard             one shard: witness commitments, lookup challenges, GKR, opening
+//! statement_inputs        an archive's shard counts, windows and boundary
+//! global_commit_phase     run the global transcript over the statement
+//! prove_shard             one shard: lookup challenges, GKR
 //! public_inputs           the statement, its roots read from the shards' proofs
 //! advance                 all of it over an archive, filling its phase sections, resumable
 //! ```
+//!
+//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The prover
+//! commits nothing: not the setup columns the key should carry, not each
+//! shard's `M` columns the global phase should absorb, not its `W` columns, and
+//! it opens nothing. A block it produces verifies, and proves nothing about the
+//! columns it was made from. Every place a commitment or an opening belongs is
+//! marked `UNFINISHED` here; a later commitment scheme must fill each one
+//! (`docs/architecture.md` §0).
 //!
 //! The prover checks nothing a verifier does not: a malformed input costs the
 //! honest prover a panic or a proof that fails (`docs/spec/gkr.md` §5.1). What
@@ -78,25 +86,20 @@ mod streaming;
 use constants::family;
 use constants::transcript_tags as tags;
 use constraints::PolyAddress;
-use curve::G1Affine;
 use field::Fr;
 use gkr::{forward, prove, BaseLayer};
 use loader::ProgramImage;
-use pcs::{commit, MercuryCommitment};
 use poly::MultilinearPoly;
-use program::lookup_tables::generic_commitments;
-use program::{setup_commitments, DecodedTables, FamilyId};
-use rayon::prelude::*;
-use srs::Srs;
+use program::{DecodedTables, FamilyId};
 use trace::{
     advice_window_count, build_boundary_finals, build_multiplicities, init_windows, plan_shards,
-    MemoryState, TraceArchive,
+    TraceArchive,
 };
 use transcript::{Transcript, TranscriptEvent, TranscriptSnapshot};
 use verifier_core::{
     advice_first_window, global_commit, identity_digest, shard_challenges, shard_transcript,
-    srs_digest, statement_shards, window_height, BoundaryFinals, FamilyCircuit, GkrProof,
-    PublicInputs, ShardProof, VerifyingKey, VmConfig, TRIVIAL_TS_WINDOW,
+    window_height, BoundaryFinals, FamilyCircuit, GkrProof, PublicInputs, ShardProof, VerifyingKey,
+    VmConfig, TRIVIAL_TS_WINDOW,
 };
 
 pub use fill::{family_fill, Fill, ShardRows, ShardSource};
@@ -145,9 +148,8 @@ pub struct Program {
 }
 
 /// One family as a statement registers it: its id and height from the
-/// `VmConfig`, its circuit from `VmConfig::circuit` — the base or the recursion
-/// format's registry — and the fill that routes its trace buffer into the
-/// circuit's columns.
+/// `VmConfig`, its circuit from `VmConfig::circuit`, and the fill that routes
+/// its trace buffer into the circuit's columns.
 ///
 /// **The family-registration surface**, `docs/spec/circuits.md` §1 and §2: a
 /// family is a circuit in the registry and a fill in [`family_fill`], and adding
@@ -183,22 +185,18 @@ pub fn register(config: &VmConfig) -> Result<Vec<FamilyRegistration>, ProverErro
 }
 
 /// Everything proving one program needs that no execution changes: the
-/// program, its registered families, its verifying key, and the prover's SRS.
+/// program, its registered families and its verifying key.
 pub struct ProverSetup {
     pub program: Program,
     pub families: Vec<FamilyRegistration>,
     pub vk: VerifyingKey,
-    pub srs: Srs,
 }
 
 impl ProverSetup {
     /// Register every family of `program`'s config and build its verifying
-    /// key over `srs`: identity's setup commitments, the generic table's, the
-    /// SRS digest over both SRS constants, and every circuit, held to the key's
-    /// own load rules (`docs/spec/proof.md` §7.2) before it is returned.
-    /// `srs` holds at least as many powers as the tallest family has rows, and
-    /// at least the generic table's `2^18`.
-    pub fn new(program: Program, srs: Srs) -> Result<ProverSetup, ProverError> {
+    /// key: the identity and every circuit, held to the key's own load rules
+    /// (`docs/spec/proof.md` §7.2) before it is returned.
+    pub fn new(program: Program) -> Result<ProverSetup, ProverError> {
         let families = register(&program.config)?;
         debug_only!(for f in &families {
             dlog!(
@@ -216,9 +214,8 @@ impl ProverSetup {
             // same pair exactly when `outputs.len() == 2 + 2·channels`, and
             // nothing central asserts it — `reduce.rs` only checks the length
             // against the artifact's and `check_discharge` only needs `>=`. Every
-            // registered circuit satisfies it, and each family's own test
-            // is what pins it (`constraints::ec_add`'s `outputs.len() == 4`,
-            // `sha256`'s `== 6`). A family whose top layer grew one more output
+            // registered circuit satisfies it, and each family's own suite is
+            // what pins it. A family whose top layer grew one more output
             // would have the discharge validating one pair and the verifier
             // reading another, and it would surface as `Lookup { channel }` on a
             // channel that is innocent. One integer, printed every run.
@@ -235,43 +232,36 @@ impl ProverSetup {
                 );
             }
         });
-        let setup = setup_commitments(&program.image, &program.tables, &program.config, &srs);
-        let setup: Vec<Vec<[u8; 64]>> = setup
-            .iter()
-            .map(|points| points.iter().map(G1Affine::to_bytes).collect())
-            .collect();
-        let generic_table = generic_commitments(&srs).map(|p| p.to_bytes());
+        // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. HERE the
+        // setup columns — each instruction family's decoded table, the image
+        // column, the generic table — are committed, the lists put in the key
+        // and digested into its identity, with whatever public parameters the
+        // scheme's verifier reads. None is: the key binds no code
+        // (`docs/architecture.md` §0).
         let code_version = program.tables.code_version;
-        let srs_verifier = verifier::encode_srs_verifier(&srs.verifier());
         let vk = VerifyingKey {
             code_version,
             config: program.config.clone(),
             entry_pc: program.image.entry,
-            identity: identity_digest(code_version, &program.config, program.image.entry, &setup),
-            setup_commitments: setup,
-            srs_verifier,
-            generic_table,
-            srs_digest: srs_digest(&srs_verifier, &generic_table),
+            identity: identity_digest(code_version, &program.config, program.image.entry),
             circuits: families.iter().map(|f| f.circuit.clone()).collect(),
         };
         vk.check().map_err(ProverError::Key)?;
-        // Identity and the SRS digest in full, not truncated: these are the two
-        // values a reader compares against a pinned constant rather than
-        // against another run, and a stale pin is this repository's most
-        // repeated failure (`docs/tools.md` §3).
+        // Identity in full, not truncated: it is the value a reader compares
+        // against a pinned constant rather than against another run, and a
+        // stale pin is this repository's most repeated failure
+        // (`docs/tools.md` §3).
         dlog!(
             Phase,
-            "apogee setup    key ok families={} entry_pc={:#x} identity={} srs_digest={}",
+            "apogee setup    key ok families={} entry_pc={:#x} identity={}",
             families.len(),
             program.image.entry,
-            debug::fr_full(&vk.identity.0),
-            debug::fr_full(&vk.srs_digest)
+            debug::fr_full(&vk.identity.0)
         );
         Ok(ProverSetup {
             program,
             families,
             vk,
-            srs,
         })
     }
 
@@ -288,7 +278,12 @@ impl ProverSetup {
 // ---------------------------------------------------------------------------
 
 /// What the global commit phase takes: the statement descriptor, the public
-/// streams and result, the boundary, and every shard's memory columns.
+/// streams and result, and the boundary.
+///
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** It is meant to
+/// carry every shard's `M` columns too, for the global phase to commit before
+/// the memory challenges; with nothing to commit them with, it carries none
+/// (`docs/architecture.md` §0).
 #[derive(Clone, Debug)]
 pub struct StatementInputs {
     pub input: Vec<u8>,
@@ -297,8 +292,6 @@ pub struct StatementInputs {
     pub shard_counts: Vec<u32>,
     pub windows: Vec<u32>,
     pub boundary: BoundaryFinals,
-    /// Per shard, in statement order, its `M` columns in layout order.
-    pub memory_columns: Vec<Vec<MultilinearPoly>>,
 }
 
 /// What the global commit phase yields, and every shard's proof starts from:
@@ -316,12 +309,11 @@ pub struct GlobalCommitState {
 /// The shard counts of an execution: one per config family, in its order —
 /// exactly one for `INIT_TEARDOWN`, one per touched window above 0 for
 /// `ZERO_WINDOWS`, one each for the two public value families, one per advice
-/// window the host supplied, the field windows through the highest cell
-/// touched, and the plan's `ceil(rows / height)` for every other.
+/// window the host supplied, and the plan's `ceil(rows / height)` for every
+/// other.
 pub(crate) fn shard_counts(
     config: &VmConfig,
     profile: &trace::CycleProfile,
-    state: &MemoryState,
     advice: &[u8],
     windows: &[u32],
     height: u32,
@@ -337,14 +329,6 @@ pub(crate) fn shard_counts(
             // having published something (`docs/spec/public-values.md` §4).
             family::PUBLIC_INPUT | family::PUBLIC_OUTPUT => 1,
             family::ADVICE_WINDOWS => advice_window_count(advice, height),
-            // The field memory's windows, consecutive from cell 0 through the
-            // highest cell the execution touched (`docs/spec/recursion.md`
-            // §2.2).
-            family::FIELD_WINDOWS => state.field_windows(
-                config
-                    .height(family::FIELD_WINDOWS)
-                    .expect("a counted family is present"),
-            ),
             _ => count,
         })
         .collect()
@@ -353,22 +337,20 @@ pub(crate) fn shard_counts(
 /// The window shard `(family, index)` covers: 0 for `INIT_TEARDOWN`,
 /// `windows[index]` for `ZERO_WINDOWS`, the two constants for the public value
 /// families, the `index`-th window from the advice origin up for
-/// `ADVICE_WINDOWS`, `index` for `FIELD_WINDOWS`, and 0 (unused) for every
-/// other family. `height` is the family's own.
+/// `ADVICE_WINDOWS`, and 0 (unused) for every other family. `height` is the
+/// family's own.
 pub(crate) fn window_of(family: FamilyId, index: u32, windows: &[u32], height: u32) -> u32 {
     match family {
         family::ZERO_WINDOWS => windows[index as usize],
         family::PUBLIC_INPUT => family::PUBLIC_INPUT_WINDOW,
         family::PUBLIC_OUTPUT => family::PUBLIC_OUTPUT_WINDOW,
         family::ADVICE_WINDOWS => advice_first_window(height) + index,
-        family::FIELD_WINDOWS => index,
         _ => 0,
     }
 }
 
 /// The statement an archived execution proves: its streams, its exit status
-/// (`x10`'s final value), its shard counts and window list, its boundary, and
-/// every shard's memory columns, filled by the shard's family.
+/// (`x10`'s final value), its shard counts and window list, and its boundary.
 pub fn statement_inputs(
     setup: &ProverSetup,
     archive: &TraceArchive,
@@ -380,7 +362,6 @@ pub fn statement_inputs(
     let counts = shard_counts(
         config,
         archive.cycle_profile(),
-        log.state(),
         archive.advice(),
         &windows,
         h,
@@ -389,7 +370,7 @@ pub fn statement_inputs(
     dlog!(
         Phase,
         "apogee stmt     shards={} counts={} windows={:?} input={}B output={}B exit={} cycles={}",
-        statement_shards(config, &counts).len(),
+        verifier_core::statement_shards(config, &counts).len(),
         debug::counts(&config.families, &counts),
         windows,
         archive.io_streams().input.len(),
@@ -411,22 +392,10 @@ pub fn statement_inputs(
             archive.io_streams().output.len()
         );
     }
-    let mut memory_columns = Vec::new();
-    for (family, index) in statement_shards(config, &counts) {
-        // `M` alone, moved out of the fill: the statement commits nothing else,
-        // and asking `shard_columns` for the whole set here counted every
-        // channel's multiplicities only to drop them.
-        memory_columns.push(shard_memory_columns(
-            setup, archive, family, index, &windows,
-        )?);
-        dlog!(
-            Detail,
-            family = family,
-            "apogee stmt     {:<22} M-columns={}",
-            debug::shard(family, index),
-            memory_columns.last().map_or(0, Vec::len)
-        );
-    }
+    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. HERE every
+    // statement shard's `M` columns are filled — `shard_columns` restricted to
+    // `M` — for the global phase to commit. With nothing to commit them with
+    // they are not built (`docs/architecture.md` §0).
     let io = archive.io_streams();
     Ok(StatementInputs {
         input: io.input.clone(),
@@ -435,97 +404,19 @@ pub fn statement_inputs(
         shard_counts: counts,
         windows,
         boundary,
-        memory_columns,
     })
 }
 
-/// `[f(x)]_1` of every column, in order, as 64-byte encodings. Parallel over
-/// the columns; the order of the result is the order of `columns`.
-fn commit_all(srs: &Srs, columns: &[&MultilinearPoly]) -> Vec<[u8; 64]> {
-    columns
-        .par_iter()
-        .map(|c| {
-            commit(srs, c)
-                .unwrap_or_else(|e| panic!("committing a column: {e:?}"))
-                .0
-                .to_bytes()
-        })
-        .collect()
-}
-
-/// A phase's commitments: one a column in the base format, one a stack of
-/// `2^σ` columns in the recursion format (`docs/spec/recursion.md` §1.3).
-pub(crate) fn commit_phase(srs: &Srs, columns: &[&MultilinearPoly], sigma: u32) -> Vec<[u8; 64]> {
-    if sigma == 0 {
-        return commit_all(srs, columns);
-    }
-    columns
-        .par_chunks(1 << sigma)
-        .map(|stack| {
-            pcs::commit_stack(srs, stack)
-                .unwrap_or_else(|e| panic!("committing a stack: {e:?}"))
-                .0
-                .to_bytes()
-        })
-        .collect()
-}
-
-/// `family`'s `σ` under `config`.
-pub(crate) fn sigma_of(setup: &ProverSetup, family: FamilyId) -> u32 {
-    setup
-        .program
-        .config
-        .stack_vars(&setup.registration(family).circuit.artifact)
-}
-
-/// The global commit phase, `docs/spec/proof.md` §2: every shard's
-/// memory columns committed, then the global transcript over the statement.
-/// Shard-count generic: `inputs` holds any number of shards per family.
-pub fn global_commit_phase(
-    vk: &VerifyingKey,
-    srs: &Srs,
-    inputs: &StatementInputs,
-) -> GlobalCommitState {
-    // **The phase's bulk, and it is sequential.** One MSM per column of every
-    // shard, ~300 MB a shard, in the one `map` below — and the `done` line
-    // further down never prints on a run that dies or hangs inside it, so this
-    // line opens the phase. A block that looks stuck before any shard is proved
-    // is stuck here.
-    //
-    // It is **one line bracketing the phase**, not a tick per shard. A tick
-    // needs the shard's position, and the position is only wanted by the tick:
-    // the default build then has either an unused index or a counter, and
-    // clippy rejects whichever spelling the feature-on build does not. Naming
-    // every shard and its column count here says the same thing before the work
-    // starts, and the `begin`/`done` pair is what localizes a death to the
-    // phase. `docs/tools.md` §3.
-    dlog!(
-        Phase,
-        "apogee commit   begin shards={} columns={} per-shard={}",
-        inputs.memory_columns.len(),
-        inputs.memory_columns.iter().map(Vec::len).sum::<usize>(),
-        statement_shards(&vk.config, &inputs.shard_counts)
-            .iter()
-            .zip(&inputs.memory_columns)
-            .map(|((family, index), columns)| format!(
-                "{}:{}",
-                debug::shard(*family, *index),
-                columns.len()
-            ))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    let memory_commitments: Vec<Vec<[u8; 64]>> = statement_shards(&vk.config, &inputs.shard_counts)
-        .iter()
-        .zip(&inputs.memory_columns)
-        .map(|((family, _), columns)| {
-            let circuit = vk
-                .circuit(*family)
-                .expect("a statement family has a circuit");
-            let sigma = vk.config.stack_vars(&circuit.artifact);
-            commit_phase(srs, &columns.iter().collect::<Vec<_>>(), sigma)
-        })
-        .collect();
+/// The global commit phase, `docs/spec/proof.md` §2: the global transcript
+/// over the statement. Shard-count generic: `inputs` holds any number of
+/// shards per family.
+///
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The phase is
+/// meant to commit every shard's memory columns first and put the commitments
+/// in the statement, which the transcript absorbs before the memory challenges.
+/// It commits nothing, so the challenges are drawn over columns nothing fixes
+/// (`docs/architecture.md` §0).
+pub fn global_commit_phase(vk: &VerifyingKey, inputs: &StatementInputs) -> GlobalCommitState {
     let statement = PublicInputs {
         input: inputs.input.clone(),
         output: inputs.output.clone(),
@@ -533,25 +424,14 @@ pub fn global_commit_phase(
         shard_counts: inputs.shard_counts.clone(),
         windows: inputs.windows.clone(),
         boundary: inputs.boundary,
-        memory_commitments,
         memory_roots: Vec::new(),
     };
-    global_commit_from_commitments(vk, statement)
+    global_commit_of(vk, statement)
 }
 
-/// The global commit phase's **second half**, `docs/spec/proof.md` §2's
-/// G1-G11, over a statement whose memory commitments the caller already has.
-///
-/// The first half is committing the columns, which is an MSM per column and
-/// reads no transcript, so *when* it happens cannot matter — only the order the
-/// commitments are absorbed in, which is the statement's own order. That is what
-/// lets the streaming prover commit each shard as it fills and run this once at
-/// the end, over exactly the ordered list `statement_inputs` would have
-/// produced.
-pub(crate) fn global_commit_from_commitments(
-    vk: &VerifyingKey,
-    statement: PublicInputs,
-) -> GlobalCommitState {
+/// The global transcript, `docs/spec/proof.md` §2, over a statement with no
+/// roots yet: the archived path's and the streaming prover's one way into it.
+pub(crate) fn global_commit_of(vk: &VerifyingKey, statement: PublicInputs) -> GlobalCommitState {
     let global = global_commit(vk, &statement);
     // The five values every shard's transcript is forked from. Two runs that
     // should have produced one block and did not diverge here or nowhere, which
@@ -559,12 +439,7 @@ pub(crate) fn global_commit_from_commitments(
     // downstream is a function of these.
     dlog!(
         Phase,
-        "apogee commit   done commitments={} digest={} memory-challenges={}",
-        statement
-            .memory_commitments
-            .iter()
-            .map(Vec::len)
-            .sum::<usize>(),
+        "apogee commit   done digest={} memory-challenges={}",
         debug::fr_full(&global.digest),
         debug::frs(&global.memory, 4)
     );
@@ -624,10 +499,9 @@ pub fn shard_columns(
 /// execution's two unbound inputs, and **this shard's rows**, cut out of the
 /// archive by `docs/spec/streaming.md` §4's rule.
 ///
-/// Which arm of [`ShardRows`] a family takes is the three presence rules of
-/// `docs/spec/delegation.md` §1: a delegation family is invoked, a family that
-/// claims pcs owns cycles, and everything else is a window family whose rows
-/// are addresses.
+/// Which arm of [`ShardRows`] a family takes: a delegation family takes its
+/// cut of its invocations, a family that owns cycles its cut of them, and
+/// every other is a window family whose rows are addresses.
 fn shard_source<'a>(
     setup: &'a ProverSetup,
     archive: &'a TraceArchive,
@@ -645,63 +519,6 @@ fn shard_source<'a>(
         window_of(family, index, windows, height),
     )
     .map_err(ProverError::Trace)
-}
-
-/// Shard `(family, index)`'s **`M` columns alone**, in layout order, as the
-/// statement commits them: the family's fill over the archive, and the memory
-/// columns moved out of its result.
-///
-/// [`shard_columns`] is the whole committed set and counts the channels'
-/// multiplicities on top of the fill. **The statement commits `M` and nothing
-/// else**, and `build_multiplicities` is about 99% of what `shard_columns`
-/// costs — 880 ms against 16 ms for the fill, on one `2^20` shard — so this
-/// does not count them.
-///
-/// A multiplicity is a **witness** column by construction
-/// (`constraints::lookup` asserts it at every channel), so nothing this drops
-/// could have been an `M` column; the loop below panics rather than commit a
-/// short list if a family's fill ever disagrees.
-pub fn shard_memory_columns(
-    setup: &ProverSetup,
-    archive: &TraceArchive,
-    family: FamilyId,
-    index: u32,
-    windows: &[u32],
-) -> Result<Vec<MultilinearPoly>, ProverError> {
-    let source = shard_source(setup, archive, family, index, windows)?;
-    memory_columns_of(setup, family, index, &source)
-}
-
-/// [`shard_memory_columns`] over a source the caller built: the streaming
-/// prover's, whose rows are a chunk it has just filled rather than a slice of an
-/// archive.
-pub(crate) fn memory_columns_of(
-    setup: &ProverSetup,
-    family: FamilyId,
-    index: u32,
-    source: &ShardSource,
-) -> Result<Vec<MultilinearPoly>, ProverError> {
-    let columns = (setup.registration(family).fill)(source).map_err(ProverError::Trace)?;
-    let width = setup.registration(family).circuit.artifact.memory.len();
-    let mut memory: Vec<Option<MultilinearPoly>> = (0..width).map(|_| None).collect();
-    for (address, column) in columns {
-        if let PolyAddress::Memory(i) = address {
-            let i = i as usize;
-            assert!(
-                i < width,
-                "shard ({family}, {index}): the fill wrote M[{i}] and the circuit has {width}"
-            );
-            memory[i] = Some(column);
-        }
-    }
-    let memory: Vec<MultilinearPoly> = memory
-        .into_iter()
-        .enumerate()
-        .map(|(i, column)| {
-            column.unwrap_or_else(|| panic!("shard ({family}, {index}): the fill wrote no M[{i}]"))
-        })
-        .collect();
-    Ok(memory)
 }
 
 /// [`shard_columns`] over a source the caller built: the streaming prover's.
@@ -736,23 +553,14 @@ fn low64(v: Fr) -> u64 {
 /// §1, the clock's four slots, and §3, a query's write at `4·cycle + Δ`). Row 0
 /// is live in every shard a plan cuts, and padding rows carry cycle 0, so the
 /// maximum is the last live row's. The honest prover's window is
-/// therefore the one its committed rows say; nothing in the circuit holds it
-/// there (`docs/spec/proof.md` §8).
-///
-/// For a **delegation** family it is the same expression over the same column,
-/// and means something else: the shard's rows are invocations, each stamped
-/// with the cycle that requested it, so the window is the **min and max
-/// invocation timestamp** the shard holds (`docs/spec/delegation.md` §8). The
-/// block asks nothing of it — no emptiness, no disjointness — because
-/// invocations interleave with the cycles that request them and two delegation
-/// shards are consecutive invocations, not consecutive times.
+/// therefore the one its rows say; nothing in the circuit holds it there
+/// (`docs/spec/proof.md` §8).
 ///
 /// For a family whose rows are words rather than cycles — the window
 /// families — it is [`TRIVIAL_TS_WINDOW`]: such a family owns no part of the
 /// execution's time at all, and there is no column to read one off.
 fn ts_window(family: FamilyId, base: &BaseLayer) -> [u64; 2] {
-    let delegation = program::delegation_frame_words(family).is_some();
-    if !constants::family::CYCLE_OWNING[family as usize] && !delegation {
+    if !constants::family::CYCLE_OWNING[family as usize] {
         return TRIVIAL_TS_WINDOW;
     }
     let cycles = base
@@ -766,13 +574,12 @@ fn ts_window(family: FamilyId, base: &BaseLayer) -> [u64; 2] {
     [ts(low64(cycles.get(0))), ts(top).saturating_add(4)]
 }
 
-/// A shard after its GKR proof: what the opening needs, and the live shard
+/// A shard after its GKR proof: what an opening would need, and the live shard
 /// transcript. `docs/spec/streaming.md` §6's `PostGkr` entry.
 pub(crate) struct ShardGkr {
     pub(crate) family: FamilyId,
     pub(crate) index: u32,
     pub(crate) ts_window: [u64; 2],
-    pub(crate) witness_commitments: Vec<[u8; 64]>,
     pub(crate) outputs: Vec<Fr>,
     pub(crate) gkr: GkrProof,
     /// The base claims' one point.
@@ -781,20 +588,20 @@ pub(crate) struct ShardGkr {
 }
 
 impl ProvingContext<'_> {
-    /// Shard `(family, index)`'s position in statement order.
+    /// Shard `(family, index)`'s position in statement order, for the debug log.
+    #[cfg(feature = "debug-info")]
     fn position(&self, family: FamilyId, index: u32) -> usize {
         let counts = &self.global.statement.shard_counts;
-        statement_shards(&self.setup.vk.config, counts)
+        verifier_core::statement_shards(&self.setup.vk.config, counts)
             .iter()
             .position(|s| *s == (family, index))
             .unwrap_or_else(|| panic!("the statement has no shard ({family}, {index})"))
     }
 
-    /// The shard's steps up to its opening, `docs/spec/proof.md` §4, S1
-    /// to S5: commit the witness columns, seed the transcript, draw the lookup
-    /// challenges, run the forward pass and the GKR proof. The base claims'
-    /// one point is read back by replaying the schedule over the proof, which
-    /// checks nothing: a tampered witness still gets its proof.
+    /// The shard's steps, `docs/spec/proof.md` §4: seed the transcript, draw
+    /// the lookup challenges, run the forward pass and the GKR proof. The base
+    /// claims' one point is read back by replaying the schedule over the proof,
+    /// which checks nothing: a tampered witness still gets its proof.
     pub(crate) fn gkr_part(&self, family: FamilyId, index: u32, base: &BaseLayer) -> ShardGkr {
         let reg = self.setup.registration(family);
         let artifact = &reg.circuit.artifact;
@@ -808,7 +615,11 @@ impl ProvingContext<'_> {
             "apogee shard    {:<22} [{}/{}] begin h={} witness-cols={}",
             debug::shard(family, index),
             self.position(family, index) + 1,
-            self.global.statement.memory_commitments.len(),
+            verifier_core::statement_shards(
+                &self.setup.vk.config,
+                &self.global.statement.shard_counts
+            )
+            .len(),
             debug::height(reg.height),
             artifact.witness.len()
         );
@@ -816,19 +627,13 @@ impl ProvingContext<'_> {
         // build has neither the binding nor the `Instant::now` behind it.
         #[cfg(feature = "debug-info")]
         let clock = debug::Clock::start();
-        let witness: Vec<&MultilinearPoly> = (0..artifact.witness.len() as u32)
-            .map(|i| base.get(PolyAddress::Witness(i)).expect("a witness column"))
-            .collect();
-        let sigma = sigma_of(self.setup, family);
-        let witness_commitments = commit_phase(&self.setup.srs, &witness, sigma);
+        // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. HERE the
+        // shard's `W` columns, multiplicities included, are committed, the
+        // commitments put in the proof and absorbed by `shard_transcript` before
+        // `g` and `β`. None is: the witness is bound to nothing
+        // (`docs/architecture.md` §0).
         let ts_window = ts_window(family, base);
-        let (mut t, g, beta) = shard_transcript(
-            self.global.digest,
-            family,
-            index,
-            ts_window,
-            &witness_commitments,
-        );
+        let (mut t, g, beta) = shard_transcript(self.global.digest, family, index, ts_window);
         let challenges = shard_challenges(
             &reg.circuit,
             index,
@@ -975,7 +780,6 @@ impl ProvingContext<'_> {
             family,
             index,
             ts_window,
-            witness_commitments,
             outputs,
             gkr,
             point,
@@ -983,120 +787,44 @@ impl ProvingContext<'_> {
         }
     }
 
-    /// The shard's one batched opening, `docs/spec/proof.md` §5 and §4's
-    /// S6, and its proof. Returns the proof and the shard transcript's event
-    /// log.
-    pub(crate) fn opening_part(
-        &self,
-        shard: ShardGkr,
-        base: &BaseLayer,
-    ) -> (ShardProof, Vec<TranscriptEvent>) {
-        // **The block's second peak.** This clones every committed column at
-        // full height — 1,420 of them for `EC_ADD` — and then runs
-        // `batch_open`'s MSM, so the `open begin`/`open done` pair is what names
-        // a shard an OOM kill takes here.
-        #[cfg(feature = "debug-info")]
-        let clock = debug::Clock::start();
+    /// The shard's proof, and the shard transcript's event log.
+    ///
+    /// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** This is
+    /// where the shard's one batched opening belongs (`docs/spec/proof.md` §5):
+    /// every committed column — `M`, `W` and `S`, in layout order — opened at
+    /// `point` in the live shard transcript, against the statement's, the
+    /// proof's and the key's commitments, and the opening put in the proof. With
+    /// no commitment scheme nothing is opened, the proof carries the GKR pass
+    /// alone, and its base claims are checked by nothing
+    /// (`docs/architecture.md` §0).
+    pub(crate) fn proof_part(&self, shard: ShardGkr) -> (ShardProof, Vec<TranscriptEvent>) {
         let ShardGkr {
             family,
             index,
             ts_window,
-            witness_commitments,
             outputs,
             gkr,
             point,
-            mut transcript,
+            transcript,
         } = shard;
-        let reg = self.setup.registration(family);
-        let artifact = &reg.circuit.artifact;
-        dlog!(
-            Phase,
-            family = family,
-            "apogee shard    {:<22} open begin committed={}",
-            debug::shard(family, index),
-            artifact.committed().len()
-        );
-        let columns: Vec<MultilinearPoly> = artifact
-            .committed()
-            .into_iter()
-            .map(|a| base.get(a).expect("a committed column").clone())
-            .collect();
-        let family_index = self
-            .setup
-            .vk
-            .config
-            .families
-            .iter()
-            .position(|(f, _)| *f == family)
-            .expect("a registered family");
-        let mut encoded =
-            self.global.statement.memory_commitments[self.position(family, index)].clone();
-        encoded.extend_from_slice(&witness_commitments);
-        encoded.extend_from_slice(&self.setup.vk.setup_commitments[family_index]);
-        if reg.circuit.reads_generic_table() {
-            encoded.extend_from_slice(&self.setup.vk.generic_table);
-        }
-        let cms: Vec<MercuryCommitment> = encoded
-            .iter()
-            .map(|b| MercuryCommitment(G1Affine::from_bytes(b).expect("the prover's own point")))
-            .collect();
-        // The commitment list's own split, which is the only prover-side view of
-        // what `VerifyError::Opening` — a *unit* variant — collapses: a batch is
-        // one instance, and column `i` carries `ρ^i`, so a list built in the
-        // wrong order is a different statement and the refusal says only
-        // "Opening".
-        dlog!(
-            Detail,
-            family = family,
-            "apogee shard    {:<22} open cms={} = M{}+W{}+S{}{} point={}",
-            debug::shard(family, index),
-            cms.len(),
-            self.global.statement.memory_commitments[self.position(family, index)].len(),
-            witness_commitments.len(),
-            self.setup.vk.setup_commitments[family_index].len(),
-            if reg.circuit.reads_generic_table() {
-                format!("+G{}", self.setup.vk.generic_table.len())
-            } else {
-                String::new()
-            },
-            point.len()
-        );
-        // Stacks of `2^σ` columns, M then W, and each setup column alone, at
-        // `u ‖ r` — at `σ = 0` exactly the base format's column-per-commitment
-        // batch (`docs/spec/recursion.md` §1.3).
-        let sigma = sigma_of(self.setup, family);
-        let r = verifier_core::stack_challenges(&mut transcript, sigma);
-        let (m, w) = (artifact.memory.len(), artifact.witness.len());
-        let mut stacks: Vec<Vec<&MultilinearPoly>> = Vec::new();
-        for phase in [&columns[..m], &columns[m..m + w]] {
-            stacks.extend(phase.chunks(1 << sigma).map(|s| s.iter().collect()));
-        }
-        stacks.extend(columns[m + w..].iter().map(|c| vec![c]));
-        let (values, mercury) =
-            pcs::batch_open_stacked(&self.setup.srs, &stacks, &cms, &point, &r, &mut transcript)
-                .unwrap_or_else(|e| panic!("opening shard ({family}, {index}): {e:?}"));
-        assert_eq!(
-            values,
-            verifier_core::stack_values(&gkr.layers[0].final_evals, m, w, &r),
-            "the opened values are the base claims"
-        );
+        // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The
+        // opening of every committed column at `point`, in `transcript`, goes
+        // HERE.
+        let _ = &point;
         let proof = ShardProof {
             family,
             shard_index: index,
             ts_window,
             global_digest: self.global.digest,
-            witness_commitments,
             outputs,
             gkr,
-            opening: mercury.to_bytes(),
         };
         dlog!(
             Phase,
             family = family,
-            "apogee shard    {:<22} open done bytes={} ms={}",
+            "apogee shard    {:<22} done bytes={}",
             debug::shard(proof.family, proof.shard_index),
-            proof.to_bytes().len(),
-            clock.ms()
+            proof.to_bytes().len()
         );
         (proof, transcript.event_log().to_vec())
     }
@@ -1166,5 +894,5 @@ pub fn prove_shard_columns(
 ) -> (ShardProof, Vec<TranscriptEvent>) {
     let base = BaseLayer::new(columns);
     let gkr = ctx.gkr_part(family, shard_idx, &base);
-    ctx.opening_part(gkr, &base)
+    ctx.proof_part(gkr)
 }

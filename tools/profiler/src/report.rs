@@ -8,10 +8,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::categories::{self, Candidate, Category, CANDIDATES};
+use crate::categories::Category;
 use crate::Profile;
 
-/// One semantic workload's share.
+/// One workload's share.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CategoryRow {
     pub category: String,
@@ -35,27 +35,6 @@ pub struct FuncRow {
     pub cycles_per_call: f64,
 }
 
-/// One accelerator candidate, priced.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct CandidateRow {
-    pub category: String,
-    pub cycles: u64,
-    pub share: f64,
-    /// Calls into the candidate's named entry points, or 0 where it has none.
-    pub calls: u64,
-    /// The frame a delegation would pass, in 32-bit words.
-    pub frame_words: u32,
-    /// `calls · (4 + 2·frame_words)`: the shim that would remain.
-    pub shim_cycles: u64,
-    /// `cycles − shim_cycles`, floored at 0: the ceiling on what an accelerator
-    /// could remove.
-    pub removable_cycles: u64,
-    pub removable_share: f64,
-    /// True where the candidate names no entry point, so `shim_cycles` is 0 and
-    /// the figure is a ceiling that charges nothing per call.
-    pub entryless: bool,
-}
-
 /// One execution's profile, flat.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProfileReport {
@@ -63,27 +42,19 @@ pub struct ProfileReport {
     pub label: String,
     /// The guest binary's name.
     pub guest: String,
-    /// The block, where the workload is one.
-    pub block_number: Option<u64>,
-    pub txs: Option<usize>,
-    pub gas_used: Option<u64>,
 
     pub guest_cycles: u64,
-    pub cycles_per_gas: Option<f64>,
     pub exit_code: i32,
     pub journal_bytes: usize,
 
-    /// Cycles per cycle-owning family and invocations per delegation family, by
-    /// name, in family order.
+    /// Cycles per family, by name, in family order.
     pub families: Vec<(String, u64)>,
-    /// Cycles per semantic workload, descending.
+    /// Cycles per workload, descending.
     pub categories: Vec<CategoryRow>,
     /// The functions with the most cycles, descending.
     pub top_functions: Vec<FuncRow>,
     /// Cycles per instruction mnemonic, descending.
     pub mnemonics: Vec<(String, u64)>,
-    /// The accelerator candidates, priced.
-    pub candidates: Vec<CandidateRow>,
     /// Cycles at a pc no function symbol claims, and its share.
     pub unattributed_cycles: u64,
     pub unattributed_share: f64,
@@ -134,18 +105,10 @@ impl ProfileReport {
                 },
             })
             .collect();
-        let candidates = CANDIDATES
-            .iter()
-            .map(|c| candidate_row(c, profile, total))
-            .collect();
         ProfileReport {
             label: label.to_string(),
             guest: guest.to_string(),
-            block_number: None,
-            txs: None,
-            gas_used: None,
             guest_cycles: total,
-            cycles_per_gas: None,
             exit_code: profile.execution.exit_code,
             journal_bytes: profile.execution.io.output.len(),
             families: profile
@@ -157,20 +120,10 @@ impl ProfileReport {
             categories,
             top_functions,
             mnemonics: profile.mnemonics.clone(),
-            candidates,
             unattributed_cycles: profile.unclaimed,
             unattributed_share: share(profile.unclaimed, total),
             function_symbols: profile.funcs.len(),
         }
-    }
-
-    /// Set the block fields, and the ratio they make.
-    pub fn with_block(mut self, number: u64, txs: usize, gas_used: u64) -> ProfileReport {
-        self.block_number = Some(number);
-        self.txs = Some(txs);
-        self.gas_used = Some(gas_used);
-        self.cycles_per_gas = (gas_used > 0).then(|| self.guest_cycles as f64 / gas_used as f64);
-        self
     }
 
     pub fn to_json(&self) -> String {
@@ -189,31 +142,17 @@ impl ProfileReport {
         let _ = writeln!(out, "workload");
         row(&mut out, "label", self.label.clone());
         row(&mut out, "guest", self.guest.clone());
-        if let Some(n) = self.block_number {
-            row(&mut out, "block", n.to_string());
-        }
-        if let Some(n) = self.txs {
-            row(&mut out, "transactions", n.to_string());
-        }
-        if let Some(n) = self.gas_used {
-            row(&mut out, "gas used", n.to_string());
-        }
         row(&mut out, "guest cycles", self.guest_cycles.to_string());
-        if let Some(r) = self.cycles_per_gas {
-            row(&mut out, "cycles per gas", format!("{r:.1}"));
-        }
         row(
             &mut out,
             "exit status",
             match self.exit_code {
                 0 => "0".to_string(),
-                // The statuses a profiling run actually reaches, named: an
-                // execution that completed and could not *publish* is a complete
-                // profile, and reading `70` as a failed execution would be wrong.
-                61 => "61  the advice is not a canonical BlockWitness".to_string(),
-                62 => "62  a transaction is not executable".to_string(),
-                70 => "70  the execution finished and its output commitment does \
-                       NOT fit the 16,380-byte journal; every cycle below was run"
+                // The guest SDK's own statuses, named: an execution that ran and
+                // could not *publish* is a complete profile, and reading `70` as
+                // a failed execution would be wrong.
+                70 => "70  the journal does not fit its window; every cycle below \
+                       was run"
                     .to_string(),
                 71 => "71  the guest's heap is exhausted".to_string(),
                 101 => "101 the guest panicked".to_string(),
@@ -227,38 +166,12 @@ impl ProfileReport {
             self.function_symbols.to_string(),
         );
 
-        let _ = writeln!(out, "\ncycles by semantic workload");
+        let _ = writeln!(out, "\ncycles by workload");
         for c in &self.categories {
             if c.cycles == 0 {
                 continue;
             }
             row(&mut out, &c.category, cyc(c.cycles, c.share));
-        }
-
-        let _ = writeln!(out, "\naccelerator candidates (ceilings)");
-        for c in &self.candidates {
-            row(
-                &mut out,
-                &c.category,
-                format!(
-                    "{}  removable {} ({:.2}%){}",
-                    cyc(c.cycles, c.share),
-                    c.removable_cycles,
-                    c.removable_share,
-                    match c.entryless {
-                        true => "  [no entry point: nothing charged per call]",
-                        false => "",
-                    }
-                ),
-            );
-            row(
-                &mut out,
-                "",
-                format!(
-                    "calls {}, frame {} words, shim {} cycles",
-                    c.calls, c.frame_words, c.shim_cycles
-                ),
-            );
         }
 
         let _ = writeln!(out, "\ncycles by family");
@@ -290,29 +203,6 @@ impl ProfileReport {
              (docs/tools.md §2.2)."
         );
         out
-    }
-}
-
-fn candidate_row(c: &Candidate, profile: &Profile, total: u64) -> CandidateRow {
-    let cycles: u64 = profile
-        .funcs
-        .iter()
-        .filter(|f| f.category == c.category)
-        .map(|f| f.cycles)
-        .sum();
-    let calls = profile.entry_calls(c.entries);
-    let shim = calls * categories::shim_cycles(c.frame_words);
-    let removable = cycles.saturating_sub(shim);
-    CandidateRow {
-        category: c.category.name().to_string(),
-        cycles,
-        share: share(cycles, total),
-        calls,
-        frame_words: c.frame_words,
-        shim_cycles: shim,
-        removable_cycles: removable,
-        removable_share: share(removable, total),
-        entryless: c.entries.is_empty(),
     }
 }
 

@@ -206,7 +206,7 @@ pub fn set_operand(gate: &mut GateDef, from: PolyAddress, to: PolyAddress) -> us
 }
 
 // ---------------------------------------------------------------------------
-// Memory statements over a committed guest
+// Memory statements over a guest
 // ---------------------------------------------------------------------------
 
 use checker::{memory_roots, WitnessRow};
@@ -244,14 +244,14 @@ pub const FAMILY_NAMES: [&str; 7] = [
 use transcript::Transcript;
 
 /// Every family's height: the init families' `h`, and tall enough for every
-/// instruction table of every committed guest but `mod-mul-ops` and `ec-ops`.
+/// instruction table of every guest these suites trace.
 pub const HEIGHT: u32 = 1 << 16;
 
 /// The guests, each on the input `crates/emulator/tests/common` runs it on:
 /// fib's is `fib_io.txt`'s `n = 24`, heap's 40.
 pub const GUESTS: [(&str, u32); 2] = [("fib", 24), ("heap", 40)];
 
-/// One committed guest, decoded at `HEIGHT` and traced to its exit: what a
+/// One guest, decoded at `HEIGHT` and traced to its exit: what a
 /// statement's memory shards are built from.
 pub struct Traced {
     pub image: ProgramImage,
@@ -265,20 +265,18 @@ pub struct Traced {
     /// window, whether or not the guest looked (`docs/spec/public-values.md`
     /// §5).
     pub input: Vec<u8>,
-    /// The advice this run was given. Empty for every committed guest.
+    /// The advice this run was given. Empty for every guest here.
     pub advice: Vec<u8>,
 }
 
-/// The ELF is `crates/loader/tests/vectors`', pinned by digest in that crate's
-/// suite. The run must exit 0.
+/// The guest is built from `guests/`. The run must exit 0.
 pub fn traced(name: &str, input: u32) -> Traced {
     traced_exiting(name, input, 0)
 }
 
 /// [`traced`] for a guest whose success is a **nonzero** status: the fixtures
-/// that count their own checks exit with the count — `keccak-test` 6,
-/// `recursion-ops` 9, `mod-mul-ops` 28 — so the status is the assertion and not
-/// a failure.
+/// that count their own checks exit with the count — `mem` 50, `alu` 96,
+/// `control` 16 — so the status is the assertion and not a failure.
 pub fn traced_exiting(name: &str, input: u32, status: i32) -> Traced {
     traced_exiting_at(name, input, status, HEIGHT)
 }
@@ -286,15 +284,10 @@ pub fn traced_exiting(name: &str, input: u32, status: i32) -> Traced {
 /// [`traced_exiting`] at a height of the caller's choosing.
 ///
 /// A decoded table's row `i` is pc `2i`, so a guest whose `.text` outgrows
-/// `2·HEIGHT` needs a taller one: `guests/mod-mul-ops` reaches pc `0x45be6` and
-/// takes `2^18`. It and `guests/ec-ops` are the committed guests that need one.
+/// `2·HEIGHT` needs a taller one.
 pub fn traced_exiting_at(name: &str, input: u32, status: i32, height: u32) -> Traced {
-    let path = format!(
-        "{}/../loader/tests/vectors/{name}.elf",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let elf = std::fs::read(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
-    let image = load_elf(&elf).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    let image =
+        load_elf(&test_support::guest_elf(name)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
     let params = ProgramParams {
         heights: [height; family::COUNT as usize],
         ..ProgramParams::defaults()
@@ -324,10 +317,9 @@ pub fn traced_exiting_at(name: &str, input: u32, status: i32, height: u32) -> Tr
 }
 
 /// Slots 1–4, drawn from a fresh transcript that binds nothing. The global
-/// transcript owns the real schedule — the statement, every memory column's
-/// commitment and the boundary absorbed before the squeeze
-/// (`docs/spec/memory.md` §6.1). Here they are only values no trace was chosen
-/// against.
+/// transcript owns the real schedule — the statement and the boundary absorbed
+/// before the squeeze (`docs/spec/memory.md` §6.1). Here they are only values
+/// no trace was chosen against.
 pub fn memory_challenges() -> ExternalChallenges {
     let mut t = Transcript::new();
     let mut memory = ExternalChallenges::new();
@@ -389,9 +381,9 @@ pub fn frame_shard(
 
 /// Each execution family that ran, with the cycles its frame proves:
 /// `t.traces.families` in order, the families that never ran dropped. One
-/// frame cannot hold two families' cycles — an ecall row needs `deleg`, a
-/// load row needs `load` — so a statement's execution side is one
-/// frame per family, each under its own query list.
+/// frame cannot hold two families' cycles — a load row needs `load`, which the
+/// add/sub frame has not — so a statement's execution side is one frame per
+/// family, each under its own query list.
 pub fn frame_plan(t: &Traced) -> Vec<(u32, Vec<u64>)> {
     let ran = t.traces.families.iter().filter(|f| !f.is_empty());
     ran.map(|f| (f.family, f.cycle.clone())).collect()

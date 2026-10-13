@@ -4,7 +4,7 @@
 //!
 //!     cargo run -p artifact-dump -- guests/target/riscv32imac-unknown-none-elf/debug/fib
 //!     cargo run -p artifact-dump -- <elf> --out artifacts/
-//!     cargo run --release -p artifact-dump -- tables <elf> [--ptau <file>]
+//!     cargo run --release -p artifact-dump -- tables <elf>
 //!
 //! The first form writes two files into the output directory, both named
 //! after the ELF:
@@ -15,8 +15,8 @@
 //! | `<name>.img.txt` | the report of that artifact |
 //!
 //! `tables` prints to stdout instead: every instruction's pc, mnemonic, decoded
-//! fields and owning family, the derived `VmConfig`, and — given PSE's ceremony
-//! file with `--ptau` — the program identity at the default parameters.
+//! fields and owning family, the derived `VmConfig`, and the program identity at
+//! the default parameters.
 //!
 //! `docs/guest-program-manual.md` is the walkthrough, from an empty crate to
 //! these files.
@@ -87,18 +87,11 @@ fn main() {
     );
 }
 
-/// `tables <elf> [--ptau <file>]`: print the decoded tables at the default
-/// parameters.
+/// `tables <elf>`: print the decoded tables at the default parameters.
 fn tables(args: &[String]) {
     let mut elf: Option<PathBuf> = None;
-    let mut ptau: Option<PathBuf> = None;
-    let mut rest = args.iter();
-    while let Some(arg) = rest.next() {
+    for arg in args {
         match arg.as_str() {
-            "--ptau" => match rest.next() {
-                Some(path) => ptau = Some(PathBuf::from(path)),
-                None => usage("`--ptau` needs a file"),
-            },
             other if other.starts_with('-') => usage(&format!("unknown flag `{other}`")),
             other => {
                 if elf.replace(PathBuf::from(other)).is_some() {
@@ -116,23 +109,7 @@ fn tables(args: &[String]) {
     };
 
     let params = program::ProgramParams::defaults();
-    // The SRS needs as many powers as the tallest table has rows.
-    let power = params
-        .heights
-        .iter()
-        .max()
-        .expect("a height per family")
-        .trailing_zeros();
-    let srs = ptau.map(|path| {
-        srs::Srs::from_ptau(&path, power)
-            .unwrap_or_else(|e| fail(&format!("reading {}: {e:?}", path.display())))
-    });
-    match artifact_dump::tables::render(
-        &bytes,
-        &elf_path.display().to_string(),
-        &params,
-        srs.as_ref(),
-    ) {
+    match artifact_dump::tables::render(&bytes, &elf_path.display().to_string(), &params) {
         Ok(page) => print!("{page}"),
         Err(why) => fail(&why),
     }
@@ -168,12 +145,12 @@ fn usage(why: &str) -> ! {
         eprintln!("artifact-dump: {why}");
     }
     eprintln!("usage: cargo run -p artifact-dump -- <guest.elf> [--out <dir>]");
-    eprintln!("       cargo run --release -p artifact-dump -- tables <guest.elf> [--ptau <file>]");
+    eprintln!("       cargo run --release -p artifact-dump -- tables <guest.elf>");
     eprintln!();
     eprintln!("The first writes <name>.img -- the ProgramImage in its postcard wire form,");
     eprintln!("nothing around it -- and <name>.img.txt, a report of it.");
-    eprintln!("`tables` prints the decoded per-family tables, the VmConfig and, with the");
-    eprintln!("PSE ceremony file, the program identity. See docs/guest-program-manual.md.");
+    eprintln!("`tables` prints the decoded per-family tables, the VmConfig and the program");
+    eprintln!("identity. See docs/guest-program-manual.md.");
     std::process::exit(if why.is_empty() { 0 } else { 2 });
 }
 

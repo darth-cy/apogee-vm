@@ -1,6 +1,11 @@
 //! Preprocessing: a [`ProgramImage`] in, the per-family decoded tables, the
-//! [`VmConfig`] they derive, and the [`ProgramIdentity`] that commits to both,
-//! to the image's words in RAM window 0 and to the entry pc.
+//! [`VmConfig`] they derive, and the [`ProgramIdentity`].
+//!
+//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** Identity is
+//! meant to commit to the tables, to the image's words in RAM window 0 and to
+//! the entry pc. With no commitment scheme it digests the config and the entry
+//! pc alone, so it **does not identify a program's code**
+//! (`docs/architecture.md` §0, [`program_identity`]).
 //!
 //! `docs/spec/program.md` §4–§8 specifies the table shape, the extra-mask
 //! encoding, the family list with its pc-claiming rule, the digest recipe and
@@ -16,8 +21,8 @@
 //! `Fr::MINUS_ONE` in every field: never zero, because pc 0 is a valid pc and
 //! an all-zero row would be claimable. Storage is column-major, each column in
 //! the narrowest backing its live values fit beside a one-bit liveness column;
-//! `MINUS_ONE` appears only when a column is exported as a polynomial, which is
-//! also what gets committed.
+//! `MINUS_ONE` appears only when a column is exported as a polynomial, the form
+//! a circuit reads.
 
 use std::fmt;
 
@@ -28,13 +33,10 @@ use constants::extra_mask::{
     shift_bitwise as sb, system_code,
 };
 use constants::{delegation, family, guest_memory};
-use curve::G1Affine;
 use field::Fr;
 use isa::{decode, Instr};
 use loader::{ProgramImage, Slot};
-use pcs::commit;
 use poly::{MultilinearPoly, PolyBacking};
-use srs::Srs;
 
 /// A family's number: an index into `constants::family`'s table.
 pub type FamilyId = u32;
@@ -54,97 +56,38 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::ATOMICS,
     family::INIT_TEARDOWN,
     family::ZERO_WINDOWS,
-    family::KECCAK_F,
-    family::POSEIDON2,
-    family::FR_ARITH,
     family::PUBLIC_INPUT,
     family::PUBLIC_OUTPUT,
     family::ADVICE_WINDOWS,
-    family::MOD_MUL,
+    family::KECCAK_F,
     family::SHA256_COMP,
-    family::EC_ADD,
-    family::FIELD_WINDOWS,
-    family::FR_OP,
-    family::P2_FIELD,
-    family::FIELD_IO,
-    family::FQ_OP,
 ];
 
-/// Every **delegation** family, with the ecall number that invokes it, its
-/// anchor address space, and the width of its memory frame in 32-bit words.
-/// Ascending by family id, append-only: `docs/spec/delegation.md` §3 is the
-/// table this mirrors.
-///
-/// `constants::delegation::TYPES` is the table itself — `constraints` builds
-/// its request-side gates from the same rows, and this crate must not carry a
-/// second copy of them.
-pub const DELEGATIONS: [(FamilyId, u32, u8, usize); constants::delegation::TYPES.len()] =
-    constants::delegation::TYPES;
-
-/// The delegation families that read and write the field memory: declaring
-/// any of them brings `FIELD_WINDOWS` into the config, and with it the
-/// recursion format (`docs/spec/recursion.md` §1.1).
-pub const FIELD_DELEGATIONS: [FamilyId; 4] = [
-    family::FR_OP,
-    family::P2_FIELD,
-    family::FIELD_IO,
-    family::FQ_OP,
-];
-
-/// The family that answers `number`, or `None` if it is not a delegation call.
+/// The delegation family that answers ecall `number`, or `None`. The registry
+/// is `constants::delegation::TYPES`.
 pub fn delegation_family(number: u32) -> Option<FamilyId> {
-    DELEGATIONS
+    delegation::TYPES
         .iter()
         .find(|(_, n, ..)| *n == number)
         .map(|(f, ..)| *f)
 }
 
-/// The ecall number that invokes `family`, or `None` if it is not a delegation
+/// `family`'s frame in 32-bit words, or `None` if it is not a delegation
 /// family.
-pub fn delegation_ecall(family: FamilyId) -> Option<u32> {
-    DELEGATIONS
-        .iter()
-        .find(|(f, ..)| *f == family)
-        .map(|(_, n, ..)| *n)
-}
-
-/// `family`'s anchor address space, or `None` if it is not a delegation
-/// family. The tag *is* the delegation type (`docs/spec/delegation.md` §3).
-pub fn delegation_space(family: FamilyId) -> Option<u8> {
-    DELEGATIONS
-        .iter()
-        .find(|(f, ..)| *f == family)
-        .map(|(_, _, space, _)| *space)
-}
-
-/// `family`'s memory frame in 32-bit words, or `None` if it is not a
-/// delegation family.
 pub fn delegation_frame_words(family: FamilyId) -> Option<usize> {
-    DELEGATIONS
+    delegation::TYPES
         .iter()
         .find(|(f, ..)| *f == family)
-        .map(|(.., w)| *w)
+        .map(|(.., words)| *words)
 }
 
-/// How many accesses a `family` row makes besides its frame: the recursion
-/// families' field cells and data words (`docs/spec/recursion.md` §3-§5), and 0
-/// for every other family.
-pub fn delegation_accesses(family: FamilyId) -> usize {
-    match family {
-        family::FR_OP => constants::fr_op::ACCESSES,
-        family::P2_FIELD => constants::p2_field::ACCESSES,
-        family::FIELD_IO => constants::field_io::ACCESSES,
-        family::FQ_OP => constants::fq_op::ACCESSES,
-        _ => 0,
-    }
-}
-
-/// Whether `family`'s rows are cycles, and so whether it claims pcs.
+/// Whether `family`'s rows are cycles, and so whether the decoder routes
+/// instructions — and their pc values — to it.
 ///
 /// The two coincide and always will: a family whose rows are cycles is one the
-/// decoder routes instructions to, and a family whose rows are addresses or
-/// invocations claims nothing. `constants::family::CYCLE_OWNING` is the table.
-pub fn claims_pcs(family: FamilyId) -> bool {
+/// decoder routes instructions to, and a family whose rows are addresses claims
+/// no pc. `constants::family::CYCLE_OWNING` is the table.
+pub fn owns_cycles(family: FamilyId) -> bool {
     family::CYCLE_OWNING[family as usize]
 }
 
@@ -160,20 +103,11 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::ATOMICS => "ATOMICS",
         family::INIT_TEARDOWN => "INIT_TEARDOWN",
         family::ZERO_WINDOWS => "ZERO_WINDOWS",
-        family::KECCAK_F => "KECCAK_F",
-        family::POSEIDON2 => "POSEIDON2",
-        family::FR_ARITH => "FR_ARITH",
         family::PUBLIC_INPUT => "PUBLIC_INPUT",
         family::PUBLIC_OUTPUT => "PUBLIC_OUTPUT",
         family::ADVICE_WINDOWS => "ADVICE_WINDOWS",
-        family::MOD_MUL => "MOD_MUL",
+        family::KECCAK_F => "KECCAK_F",
         family::SHA256_COMP => "SHA256_COMP",
-        family::EC_ADD => "EC_ADD",
-        family::FIELD_WINDOWS => "FIELD_WINDOWS",
-        family::FR_OP => "FR_OP",
-        family::P2_FIELD => "P2_FIELD",
-        family::FIELD_IO => "FIELD_IO",
-        family::FQ_OP => "FQ_OP",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -310,20 +244,11 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         family::MUL_DIV | family::ATOMICS => &[Pc, NextPc, Rs1, Rs2, Rd, ExtraMask],
         family::INIT_TEARDOWN
         | family::ZERO_WINDOWS
-        | family::KECCAK_F
-        | family::POSEIDON2
-        | family::FR_ARITH
-        | family::MOD_MUL
-        | family::SHA256_COMP
-        | family::EC_ADD
         | family::PUBLIC_INPUT
         | family::PUBLIC_OUTPUT
         | family::ADVICE_WINDOWS
-        | family::FIELD_WINDOWS
-        | family::FR_OP
-        | family::P2_FIELD
-        | family::FIELD_IO
-        | family::FQ_OP => &[],
+        | family::KECCAK_F
+        | family::SHA256_COMP => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -357,7 +282,7 @@ pub fn field_mask(family: FamilyId) -> u8 {
         "{}: a lookup tuple lists its fields in column order",
         family_name(family)
     );
-    if claims_pcs(family) {
+    if owns_cycles(family) {
         assert!(
             tuple.starts_with(&[RowField::Pc, RowField::NextPc]),
             "{}: pc and next_pc are mandatory in every instruction family",
@@ -476,9 +401,8 @@ pub enum ProgramError {
     /// A RAM window rule of `docs/spec/memory.md` §3.2 or §3.5 is broken;
     /// `rule` says which.
     WindowRule { rule: &'static str },
-    /// The image carries a delegation declaration record naming an ecall
-    /// number no delegation family answers. `addr` is the record's address.
-    /// `docs/spec/delegation.md` §7.
+    /// A declaration record at `addr` names an ecall number no delegation
+    /// family answers: the guest and this preprocessor disagree on the ABI.
     UnknownDelegation { addr: u32, number: u32 },
 }
 
@@ -489,11 +413,6 @@ impl fmt::Display for ProgramError {
                 f,
                 "code version {version} is not the one this preprocessor builds ({})",
                 family::CODE_VERSION
-            ),
-            ProgramError::UnknownDelegation { addr, number } => write!(
-                f,
-                "the delegation record at {addr:#x} declares ecall {number:#x}, \
-                 which no delegation family answers"
             ),
             ProgramError::HeightNotOnMenu { family, height } => write!(
                 f,
@@ -526,6 +445,11 @@ impl fmt::Display for ProgramError {
                 4 * height as u64
             ),
             ProgramError::WindowRule { rule } => write!(f, "RAM window rule broken: {rule}"),
+            ProgramError::UnknownDelegation { addr, number } => write!(
+                f,
+                "the declaration record at {addr:#x} names ecall {number:#x}, which no \
+                 delegation family answers"
+            ),
         }
     }
 }
@@ -580,7 +504,7 @@ impl FamilyTable {
             .then(|| read(&self.columns[column].1, row))
     }
 
-    /// Column `column` as the polynomial that is committed: `height`
+    /// Column `column` as the polynomial a circuit reads: `height`
     /// evaluations, the stored value on a live row and `Fr::MINUS_ONE` on
     /// every other.
     pub fn column_poly(&self, column: usize) -> MultilinearPoly {
@@ -631,40 +555,19 @@ fn narrowest(values: Vec<u32>) -> PolyBacking {
 // Derivation
 // ---------------------------------------------------------------------------
 
-/// The delegation families the linked binary **declares**, ascending.
+/// The delegation families the image **declares**, ascending.
 ///
-/// Static detachment for a delegation family, `docs/spec/delegation.md` §7.
-/// A delegation family claims no pc, so the instruction sweep can never learn
-/// that a program calls one: the ecall number lives in `a7` at run time, not
-/// in any instruction word. What decides membership instead is a declaration
-/// record the shim itself emits — `constants::delegation::MARKER_MAGIC` then
-/// the declared ecall number, little-endian — placed in an allocated
-/// `.rodata` section, so the linker keeps it exactly when the shim is linked.
-///
-/// The scan is over the image's **file-backed bytes**, at every byte offset,
-/// in address order. Those bytes are already what program identity binds
-/// through the image column (`docs/spec/program.md` §8), so a declaration
-/// cannot be altered without moving identity, and no loader change is needed
-/// to carry it: a record is an ordinary run of `.rodata` bytes. The scan is
-/// byte-wise and not word-wise because a `static`'s address is the linker's,
-/// and a record that landed off a word boundary would be a declaration
-/// silently lost.
-///
-/// A record naming a number no delegation family answers is
-/// [`ProgramError::UnknownDelegation`] — loud, because it means the guest and
-/// this preprocessor disagree about the ABI. A number declared twice is one
-/// declaration; a user flag never adds or removes one.
+/// A delegation family claims no pc — its ecall number is in `a7` at run time,
+/// not in any instruction word — so what puts one in the config is the record
+/// its SDK shim emits: `delegation::MARKER_MAGIC`, then the ecall number, in
+/// an allocated `.rodata` section the linker keeps exactly when the shim is
+/// linked. The scan is over the file-backed bytes at every byte offset, since
+/// a `static`'s alignment is the linker's choice.
 pub fn declared_delegations(image: &ProgramImage) -> Result<Vec<FamilyId>, ProgramError> {
+    let n = delegation::MARKER_MAGIC.len();
     let mut found: Vec<FamilyId> = Vec::new();
-    let mut segments: Vec<&loader::Segment> = image
-        .segments
-        .iter()
-        .filter(|s| !s.bytes.is_empty())
-        .collect();
-    segments.sort_by_key(|s| s.vaddr);
-    for segment in segments {
+    for segment in &image.segments {
         let bytes = &segment.bytes;
-        let n = delegation::MARKER_MAGIC.len();
         for at in 0..bytes.len().saturating_sub(delegation::MARKER_BYTES - 1) {
             if bytes[at..at + n] != delegation::MARKER_MAGIC {
                 continue;
@@ -675,12 +578,10 @@ pub fn declared_delegations(image: &ProgramImage) -> Result<Vec<FamilyId>, Progr
                 bytes[at + n + 2],
                 bytes[at + n + 3],
             ]);
-            let Some(family) = delegation_family(number) else {
-                return Err(ProgramError::UnknownDelegation {
-                    addr: segment.vaddr.wrapping_add(at as u32),
-                    number,
-                });
-            };
+            let family = delegation_family(number).ok_or(ProgramError::UnknownDelegation {
+                addr: segment.vaddr.wrapping_add(at as u32),
+                number,
+            })?;
             if !found.contains(&family) {
                 found.push(family);
             }
@@ -717,8 +618,8 @@ fn height_of(family: FamilyId, params: &ProgramParams) -> u32 {
 ///
 /// The family set is derived, never chosen: an instruction family is present
 /// exactly when it claims at least one pc, a delegation family exactly when
-/// the image declares it, and a window family always — `FIELD_WINDOWS` exactly
-/// when a field delegation family is present (`docs/spec/program.md` §7).
+/// the image declares it ([`declared_delegations`]), and a window family
+/// always (`docs/spec/program.md` §7).
 /// [`ProgramError`] names every refusal.
 ///
 /// `image` must satisfy `ProgramImage`'s documented invariants, which
@@ -811,20 +712,13 @@ pub fn decode_program_detaching(
         // present because it claims one. A **window** family is present in
         // every config — the two RAM window ones (`docs/spec/memory.md` §3.2),
         // the two public value ones and `ADVICE_WINDOWS`
-        // (`docs/spec/public-values.md` §4). A delegation family is present
-        // exactly when the linked binary declares it
-        // (`docs/spec/delegation.md` §7) — never because a caller asked. The
-        // field memory's windows follow the field families: present exactly
-        // when one of them is declared, which is what puts the program in the
-        // recursion format (`docs/spec/recursion.md` §1.1, §2.2).
-        let field = family == family::FIELD_WINDOWS
-            && declared.iter().any(|f| FIELD_DELEGATIONS.contains(f));
+        // (`docs/spec/public-values.md` §4). A **delegation** family is present
+        // exactly when the image declares it — never because a caller asked.
         let always = (family == family::INIT_TEARDOWN
             || family == family::ZERO_WINDOWS
             || family == family::ADVICE_WINDOWS
             || family == family::PUBLIC_INPUT
             || family == family::PUBLIC_OUTPUT
-            || field
             || declared.contains(&family))
             && !detached.contains(&family);
         if rows.is_empty() && !always {
@@ -847,8 +741,8 @@ pub fn decode_program_detaching(
     }
 
     // RAM window 0, `INIT_TEARDOWN`'s, holds every file-backed byte: the image
-    // column commits exactly that window, so a byte above it would read as
-    // zero and move no identity. `docs/spec/memory.md` §3.4.
+    // column is exactly that window, so a byte above it would read as zero.
+    // `docs/spec/memory.md` §3.4.
     let height = window_height(&config)?;
     if let Some(end) = file_bytes_end(image) {
         if end > 4 * height as u64 {
@@ -961,7 +855,8 @@ pub fn check_memory_windows(
 
 /// RAM window 0's initial words, the image column: row `y` is
 /// `image.initial_word(4y)`, `height` rows, `height` being `INIT_TEARDOWN`'s.
-/// Program identity commits it as that family's one setup column.
+/// It is that family's one setup column, which program identity is meant to
+/// commit — **UNFINISHED**: nothing commits it (`docs/architecture.md` §0).
 /// `docs/spec/memory.md` §3.4.
 ///
 /// `U32`-backed: a word is 32 bits, and nothing narrower holds every image.
@@ -970,112 +865,24 @@ pub fn image_init_column(image: &ProgramImage, height: u32) -> MultilinearPoly {
     MultilinearPoly::new(PolyBacking::U32(words))
 }
 
-/// The program's identity: its [`setup_commitments`], digested with the code
-/// version, the static `VmConfig` and the entry pc by
-/// [`identity_from_commitments`]. `docs/spec/program.md` §8.
+/// The program's identity, `docs/spec/program.md` §8:
+/// `verifier_core::identity_digest` over the code version, the static
+/// `VmConfig` and the entry pc.
+///
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** Identity is
+/// meant to digest every family's **setup-column commitments** as well — each
+/// instruction family's decoded-table columns in lookup-tuple order and
+/// `INIT_TEARDOWN`'s [`image_init_column`] — and so to bind every instruction
+/// and every file byte of the image. Without a commitment scheme there is
+/// nothing to digest: this identity binds the config and the entry pc and
+/// **nothing of `tables` or of the image's bytes**. Two programs with one config
+/// and one entry pc share it. A later commitment scheme must commit the setup
+/// columns HERE and carry the lists in the verifying key
+/// (`docs/architecture.md` §0).
 pub fn program_identity(
     image: &ProgramImage,
     tables: &DecodedTables,
     config: &VmConfig,
-    srs: &Srs,
 ) -> ProgramIdentity {
-    identity_from_commitments(
-        tables.code_version,
-        config,
-        image.entry,
-        &setup_commitments(image, tables, config, srs),
-    )
-}
-
-/// Every family's setup commitments, one list per family of `config`, in its
-/// order: an instruction family's decoded-table columns in lookup-tuple order;
-/// `INIT_TEARDOWN`'s one, the [`image_init_column`] at its height; every
-/// other family's none.
-///
-/// `tables` and `config` must be `image`'s derivation, and `srs` must hold as
-/// many powers as the tallest table has rows; either failing is a broken
-/// caller invariant and panics.
-pub fn setup_commitments(
-    image: &ProgramImage,
-    tables: &DecodedTables,
-    config: &VmConfig,
-    srs: &Srs,
-) -> Vec<Vec<G1Affine>> {
-    assert_eq!(
-        tables.families.len(),
-        config.families.len(),
-        "setup_commitments: the tables and the VmConfig name different family sets"
-    );
-    for (table, (family, height)) in tables.families.iter().zip(&config.families) {
-        assert!(
-            table.family == *family && table.height == *height,
-            "setup_commitments: the {} table does not match the VmConfig's entry",
-            family_name(table.family)
-        );
-    }
-    let cm = |table: &FamilyTable, poly: &MultilinearPoly| {
-        commit(srs, poly)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "setup_commitments: committing a {} column failed: {e:?}",
-                    family_name(table.family)
-                )
-            })
-            .0
-    };
-    tables
-        .families
-        .iter()
-        .map(|table| match table.family {
-            family::INIT_TEARDOWN => vec![cm(table, &image_init_column(image, table.height))],
-            // `ZERO_WINDOWS` has no setup column, and a delegation family has
-            // no decoded table at all: it is invoked, never decoded, so there
-            // is nothing about it for identity to commit but its presence in
-            // the `VM_CONFIG` message. The public pair and `ADVICE_WINDOWS` are
-            // empty for a stronger reason: an `S` column is bound by program
-            // identity, and one execution's public values — or one
-            // execution's advice — have no business in every execution's
-            // identity. Theirs is an `M` column instead
-            // (`docs/spec/public-values.md` §4).
-            family::ZERO_WINDOWS
-            | family::KECCAK_F
-            | family::POSEIDON2
-            | family::FR_ARITH
-            | family::MOD_MUL
-            | family::SHA256_COMP
-            | family::EC_ADD
-            | family::PUBLIC_INPUT
-            | family::PUBLIC_OUTPUT
-            | family::ADVICE_WINDOWS
-            | family::FIELD_WINDOWS
-            | family::FR_OP
-            | family::P2_FIELD
-            | family::FIELD_IO
-            | family::FQ_OP => Vec::new(),
-            // One column at a time: at 2^22 rows an `Fr` column is 128 MiB.
-            _ => (0..table.columns.len())
-                .map(|c| cm(table, &table.column_poly(c)))
-                .collect(),
-        })
-        .collect()
-}
-
-/// The identity digest over given setup commitments. It needs no SRS: this is
-/// what a verifying-key loader recomputes, and it is
-/// `verifier_core::identity_digest` over the points' canonical encodings,
-/// whose doc is the recipe (`docs/spec/program.md` §8).
-///
-/// `commitments` holds one list per family of `config`; anything else is a
-/// caller error and panics.
-pub fn identity_from_commitments(
-    code_version: u32,
-    config: &VmConfig,
-    entry_pc: u32,
-    commitments: &[Vec<G1Affine>],
-) -> ProgramIdentity {
-    let encoded: Vec<Vec<[u8; 64]>> = commitments
-        .iter()
-        .map(|points| points.iter().map(G1Affine::to_bytes).collect())
-        .collect();
-    verifier_core::identity_digest(code_version, config, entry_pc, &encoded)
+    verifier_core::identity_digest(tables.code_version, config, image.entry)
 }

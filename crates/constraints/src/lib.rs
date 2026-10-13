@@ -9,8 +9,8 @@
 //! `gkr-verify`'s. What lives here is the formula *representation*, the
 //! construction-time checks, and the wire form.
 //!
-//! `#![no_std]` + `alloc`, because `gkr-verify` reads an artifact and the
-//! recursion guest links `gkr-verify`.
+//! `#![no_std]` + `alloc`, because `gkr-verify`, which is too, reads an
+//! artifact.
 
 extern crate alloc;
 
@@ -24,11 +24,6 @@ pub mod add_sub;
 pub mod atomics;
 mod build;
 pub mod delegation;
-pub mod ec_add;
-pub mod field_io;
-pub mod fq_op;
-pub mod fr_arith;
-pub mod fr_op;
 pub mod gadgets;
 pub mod jump_branch_slt;
 pub mod keccak;
@@ -37,10 +32,7 @@ pub mod lookup;
 pub mod mem_subword;
 pub mod mem_word;
 pub mod memory;
-pub mod mod_mul;
 pub mod mul_div;
-pub mod p2_field;
-pub mod poseidon2;
 pub mod sha256;
 pub mod shift_bitwise;
 mod wire;
@@ -59,7 +51,7 @@ pub const COEFFICIENT_ENCODING_CANONICAL_LE: u32 = 0;
 
 /// The largest `trace_vars` an artifact may declare: a trace of `2^30` rows.
 /// Far above the height menu's `2^22`, and low enough that `1 << trace_vars`
-/// fits a 32-bit `usize`, which the recursion guest has.
+/// fits a 32-bit `usize`.
 pub const MAX_TRACE_VARS: u32 = 30;
 
 // ---------------------------------------------------------------------------
@@ -80,8 +72,7 @@ pub struct FamilyCircuit {
 impl FamilyCircuit {
     /// Whether the circuit reads the generic channel, and so names the packed
     /// generic table as its last `constants::generic_table::WIDTH` setup
-    /// columns, which a shard opens against the verifying key's generic-table
-    /// commitments (`docs/spec/lookup.md` §9).
+    /// columns (`docs/spec/lookup.md` §9).
     pub fn reads_generic_table(&self) -> bool {
         self.channels
             .iter()
@@ -90,8 +81,8 @@ impl FamilyCircuit {
 }
 
 /// The circuit that proves `family` over `2^trace_vars` rows, or `None` for a
-/// family this registry holds no circuit for — the recursion families, which
-/// only [`recursion_circuit`] holds — or a height it cannot be built at.
+/// family this registry holds no circuit for or a height it cannot be built
+/// at.
 ///
 /// **The one registry of circuits**, `docs/spec/circuits.md` §1: a
 /// verifying key's circuits must be byte for byte what this returns, and a
@@ -105,26 +96,8 @@ impl FamilyCircuit {
 /// most any one of the family's channels' tables needs, taken from
 /// `channels()` before the artifact is built, so no family can be missing
 /// from it and no channel's table can be overlooked. A family with no channel
-/// at all keeps a floor of 0, which is what the RAM window families and
-/// `POSEIDON2` and `FR_ARITH` take.
-///
-/// `MOD_MUL` and `EC_ADD` carry `RANGE16`, and `KECCAK_F` and `SHA256_COMP`
-/// `RANGE16` and `XOR8` (`docs/spec/delegation.md` §9), so each has a floor of
-/// `2^16` — and a floor is not a height: `KECCAK_F`'s and `SHA256_COMP`'s
-/// `DEFAULT_HEIGHTS` entries are `2^18`, chosen above it.
+/// at all keeps a floor of 0, which is what the RAM window families take.
 pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
-    circuit(false, family, trace_vars)
-}
-
-/// The **recursion format**'s registry (`docs/spec/recursion.md` §1.2):
-/// [`family_circuit`]'s, but for `ADD_SUB`, which knows every delegation type,
-/// and the recursion families, which only it holds. A statement is in the
-/// recursion format exactly when its config holds `FIELD_WINDOWS`.
-pub fn recursion_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
-    circuit(true, family, trace_vars)
-}
-
-fn circuit(recursion: bool, family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
     use constants::family as f;
     if trace_vars > MAX_TRACE_VARS {
         return None;
@@ -136,9 +109,6 @@ fn circuit(recursion: bool, family: u32, trace_vars: u32) -> Option<FamilyCircui
     // is the defect this guard exists to prevent.
     let (build, channels): (fn(u32) -> CircuitArtifact, Vec<crate::lookup::ChannelSpec>) =
         match family {
-            f::ADD_SUB_LUI_AUIPC if recursion => {
-                (add_sub::recursion_artifact, add_sub::recursion_channels())
-            }
             f::ADD_SUB_LUI_AUIPC => (add_sub::artifact, add_sub::channels()),
             f::JUMP_BRANCH_SLT => (jump_branch_slt::artifact, jump_branch_slt::channels()),
             f::SHIFT_BITWISE => (shift_bitwise::artifact, shift_bitwise::channels()),
@@ -155,24 +125,14 @@ fn circuit(recursion: bool, family: u32, trace_vars: u32) -> Option<FamilyCircui
             // (`docs/spec/public-values.md` §5).
             f::PUBLIC_OUTPUT => (memory::zero_window_artifact, Vec::new()),
             // The public input window and the advice windows share one circuit and
-            // differ only in what the verifier does with the committed init
-            // column: holds it to the statement's `input`, or to nothing at all.
+            // differ only in what the verifier does with the init column: holds
+            // it to the statement's `input`, or to nothing at all.
             f::PUBLIC_INPUT | f::ADVICE_WINDOWS => (memory::value_window_artifact, Vec::new()),
-            // The delegation families. Their heights differ by three orders of
-            // magnitude because their rows do (`docs/spec/delegation.md` §9);
-            // what each one may take is the floor below, and for the two
-            // that carry no channel that floor is 0.
+            // The delegation families: each in a `VmConfig` only when the image
+            // declares it (`constants::delegation`), and each with a floor of
+            // `2^16` below, from `RANGE16` and `XOR8`.
             f::KECCAK_F => (keccak::artifact, keccak::channels()),
-            f::POSEIDON2 => (poseidon2::artifact, poseidon2::channels()),
-            f::FR_ARITH => (fr_arith::artifact, fr_arith::channels()),
-            f::MOD_MUL => (mod_mul::artifact, mod_mul::channels()),
             f::SHA256_COMP => (sha256::artifact, sha256::channels()),
-            f::EC_ADD => (ec_add::artifact, ec_add::channels()),
-            f::FIELD_WINDOWS if recursion => (memory::field_window_artifact, Vec::new()),
-            f::FR_OP if recursion => (fr_op::artifact, fr_op::channels()),
-            f::P2_FIELD if recursion => (p2_field::artifact, p2_field::channels()),
-            f::FIELD_IO if recursion => (field_io::artifact, field_io::channels()),
-            f::FQ_OP if recursion => (fq_op::artifact, fq_op::channels()),
             _ => return None,
         };
     if trace_vars < minimum_trace_vars(&channels) {
@@ -192,12 +152,6 @@ fn circuit(recursion: bool, family: u32, trace_vars: u32) -> Option<FamilyCircui
 /// in step is what makes a bad height a clean `None` from
 /// [`family_circuit`] — and so a clean `Err` from `VerifyingKey::check` —
 /// rather than a panic on bytes a verifier was handed.
-///
-/// The per-channel number is `lookup::table_vars` and **not** `BITS` with a
-/// range filter. `XOR8`'s table is virtual and 65,536 rows wide without being
-/// a range channel at all, so a filter on `IS_RANGE` would give a family
-/// carrying it alone a floor of 0 and an incomplete table at every height
-/// below `2^16`.
 fn minimum_trace_vars(channels: &[crate::lookup::ChannelSpec]) -> u32 {
     channels
         .iter()
@@ -229,20 +183,14 @@ pub enum VirtualKind {
     /// `V[range16]`: the 16-bit range channel's table, the low 16 bits of the
     /// row index. `docs/spec/lookup.md` §3.
     Range16,
-    /// `V[xor8_a]`: column 0 of the `XOR8` channel's table, the low eight bits
-    /// of the row index. `docs/spec/lookup.md` §3.
-    Xor8A,
-    /// `V[xor8_b]`: column 1 of the `XOR8` table, bits 8 through 15 of the row
+    /// `V[xor8_a]`: column 0 of the `XOR8` table, the low byte of the row
     /// index.
+    Xor8A,
+    /// `V[xor8_b]`: column 1 of the `XOR8` table, the row index's next byte.
     Xor8B,
-    /// `V[xor8_out]`: column 2 of the `XOR8` table, the bitwise XOR of the
-    /// other two.
-    ///
+    /// `V[xor8_out]`: column 2 of the `XOR8` table, the XOR of the other two.
     /// Its multilinear extension is `Σ_{j < 8} 2^j·(y_j + y_{j+8} − 2·y_j·y_{j+8})`,
-    /// because `y ^ z = y + z − 2yz` is already multilinear in each of `y` and
-    /// `z`. That is what makes a byte XOR table a **closed form** rather than a
-    /// committed setup column, and so free of a commitment and of the SRS
-    /// digest.
+    /// because `y ^ z = y + z − 2yz` is multilinear in each of `y` and `z`.
     Xor8Out,
 }
 

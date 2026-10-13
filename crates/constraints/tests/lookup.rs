@@ -55,10 +55,10 @@ fn toy() -> CircuitArtifact {
 ///
 /// **Not `lookup_channel::COUNT`.** The toy is one family's shape, and
 /// `tools/kat-gen/src/lookup.rs`'s `TOY_CHANNELS` declares the four
-/// `JUMP_BRANCH_SLT` carries; `XOR8` is the byte-level delegation families'.
-/// Sizing this fixture off the global count would ask it for a root pair and a
-/// `TreeCross` per halving list on a channel it has no lookup, no table and no
-/// multiplicity column for.
+/// `JUMP_BRANCH_SLT` carries. That those are every channel today is not
+/// something the fixture should rest on: sized off the global count, it would be
+/// asked for a root pair and a `TreeCross` per halving list on any channel added
+/// later, one it has no lookup, no table and no multiplicity column for.
 fn toy_channels(a: &CircuitArtifact) -> Vec<u32> {
     let mut channels: Vec<u32> = a.lookups.iter().map(|l| l.channel).collect();
     channels.sort_unstable();

@@ -14,7 +14,7 @@
 //! The shift edges are here in full — their honest half as the shift-edge rows
 //! of [`honest_rows`], their negative half as the forgeries the truncation, the
 //! free shamt, the residue and the sign extension each admit. The AND table
-//! against an independent recomputation over the ceremony's SRS is
+//! against an independent recomputation is
 //! `crates/program/tests/lookup_tables.rs`'.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -1561,11 +1561,7 @@ fn an_srai_carrying_srlis_answer_is_refused_by_se_rule_alone() {
 /// it for its proof, and traced into an archive. The exit status is 96, the
 /// number of checks the guest made and passed.
 fn alu() -> (prover::Program, trace::TraceArchive) {
-    let elf = std::fs::read(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../loader/tests/vectors/alu.elf"
-    ))
-    .expect("the alu guest");
+    let elf = test_support::guest_elf("alu");
     let image = loader::load_elf(&elf).expect("alu loads");
     let mut params = program::ProgramParams::defaults();
     params.heights = [1 << 16; family::COUNT as usize];
@@ -1801,9 +1797,8 @@ fn filled(
             .1
             .clone()
     };
-    // The setup columns are the tables the key's commitments are of: the
-    // decoded table identity binds, then the packed table the SRS digest
-    // covers.
+    // The setup columns are the family's decoded table, then the packed
+    // generic table.
     let table = program
         .tables
         .family(family::SHIFT_BITWISE)

@@ -1916,11 +1916,7 @@ fn a_forged_operand_sign_is_refused_by_its_lookup_alone() {
 /// it for its proof, and traced into an archive. The exit status is 96, the
 /// number of checks the guest made and passed.
 fn alu() -> (prover::Program, trace::TraceArchive) {
-    let elf = std::fs::read(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../loader/tests/vectors/alu.elf"
-    ))
-    .expect("the alu guest");
+    let elf = test_support::guest_elf("alu");
     let image = loader::load_elf(&elf).expect("alu loads");
     let mut params = program::ProgramParams::defaults();
     params.heights = [1 << 16; family::COUNT as usize];
@@ -2134,8 +2130,8 @@ fn filled(
             .1
             .clone()
     };
-    // The setup columns are the tables the key's commitments are of: the
-    // decoded table identity binds, then the packed table the SRS digest does.
+    // The setup columns are the family's decoded table, then the packed
+    // generic table.
     let table = program
         .tables
         .family(family::MUL_DIV)

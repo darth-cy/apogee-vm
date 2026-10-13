@@ -10,7 +10,7 @@ target = "riscv32imac-unknown-none-elf"
 # maps. `cargo run` on a guest therefore has nothing to run it with, and the
 # executor is `crates/emulator`.
 
-# `-T`  the memory map (`docs/spec/ecall-abi.md` §6), which also defines the
+# `-T`  the memory map (`docs/spec/ecall-abi.md` §5), which also defines the
 #       symbols crt0 and the bump allocator reference. Resolved relative to
 #       the directory cargo runs the linker in, which is this workspace's root.
 # `--no-relax`  linker relaxation rewrites instruction sequences and shifts

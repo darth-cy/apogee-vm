@@ -22,8 +22,7 @@ use loader::{load_elf, Slot};
 #[test]
 fn objdump_agrees_instruction_for_instruction() {
     for name in ["fib", "rvc-dense", "amm"] {
-        let image = load_elf(&common::bytes(&format!("{name}.elf")))
-            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        let image = load_elf(&common::guest(name)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
         let listing = common::objdump(name);
         assert!(
             listing.len() > 16,
@@ -153,7 +152,7 @@ fn addresses_are_never_compacted() {
 /// Every symbol `nm` reports is the address of an instruction.
 #[test]
 fn every_symbol_address_is_an_instruction() {
-    let image = load_elf(&common::bytes("rvc-dense.elf")).expect("the fixture loads");
+    let image = load_elf(&common::guest("rvc-dense")).expect("the fixture loads");
     let nm = common::nm("rvc-dense");
     assert!(
         nm.len() > 4,
@@ -213,7 +212,7 @@ fn the_fixture_covers_the_required_compressed_forms() {
 /// with the image must fail, or the two tests above prove nothing.
 #[test]
 fn a_shifted_listing_is_rejected() {
-    let image = load_elf(&common::bytes("rvc-dense.elf")).expect("the fixture loads");
+    let image = load_elf(&common::guest("rvc-dense")).expect("the fixture loads");
     let listing = common::objdump("rvc-dense");
 
     // Move one instruction one halfword along, which is precisely what a
@@ -232,7 +231,7 @@ fn a_shifted_listing_is_rejected() {
 
 /// Both paired regions, read out of the committed image.
 fn paired_regions() -> (Vec<common::Expanded>, Vec<common::Expanded>) {
-    let image = load_elf(&common::bytes("rvc-dense.elf")).expect("the fixture loads");
+    let image = load_elf(&common::guest("rvc-dense")).expect("the fixture loads");
     let nm = common::nm("rvc-dense");
     let region = |begin: &str, end: &str| {
         common::instructions_in(
@@ -250,17 +249,10 @@ fn paired_regions() -> (Vec<common::Expanded>, Vec<common::Expanded>) {
 }
 
 /// The committed fixtures are what they were when the digests were written
-/// down.
+/// down. Each is a function of nothing in the tree but its generator, so a
+/// digest here moves only when that generator does.
 #[test]
 fn committed_fixtures_match_their_pins() {
-    for (name, want) in common::PINS {
-        assert_eq!(
-            common::digest(name),
-            want,
-            "{name} has changed. If that was deliberate, rerun the generator and \
-             update the digest in tests/common/mod.rs."
-        );
-    }
     assert_eq!(
         common::digest("synthetic_elfs.txt"),
         "4b637a7fc691b033a952ef1d2ecb28e4d18f6da8c3136c2fe224ddedca168436",

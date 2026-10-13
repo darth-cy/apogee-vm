@@ -3,7 +3,7 @@
 //! when a row under a root changes; every execution family's frame and both
 //! window artifacts keep the laws, the lookup rules and the padding contract,
 //! and each frame its product-tree clause; and an honest statement over a
-//! committed guest — one frame per family that ran, its RAM windows and its
+//! guest — one frame per family that ran, its RAM windows and its
 //! boundary, filled by `trace`'s builders from a real execution — keeps every
 //! gate and every obligation, reconciles, and proves.
 
@@ -20,7 +20,7 @@ use common::{
 use constants::challenge_slot::{MEM_ALPHA_VAL, MEM_GAMMA};
 use constants::family;
 use constraints::memory::{
-    family_frame_artifact, frame, frame_queries, image_window_artifact, value_window_artifact,
+    family_frame_artifact, frame_queries, image_window_artifact, value_window_artifact,
     zero_window_artifact, CYCLE,
 };
 use constraints::CircuitArtifact;
@@ -72,9 +72,9 @@ fn forwarded(a: &CircuitArtifact, seed: u64) -> LayerValues {
 
 type Constructor = fn(u32) -> CircuitArtifact;
 
-/// A padded frame, `ADD_SUB_LUI_AUIPC`'s five queries: 8 leaves a side.
-fn alu_frame(trace_vars: u32) -> CircuitArtifact {
-    family_frame_artifact(family::ADD_SUB_LUI_AUIPC, trace_vars)
+/// A padded frame, `ATOMICS`' five queries: 8 leaves a side.
+fn atomics_frame(trace_vars: u32) -> CircuitArtifact {
+    family_frame_artifact(family::ATOMICS, trace_vars)
 }
 
 /// The narrowest, `JUMP_BRANCH_SLT`'s four: 4 leaves a side, and no pad leaf.
@@ -89,7 +89,7 @@ fn reg_frame(trace_vars: u32) -> CircuitArtifact {
 /// here so the hook is held to a depth it cannot have hardcoded.
 const HALVING_INPUTS: [(&str, Constructor, usize); 3] = [
     ("zero window", zero_window_artifact, 1),
-    ("add_sub_lui_auipc frame", alu_frame, 4),
+    ("atomics frame", atomics_frame, 4),
     ("jump_branch_slt frame", reg_frame, 3),
 ];
 
@@ -211,10 +211,10 @@ fn the_memory_artifacts_keep_the_laws_and_the_padding_contract() {
 }
 
 // ---------------------------------------------------------------------------
-// An honest statement over a committed guest
+// An honest statement over a guest
 // ---------------------------------------------------------------------------
 
-/// The honest statement of a committed guest: every shard's forward pass keeps
+/// The honest statement of a guest: every shard's forward pass keeps
 /// every gate, and its roots are what `memory_roots` recomputes; every artifact
 /// keeps the checker's laws and padding contract, and each frame the
 /// product-tree clause; the witness-row evaluator, `violated_relations`,
@@ -228,7 +228,7 @@ fn the_memory_artifacts_keep_the_laws_and_the_padding_contract() {
 ///
 /// The execution side is one frame per family that ran, each under that
 /// family's `frame_queries`: a single frame cannot hold cycles of two families,
-/// since an ecall row needs `deleg` and a load row needs `load`.
+/// since a load row needs `load` and the add/sub frame has none.
 fn honest_statement(name: &str, input: u32, prove_frames: bool) {
     let t = traced(name, input);
     let memory = memory_challenges();
@@ -381,27 +381,17 @@ fn a_frame_per_family_in_any_order_reconciles() {
 ///
 /// It is the whole safety net under "a shard's columns are its execution's
 /// memory queries". The row-based reading has to rebuild each row's events —
-/// the pc query's read timestamp as `4·(cycle − 1)`, the roles in `ROLES` order,
-/// and a delegation request's anchor space out of the row's own `a7`
-/// (`trace::Row::delegation_space`) — and any of those got wrong is a column
-/// that differs here.
-///
-/// `keccak-test`, `recursion-ops` and `mod-mul-ops` are in the list for
-/// exactly that last one: they make delegation calls, so their add/sub family
-/// carries live `deleg` queries and a `deleg_space` column, with five different
-/// tags between them.
+/// the pc query's read timestamp as `4·(cycle − 1)` and the roles in `ROLES`
+/// order — and either got wrong is a column that differs here.
 #[test]
 fn the_row_reading_and_the_log_reading_of_a_frame_agree() {
     let mut checked = (0, 0);
     for (name, input, status, height) in [
         ("fib", 24, 0, HEIGHT),
         ("heap", 40, 0, HEIGHT),
-        ("keccak-test", 0, 6, HEIGHT),
-        ("recursion-ops", 0, 9, HEIGHT),
-        // At `2^18`, for the reason `common::traced_exiting_at` gives: its
-        // `.text` reaches pc `0x45be6`. It is the third guest here that makes
-        // delegation calls, and the only one that calls `MOD_MUL` and `EC_ADD`.
-        ("mod-mul-ops", 0, 28, 1 << 18),
+        ("atomics", 37, 0, HEIGHT),
+        ("rvc-dense", 7, 0, HEIGHT),
+        ("addsub", 0, 42, HEIGHT),
         ("mem", 0, 50, HEIGHT),
         ("alu", 0, 96, HEIGHT),
         ("control", 0, 16, HEIGHT),
@@ -461,91 +451,4 @@ fn the_row_reading_and_the_log_reading_of_a_frame_agree() {
         checked.0,
         checked.1
     );
-}
-
-/// The `deleg_space` column is the thing the row reading recovers from `a7`
-/// rather than from an event's own address space, so it gets its own check:
-/// every live `deleg` query names the requested family's tag and no other row
-/// does, and between the three guests five tags appear.
-///
-/// `keccak-test` requests `KECCAK_F` alone; `recursion-ops` requests
-/// `POSEIDON2` and `FR_ARITH` through ordinary `Fr` arithmetic; `mod-mul-ops`
-/// requests `MOD_MUL`, both by name and through `guests/vendor/k256`'s patched
-/// field multiply, and `EC_ADD` through its patched `ProjectivePoint`. No
-/// committed guest requests all five, which is why this takes three.
-#[test]
-fn the_delegation_space_column_is_the_requested_family() {
-    let seen: Vec<u64> = [
-        ("keccak-test", 6, HEIGHT),
-        ("recursion-ops", 9, HEIGHT),
-        // `2^18`: its `.text` reaches pc `0x45be6` and a table's row `i` is pc `2i`.
-        ("mod-mul-ops", 28, 1 << 18),
-    ]
-    .into_iter()
-    .flat_map(|(name, status, height)| deleg_space_tags(name, status, height))
-    .collect();
-    let mut tags = seen.clone();
-    tags.sort_unstable();
-    tags.dedup();
-    assert_eq!(
-        tags,
-        [
-            constants::address_space::DELEGATION_KECCAK_F as u64,
-            constants::address_space::DELEGATION_POSEIDON2 as u64,
-            constants::address_space::DELEGATION_FR_ARITH as u64,
-            constants::address_space::DELEGATION_MOD_MUL as u64,
-            constants::address_space::DELEGATION_EC_ADD as u64,
-        ],
-        "the three guests request five delegation spaces, EC_ADD through \
-         `guests/vendor/k256`'s patched `ProjectivePoint`, which `mod-mul-ops`' \
-         group arithmetic reaches without naming a shim"
-    );
-}
-
-/// `name`'s add/sub frame's `deleg_space` column, checked row by row against
-/// the row's own requested family, and returned as the tags it held.
-fn deleg_space_tags(name: &str, status: i32, height: u32) -> Vec<u64> {
-    let t = common::traced_exiting_at(name, 0, status, height);
-    let fam = family::ADD_SUB_LUI_AUIPC;
-    let trace = t
-        .traces
-        .family(fam)
-        .expect("the add/sub family owns every ecall row");
-    let queries = frame_queries(fam);
-    let at = queries
-        .iter()
-        .position(|&q| q == constraints::memory::DELEG)
-        .expect("add/sub's frame has the deleg query");
-    let height = trace.len().next_power_of_two();
-    let shard = RowSlice::shard(trace, 0, height);
-    let columns = build_memory_columns(&shard, queries, height);
-    let space = &columns
-        .iter()
-        .find(|(a, _)| *a == constraints::memory::deleg_space(queries.len()))
-        .expect("the deleg_space column")
-        .1;
-    let mask = &columns
-        .iter()
-        .find(|(a, _)| *a == frame(at, constraints::memory::FIELD_MASK))
-        .expect("the deleg mask")
-        .1;
-    let mut tags: Vec<u64> = Vec::new();
-    for r in 0..trace.len() {
-        let row = trace.row(r);
-        let live = row.query(trace::Role::Delegate).is_some();
-        assert_eq!(
-            mask.get(r),
-            Fr::from_u64(live as u64),
-            "{name} row {r}'s deleg mask"
-        );
-        match row.delegation_space() {
-            Some(s) => {
-                assert_eq!(space.get(r), Fr::from_u64(s.tag() as u64), "{name} row {r}");
-                tags.push(s.tag() as u64);
-            }
-            None => assert_eq!(space.get(r), Fr::ZERO, "{name} row {r}"),
-        }
-    }
-    assert!(!tags.is_empty(), "{name} makes a delegation call");
-    tags
 }

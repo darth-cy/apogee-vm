@@ -7,8 +7,8 @@ the emulator that produces a trace and the containers that hold one. The memory 
 ## 1. The clock
 
 Cycle `c` occupies the four timestamps `4c + Δ`, one per **slot** `Δ ∈ {0, 1, 2, 3}`
-(`constants::memory::TS_STEP`). Every instruction is one cycle and nothing else is: a delegation
-invocation rides the cycle that requested it, so the cycle count is the instruction count.
+(`constants::memory::TS_STEP`). Every instruction is one cycle and nothing else is, so the cycle
+count is the instruction count.
 
 - **Cycles are numbered from 1.** Timestamp 0 is every address's initial write, and a read must
   strictly precede its write, so a cycle-0 pc query could not follow the value it reads.
@@ -23,16 +23,10 @@ invocation rides the cycle that requested it, so the cycle count is the instruct
 | 1 | `REG` | a register index, `0..32` | 0, `x0` included |
 | 2 | `RAM` | the byte address of a 4-aligned word in RAM, a public window or the advice region | the image's bytes in RAM, 0 past them; the public input's and the advice's layouts; 0 in the journal |
 | 3 | `PC` | 0 | the entry point |
-| 4–9 | `DELEGATION_KECCAK_F` … `DELEGATION_EC_ADD`, a base-format delegation family's anchor each | a frame base | no initial write |
-| 10 | `FIELD` | a cell, any `u32` | 0 |
-| 11–14 | `DELEGATION_FR_OP` … `DELEGATION_FQ_OP`, a recursion family's anchor each | a frame base | no initial write |
 
-The tags are nonzero so that no real tuple is all zeros, as `x0`'s initial write would be. A byte or
-halfword access queries its word, and `trace::InitialMemory` is what RAM starts from. An anchor
-space, in [delegation.md](delegation.md) §3's order, is a delegation family's type, not memory: a
-query there reads the tuple stamped 0 with value 0, whatever came before; requests pair with
-invocations and nothing chains ([delegation.md](delegation.md) §5). Field cells hold whole `Fr`
-elements, reached only by the recursion families ([recursion.md](recursion.md) §2).
+The tags are nonzero so that no real tuple is all zeros, as `x0`'s initial write would be; 4 is the
+tag the next space takes. A byte or halfword access queries its word, and `trace::InitialMemory` is
+what RAM starts from.
 
 ## 3. A query
 
@@ -62,18 +56,13 @@ every register field of the decoded instruction, whatever register it names, `x0
 | `sc.w` | `rs1` | `rs2` | the word ← `rs2`; `rd` ← 0 |
 | AMOs | `rs1` | `rs2` | the word ← `op(old, rs2)`; `rd` ← `old` |
 | `fence` | | | |
-| `ecall` | `a7` | `a0` (§6) | `a0` ← the result; a delegation's mirror query |
+| `ecall` | `a7` | `a0` (§6) | `a0` ← the result |
 
-`ebreak` has no row (§10). An atomic's row and a delegation request's carry two queries at slot 3,
-at distinct addresses. A family's frame is the union of its instructions' queries
+`ebreak` has no row (§10). An atomic's row carries two queries at slot 3, at distinct addresses. A
+family's frame is the union of its instructions' queries
 ([memory.md](memory.md) §2). **`next_pc`** is the fall-through — `pc + 2` after a compressed
 instruction, `pc + 4` otherwise — except a `jal`'s or taken branch's `pc + imm`, a `jalr`'s
 `(rs1 + imm) & !1`, and the exit row's `HALT_PC` ([memory.md](memory.md) §5).
-
-An invocation's accesses ride its requesting cycle but belong to its own family's row: its frame
-words in RAM at slot 0 (`constants::delegation::FRAME_DELTA`), a `FIELD_IO` invocation's eight data
-words in RAM at slot 1 (`constants::field_io::DATA_DELTA`), and a recursion family's field cells
-at slots of its own ([delegation.md](delegation.md) §4, [recursion.md](recursion.md) §2.1).
 
 ## 5. The x0 rule
 
@@ -90,14 +79,12 @@ slot 3; the rest depends on the number ([ecall-abi.md](ecall-abi.md)):
 | `a7` | Δ = 2 | `a0` written | `next_pc` | Besides |
 | --- | --- | --- | --- | --- |
 | `EXIT` | `a0`, the status | the status | `HALT_PC` | the execution stops |
-| a delegation number | `a0`, the frame base | 0, or for a recursion type the base past the frame ([recursion.md](recursion.md) §1.4) | fall-through | the mirror query at the frame base (§7); the invocation (§4) |
-| any other | none | `-ENOSYS` | fall-through | no proof admits the row ([ecall-abi.md](ecall-abi.md) §3) |
+| any other | none | `-ENOSYS` | fall-through | no proof admits the row ([ecall-abi.md](ecall-abi.md) §4) |
 
 ## 7. The order of the log
 
-Events are recorded in cycle order and, within a cycle, by slot and then by role: the pc query;
-then an invocation riding the cycle, its frame words in frame order and a `FIELD_IO` invocation's
-data words after them; then one query per role the row has, in `trace::ROLES` order:
+Events are recorded in cycle order and, within a cycle, by slot and then by role: the pc query,
+then one query per role the row has, in `trace::ROLES` order:
 
 | Role | Slot | Space | What |
 | --- | --- | --- | --- |
@@ -106,7 +93,6 @@ data words after them; then one query per role the row has, in `trace::ROLES` or
 | `load` | 2 | `RAM` | a load's word |
 | `ram` | 3 | `RAM` | a store's or an atomic's word |
 | `rd` | 3 | `REG` | `rd`; an ecall's result `a0` |
-| `delegate` | 3 | the requested family's anchor space | a delegation request's mirror query |
 
 `ROLES` is in slot order, so the log is in timestamp order, which `MemoryState::record` asserts;
 `trace::Row::present` holds one bit per role in a `u8`, and no two roles share a `(space, slot)`
@@ -116,8 +102,7 @@ frame serves the whole A extension.
 ## 8. Routing
 
 Every cycle goes to the one family whose decoded table claims its pc ([program.md](program.md) §4);
-a pc no table claims, or one claimed by a family not its instruction's, panics the tracer. An
-invocation goes by its type to its family's buffer.
+a pc no table claims, or one claimed by a family not its instruction's, panics the tracer.
 
 ## 9. The trace-level memory check
 
@@ -134,9 +119,6 @@ with the last write before it: sequential consistency. What it cannot see:
   added, trailing cycles removed. In a proof the final values are the boundary scalars and the
   window families' teardown columns, fixed before any memory challenge, and the verifier fixes
   `x0`'s and the pc's ([memory.md](memory.md) §4, §5).
-- An anchor-space query is credited with its invocation's two tuples and balances alone; that
-  requests and invocations pair 1:1 is the circuits' ([delegation.md](delegation.md) §5).
-- Field-cell accesses are not events ([recursion.md](recursion.md) §2.1).
 
 ## 10. The emulator
 
@@ -155,14 +137,11 @@ never split. The instruction stream is the image decoded at load, so a store int
 RAM and not what executes.
 
 Every other stop is a fatal `EmuError`, and `run` and `trace_run` return no trace beside one:
-`NotAnInstruction` (the all-zero halfword included), `IllegalInstruction`, `Ebreak`, `Misaligned`
-(a frame base too), `OutOfBounds` (an access outside [ecall-abi.md](ecall-abi.md) §6's regions, an
-advice word past what the host supplied, or a frame not wholly in RAM), `ClockOverflow`,
-`PublicInputTooLong` and `JournalTooLong` (the input, or the journal's length word at exit, above a
-window's payload), `DelegationFamilyAbsent` (on the tracing paths, a delegation number the image did
-not declare) and `DelegationFrame` (a frame its family has no witness for,
-[delegation.md](delegation.md) §6). An unassigned ecall number is not an error but `-ENOSYS`
-(§6).
+`NotAnInstruction` (the all-zero halfword included), `IllegalInstruction`, `Ebreak`, `Misaligned`,
+`OutOfBounds` (an access outside [ecall-abi.md](ecall-abi.md) §5's regions, or an advice word past
+what the host supplied), `ClockOverflow`, and `PublicInputTooLong` and `JournalTooLong` (the input,
+or the journal's length word at exit, above a window's payload). An unassigned ecall number is not
+an error but `-ENOSYS` (§6).
 
 There is no second executor: `crates/emulator/tests/trace.rs` restates §4's table and checks every
 traced row against it, and §9's check and the checker's multiset, memory and family-row suites hold
@@ -176,14 +155,11 @@ the rest.
   `FamilyTrace`, empty for a window family, is raw live rows, column-major, in small integer types:
   `cycle`, `pc`, `next_pc`, `present`, and per role `addr`, `read_ts`, `read_value`,
   `write_value`; no padding, no polynomial. A row stores everything its queries carry but a write
-  timestamp, `4c + Δ`, and the pc query's read timestamp, `4(c − 1)`. A delegation family's
-  `DelegationTrace` has a row per invocation: the requesting cycle, the frame base, the frame
-  words, and a recursion family's cell and data-word accesses.
-- **`RowSlice`, `FrameSlice`.** One shard's rows, `[i·h, min((i + 1)·h, len))`, borrowed: what the
-  memory column builders read, never the log ([memory.md](memory.md) §2). `Row::delegation_space`
-  recovers a mirror query's space from the `a7` the row read.
-- **`MemoryState`**, the last-access tables: each register's, the pc's, each RAM word's and each
-  field cell's last `(ts, value)`. `O(touched addresses)`, and all the register and pc boundary,
+  timestamp, `4c + Δ`, and the pc query's read timestamp, `4(c − 1)`.
+- **`RowSlice`.** One shard's rows, `[i·h, min((i + 1)·h, len))`, borrowed: what the memory column
+  builders read, never the log ([memory.md](memory.md) §2).
+- **`MemoryState`**, the last-access tables: each register's, the pc's and each RAM word's last
+  `(ts, value)`. `O(touched addresses)`, and all the register and pc boundary,
   the RAM window list (`trace::init_windows`) and the window families' teardown need.
 - **`MemoryEventLog`**, the events and a `MemoryState`: `O(cycles)`, kept only by `trace_run`, read
   by §9's check, the `TraceArchive` and `checker::memory_columns_from_log`, the independent reading
@@ -194,6 +170,6 @@ the rest.
   parts is read back. No proving path reads one; `checker::TamperHarness` and the retained archived
   path do ([streaming.md](streaming.md) §6).
 - **`CycleProfile`, `ShardPlan`.** The profile counts rows per family, cycles for a cycle-owning
-  family (summing to the cycle count) and invocations for a delegation family.
+  family, summing to the cycle count, and 0 for a window family.
   `trace::plan_shards` is `⌈count / height⌉` per family; a window family plans 0 there, its count
   being the prover's ([streaming.md](streaming.md) §4).

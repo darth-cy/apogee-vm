@@ -4,8 +4,7 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# `#![no_std]` + alloc: `gkr-verify` reads the artifact, and the recursion
-# guest links `gkr-verify`.
+# `#![no_std]` + alloc, as `gkr-verify`, which reads the artifact, is.
 [dependencies]
 # `challenge_slot::NAMES`: the slots a coefficient may name.
 constants.workspace = true

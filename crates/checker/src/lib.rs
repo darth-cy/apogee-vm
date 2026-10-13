@@ -35,7 +35,7 @@ mod tamper;
 mod tape;
 
 pub use memory::{frame_witness_from_log, memory_columns_from_log};
-pub use tamper::{assert_anchor_twins_refused, AnchorTwins, Cell, Tamper, TamperHarness};
+pub use tamper::{Cell, Tamper, TamperHarness};
 pub use tape::{check_global_tape, expected_global_tape, global_tape, tape};
 
 /// Independent pseudo-random points per sampled check.
@@ -109,8 +109,7 @@ fn challenge_slots(gates: &[&GateDef]) -> Vec<u32> {
 /// The scratch bijection read the other way: an inner address to its slot.
 ///
 /// Built once per caller: a scan of the whole bijection per use would be
-/// quadratic in a circuit whose inner columns number in the thousands — a
-/// delegation family's do.
+/// quadratic in the circuit's inner-column count.
 fn slot_index(a: &CircuitArtifact) -> BTreeMap<PolyAddress, usize> {
     a.scratch
         .iter()
@@ -366,9 +365,8 @@ pub fn check_law4(a: &CircuitArtifact) -> Result<(), String> {
     }
     // With equal counts, every index named exactly once also means no entry
     // names an index outside the list.
-    // Counted into a tally rather than searched per index: a circuit whose
-    // relations and scratch slots number in the thousands — a delegation
-    // family's does — makes a scan per index quadratic.
+    // Counted into a tally rather than searched per index: a scan per index
+    // is quadratic in the relation count.
     let mut named = vec![0usize; listed];
     for e in &entries {
         if let Some(count) = named.get_mut(e.1 as usize) {
@@ -1287,7 +1285,7 @@ fn compress(powers: &[Fr], tuple: &[Fr]) -> Fr {
 }
 
 /// The gated value of tuple position `j` at selector `s` and raw expression
-/// value `raw`, `docs/spec/lookup.md` §4: a range channel and `XOR8` gate to 0,
+/// value `raw`, `docs/spec/lookup.md` §4: a range channel gates to 0,
 /// the generic channel to the all-zero `ZeroEntry` with its key offset by one,
 /// and the decoder channel to `MINUS_ONE` in every column.
 fn gate_tuple(channel: u32, j: usize, s: Fr, raw: Fr) -> Fr {

@@ -202,11 +202,12 @@ fn check_listing(elf: &[u8], listing: &[u8], name: &str) -> (usize, BTreeSet<&'s
 #[test]
 fn decode_agrees_with_objdump_on_the_guest_corpus() {
     for name in ["fib", "rvc-dense", "amm"] {
-        let (checked, _) = check_listing(
-            &common::loader(&format!("{name}.elf")),
-            &common::loader(&format!("{name}.objdump.txt")),
-            name,
-        );
+        let elf = test_support::guest_elf(name);
+        let listing: String = test_support::objdump(&elf)
+            .iter()
+            .map(|(addr, encoding, text)| format!("{addr:08x} {encoding} {text}\n"))
+            .collect();
+        let (checked, _) = check_listing(&elf, listing.as_bytes(), name);
         assert!(
             checked > 2000,
             "{name}: only {checked} instructions compared"

@@ -2,8 +2,8 @@
 //! semantic workload. `docs/tools.md` §2 is the design.
 //!
 //! It invokes nothing proving-related. Three inputs — a guest ELF, the bytes it
-//! runs on, and the ELF's own symbol table — and arithmetic. No SRS, no key, no
-//! circuit, no commitment.
+//! runs on, and the ELF's own symbol table — and arithmetic. No key, no
+//! circuit, no proof.
 //!
 //! # How it collects
 //!
@@ -18,9 +18,8 @@
 //!
 //! The executor is `emulator::StreamingRun`, so the profiler's memory is one
 //! partial trace buffer per family plus the histogram — 8 bytes a halfword of
-//! image, 32 MiB for the largest image a `2^22` decoded table reaches. **A whole
-//! Ethereum block profiles in a minute and a few hundred megabytes**, where
-//! `trace_run` would need ~520 GB for the same execution
+//! image, 32 MiB for the largest image a `2^22` decoded table reaches — however
+//! long the execution, where `trace_run` would hold every row of it
 //! (`docs/spec/streaming.md` §1).
 
 pub mod categories;
@@ -30,7 +29,7 @@ pub mod report;
 use std::collections::BTreeMap;
 
 use categories::Category;
-use emulator::{ChunkRows, Execution, GuestIo, StreamingRun};
+use emulator::{Execution, GuestIo, StreamingRun};
 use isa::Instr;
 use loader::{FuncSymbol, ProgramImage};
 use program::{DecodedTables, VmConfig};
@@ -59,8 +58,7 @@ pub struct Profile {
     /// pc `slot_base + 2i`, the same indexing `ProgramImage::slots` has.
     pub hist: Vec<u64>,
     pub slot_base: u32,
-    /// Per family: cycles for a cycle-owning one, invocations for a delegation
-    /// one (`docs/spec/delegation.md` §8).
+    /// Per family: its cycles, 0 for a window family.
     pub profile: CycleProfile,
     /// Every function symbol of the image, with its share.
     pub funcs: Vec<FuncProfile>,
@@ -120,14 +118,9 @@ pub fn profile(
     })
 }
 
-/// Add one shard's rows to the histogram. A delegation family's rows are
-/// invocations rather than cycles, and their requesting cycle is already counted
-/// by the family that owns the ecall row, so they add nothing here.
+/// Add one shard's rows to the histogram: one cycle per row, at its pc.
 fn count(hist: &mut [u64], slot_base: u32, chunk: &emulator::ShardChunk) {
-    let ChunkRows::Cycles(rows) = &chunk.rows else {
-        return;
-    };
-    for pc in &rows.pc {
+    for pc in &chunk.rows.pc {
         let slot = ((pc - slot_base) / 2) as usize;
         hist[slot] += 1;
     }
@@ -135,9 +128,8 @@ fn count(hist: &mut [u64], slot_base: u32, chunk: &emulator::ShardChunk) {
 
 /// Every function symbol with its cycles, its calls and its category.
 ///
-/// Overlapping symbols are possible — an alias shares an address and a size, and
-/// `guests/revm-block` has 28 such groups — so a cycle can be inside two
-/// entries' ranges. Each entry reports its own range's sum, and
+/// Overlapping symbols are possible — an alias shares an address and a size —
+/// so a cycle can be inside two entries' ranges. Each entry reports its own range's sum, and
 /// [`claimed_cycles`] counts each *slot* once so that the shares still add up.
 fn attribute(elf: &[u8], slot_base: u32, hist: &[u64]) -> Vec<FuncProfile> {
     let mut out: Vec<FuncProfile> = loader::function_symbols(elf)

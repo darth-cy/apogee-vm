@@ -1,8 +1,8 @@
 //! Fixture plumbing for `crates/isa`'s suites.
 //!
 //! This crate's own fixtures live in `tests/vectors/` and are pinned by
-//! SHA-256 in [`PINS`]. The guest ELFs and their listings are
-//! `crates/loader`'s, pinned there and read in place.
+//! SHA-256 in [`PINS`]. The guests are built from `guests/` and listed by the
+//! pinned toolchain's `llvm-objdump` as the tests run (`test_support`).
 
 #![allow(dead_code)]
 
@@ -32,14 +32,6 @@ pub fn own(name: &str) -> Vec<u8> {
     read(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/vectors")
-            .join(name),
-    )
-}
-
-pub fn loader(name: &str) -> Vec<u8> {
-    read(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../loader/tests/vectors")
             .join(name),
     )
 }

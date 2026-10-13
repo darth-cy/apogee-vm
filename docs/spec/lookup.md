@@ -35,10 +35,15 @@ of a shard's lookups on it as one identity over the shard's rows `y`:
 | 13 | `LOOKUP_DECODER_NEUTRAL` | `g − Σ_{j<W} β^j`, derived; `W` the decoder tuple's width |
 
 `g` and `β` are **shard-local**: the shard's transcript draws them, in that order under the tag
-`LOOKUP_CHALLENGE` (33), right after absorbing its witness commitments, multiplicities included
-([proof.md](proof.md) §4). `M` columns are committed in the global transcript the shard is seeded
-from and `S` columns are bound by identity or the SRS digest, so every column a channel reads is
-fixed before either challenge exists.
+`LOOKUP_CHALLENGE` (20), right after the shard's seed and time window ([proof.md](proof.md) §4).
+Every column a channel reads is meant to be fixed before either challenge exists: the shard's
+witness commitments, multiplicities included, absorbed just before them, the `M` columns committed
+in the global transcript the shard is seeded from, and the `S` columns bound by identity or the
+key.
+
+> **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** None of them is fixed: no column
+> is committed ([proof.md](proof.md) §3), so a prover chooses every column after `g` and `β`, and
+> every channel is **UNSOUND** — `checker`'s `tests/logup.rs` rebalances one outright.
 
 `β^0` is the literal 1, so a one-column tuple names no slot. A gate coefficient is one literal or
 one slot ([gkr.md](gkr.md) §3), so each higher power is a slot of its own, computed by the verifier
@@ -59,27 +64,19 @@ only at `s ∈ {0, 1}`. At any other `s` a scaled tuple is looked up instead: on
 | `RANGE16` | 1 | range | `V[range16]`: `y mod 2^16` | 1 | 16 |
 | `GENERIC` | 2 | table, committed | the packed table (§9) | 3 | 0 |
 | `DECODER` | 3 | table, committed | the family's decoded table (§10) | 7 or 6 | 0 |
-| `XOR8` | 4 | table, virtual | `V[xor8_a]`, `V[xor8_b]`, `V[xor8_out]`: `y`'s low two bytes and their XOR | 3 | 16 |
 
 A virtual table is a closed form of the row index, never committed: the verifier evaluates its
 multilinear extension where the GKR pass ends (`gkr_verify::virtual_at_point`, [gkr.md](gkr.md) §2).
-Each is a weighted sum of the row's bits but `V[xor8_out]`,
-`Σ_{j<8} 2^j·(y_j + y_{j+8} − 2·y_j·y_{j+8})`, which is exact because `y ^ z = y + z − 2yz` is
-multilinear. So `XOR8` costs no commitment and nothing in the SRS digest.
+Each is a weighted sum of the row's bits.
 
 `constraints::lookup::table_vars` is the fewest variables at which a table is complete: `BITS` for a
-range channel, 16 for `XOR8`, 0 for a committed table, a setup column at the circuit's own height.
+range channel, 0 for a committed table, a setup column at the circuit's own height.
 Below it a virtual table holds only part of its range, which costs completeness, not soundness.
 `family_circuit` returns `None` below the largest `table_vars` of a family's channels, so a key
 naming such a height fails to load ([proof.md](proof.md) §7). On the height menu
 ([program.md](program.md) §7) a family carrying `TIMESTAMP` is at `2^20` or more, and one carrying
-`RANGE16` or `XOR8` at `2^16` or more. The packed table needs `2^18` rows (§9), and every family
-that reads it carries `TIMESTAMP`. Above `table_vars` a table repeats, which §7 makes harmless.
-
-`XOR8`'s tuple is three wide so that membership bounds each entry to `[0, 256)` on its own; a packed
-key `x + 256·y` would bound neither, `(x, y)` and `(x + 256, y − 1)` compressing alike. Every other
-bitwise operation on bytes is a linear form over its results
-([delegation-circuits.md](delegation-circuits.md) §1).
+`RANGE16` at `2^16` or more. The packed table needs `2^18` rows (§9), and every family that reads
+it carries `TIMESTAMP`. Above `table_vars` a table repeats, which §7 makes harmless.
 
 ## 4. Gated keys
 
@@ -88,13 +85,13 @@ to a **neutral** tuple, which is a real table row:
 
 | gating | channels | gated position `j` | neutral tuple |
 | --- | --- | --- | --- |
-| `NoOffset` | `TIMESTAMP`, `RANGE16`, `XOR8` | `s·e_j` | all zero |
+| `NoOffset` | `TIMESTAMP`, `RANGE16` | `s·e_j` | all zero |
 | `ZeroEntry` | `GENERIC` | `s·(e_0 + 1)`, then `s·e_j` | the all-zero `ZeroEntry` row |
 | `MinusOne` | `DECODER` | `s·(e_j + 1) − 1` | −1 in every column, a padding row |
 
 The `+ 1` keeps every real key of the packed table at 1 or above, so no real entry is the all-zero
 tuple a switched-off row looks up. A range table needs no offset, 0 being in range, and one would
-push `2^BITS − 1` out of it; `XOR8`'s `(0, 0, 0)` is a true entry. A decoded table has no all-zero
+push `2^BITS − 1` out of it. A decoded table has no all-zero
 row, pc 0 being a valid pc, and its `MINUS_ONE` padding rows ([program.md](program.md) §5) are the
 neutral entry.
 
@@ -154,8 +151,9 @@ Each channel has one multiplicity column, a committed `W` column; a circuit's ar
 columns, in channel order. Row `t` counts the (row, lookup) pairs of the shard whose gated tuple is
 table row `t`'s, switched-off rows included. A tuple at several table rows is credited to the
 lowest; every other copy holds 0 and contributes `0/(T + g)`. The count is over raw gated tuples,
-the column being committed before `g` and `β` exist (`trace::build_multiplicities`, which refuses a
-tuple no table row holds: the honest prover cannot balance it).
+the column being meant to be committed before `g` and `β` exist (**UNFINISHED**, §2;
+`trace::build_multiplicities`, which refuses a tuple no table row holds: the honest prover cannot
+balance it).
 
 No gate or range check constrains the column, and soundness needs none. If a gated tuple `v` is in
 no table row, the left side of §1's identity, as a rational function of `g`, has a pole at `−v`
@@ -173,8 +171,8 @@ failure is `VerifyError::Lookup { channel }`. The GKR pass absorbs the pair befo
 challenge and proves it ([gkr.md](gkr.md) §5). `den` is the product of every leaf denominator, and
 `num = 0` means the sum vanishes only where `den ≠ 0`: one leaf `(0, 0)` — a table row whose
 `T + g` vanishes, counted 0 — makes the root `(0, 0)` whatever the other leaves hold. With `g`
-drawn after the columns that has probability at most fractions/`|Fr|`, and `den ≠ 0` makes it a
-refusal.
+drawn after the columns — which with no commitment it is not (§2) — that has probability at most
+fractions/`|Fr|`, and `den ≠ 0` makes it a refusal.
 
 ## 9. The generic table
 
@@ -196,20 +194,23 @@ the 1. `U16GetSign` serves every sign an execution family computes, AND the bitw
 (`SHIFT_COPOWER_BITS = 31`), `2^32` not fitting a `u32` column, and the two gates that read it carry
 the factor 2 ([shift-bitwise.md](shift-bitwise.md) §4). 131,105 rows in all (`GENERIC_ROWS`).
 
-**Its commitments are a constant of the ceremony.** A Mercury commitment reads the evaluation table
-as coefficients ([mercury.md](mercury.md) §2) and the table is zero past its entries, so over `2^n`
-rows it commits to the same three points for every `n ≥ 18`; `generic_commitments(srs)` computes
-them at `2^18` (`GENERIC_LOG_HEIGHT`). Every verifying key carries them once, as
-`VerifyingKey::generic_table`, whether or not a family reads the channel, and its SRS digest covers
-them ([proof.md](proof.md) §3); program identity does not. A circuit that reads `GENERIC` names the
-table as its three setup columns after identity's (`FamilyCircuit::reads_generic_table`), and a
-shard's opening checks them against the key's points ([proof.md](proof.md) §5).
+The table is zero past its entries, so over `2^n` rows it is the same three columns for every
+`n ≥ 18` (`GENERIC_LOG_HEIGHT`). A circuit that reads `GENERIC` names the table as its three setup
+columns after the family's own (`FamilyCircuit::reads_generic_table`); program identity does not
+digest it.
+
+**ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The table is meant to be committed
+once into every verifying key, whether or not a family reads the channel, and every shard's
+opening to check its three setup columns against those commitments. There are none
+([proof.md](proof.md) §3), so nothing binds the table a proof reads — `checker`'s
+`UNFINISHED_a_poisoned_generic_table_row_is_refused` is that twin.
 
 ## 10. The decoder channel
 
 The `DECODER` table is the family's decoded table, `program::lookup_tuple(family)`'s columns, as its
 first setup columns at its height, row `i` holding pc `2i` ([program.md](program.md) §5); program
-identity commits them ([program.md](program.md) §8). Each execution family makes one lookup on it,
+identity is meant to commit them, and does not (**UNFINISHED**, [program.md](program.md) §8). Each
+execution family makes one lookup on it,
 `imm` absent for `MUL_DIV` and `ATOMICS`:
 
 ```text
@@ -256,16 +257,17 @@ under the same selector.
 ## 12. What it rests on
 
 - **Every gated tuple is a table row**: §1's identity over challenges drawn after every column it
-  reads, boolean selectors (§2), both root conditions (§8) and the GKR pass. The error is at most
+  reads — **UNFINISHED**, they are not (§2) — boolean selectors (§2), both root conditions (§8) and
+  the GKR pass. The error is at most
   fractions/`|Fr|` for `g`, plus looked-up tuples × table rows × (width − 1)/`|Fr|` for a `β`
   collision: below `2^−190` at every menu height.
 - **A lookup answers from its own sub-table**: one width per channel (§11), disjoint key ranges and
   the `+ 1` (§9), and its family's bound on the key (§4).
 - **A switched-off row costs nothing**: its neutral tuple is a table row the multiplicity counts
   (§4).
-- **The table is the intended one**: the verifier's own closed form (§3), or a table bound by
-  identity or by the SRS digest, as trustworthy as the channel the verifier took that from
-  ([program.md](program.md) §8, [srs.md](srs.md) §3).
+- **The table is the intended one**: the verifier's own closed form (§3), or a table meant to be
+  bound by identity or by the key, as trustworthy as the channel the verifier took that from
+  ([program.md](program.md) §8) — **UNFINISHED**, neither binds one (§9).
 - **Every declared obligation is discharged**: the discharge rule over the registry's specs (§11).
 
 The channel does not check the multiplicity column (§7), a key's bound (§4), or that a committed

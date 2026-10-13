@@ -11,11 +11,10 @@
 mod common;
 
 use constants::family;
-use program::lookup_tables::generic_commitments;
 use prover::ProverSetup;
 use trace::TraceArchive;
-use verifier::{verify_shard, PublicInputs, ShardProof, VerifyError};
-use verifier_core::{reduce_shard, srs_digest};
+use verifier::{verify_shard, PublicInputs, ShardProof};
+use verifier_core::reduce_shard;
 
 const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
 const JBS: u32 = family::JUMP_BRANCH_SLT;
@@ -42,14 +41,7 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
             4 + 128 * a.layer_vars(k + 1) as usize + 4 + 32 * claims
         })
         .sum();
-    4 + 4
-        + 16
-        + 32
-        + (4 + 64 * a.witness.len())
-        + (4 + 32 * a.outputs.len())
-        + 4
-        + transitions
-        + 704
+    4 + 4 + 16 + 32 + (4 + 32 * a.outputs.len()) + 4 + transitions
 }
 
 /// The guest decodes into the add/sub family, the jump/branch/slt family and
@@ -61,13 +53,6 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// `the_guest_runs_the_acceptance_matrix`, over the same fixture, and the
 /// emulator's reading of it is `crates/emulator/tests/guests.rs`', which checks
 /// the exit status and the journal and nothing below that.
-///
-/// The generic table, which this family reads, is bound: the key
-/// carries the packed table's commitments — the ones
-/// `program::lookup_tables::generic_commitments` makes over this SRS at `2^18`
-/// — its SRS digest covers them, and the family's opening claim ends with
-/// them, so its `2^20`-row `S[7..10]` open against exactly those; the add/sub
-/// family's claim does not carry them.
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks near 10 GB"]
 fn a1_the_guest_proves_and_every_shard_verifies() {
@@ -134,62 +119,44 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     assert_eq!(jbs.gkr.layers[0].rounds.len(), 20);
     assert_eq!(jbs.gkr.layers[0].final_evals.len(), 21 + 44 + 10);
     assert_eq!(jbs.outputs.len(), 2 + 2 * 4);
-    assert_eq!(jbs.to_bytes().len(), 61_612);
+    assert_eq!(jbs.to_bytes().len(), 58_088);
 
-    // The generic table's binding.
-    let table = generic_commitments(&setup.srs).map(|p| p.to_bytes());
-    assert_eq!(setup.vk.generic_table, table);
-    assert_eq!(
-        setup.vk.srs_digest,
-        srs_digest(&setup.vk.srs_verifier, &table)
-    );
-    let reduced = |proof: &ShardProof| match reduce_shard(&setup.vk, proof, &public) {
-        Ok(claim) => claim.commitments,
-        Err(e) => panic!("the honest shard reduces: {e}"),
-    };
-    let claim = reduced(jbs);
-    assert_eq!(claim.len(), 21 + 44 + 10);
-    assert_eq!(&claim[..21], &public.memory_commitments[2][..]);
-    assert_eq!(&claim[21..65], &jbs.witness_commitments[..]);
-    assert_eq!(&claim[65..72], &setup.vk.setup_commitments[1][..]);
-    assert_eq!(&claim[72..], &table[..]);
-    let add = reduced(&proofs[1]);
-    // The add/sub claim is its 27 memory, 35 witness and 7 setup commitments,
-    // so identity's setup commitments start at 62. The witness count, and with
-    // it that offset, moves by one for every registered delegation type
-    // (`docs/spec/delegation.md` §3), the base format registering six.
-    assert_eq!(add.len(), 27 + 35 + 7);
-    assert_eq!(&add[62..], &setup.vk.setup_commitments[0][..]);
+    // Each shard reduces to one claim per committed column, in layout order:
+    // memory, witness, setup.
+    //
+    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. Those claims
+    // are meant to be opened against the statement's memory commitments, the
+    // shard's witness commitments and the key's setup and generic-table
+    // commitments. Nothing is opened, so these lengths are all that can be
+    // held (`docs/architecture.md` §0).
+    for (proof, (m, w, s)) in [(jbs, (21, 44, 10)), (&proofs[1], (21, 28, 7))] {
+        let claim = match reduce_shard(&setup.vk, proof, &public) {
+            Ok(claim) => claim,
+            Err(e) => panic!("the honest shard reduces: {e}"),
+        };
+        let a = &setup.vk.circuit(proof.family).expect("a circuit").artifact;
+        assert_eq!(claim.columns, a.committed());
+        assert_eq!(
+            (a.memory.len(), a.witness.len(), a.setup.len()),
+            (m, w, s),
+            "family {}",
+            proof.family
+        );
+        assert_eq!(claim.values.len(), m + w + s);
+        assert_eq!(claim.point.len(), 20);
+    }
 }
 
-/// The generic table's binding from the other side. A key whose table
-/// commitments are another table's — its value and result commitments swapped, every
-/// point still the SRS's — does not load under the SRS digest the honest key
-/// carries, which is the one trusted value that pins the table. Given its own
-/// digest, it loads, and a verifier comparing that digest with the trusted one
-/// refuses it; the honest proofs are refused under it on every shard as made
-/// for another statement, the digest being G2's.
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The generic
+/// table's binding: a key whose generic table is another table's is another
+/// statement, and every honest shard is refused under it. Nothing commits the
+/// table, so no key names one and there is nothing to swap. This is held here,
+/// disabled, as the property a commitment scheme must restore
+/// (`docs/architecture.md` §0).
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks near 10 GB"]
-fn a_key_with_another_generic_table_is_another_statement() {
-    let (setup, _, public, proofs) = proved();
-    let mut other = setup.vk.clone();
-    other.generic_table.swap(1, 2);
-    assert!(
-        other.check().is_err(),
-        "the trusted SRS digest pins the table"
-    );
-    other.srs_digest = srs_digest(&other.srs_verifier, &other.generic_table);
-    assert_eq!(other.check(), Ok(()));
-    assert_ne!(other.srs_digest, setup.vk.srs_digest);
-    for proof in &proofs {
-        assert_eq!(
-            verify_shard(&other, proof, &public),
-            Err(VerifyError::Statement(
-                "the proof was made for another statement"
-            )),
-            "shard {:?}",
-            (proof.family, proof.shard_index)
-        );
-    }
+#[ignore = "UNFINISHED: the key commits no generic table until a commitment scheme exists \
+            (docs/architecture.md §0)"]
+#[allow(non_snake_case)]
+fn UNFINISHED_a_key_with_another_generic_table_is_another_statement() {
+    todo!("UNFINISHED: no commitment scheme commits the generic table (docs/architecture.md §0)")
 }

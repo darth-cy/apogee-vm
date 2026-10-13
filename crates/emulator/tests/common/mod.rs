@@ -1,7 +1,7 @@
 //! Shared plumbing for the emulator's suites.
 //!
-//! Every guest here is the committed ELF under `crates/loader/tests/vectors`,
-//! pinned by digest in `crates/loader/tests/common/mod.rs`.
+//! Every guest here is built from `guests/` (`test_support::guest_elf`); the
+//! one committed file read is fib's public-I/O record.
 
 #![allow(dead_code)]
 
@@ -21,8 +21,7 @@ pub fn vectors() -> PathBuf {
 }
 
 pub fn elf(name: &str) -> Vec<u8> {
-    let path = vectors().join(format!("{name}.elf"));
-    fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
+    test_support::guest_elf(name)
 }
 
 pub fn image(name: &str) -> ProgramImage {
@@ -47,8 +46,8 @@ pub fn with_advice(input: &[u8], advice: &[u8]) -> GuestIo {
     }
 }
 
-/// Every family at the smallest height: every committed guest's code fits
-/// but `mod-mul-ops`', and a table costs 2^16 rows rather than 2^22.
+/// Every family at the smallest height: every committed guest's code fits, and
+/// a table costs 2^16 rows rather than 2^22.
 pub fn smallest() -> ProgramParams {
     uniform(1 << 16)
 }
@@ -61,11 +60,9 @@ pub fn uniform(height: u32) -> ProgramParams {
     }
 }
 
-/// Decoded tables at the smallest menu height the guest's code fits.
-///
-/// 2^16 rows for every committed guest but `mod-mul-ops`, whose code is large
-/// enough to need a taller table: a table's rows are absolute pcs, one per
-/// halfword, so a family's height has to reach past the last instruction.
+/// Decoded tables at the smallest menu height the guest's code fits: a table's
+/// rows are absolute pcs, one per halfword, so a family's height has to reach
+/// past the last instruction.
 pub fn preprocess(image: &ProgramImage) -> (DecodedTables, VmConfig) {
     let mut refused = None;
     for &height in &family::HEIGHT_MENU {
@@ -112,11 +109,9 @@ pub fn input_of(name: &str) -> Vec<u8> {
         "heap" => 40u32.to_le_bytes().to_vec(),
         "atomics" => 37u32.to_le_bytes().to_vec(),
         "rvc-dense" => 7u32.to_le_bytes().to_vec(),
-        // Reads nothing: its exit status is its result. `keccak-test`,
-        // `recursion-ops` and `shards` are the same shape — each counts its own
-        // checks — and `tests/streaming.rs` streams all three.
-        "addsub" | "control" | "alu" | "mem" | "keccak-test" | "recursion-ops" | "shards"
-        | "mod-mul-ops" | "sha256-ops" | "ec-ops" => Vec::new(),
+        // Reads nothing: its exit status is its result. `shards` is the same
+        // shape — it counts its own checks — and `tests/streaming.rs` streams it.
+        "addsub" | "control" | "alu" | "mem" | "shards" => Vec::new(),
         other => panic!("no input chosen for {other}"),
     }
 }
@@ -129,12 +124,7 @@ pub fn exit_code_of(name: &str) -> i32 {
         "control" => 16,
         "alu" => 96,
         "mem" => 50,
-        "keccak-test" => 6,
-        "recursion-ops" => 9,
         "shards" => 2,
-        "mod-mul-ops" => 28,
-        "sha256-ops" => 13,
-        "ec-ops" => 20,
         _ => 0,
     }
 }
@@ -216,16 +206,6 @@ pub fn guest_profile() -> String {
 /// `guests/.cargo/config.toml`, and nothing from the ambient environment that
 /// could reach rustc.
 pub fn build_guest(name: &str, profile: &str) -> Vec<u8> {
-    build_bin(name, name, profile)
-}
-
-/// The same, for one named binary of a package that has more than one.
-///
-/// The target directory is keyed on `bin` and not on `name`, and that matters:
-/// this function wipes the directory before and after every build, so two
-/// binaries of one package sharing a key would each delete the other's work and
-/// a suite that builds both would pay two cold 158-crate builds.
-pub fn build_bin(name: &str, bin: &str, profile: &str) -> Vec<u8> {
     assert!(
         matches!(profile, "debug" | "release"),
         "unknown guest profile {profile:?}: expected \"debug\" or \"release\""
@@ -234,7 +214,7 @@ pub fn build_bin(name: &str, bin: &str, profile: &str) -> Vec<u8> {
         .join("../../guests")
         .join(name);
     let target_dir = std::env::temp_dir().join(format!(
-        "apogee-emulator-{bin}-{profile}-{}",
+        "apogee-emulator-{name}-{profile}-{}",
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&target_dir);
@@ -267,7 +247,7 @@ pub fn build_bin(name: &str, bin: &str, profile: &str) -> Vec<u8> {
     let elf = target_dir
         .join("riscv32imac-unknown-none-elf")
         .join(profile)
-        .join(bin);
+        .join(name);
     let bytes = fs::read(&elf).unwrap_or_else(|e| panic!("reading {}: {e}", elf.display()));
     let _ = fs::remove_dir_all(&target_dir);
     bytes

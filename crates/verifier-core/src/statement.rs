@@ -1,5 +1,5 @@
 //! The statement: the static `VmConfig`, its descriptor and window rules, the
-//! identity and SRS digests, the order of a statement's shards, and the global
+//! identity digest, the order of a statement's shards, and the global
 //! transcript that turns a statement into the memory challenges and the digest
 //! every shard is seeded with.
 //!
@@ -14,8 +14,8 @@ use alloc::vec::Vec;
 use constants::memory::TS_BITS;
 use constants::{challenge_slot, family, guest_memory, transcript_tags as tags, PROTOCOL_VERSION};
 use field::Fr;
-use gkr_verify::{field_window_challenges, window_challenges, BoundaryFinals, ExternalChallenges};
-use transcript::{append_g1_points, io_digest, Transcript};
+use gkr_verify::{window_challenges, BoundaryFinals, ExternalChallenges};
+use transcript::{io_digest, Transcript};
 
 use crate::{PublicInputs, VerifyingKey};
 
@@ -45,36 +45,11 @@ impl VmConfig {
             .map(|(_, h)| *h)
     }
 
-    /// Whether a statement under this config is in the **recursion format**:
-    /// it holds the field memory's windows (`docs/spec/recursion.md` §1.1).
-    /// Nothing else says so — no wire form carries a format.
-    pub fn is_recursion(&self) -> bool {
-        self.height(family::FIELD_WINDOWS).is_some()
-    }
-
-    /// `σ`, how many variables a shard of `artifact` stacks its columns
-    /// under (`docs/spec/recursion.md` §1.3): 0 in the base format, where a
-    /// stack is a column; in the recursion format the smallest even `σ` with
-    /// `2^σ` slots for the wider phase, capped so a stack is at most the
-    /// ceremony's `2^STACK_LOG` evaluations.
-    pub fn stack_vars(&self, artifact: &constraints::CircuitArtifact) -> u32 {
-        if !self.is_recursion() {
-            return 0;
-        }
-        let widest = artifact.memory.len().max(artifact.witness.len()).max(1);
-        let need = widest.next_power_of_two().trailing_zeros();
-        (need + need % 2).min(STACK_LOG - artifact.trace_vars)
-    }
-
-    /// `family`'s circuit at `trace_vars`, from this config's format's
-    /// registry: the one source of a key's circuits, for the key's load rule
-    /// and the prover's registration alike.
+    /// `family`'s circuit at `trace_vars`, from the registry: the one source of
+    /// a key's circuits, for the key's load rule and the prover's registration
+    /// alike.
     pub fn circuit(&self, family: u32, trace_vars: u32) -> Option<constraints::FamilyCircuit> {
-        if self.is_recursion() {
-            constraints::recursion_circuit(family, trace_vars)
-        } else {
-            constraints::family_circuit(family, trace_vars)
-        }
+        constraints::family_circuit(family, trace_vars)
     }
 
     /// The wire form: `u32` LE family count `k`, then `k` pairs of
@@ -96,10 +71,6 @@ impl VmConfig {
     /// without `INIT_TEARDOWN`, `ZERO_WINDOWS`, `ADVICE_WINDOWS` or the two
     /// public families, which derivation puts in every config, or with them at
     /// the wrong heights. `None` rather than a panic.
-    ///
-    /// The window families are required to be *present*, not last: the
-    /// delegation and recursion families take ids above `INIT_TEARDOWN` and
-    /// `ZERO_WINDOWS`, so a config holding one lists it after both.
     pub fn from_bytes(bytes: &[u8]) -> Option<VmConfig> {
         let word = |i: usize| -> Option<u32> {
             Some(u32::from_le_bytes(
@@ -128,15 +99,6 @@ impl VmConfig {
         window_height(&config).ok()?;
         Some(config)
     }
-}
-
-/// The largest stack, `2^STACK_LOG` evaluations: the ceremony the repository
-/// holds (`docs/spec/recursion.md` §1.3).
-pub const STACK_LOG: u32 = 24;
-
-/// How many stacks `columns` columns take at `σ` stack variables.
-pub fn stack_count(columns: usize, sigma: u32) -> usize {
-    columns.div_ceil(1 << sigma)
 }
 
 /// The one height of the three window families, or the rule a config breaks.
@@ -274,9 +236,9 @@ pub fn absorb_statement_descriptor(
 /// challenges (`docs/spec/memory.md` §3.5): [`window_height`]'s, which give
 /// the one height `h`; exactly one `INIT_TEARDOWN` shard; one window id per
 /// `ZERO_WINDOWS` shard; the ids strictly increasing; every id in
-/// `[1, 2^29 / h - 1]`; exactly one shard of each public family; the advice
-/// windows below the top of the address space; and the field windows within
-/// the `2^32` cells. `ZERO_WINDOWS` shard `i` is window `windows[i]`, so
+/// `[1, 2^29 / h - 1]`; exactly one shard of each public family; and the
+/// advice windows below the top of the address space. `ZERO_WINDOWS` shard `i`
+/// is window `windows[i]`, so
 /// together they give every RAM word exactly one init row. The error names
 /// the rule broken.
 ///
@@ -329,13 +291,6 @@ pub fn check_memory_windows(
     if advice_first_window(height) as u64 + advice > (1u64 << 30) / height as u64 {
         return Err("the advice windows do not fit below the top of the address space");
     }
-    // The field memory's windows are consecutive from cell 0, and a cell is a
-    // `u32` (`docs/spec/recursion.md` §2.2).
-    if let Some(h) = config.height(family::FIELD_WINDOWS) {
-        if count(family::FIELD_WINDOWS) as u64 * h as u64 > 1u64 << 32 {
-            return Err("the field windows do not fit the 2^32 cells");
-        }
-    }
     Ok(())
 }
 
@@ -360,61 +315,31 @@ impl ProgramIdentity {
     }
 }
 
-/// The identity digest over given setup commitments, each a 64-byte canonical
-/// `G1` encoding. It needs no SRS and no curve: this is what a verifying-key
-/// loader recomputes. A fresh typed transcript absorbs, in this order
-/// (`docs/spec/program.md` §8):
+/// The identity digest: what a verifying-key loader recomputes. A fresh typed
+/// transcript absorbs, in this order (`docs/spec/program.md` §8):
 ///
 /// 1. `PROGRAM_IDENTITY`: `code_version`, one scalar;
 /// 2. `VM_CONFIG`: the family ids, their heights, `bytecode_size_words`;
 /// 3. `PROGRAM_ENTRY`: `entry_pc`, one scalar;
-/// 4. per family of `config`, in its order, `COMMITMENT`: that family's list
-///    in `commitments`, as one message of 4-limb points;
-/// 5. one raw squeeze, which is the identity.
+/// 4. one raw squeeze, which is the identity.
 ///
-/// `program::identity_from_commitments` is this over `G1Affine`s.
-/// `commitments` holds one list per family of `config`; anything else is a
-/// caller error and panics.
-pub fn identity_digest(
-    code_version: u32,
-    config: &VmConfig,
-    entry_pc: u32,
-    commitments: &[Vec<[u8; 64]>],
-) -> ProgramIdentity {
-    assert_eq!(
-        commitments.len(),
-        config.families.len(),
-        "identity_digest: one commitment list per family in the VmConfig"
-    );
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** Between steps
+/// 3 and 4 belongs one commitment list per family of `config`: the setup
+/// columns' commitments — each instruction family's decoded table and
+/// `INIT_TEARDOWN`'s image column. Nothing is absorbed there, so this identity
+/// binds the config and the entry pc and **nothing of the program's code or
+/// image**: two programs with one config and one entry pc share it. A later
+/// commitment scheme must commit the setup columns, put the lists in the key
+/// and absorb them here (`docs/architecture.md` §0).
+pub fn identity_digest(code_version: u32, config: &VmConfig, entry_pc: u32) -> ProgramIdentity {
     let mut tr = Transcript::new();
     tr.append_scalar(tags::PROGRAM_IDENTITY, Fr::from_u64(code_version as u64));
     absorb_vm_config(&mut tr, config);
     tr.append_scalar(tags::PROGRAM_ENTRY, Fr::from_u64(entry_pc as u64));
-    for points in commitments {
-        append_g1_points(&mut tr, tags::COMMITMENT, points);
-    }
+    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The setup
+    // columns' commitments, one list per family, are absorbed here once a
+    // commitment scheme exists. Until then the identity binds no code.
     ProgramIdentity(tr.sample())
-}
-
-/// The SRS digest, `docs/spec/proof.md` §3: a fresh typed transcript
-/// absorbs the 320-byte `SrsVerifier` encoding — `g1_gen ‖ g2_gen ‖ g2_tau`,
-/// `docs/spec/srs.md` §5's layout — as one `SRS_VERIFIER` bytes message, then
-/// the packed generic table's three commitments as one `GENERIC_TABLE` message
-/// of twelve limbs; the digest is one raw squeeze, as `io_digest`'s is. Raw,
-/// because a challenge under a bytes tag would be one tag in two kinds.
-///
-/// Both are constants of the ceremony — the table's commitments are the same
-/// at every height — so one trusted digest pins the points every pairing reads
-/// and the table every generic lookup reads (`docs/spec/proof.md`
-/// §3).
-pub fn srs_digest(
-    verifier: &[u8; 320],
-    generic_table: &[[u8; 64]; constants::generic_table::WIDTH],
-) -> Fr {
-    let mut sponge = Transcript::new();
-    sponge.append_bytes(tags::SRS_VERIFIER, verifier);
-    append_g1_points(&mut sponge, tags::GENERIC_TABLE, generic_table);
-    sponge.sample()
 }
 
 // ---------------------------------------------------------------------------
@@ -445,8 +370,8 @@ pub fn statement_shards(config: &VmConfig, shard_counts: &[u32]) -> Vec<(u32, u3
     out
 }
 
-/// `(family, count)` per family of `config`, in the global transcript's group
-/// order: `INIT_TEARDOWN`, `ZERO_WINDOWS`, then every other family ascending.
+/// `(family, count)` per family of `config`, in statement order:
+/// `INIT_TEARDOWN`, `ZERO_WINDOWS`, then every other family ascending.
 pub(crate) fn groups(config: &VmConfig, shard_counts: &[u32]) -> Vec<(u32, u32)> {
     let pairs = config
         .families
@@ -478,53 +403,45 @@ pub struct GlobalTranscript {
     pub digest: Fr,
 }
 
-/// The global transcript, `docs/spec/proof.md` §2, G1 to G11: run
-/// identically by the prover's global commit phase and by the verifier. Every
-/// field of `statement` is absorbed but two: `memory_roots`, computed after the
-/// challenges and bound by each shard's own proof, and `exit_status`, bound
-/// only by step 10b, `verify_global_memory`, which holds it to `x10`'s final
-/// value in the boundary G9 absorbs. A caller that skips step 10b has not
-/// bound the status.
+/// The global transcript, `docs/spec/proof.md` §2: run identically by the
+/// prover's global phase and by the verifier. Every field of `statement` is
+/// absorbed but two: `memory_roots`, computed after the challenges and bound by
+/// each shard's own proof, and `exit_status`, bound only by step 10b,
+/// `verify_global_memory`, which holds it to `x10`'s final value in the
+/// boundary absorbed here. A caller that skips step 10b has not bound the
+/// status.
 ///
-/// `statement` must be consistent with `vk`: one shard count per config family
-/// and one commitment list per statement shard. The verifier checks that first
-/// and refuses as `Statement`; a broken one here is a caller error and panics.
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The memory
+/// challenges are meant to follow every shard's memory-column commitments, so
+/// that no `M` column can be chosen after them. No commitment is absorbed, so a
+/// prover may pick the `M` columns after seeing `γ_M, α_addr, α_ts, α_val`, and
+/// the memory argument is **UNSOUND** until a commitment scheme fills the gap
+/// marked below (`docs/architecture.md` §0).
+///
+/// `statement` must be consistent with `vk`: one shard count per config family.
+/// The verifier checks that first and refuses as `Statement`; a broken one here
+/// is a caller error and panics.
 pub fn global_commit(vk: &VerifyingKey, statement: &PublicInputs) -> GlobalTranscript {
-    global_transcript(vk.srs_digest, &vk.config, vk.identity, statement)
+    global_transcript(&vk.config, vk.identity, statement)
 }
 
-/// [`global_commit`] over the three things it reads of a key.
+/// [`global_commit`] over the two things it reads of a key.
 pub(crate) fn global_transcript(
-    srs_digest: Fr,
     config: &VmConfig,
     identity: ProgramIdentity,
     statement: &PublicInputs,
 ) -> GlobalTranscript {
     let mut t = Transcript::new();
     t.append_scalar(tags::PROTOCOL_SUITE, Fr::from_u64(PROTOCOL_VERSION as u64));
-    t.append_scalar(tags::SRS_DIGEST, srs_digest);
     absorb_statement_descriptor(&mut t, config, &statement.shard_counts, &statement.windows);
     t.append_scalar(tags::PROGRAM_IDENTITY, identity.0);
     let io = io_digest(&statement.input, &statement.output);
     t.append_bytes(tags::PUBLIC_INPUTS, &io.to_bytes());
-
-    let mut lists = statement.memory_commitments.iter();
-    for (family, count) in groups(config, &statement.shard_counts) {
-        t.append_scalars(
-            tags::MEMORY_GROUP,
-            &[Fr::from_u64(family as u64), Fr::from_u64(count as u64)],
-        );
-        for _ in 0..count {
-            let list = lists
-                .next()
-                .expect("global_commit: one commitment list per statement shard");
-            append_g1_points(&mut t, tags::COMMITMENT, list);
-        }
-    }
-    assert!(
-        lists.next().is_none(),
-        "global_commit: one commitment list per statement shard, and no more"
-    );
+    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. Every statement
+    // shard's `M` commitments are absorbed HERE, in statement order, before the
+    // boundary and the memory challenges. Nothing is: the memory columns are
+    // bound to nothing and the memory argument is unsound until a commitment
+    // scheme fills this void (`docs/architecture.md` §0).
     t.append_scalars(
         tags::MEMORY_BOUNDARY,
         &boundary_scalars(&statement.boundary),
@@ -543,14 +460,19 @@ pub(crate) fn global_transcript(
 }
 
 /// A shard transcript through its lookup challenges, `docs/spec/proof.md`
-/// §4, S1 to S4: the seed, the time window, the witness commitments, then `g`
-/// and `β`. Returns the transcript and the two challenges.
+/// §4: the seed, the time window, then `g` and `β`. Returns the transcript and
+/// the two challenges.
+///
+/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** `g` and `β`
+/// are meant to follow the shard's witness commitments, multiplicities
+/// included. None is absorbed, so the `W` columns are bound to nothing and the
+/// lookup arguments are **UNSOUND** until a commitment scheme fills the gap
+/// marked below (`docs/architecture.md` §0).
 pub fn shard_transcript(
     digest: Fr,
     family: u32,
     index: u32,
     ts_window: [u64; 2],
-    witness_commitments: &[[u8; 64]],
 ) -> (Transcript, Fr, Fr) {
     let mut t = Transcript::new();
     t.append_scalars(
@@ -565,7 +487,10 @@ pub fn shard_transcript(
         tags::SHARD_TS_WINDOW,
         &[Fr::from_u64(ts_window[0]), Fr::from_u64(ts_window[1])],
     );
-    append_g1_points(&mut t, tags::COMMITMENT, witness_commitments);
+    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The shard's `W`
+    // commitments are absorbed HERE, before `g` and `β`. Nothing is: the
+    // witness and multiplicity columns are bound to nothing until a commitment
+    // scheme fills this void (`docs/architecture.md` §0).
     let g = t.challenge_scalar(tags::LOOKUP_CHALLENGE);
     let beta = t.challenge_scalar(tags::LOOKUP_CHALLENGE);
     (t, g, beta)
@@ -590,8 +515,8 @@ pub fn memory_slots(memory: &[Fr; 4]) -> ExternalChallenges {
 /// The window shard `index` of a window family initializes, on its own grid
 /// of `2^trace_vars`-row windows, or `None` for a family whose rows are not a
 /// window: 0 for `INIT_TEARDOWN`, `windows[index]` for `ZERO_WINDOWS`, the
-/// public windows' constant ids, the `index`-th window from the advice origin
-/// up, and field window `index` from cell 0 up.
+/// public windows' constant ids, and the `index`-th window from the advice
+/// origin up.
 ///
 /// `index` is below the family's count and `windows` is the statement's list,
 /// which the window rules hold to that count; anything else panics.
@@ -603,16 +528,14 @@ pub fn shard_window(family: u32, index: u32, windows: &[u32], trace_vars: u32) -
         family::PUBLIC_INPUT => Some(family::PUBLIC_INPUT_WINDOW),
         family::PUBLIC_OUTPUT => Some(family::PUBLIC_OUTPUT_WINDOW),
         family::ADVICE_WINDOWS => Some(advice_first_window(1 << trace_vars) + index),
-        family::FIELD_WINDOWS => Some(index),
         _ => None,
     }
 }
 
 /// The external challenges shard `(family, index)`'s circuit reads,
 /// `docs/spec/proof.md` §4: slots 1 to 4 from `memory`; for a window
-/// family, the derived slot 5 at [`shard_window`]'s window, over RAM or, for
-/// `FIELD_WINDOWS`, over the field memory; then the LogUp slots from `g`, `β`
-/// and the circuit. Panics as [`shard_window`] does.
+/// family, the derived slot 5 at [`shard_window`]'s window; then the LogUp
+/// slots from `g`, `β` and the circuit. Panics as [`shard_window`] does.
 pub fn shard_challenges(
     circuit: &constraints::FamilyCircuit,
     index: u32,
@@ -624,9 +547,6 @@ pub fn shard_challenges(
     let drawn = memory_slots(memory);
     let trace_vars = circuit.artifact.trace_vars;
     let mut out = match shard_window(circuit.family, index, windows, trace_vars) {
-        Some(w) if circuit.family == family::FIELD_WINDOWS => {
-            field_window_challenges(&drawn, w, trace_vars)
-        }
         Some(w) => window_challenges(&drawn, w, trace_vars),
         None => drawn,
     };

@@ -1,7 +1,6 @@
-//! The statements the proving suites prove, over a toy SRS whose `tau` is
-//! written down here. Test-only.
+//! The statements the proving suites prove. Test-only.
 //!
-//! - `guests/addsub`'s committed ELF, decoded with its execution family at
+//! - `guests/addsub`, built from source, decoded with its execution family at
 //!   `2^20` rows — the timestamp channel's floor — and everything else at
 //!   `2^16`, traced into an archive.
 //! - `guests/control`'s, the same way, with both of its execution families —
@@ -16,19 +15,14 @@
 //!   family** — and it touches no RAM, so it has a family the config carries
 //!   and no shard proves.
 //!
-//! The revm block's statement is the one that is **not** here:
-//! `guests/revm-block`'s is built from source rather than from a committed ELF,
-//! so it lives in `tests/revm.rs` beside the suite that proves it, and this
-//! module stays free of the guest workspace — `crates/checker`'s suites include
-//! it too.
+//! Every guest here is built from `guests/` by `test_support::guest_elf`;
+//! `crates/checker`'s and `crates/verifier`'s suites include this module too,
+//! and depend on `test-support` for it.
 
 #![allow(dead_code)]
 
-use std::path::PathBuf;
-
 use constants::family;
 use emulator::{trace_run, GuestIo};
-use field::Fr;
 use loader::load_elf;
 use program::{decode_program, ProgramParams};
 use prover::{Program, ProverSetup};
@@ -61,73 +55,9 @@ pub const SHARDS_RESULT: u32 = 2;
 /// `guests/shards`' add/sub occupancy, which is what makes it two shards.
 pub const SHARDS_ADD_CYCLES: u64 = 1_064_970;
 
-/// `guests/keccak-test`'s exit status: the number of its checks.
-pub const KECCAK_RESULT: u32 = 6;
-
-/// How many keccak-f **permutations** `guests/keccak-test` computes: one per
-/// block of its six inputs, the guest's own corpus.
-pub const KECCAK_PERMUTATIONS: u64 = 10;
-
-/// How many `KECCAK_F` **invocations** that is. One invocation is one round,
-/// so a permutation is 24 of them (`docs/spec/delegation-circuits.md` §2).
-pub const KECCAK_INVOCATIONS: u64 = KECCAK_PERMUTATIONS * constants::keccak::ROUNDS as u64;
-
-/// The delegation family's height. `RANGE16`'s table and `XOR8`'s each need 16
-/// variables, so `constraints::family_circuit` returns `None` below `2^16` — but
-/// 16 is the **floor and not the choice**: the family is at `2^18`, one menu
-/// entry up and four times the cost a shard, so that a stateless block's keccak
-/// load is fewer, fatter shards (`docs/spec/delegation-circuits.md` §2.4, `docs/spec/delegation.md` §9).
-///
-/// This must equal `constants::family::DEFAULT_HEIGHTS[KECCAK_F]`'s exponent:
-/// `crates/prover/tests/revm.rs` derives its delegation heights from that array
-/// and then asserts the config's keccak height is `1 << KECCAK_VARS`, so the two
-/// disagreeing is a red suite rather than a slow one.
-pub const KECCAK_VARS: u32 = 18;
-
-/// `SHA256_COMP`'s height, for [`KECCAK_VARS`]' reason: its two
-/// channels put its floor at 16 and `2^18` is the choice above it, a
-/// compression being 16 rows (`docs/spec/delegation-circuits.md` §6). This must equal
-/// `constants::family::DEFAULT_HEIGHTS[SHA256_COMP]`'s exponent.
-pub const SHA256_VARS: u32 = 18;
-
-/// `guests/keccak-unused`'s exit status.
-pub const KECCAK_UNUSED_RESULT: u32 = 7;
-
-/// `guests/recursion-ops`' exit status: the number of checks it passed.
-pub const RECURSION_RESULT: u32 = 9;
-
-/// `guests/recursion-unused`'s exit status.
-pub const RECURSION_UNUSED_RESULT: u32 = 11;
-
-/// `guests/mod-mul-ops`' exit status: the number of checks it passed.
-pub const MOD_MUL_RESULT: u32 = 28;
-
-/// `POSEIDON2`'s and `FR_ARITH`'s height. **Not `MOD_MUL`'s**, which is `2^16`
-/// (`constants::family::DEFAULT_HEIGHTS`, `docs/spec/delegation.md` §9).
-pub const DELEGATION_VARS: u32 = 8;
-
-/// The height `MOD_MUL` and `EC_ADD` are proved at here, and the lowest they
-/// can have: `RANGE16`'s table needs sixteen variables, so
-/// `constraints::family_circuit` returns `None` below `2^16`
-/// (`docs/spec/delegation.md` §9).
-///
-/// At `2^16` a single shard of this fixture is 98% padding, so shard 0 covers
-/// padding rows.
-///
-/// The cost is the **forward pass**: 4.6 GB for `MOD_MUL` at `2^16` and
-/// 18.3 GB for `EC_ADD`. So the fill checks in `tests/fills.rs` evaluate
-/// sampled rows row-locally rather than running a pass, which is the same
-/// statement per row — and the end-to-end proof of both families at this
-/// height is the `#[ignore]`d `host::prove` suite, whose params read
-/// `DEFAULT_HEIGHTS`: the synthetic block `prover::revm` proves invokes
-/// neither.
-pub const DELEGATION_CHANNEL_VARS: u32 = 16;
-
-/// The committed ELF of guest `name`.
+/// Guest `name`'s ELF, built from `guests/`.
 pub fn fixture(name: &str) -> Vec<u8> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join(format!("../loader/tests/vectors/{name}.elf"));
-    std::fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
+    test_support::guest_elf(name)
 }
 
 pub fn elf() -> Vec<u8> {
@@ -181,63 +111,6 @@ pub fn shards_params() -> ProgramParams {
     heights(&[family::ADD_SUB_LUI_AUIPC, family::JUMP_BRANCH_SLT])
 }
 
-/// `keccak-test`'s heights: the six execution families it runs at `2^20`, and
-/// the delegation family at [`KECCAK_VARS`].
-pub fn keccak_params() -> ProgramParams {
-    let mut params = heights(&[
-        family::ADD_SUB_LUI_AUIPC,
-        family::JUMP_BRANCH_SLT,
-        family::SHIFT_BITWISE,
-        family::MUL_DIV,
-        family::MEM_WORD,
-        family::MEM_SUBWORD,
-    ]);
-    params.heights[family::KECCAK_F as usize] = 1 << KECCAK_VARS;
-    params
-}
-
-/// `mod-mul-ops`' heights: the six execution families it runs at `2^20`,
-/// `MOD_MUL` and `EC_ADD` at [`DELEGATION_CHANNEL_VARS`], the lowest height
-/// either can have, and the window families at `2^18` — see
-/// [`mod_mul_program`] for why `2^16` does not fit them.
-pub fn mod_mul_params() -> ProgramParams {
-    let mut heights = [1 << 18; family::COUNT as usize];
-    for f in [
-        family::ADD_SUB_LUI_AUIPC,
-        family::JUMP_BRANCH_SLT,
-        family::SHIFT_BITWISE,
-        family::MUL_DIV,
-        family::MEM_WORD,
-        family::MEM_SUBWORD,
-    ] {
-        heights[f as usize] = 1 << ADD_VARS;
-    }
-    for f in [family::MOD_MUL, family::EC_ADD] {
-        heights[f as usize] = 1 << DELEGATION_CHANNEL_VARS;
-    }
-    ProgramParams {
-        heights,
-        ..ProgramParams::defaults()
-    }
-}
-
-/// `recursion-ops`' heights: the execution families it runs at `2^20`, and
-/// the two delegation families at `2^8`.
-pub fn recursion_params() -> ProgramParams {
-    let mut params = heights(&[
-        family::ADD_SUB_LUI_AUIPC,
-        family::JUMP_BRANCH_SLT,
-        family::SHIFT_BITWISE,
-        family::MUL_DIV,
-        family::MEM_WORD,
-        family::MEM_SUBWORD,
-    ]);
-    for f in [family::POSEIDON2, family::FR_ARITH] {
-        params.heights[f as usize] = 1 << DELEGATION_VARS;
-    }
-    params
-}
-
 fn program_of(name: &str, params: &ProgramParams) -> Program {
     let image = load_elf(&fixture(name)).unwrap_or_else(|e| panic!("{name} loads: {e:?}"));
     let (tables, config) =
@@ -269,38 +142,6 @@ pub fn shards_program() -> Program {
     program_of("shards", &shards_params())
 }
 
-pub fn keccak_program() -> Program {
-    program_of("keccak-test", &keccak_params())
-}
-
-pub fn keccak_unused_program() -> Program {
-    program_of("keccak-unused", &keccak_params())
-}
-
-pub fn recursion_program() -> Program {
-    program_of("recursion-ops", &recursion_params())
-}
-
-pub fn recursion_unused_program() -> Program {
-    program_of("recursion-unused", &recursion_params())
-}
-
-/// `guests/mod-mul-ops`, which calls the `MOD_MUL` delegation by name over all
-/// four moduli and reaches it a second time through `guests/vendor/k256`'s
-/// patched field and scalar multiplies — and reaches `EC_ADD` too through that
-/// crate's patched `ProjectivePoint`, which this guest's own source names not
-/// at all.
-///
-/// Its six execution families run at `2^20` and its two delegation families at
-/// [`DELEGATION_CHANNEL_VARS`], but its **window** families need `2^18` rather
-/// than `2^16`: the guest's `.text`
-/// reaches pc `0x45be6` and `decode_program` refuses an image byte past RAM
-/// window 0, which at `2^16` ends at `0x40000` — that one fits, but the decoded
-/// tables do not, a table's row `i` being pc `2i`.
-pub fn mod_mul_program() -> Program {
-    program_of("mod-mul-ops", &mod_mul_params())
-}
-
 /// `guests/public-io`, which reads its public input and its
 /// advice with ordinary loads and writes its journal with ordinary stores
 /// (`docs/spec/public-values.md`). Its execution families at `2^20`, the rest
@@ -320,7 +161,7 @@ pub fn public_io_program() -> Program {
 }
 
 pub fn public_io_setup() -> ProverSetup {
-    ProverSetup::new(public_io_program(), toy_srs(ADD_VARS)).expect("public-io registers")
+    ProverSetup::new(public_io_program()).expect("public-io registers")
 }
 
 /// The eight public input bytes `guests/public-io` reads: the advice's length
@@ -394,65 +235,6 @@ pub fn mem_archive(program: &Program) -> TraceArchive {
 /// The post-execution archive of `shards`' one run.
 pub fn shards_archive(program: &Program) -> TraceArchive {
     trace(program, SHARDS_RESULT)
-}
-
-/// The post-execution archive of `keccak-test`'s one run.
-pub fn keccak_archive(program: &Program) -> TraceArchive {
-    trace(program, KECCAK_RESULT)
-}
-
-/// The post-execution archive of `keccak-unused`'s one run.
-pub fn keccak_unused_archive(program: &Program) -> TraceArchive {
-    trace(program, KECCAK_UNUSED_RESULT)
-}
-
-/// The post-execution archive of `recursion-ops`' one run.
-pub fn recursion_archive(program: &Program) -> TraceArchive {
-    trace(program, RECURSION_RESULT)
-}
-
-/// The post-execution archive of `recursion-unused`'s one run.
-pub fn recursion_unused_archive(program: &Program) -> TraceArchive {
-    trace(program, RECURSION_UNUSED_RESULT)
-}
-
-/// The post-execution archive of `mod-mul-ops`' one run.
-pub fn mod_mul_archive(program: &Program) -> TraceArchive {
-    trace(program, MOD_MUL_RESULT)
-}
-
-/// `guests/sha256-ops`, which calls the `SHA256_COMP` delegation by name and
-/// through `guest_sdk::sha256`'s block loop.
-///
-/// `SHA256_COMP` is at [`SHA256_VARS`], its default, one row being four rounds
-/// (`docs/spec/delegation-circuits.md` §6). Its window families need `2^18`
-/// for `mod_mul_program`'s reason.
-pub fn sha256_program() -> Program {
-    let mut heights = [1 << 18; family::COUNT as usize];
-    for f in [
-        family::ADD_SUB_LUI_AUIPC,
-        family::JUMP_BRANCH_SLT,
-        family::SHIFT_BITWISE,
-        family::MUL_DIV,
-        family::MEM_WORD,
-        family::MEM_SUBWORD,
-    ] {
-        heights[f as usize] = 1 << ADD_VARS;
-    }
-    heights[family::SHA256_COMP as usize] = 1 << SHA256_VARS;
-    program_of(
-        "sha256-ops",
-        &ProgramParams {
-            heights,
-            ..ProgramParams::defaults()
-        },
-    )
-}
-
-/// The post-execution archive of `sha256-ops`' one run: exit 13, one per check
-/// but the first.
-pub fn sha256_archive(program: &Program) -> TraceArchive {
-    trace(program, 13)
 }
 
 /// A run with no input and no hint, which must exit with `status`.
@@ -535,110 +317,21 @@ pub fn streamed_shards(setup: &ProverSetup, io: &GuestIo) -> (PublicInputs, Vec<
 }
 
 pub fn setup() -> ProverSetup {
-    ProverSetup::new(program(), toy_srs(ADD_VARS)).expect("addsub registers")
+    ProverSetup::new(program()).expect("addsub registers")
 }
 
 pub fn control_setup() -> ProverSetup {
-    ProverSetup::new(control_program(), toy_srs(ADD_VARS)).expect("control registers")
+    ProverSetup::new(control_program()).expect("control registers")
 }
 
 pub fn alu_setup() -> ProverSetup {
-    ProverSetup::new(alu_program(), toy_srs(ADD_VARS)).expect("alu registers")
+    ProverSetup::new(alu_program()).expect("alu registers")
 }
 
 pub fn mem_setup() -> ProverSetup {
-    ProverSetup::new(mem_program(), toy_srs(ADD_VARS)).expect("mem registers")
+    ProverSetup::new(mem_program()).expect("mem registers")
 }
 
 pub fn shards_setup() -> ProverSetup {
-    ProverSetup::new(shards_program(), toy_srs(ADD_VARS)).expect("shards registers")
-}
-
-pub fn keccak_setup() -> ProverSetup {
-    ProverSetup::new(keccak_program(), toy_srs(ADD_VARS)).expect("keccak-test registers")
-}
-
-pub fn keccak_unused_setup() -> ProverSetup {
-    ProverSetup::new(keccak_unused_program(), toy_srs(ADD_VARS)).expect("keccak-unused registers")
-}
-
-pub fn recursion_setup() -> ProverSetup {
-    ProverSetup::new(recursion_program(), toy_srs(ADD_VARS)).expect("recursion-ops registers")
-}
-
-pub fn recursion_unused_setup() -> ProverSetup {
-    ProverSetup::new(recursion_unused_program(), toy_srs(ADD_VARS))
-        .expect("recursion-unused registers")
-}
-
-pub fn mod_mul_setup() -> ProverSetup {
-    ProverSetup::new(mod_mul_program(), toy_srs(ADD_VARS)).expect("mod-mul-ops registers")
-}
-
-/// The toy SRS's `tau`.
-pub fn toy_tau() -> Fr {
-    Fr::from_hex("0x0000000000000000000000000000000000000000000000000000000000c0ffee")
-        .expect("a canonical literal")
-}
-
-/// An SRS of `2^power` powers of a `tau` written down here: real, structurally
-/// valid and completely insecure, built the way `crates/pcs`' suite builds one
-/// and loaded through `Srs::load`. The archive is kept under cargo's
-/// workspace-wide integration-test directory (`CARGO_TARGET_TMPDIR`,
-/// `<target>/tmp`), so every suite that includes this module — the prover's,
-/// the verifier's and the checker's — loads it instead of building it again;
-/// its content is a function of `power` alone, and a file that does not load
-/// is rebuilt.
-pub fn toy_srs(power: u32) -> srs::Srs {
-    use curve::{G1Projective, G2Affine};
-    use rayon::prelude::*;
-
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    let path = dir.join(format!("s16-toy-{power}.srs"));
-    if let Ok(srs) = srs::Srs::load(&path) {
-        return srs;
-    }
-    let tau = toy_tau();
-    let count = 1usize << power;
-    let mut scalars = Vec::with_capacity(count);
-    let mut acc = Fr::ONE;
-    for _ in 0..count {
-        scalars.push(acc);
-        acc *= tau;
-    }
-    let projective: Vec<G1Projective> = scalars
-        .par_iter()
-        .map(|s| G1Projective::GENERATOR.mul(s))
-        .collect();
-    let g1 = G1Projective::batch_to_affine(&projective);
-    let g2_tau = G2Affine::GENERATOR.mul(&tau);
-
-    let mut bytes = Vec::with_capacity(280 + count * 64);
-    bytes.extend_from_slice(b"APOGESRS");
-    bytes.extend_from_slice(&1u32.to_le_bytes());
-    bytes.extend_from_slice(&power.to_le_bytes());
-    bytes.extend_from_slice(&(count as u64).to_le_bytes());
-    bytes.extend_from_slice(&G2Affine::GENERATOR.to_bytes());
-    bytes.extend_from_slice(&g2_tau.to_bytes());
-    for p in &g1 {
-        bytes.extend_from_slice(&p.to_bytes());
-    }
-    std::fs::create_dir_all(&dir).expect("the test directory");
-    // Written aside and renamed, so nothing ever reads half a file. The name
-    // must be unique per *call*, not per process: two tests in one binary are
-    // two threads of one process, so a pid alone gave both the same scratch
-    // path — one renamed it away and the other's rename found nothing, or a
-    // reader opened it mid-write and got `Truncated`. `rename` is atomic on
-    // POSIX and the content is a function of `power` alone, so two callers
-    // racing to place identical bytes is harmless once the scratch names
-    // differ.
-    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let partial = dir.join(format!(
-        "s16-toy-{power}.{}.{}.partial",
-        std::process::id(),
-        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    std::fs::write(&partial, &bytes).expect("writing the toy archive");
-    std::fs::rename(&partial, &path).expect("placing the toy archive");
-    srs::Srs::load(&path).expect("the toy archive loads")
+    ProverSetup::new(shards_program()).expect("shards registers")
 }

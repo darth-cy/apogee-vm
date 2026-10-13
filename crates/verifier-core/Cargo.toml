@@ -4,11 +4,9 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# `#![no_std]` + alloc: the recursion guest links this crate, and CI builds it
-# for `riscv32imac-unknown-none-elf`. Everything a shard's verification does
-# except the one Mercury opening lives here; `crates/verifier` is the `std`
-# wrapper that decodes curve points and calls `pcs::batch_verify`.
-# `docs/spec/proof.md` specifies it.
+# `#![no_std]` + alloc. Everything a shard's and a block's verification does
+# lives here; `crates/verifier` is the `std` wrapper with the proof archive and
+# the CLI. `docs/spec/proof.md` specifies it.
 [dependencies]
 constants.workspace = true
 # `FamilyCircuit`, the registry a key's circuits are held to, and the rules a
@@ -17,8 +15,6 @@ constraints.workspace = true
 field.workspace = true
 # `verify`, the boundary, the window challenge, the LogUp slots and root check.
 gkr-verify.workspace = true
-# `ENTRY_POINTS`: which point each of a deferred check's twelve scalars goes with.
-pcs-verify.workspace = true
 poly.workspace = true
 transcript.workspace = true
 

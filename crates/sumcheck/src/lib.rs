@@ -7,7 +7,7 @@
 //! A [`Gate`] `G` is a sum of terms `coef * x_a * x_b`, where `x_a` and `x_b`
 //! name input columns and the second factor is optional. Every column is a
 //! multilinear polynomial in the same `n` variables, so `G` has degree at most
-//! **2 in each variable**, the degree ceiling (`docs/spec/primitives.md` §7).
+//! **2 in each variable**, the degree ceiling (`docs/spec/primitives.md` §3).
 //!
 //! The zerocheck claim is `G(y) = 0 for every y in {0,1}^n`. It is discharged
 //! as the sumcheck

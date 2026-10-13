@@ -56,51 +56,34 @@ pub const FIELD_READ_VALUE: u32 = 3;
 /// A frame query's field: the value it writes, at `4·cycle + Δ`.
 pub const FIELD_WRITE_VALUE: u32 = 4;
 
-/// The query table's size: the pc query, then the six roles of
+/// The query table's size: the pc query, then the five roles of
 /// `docs/spec/execution-trace.md` §7 in their fixed order. A family's frame
 /// holds a *subset* of these — [`frame_queries`] — so this is the table's
 /// length, never a frame's width.
 ///
-/// `Row::present` is a `u8` with one bit per role, so it has two spare bits;
-/// a seventh role is a schema change.
-pub const FRAME_QUERIES: usize = 7;
+/// `Row::present` is a `u8` with one bit per role, so it has three spare bits;
+/// a ninth role is a schema change.
+pub const FRAME_QUERIES: usize = 6;
 
 /// The pc query, which every execution family's frame holds first.
 pub const PC: usize = 0;
 /// `rs1`; an ecall row's `a7`.
 pub const RS1: usize = 1;
-/// `rs2`; an ecall row's `a0` — its one argument, which is an exit status or a
-/// delegation frame base.
+/// `rs2`; an ecall row's `a0` — its one argument, the exit status.
 pub const RS2: usize = 2;
 /// A load's word, at `Δ = 2`.
 pub const LOAD: usize = 3;
 /// A store's or an atomic's word, at `Δ = 3`.
 pub const RAM: usize = 4;
 
-/// A **delegation** request's mirror query, at `Δ = 3`, in the delegation
-/// family's own address space; its address is the frame base pointer the
-/// request read from `a0`. `docs/spec/delegation.md` §5.
-///
-/// This is its id in the query table, not its position in any frame: in
-/// `ADD_SUB_LUI_AUIPC`'s five-query frame it sits at slot 4.
-pub const DELEG: usize = 6;
-
 /// Each query's name, which its columns, leaves and obligations are named after.
-pub const FRAME_NAMES: [&str; FRAME_QUERIES] = ["pc", "rs1", "rs2", "load", "ram", "rd", "deleg"];
+pub const FRAME_NAMES: [&str; FRAME_QUERIES] = ["pc", "rs1", "rs2", "load", "ram", "rd"];
 
 /// The read-only queries, which write back what they read: `rs1` through
 /// `load`. `docs/spec/memory.md` §2.4.
 pub const FRAME_READ_ONLY: [usize; 3] = [RS1, RS2, LOAD];
 
 /// Each query's address space, `constants::address_space`.
-///
-/// **[`DELEG`]'s entry is 0, which is no space at all**, and that is not an
-/// omission: one `deleg` query serves every delegation type, so its space is a
-/// property of the row rather than of the table. Which space it is rides the
-/// frame's [`deleg_space`] column, and which events it takes is
-/// [`frame_query_takes`]. A reader that compares this entry against a real
-/// event's tag matches nothing — every address-space tag is nonzero — so the
-/// mistake is a loud "no free frame query takes" rather than a silent skip.
 pub const FRAME_SPACE: [u8; FRAME_QUERIES] = [
     address_space::PC,
     address_space::REG,
@@ -108,54 +91,31 @@ pub const FRAME_SPACE: [u8; FRAME_QUERIES] = [
     address_space::RAM,
     address_space::RAM,
     address_space::REG,
-    0,
 ];
 
 /// Whether query `q` takes a memory event in address space `space` at in-cycle
-/// slot `delta`.
-///
-/// Every query but [`DELEG`] names exactly one space ([`FRAME_SPACE`]); the
-/// delegation mirror takes an event in **any** of `address_space::DELEGATION`,
-/// because one query serves every delegation type and the type is carried per
-/// row by [`deleg_space`]. This is the one routing rule: `trace`'s frame
-/// builder and every test read it rather than the table.
+/// slot `delta`: the query names that space ([`FRAME_SPACE`]) and that slot
+/// ([`FRAME_DELTA`]). This is the one routing rule: `trace`'s frame builder and
+/// every test read it rather than the tables.
 pub fn frame_query_takes(q: usize, space: u8, delta: u64) -> bool {
-    FRAME_DELTA[q] == delta
-        && if q == DELEG {
-            address_space::DELEGATION.contains(&space)
-        } else {
-            FRAME_SPACE[q] == space
-        }
+    FRAME_DELTA[q] == delta && FRAME_SPACE[q] == space
 }
 
 /// Each query's in-cycle slot `Δ`: its write is at `4·cycle + Δ`.
-pub const FRAME_DELTA: [u64; FRAME_QUERIES] = [0, 1, 2, 2, 3, 3, 3];
+pub const FRAME_DELTA: [u64; FRAME_QUERIES] = [0, 1, 2, 2, 3, 3];
 
 /// Each query's least advance: how many timestamps, at least, its write
 /// follows the write it reads. 1, a read strictly preceding its write, for
 /// every query but the pc, whose read is the previous row's pc write: its
 /// `TS_STEP` puts all four of a row's timestamps after the previous row's, so
 /// consecutive rows never interleave. `docs/spec/memory.md` §2.4, §9.
-pub const FRAME_MIN_ADVANCE: [u64; FRAME_QUERIES] = [memory::TS_STEP, 1, 1, 1, 1, 1, 1];
+pub const FRAME_MIN_ADVANCE: [u64; FRAME_QUERIES] = [memory::TS_STEP, 1, 1, 1, 1, 1];
 
 /// `M[1 + 5·slot + field]`: one field of the query at `slot` — its position in
 /// the family's query list, not its id in [`FRAME_NAMES`]. The two agree only
 /// for a family holding every query, and none does.
 pub fn frame(slot: usize, field: u32) -> PolyAddress {
     PolyAddress::Memory(1 + 5 * slot as u32 + field)
-}
-
-/// `M[1 + 5·width]`: the delegation type a request asks for, as its
-/// `constants::address_space` tag, and 0 on every row that asks for none.
-///
-/// A frame holding the [`DELEG`] query carries this one extra `M` column, and
-/// a frame without it does not. It exists because the mirror's leaf must name
-/// the delegation type and a leaf may read no `W` column ([`check_memory`]'s
-/// provenance rule): the type selectors a family commits are witness columns,
-/// so the tag crosses into the leaf through a memory column the family pins to
-/// them. `docs/spec/delegation.md` §5.1.
-pub fn deleg_space(width: usize) -> PolyAddress {
-    PolyAddress::Memory(1 + 5 * width as u32)
 }
 
 /// `W[slot]`: the high chunk of a query's timestamp gap, `gap >> 19`.
@@ -191,20 +151,17 @@ pub const RD: usize = 5;
 /// instruction. A frame narrower than its family cannot balance: the events it
 /// drops leave their addresses' chains broken, so the honest prover is refused
 /// rather than a cheating one admitted. A frame wider than its family carries
-/// columns that are 0 on every row, commits and opens them, and discharges
-/// their obligations vacuously.
+/// columns that are 0 on every row and discharges their obligations
+/// vacuously.
 ///
-/// Panics on every family that is not an execution family — a window,
-/// delegation or recursion family has no execution frame — and on an id
-/// outside `constants::family`.
+/// Panics on every family that is not an execution family — a window family
+/// has no execution frame — and on an id outside `constants::family`.
 pub fn frame_queries(family: u32) -> &'static [usize] {
     match family {
         // lui, auipc, addi, add, sub, and the system row kind: an ecall's own
         // row reads `a7` and `a0` and writes `a0`. No `load` and no `ram`:
-        // no instruction routed here touches memory. The delegation mirror is
-        // here because a delegation ecall is an ecall, so its row is this
-        // family's (`docs/spec/delegation.md` §5.1).
-        family::ADD_SUB_LUI_AUIPC => &[PC, RS1, RS2, RD, DELEG],
+        // no instruction routed here touches memory.
+        family::ADD_SUB_LUI_AUIPC => &[PC, RS1, RS2, RD],
         // Register-register, register-immediate, branches and jumps: no RAM
         // query at all.
         family::JUMP_BRANCH_SLT | family::SHIFT_BITWISE | family::MUL_DIV => &[PC, RS1, RS2, RD],
@@ -216,16 +173,6 @@ pub fn frame_queries(family: u32) -> &'static [usize] {
         family::INIT_TEARDOWN | family::ZERO_WINDOWS => panic!(
             "family {family} initializes RAM and runs no cycles, so it has no frame; \
              `docs/spec/memory.md` §3.3 is its artifact"
-        ),
-        family::KECCAK_F
-        | family::POSEIDON2
-        | family::FR_ARITH
-        | family::MOD_MUL
-        | family::SHA256_COMP
-        | family::EC_ADD => panic!(
-            "family {family} is invoked, not decoded, and its frame is a run of \
-             fixed-offset words rather than a subset of the query table; \
-             `docs/spec/delegation.md` §4 is its artifact"
         ),
         other => panic!("family {other} has no frame, or is not in constants::family"),
     }
@@ -257,22 +204,10 @@ fn slot(s: u32) -> Coeff {
 /// A coefficient is one literal or one slot, so `α_ts·4·cycle` is a term
 /// repeated four times and `α_ts·Δ·m` one repeated `Δ` times. The read tuple
 /// has one term per part, so its term `PART_*` is that part.
-///
-/// [`DELEG`]'s `AS` part is the exception, and `space` is where it comes from:
-/// one `deleg` query serves every delegation type, so its tag is not a literal
-/// of the table but the value of the frame's [`deleg_space`] column, which the
-/// leaf reads at coefficient 1. Passing `None` for a frame holding `deleg` is
-/// a programmer error and panics.
-fn tuple(query: usize, at: usize, write: bool, space: Option<PolyAddress>) -> GateDef {
+fn tuple(query: usize, at: usize, write: bool) -> GateDef {
     let mask = frame(at, FIELD_MASK);
     let mut parts: [Vec<(Coeff, PolyAddress)>; 4] = Default::default();
-    parts[memory::PART_AS] = match query {
-        DELEG => vec![(
-            lit(1),
-            space.expect("a frame holding the deleg query carries a deleg_space column"),
-        )],
-        _ => vec![(lit(FRAME_SPACE[query] as u64), mask)],
-    };
+    parts[memory::PART_AS] = vec![(lit(FRAME_SPACE[query] as u64), mask)];
     parts[memory::PART_ADDR] = vec![(slot(challenge_slot::MEM_ALPHA_ADDR), frame(at, FIELD_ADDR))];
     let alpha_ts = slot(challenge_slot::MEM_ALPHA_TS);
     parts[memory::PART_TS] = match write {
@@ -304,7 +239,7 @@ fn tuple(query: usize, at: usize, write: bool, space: Option<PolyAddress>) -> Ga
 /// holding every query would address it. The verifier's boundary reads only
 /// the coefficients and their `PART_*` positions, which no slot changes.
 pub fn read_tuple(query: usize) -> GateDef {
-    tuple(query, query, false, None)
+    tuple(query, query, false)
 }
 
 /// A product-tree leaf, one flat `Quadratic`: at `mask = 1` the tuple, at
@@ -448,8 +383,7 @@ fn gap_lookups(query: usize, at: usize) -> [LookupExpr; 2] {
 
 /// The memory subtree an execution family carries, `docs/spec/memory.md` §2,
 /// over `2^trace_vars` rows and the `queries` of [`frame_queries`]: with
-/// `w = queries.len()`, `1 + 5w` `M` columns — one more, [`deleg_space`], when
-/// the frame holds the delegation mirror — `w + 3` `W` columns, `2w` leaves
+/// `w = queries.len()`, `1 + 5w` `M` columns, `w + 3` `W` columns, `2w` leaves
 /// padded to the next power of two a side, `w` booleanity gates, one
 /// write-back gate per read-only query, the four x0 gates and `2w` gap
 /// obligations. Validated and held to [`check_memory`]; panics if either
@@ -554,13 +488,6 @@ fn frame_body(
             columns.push(format!("{}_{field}", FRAME_NAMES[query]));
         }
     }
-    // A frame holding the delegation mirror carries one more `M` column, the
-    // requested type's address-space tag, which its two leaves read. See
-    // `deleg_space`.
-    let space = queries.contains(&DELEG).then(|| {
-        columns.push(String::from("deleg_space"));
-        deleg_space(width)
-    });
     let mut witness: Vec<String> = queries
         .iter()
         .map(|&query| format!("{}_gap_hi", FRAME_NAMES[query]))
@@ -587,14 +514,8 @@ fn frame_body(
     let mut lookups = gaps;
     for (at, &query) in queries.iter().enumerate() {
         let (name, mask) = (FRAME_NAMES[query], frame(at, FIELD_MASK));
-        reads.push((
-            format!("read_{name}"),
-            leaf(&tuple(query, at, false, space), mask),
-        ));
-        writes.push((
-            format!("write_{name}"),
-            leaf(&tuple(query, at, true, space), mask),
-        ));
+        reads.push((format!("read_{name}"), leaf(&tuple(query, at, false), mask)));
+        writes.push((format!("write_{name}"), leaf(&tuple(query, at, true), mask)));
         enforcing.push((format!("{name}_mask_boolean"), booleanity(mask)));
     }
     for (at, &query) in queries.iter().enumerate() {
@@ -649,15 +570,9 @@ const WORD_BYTES: u64 = 4;
 /// `γ_M + RAM + α_addr·4h·w`, slot 5, with `(α_addr, V[row])` `WORD_BYTES`
 /// times for `4y`: a window row's tuple at `ts` and `value`, where given.
 fn window_tuple(ts: Option<PolyAddress>, value: PolyAddress) -> GateDef {
-    stride_tuple(WORD_BYTES, ts, value)
-}
-
-/// [`window_tuple`] for a window whose rows are `stride` addresses apart: four
-/// bytes a RAM word, one cell a field cell.
-fn stride_tuple(stride: u64, ts: Option<PolyAddress>, value: PolyAddress) -> GateDef {
     let row = PolyAddress::Virtual(VirtualKind::RowIndex);
     let mut terms = Vec::new();
-    for _ in 0..stride {
+    for _ in 0..WORD_BYTES {
         terms.push((slot(challenge_slot::MEM_ALPHA_ADDR), row));
     }
     if let Some(ts) = ts {
@@ -708,22 +623,10 @@ pub fn image_window_artifact(trace_vars: u32) -> CircuitArtifact {
 /// enforcing gates, no obligations. Validated and held to [`check_memory`];
 /// panics if either refuses it.
 pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact {
-    zero_window(trace_vars, WORD_BYTES)
-}
-
-/// `FIELD_WINDOWS`, one window of the field memory (`docs/spec/recursion.md`
-/// §2.2): [`zero_window_artifact`] at a stride of **one cell a row**, so row
-/// `y` of window `w` is cell `h·w + y`. The address space is not in the
-/// artifact: it is the derived slot 5's, `γ_M + FIELD + α_addr·h·w`.
-pub fn field_window_artifact(trace_vars: u32) -> CircuitArtifact {
-    zero_window(trace_vars, 1)
-}
-
-fn zero_window(trace_vars: u32, stride: u64) -> CircuitArtifact {
     let row = PolyAddress::Virtual(VirtualKind::RowIndex);
-    let teardown = stride_tuple(stride, Some(PolyAddress::Memory(0)), PolyAddress::Memory(1));
+    let teardown = window_tuple(Some(PolyAddress::Memory(0)), PolyAddress::Memory(1));
     let init = GateDef::Linear {
-        terms: vec![(slot(challenge_slot::MEM_ALPHA_ADDR), row); stride as usize],
+        terms: vec![(slot(challenge_slot::MEM_ALPHA_ADDR), row); WORD_BYTES as usize],
         constant: slot(challenge_slot::MEM_WINDOW_CONSTANT),
     };
     assemble(
@@ -740,7 +643,7 @@ fn zero_window(trace_vars: u32, stride: u64) -> CircuitArtifact {
     )
 }
 
-/// A window whose initial values are **committed**, `docs/spec/public-values.md`
+/// A window whose initial values are the prover's, `docs/spec/public-values.md`
 /// §4: `M[0] teardown_ts`, `M[1] teardown_value`, `M[2] init_value`, `V[row]`;
 /// the teardown tuple on the read side and the init tuple, value `M[2]`, on
 /// the write side; no enforcing gates, no obligations, degree 1 throughout.
@@ -750,14 +653,15 @@ fn zero_window(trace_vars: u32, stride: u64) -> CircuitArtifact {
 /// they differ only in what the verifier does with the column:
 ///
 /// * `PUBLIC_INPUT`, whose init column is held to the statement's `input` at
-///   the shard's own opening point;
+///   the shard's own evaluation point;
 /// * `ADVICE_WINDOWS`, whose init column is held to **nothing** — that is what
 ///   makes it advice.
 ///
-/// `INIT_TEARDOWN`'s init column is `S[0]` instead, because program identity
-/// binds it. One execution's public values and one execution's advice have no
-/// business in every execution's identity, so theirs is `M`, committed in the
-/// global commit phase before the memory challenges are squeezed.
+/// `INIT_TEARDOWN`'s init column is `S[0]` instead, a setup column of the
+/// program's. One execution's public values and one execution's advice have no
+/// business in every execution's setup, so theirs is `M`, fixed in the global
+/// phase before the memory challenges are squeezed — once a commitment scheme
+/// binds `M` there; until then nothing does (`docs/architecture.md` §0).
 ///
 /// Validated and held to [`check_memory`]; panics if either refuses it.
 pub fn value_window_artifact(trace_vars: u32) -> CircuitArtifact {
@@ -1015,15 +919,15 @@ mod tests {
     use super::*;
 
     /// A dropped obligation fails the build. The `ADD_SUB_LUI_AUIPC` frame's
-    /// 10 obligations, less the last gadget's `gap_lo_deleg` — an obligation
+    /// 8 obligations, less the last gadget's `gap_lo_rd` — an obligation
     /// built and then dropped before the artifact is written — fail the build
     /// at the count assertion, before `validate` or `check_memory` run. The
     /// control beside it is the same call with every obligation, which is
     /// `frame_artifact`.
     #[test]
     #[should_panic(
-        expected = "every read carries two gap obligations, so 5 reads need 10 \
-                               obligations; 9 reached the artifact"
+        expected = "every read carries two gap obligations, so 4 reads need 8 \
+                               obligations; 7 reached the artifact"
     )]
     fn a_dropped_gap_obligation_fails_the_build() {
         let queries = frame_queries(family::ADD_SUB_LUI_AUIPC);

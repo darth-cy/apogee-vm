@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{blob, shell, statement, vk, ADD, INIT, JBS, ZERO};
+use common::{shell, statement, vk, ADD, INIT, JBS, ZERO};
 use field::Fr;
 use verifier_core::{
     check_ts_windows, BlockProof, BlockReconciliation, ShardRecord, TRIVIAL_TS_WINDOW,
@@ -19,7 +19,6 @@ fn block() -> BlockProof {
     let public = statement();
     let mut init = shell(&vk, &public);
     init.family = INIT;
-    init.witness_commitments = Vec::new();
     init.outputs = vec![Fr::ZERO; 2];
     let mut add = shell(&vk, &public);
     add.ts_window = [4, 400];
@@ -28,7 +27,6 @@ fn block() -> BlockProof {
     // carries the trivial window like the init family's.
     let mut input = shell(&vk, &public);
     input.family = common::PIN;
-    input.witness_commitments = Vec::new();
     input.outputs = vec![Fr::ZERO; 2];
     let mut journal = input.clone();
     journal.family = common::POUT;
@@ -54,10 +52,8 @@ fn the_reconciliation_is_the_statement_and_the_proofs() {
     assert_eq!((records[1].family, records[1].shard_index), (ADD, 0));
     for (i, r) in records.iter().enumerate() {
         assert_eq!(r.ts_window, block.shards[i].ts_window);
-        assert_eq!(r.memory_commitments, block.statement.memory_commitments[i]);
         assert_eq!(r.roots, block.statement.memory_roots[i]);
     }
-    assert_eq!(records[1].memory_commitments.len(), 27, "add/sub's M width");
 }
 
 /// The public-data API: the descriptor, the counts and a family's count, read
@@ -108,7 +104,7 @@ fn a_block_whose_statement_and_proofs_disagree_is_refused() {
     };
     assert_eq!(
         BlockProof::from_bytes(&extra_proof.to_bytes()),
-        Err("the block has not one proof, commitment list and root pair per shard")
+        Err("the block has not one proof and root pair per shard")
     );
     let missing_proof = {
         let mut b = block();
@@ -117,7 +113,7 @@ fn a_block_whose_statement_and_proofs_disagree_is_refused() {
     };
     assert_eq!(
         BlockProof::from_bytes(&missing_proof.to_bytes()),
-        Err("the block has not one proof, commitment list and root pair per shard")
+        Err("the block has not one proof and root pair per shard")
     );
     let out_of_order = {
         let mut b = block();
@@ -164,7 +160,7 @@ fn the_block_reader_refuses_everything_it_did_not_write() {
 }
 
 /// `BlockReconciliation`'s own wire form: family, shard index, ts_start,
-/// ts_end, the memory commitments in column order, read root, write root.
+/// ts_end, read root, write root.
 #[test]
 fn the_reconciliation_round_trips_in_its_frozen_layout() {
     let records = block().reconciliation();
@@ -179,7 +175,6 @@ fn the_reconciliation_round_trips_in_its_frozen_layout() {
             family: ADD,
             shard_index: 3,
             ts_window: [4, 0x1_0000_0000],
-            memory_commitments: vec![blob(1), blob(2)],
             roots: [Fr::from_u64(11), Fr::from_u64(12)],
         }],
     };
@@ -189,12 +184,9 @@ fn the_reconciliation_round_trips_in_its_frozen_layout() {
     assert_eq!(&b[8..12], &3u32.to_le_bytes());
     assert_eq!(&b[12..20], &4u64.to_le_bytes());
     assert_eq!(&b[20..28], &0x1_0000_0000u64.to_le_bytes());
-    assert_eq!(&b[28..32], &2u32.to_le_bytes(), "the commitment count");
-    assert_eq!(&b[32..96], &blob(1));
-    assert_eq!(&b[96..160], &blob(2));
-    assert_eq!(&b[160..192], &Fr::from_u64(11).to_bytes());
-    assert_eq!(&b[192..224], &Fr::from_u64(12).to_bytes());
-    assert_eq!(b.len(), 224);
+    assert_eq!(&b[28..60], &Fr::from_u64(11).to_bytes());
+    assert_eq!(&b[60..92], &Fr::from_u64(12).to_bytes());
+    assert_eq!(b.len(), 92);
 
     let mut long = b.clone();
     long.push(0);

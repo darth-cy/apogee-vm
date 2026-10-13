@@ -18,7 +18,7 @@ use checker::{
     violated_relations, WitnessRow,
 };
 use constants::extra_mask::add_sub_lui_auipc as kind;
-use constants::{challenge_slot, ecall, family, guest_memory, lookup_channel};
+use constants::{challenge_slot, family, lookup_channel};
 use constraints::lookup::{check_discharge, ChannelSpec};
 use constraints::memory::check_memory;
 use constraints::{add_sub, family_circuit, CircuitArtifact, PolyAddress, VirtualKind};
@@ -31,11 +31,8 @@ const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../constraints/tests/vectors/add_sub.bin"
 );
-/// The fixture's digest, which moves whenever a **delegation ecall number** does:
-/// `deleg_{family}_number`'s literal is that number, read from `constants::ecall`,
-/// so this family's bytes are a function of the delegation registry
-/// (`docs/spec/delegation.md` §3).
-const FIXTURE_SHA256: &str = "ebbd55f8767f65858bef31c756f5348ea9f638cb420bc6bd189b83b3797263c4";
+/// The fixture's digest: the constructor's bytes at `2^22`.
+const FIXTURE_SHA256: &str = "ce0aa2f96ebfd31beae12db8a21709de5c807eefb8ed7174e60f1e0a74371e7b";
 
 fn artifact() -> CircuitArtifact {
     add_sub::artifact(VARS)
@@ -184,16 +181,10 @@ const CYCLE: u64 = 9;
 
 /// The honest row of `i` on cycle 9, its reads seeing `rs1v`, `rs2v` and the
 /// old `rd` value `rd_old` — an exit's status is `rs2v`, and its `rd` read sees
-/// the same `a0`.
-///
-/// An ecall row whose `a7` is a **delegation** number rather than 93 is a
-/// delegation request (`docs/spec/delegation.md` §2): it takes the same ecall
-/// frame, carries its type's `is_deleg_t` beside `is_ecall`, makes the mirror query at the
-/// `a0` it read, writes 0 into `a0`, and falls through rather than halting.
+/// the same `a0`. The one ecall this family proves is `exit`.
 fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
     let system_ecall = i.bit == kind::SYSTEM && i.imm == 0;
-    let delegation = system_ecall && rs1v == ecall::PRECOMPILE_KECCAK_F;
-    let exit = system_ecall && !delegation;
+    let exit = system_ecall;
     let fence = i.bit == kind::SYSTEM && i.imm == 2;
     let (sel, wrap) = match i.bit {
         kind::ADD => add(rs1v, rs2v),
@@ -226,14 +217,6 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
     if uses_rs2 {
         r.query("rs2", CYCLE, 2, rs2_addr as u64, rs2v as u64, rs2v as u64);
     }
-    if delegation {
-        // The mirror query: address the frame base the request passed in `a0`,
-        // reading the answer tuple an invocation wrote at timestamp 0, and
-        // writing back a value nothing constrains — 0 in an honest fill
-        // (`docs/spec/delegation.md` §5.2).
-        r.set("deleg_mask", Fr::ONE)
-            .set("deleg_addr", f(rs2v as u64));
-    }
     if uses_rd {
         let write = if rd_addr == 0 { 0 } else { sel };
         r.query("rd", CYCLE, 3, rd_addr as u64, rd_old as u64, write as u64);
@@ -264,15 +247,6 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
     r.set(name("kind", kinds[i.bit as usize]), Fr::ONE);
     if system_ecall {
         r.set("is_ecall", Fr::ONE);
-    }
-    if delegation {
-        r.set("is_deleg_9", Fr::ONE);
-        // The mirror's leaf names the delegation type through this column, and
-        // `deleg_space_rule` ties it to the selector above.
-        r.set(
-            "deleg_space",
-            f(constants::address_space::DELEGATION_KECCAK_F as u64),
-        );
     }
     if fence {
         r.set("is_fence", Fr::ONE);
@@ -346,18 +320,6 @@ fn honest_rows() -> Vec<(&'static str, Row)> {
             "exit 42",
             honest(Instr::new(kind::SYSTEM, 0, 0, 0, 0), 93, 42, 42),
         ),
-        // A delegation request: `a7` is the keccak family's number, `a0` the
-        // frame base — word-aligned and inside the RAM window, as every frame
-        // pointer is (`docs/spec/delegation.md` §4) — and `a0` is written 0.
-        (
-            "keccak delegation request",
-            honest(
-                Instr::new(kind::SYSTEM, 0, 0, 0, 0),
-                ecall::PRECOMPILE_KECCAK_F,
-                guest_memory::RAM_ORIGIN + 0x400,
-                7,
-            ),
-        ),
         ("padding", Row::default()),
     ]
 }
@@ -423,13 +385,12 @@ fn the_circuit_is_the_fixture_and_keeps_every_rule() {
 #[test]
 fn the_layout_and_the_gates_are_the_specs() {
     let a = artifact();
-    assert_eq!(a.memory.len(), 27);
+    assert_eq!(a.memory.len(), 21);
     let mut witness = names(&[
         "pc_gap_hi",
         "rs1_gap_hi",
         "rs2_gap_hi",
         "rd_gap_hi",
-        "deleg_gap_hi",
         "rd_inv",
         "rd_is_zero",
         "rd_selected",
@@ -447,12 +408,6 @@ fn the_layout_and_the_gates_are_the_specs() {
         "kind_lui",
         "is_ecall",
         "is_fence",
-        "is_deleg_9",
-        "is_deleg_10",
-        "is_deleg_11",
-        "is_deleg_15",
-        "is_deleg_16",
-        "is_deleg_17",
         "wrap",
         "rd_hi",
         "pc_wrap",
@@ -489,7 +444,6 @@ fn the_layout_and_the_gates_are_the_specs() {
         "rs1_mask_boolean",
         "rs2_mask_boolean",
         "rd_mask_boolean",
-        "deleg_mask_boolean",
         "rs1_writes_back",
         "rs2_writes_back",
         "rd_is_zero_inverse",
@@ -510,29 +464,10 @@ fn the_layout_and_the_gates_are_the_specs() {
         "system_split",
         "ecall_code",
         "fence_code",
-        "is_deleg_9_boolean",
-        "deleg_9_is_an_ecall",
-        "deleg_9_number",
-        "is_deleg_10_boolean",
-        "deleg_10_is_an_ecall",
-        "deleg_10_number",
-        "is_deleg_11_boolean",
-        "deleg_11_is_an_ecall",
-        "deleg_11_number",
-        "is_deleg_15_boolean",
-        "deleg_15_is_an_ecall",
-        "deleg_15_number",
-        "is_deleg_16_boolean",
-        "deleg_16_is_an_ecall",
-        "deleg_16_number",
-        "is_deleg_17_boolean",
-        "deleg_17_is_an_ecall",
-        "deleg_17_number",
         "ecall_is_exit",
         "rs1_mask_rule",
         "rs2_mask_rule",
         "rd_mask_rule",
-        "deleg_mask_rule",
         "rs1_addr_rule",
         "rs2_addr_rule",
         "rd_addr_rule",
@@ -542,11 +477,6 @@ fn the_layout_and_the_gates_are_the_specs() {
         "sub",
         "lui",
         "exit_status",
-        "deleg_writes_no_register",
-        "deleg_read_ts_zero",
-        "deleg_read_value_zero",
-        "deleg_addr_rule",
-        "deleg_space_rule",
         "wrap_boolean",
         "pc_wrap_boolean",
         "next_pc_rule",
@@ -558,9 +488,9 @@ fn the_layout_and_the_gates_are_the_specs() {
         .iter()
         .map(|l| (l.name.clone(), l.channel))
         .collect();
-    assert_eq!(lookups.len(), 15);
+    assert_eq!(lookups.len(), 13);
     assert_eq!(
-        lookups[10..],
+        lookups[8..],
         [
             ("rd_hi_range".to_string(), lookup_channel::RANGE16),
             ("rd_lo_range".to_string(), lookup_channel::RANGE16),
@@ -569,13 +499,13 @@ fn the_layout_and_the_gates_are_the_specs() {
             ("decode_row".to_string(), lookup_channel::DECODER),
         ]
     );
-    assert!(lookups[..10]
+    assert!(lookups[..8]
         .iter()
         .all(|(_, c)| *c == lookup_channel::TIMESTAMP));
     // The frame's gap obligations are each under their own query's mask; the
     // family's five are under the row's.
     let pc_mask = PolyAddress::Memory(1);
-    for (at, l) in a.lookups[..10].iter().enumerate() {
+    for (at, l) in a.lookups[..8].iter().enumerate() {
         assert_eq!(
             l.selector,
             PolyAddress::Memory(1 + 5 * (at as u32 / 2)),
@@ -584,14 +514,11 @@ fn the_layout_and_the_gates_are_the_specs() {
         );
     }
     assert!(
-        a.lookups[10..].iter().all(|l| l.selector == pc_mask),
+        a.lookups[8..].iter().all(|l| l.selector == pc_mask),
         "every new obligation is the row's"
     );
 
-    // The `is_deleg_*` selectors are witness columns before these, one per
-    // registered delegation type (`docs/spec/delegation.md` §3), so each type
-    // moves the multiplicities up by one.
-    let mult = |i: u32| PolyAddress::Witness(32 + i);
+    let mult = |i: u32| PolyAddress::Witness(25 + i);
     assert_eq!(
         add_sub::channels(),
         vec![
@@ -613,10 +540,10 @@ fn the_layout_and_the_gates_are_the_specs() {
         ]
     );
     // The frame's product-tree leaves, then one fraction tree per channel:
-    // 16 + 32 + 16 + 4. The frame is **five** queries, so its leaves are five
-    // plus three literal-1 pads a side, 16 over the two sides; its ten
-    // timestamp obligations pad to sixteen pairs, 32 slots.
-    assert_eq!(a.layers[0].width, 68);
+    // 8 + 32 + 16 + 4. The frame is **four** queries, so its leaves are four a
+    // side with no pad, 8 over the two sides; its eight timestamp obligations
+    // and the table's fraction pad to sixteen pairs, 32 slots.
+    assert_eq!(a.layers[0].width, 60);
     assert_eq!(a.outputs.len(), 2 + 2 * 3);
 }
 
@@ -671,8 +598,8 @@ fn the_registry_holds_the_three_families_s16_proves() {
 /// Every row kind the family proves — each sum with and without its carry,
 /// each difference with and without its borrow, `rd = x0` computing a nonzero
 /// value it discards, an `x0` operand, a two-byte instruction, a fence, the
-/// exit, a **delegation request**, and the all-zero padding row —
-/// satisfies every gate and every range obligation.
+/// exit, and the all-zero padding row — satisfies every gate and every range
+/// obligation.
 #[test]
 fn every_row_kind_satisfies_every_gate_and_every_bound() {
     let a = artifact();
@@ -691,29 +618,6 @@ fn every_row_kind_satisfies_every_gate_and_every_bound() {
     assert_ne!(get("add to x0, carrying", "rd_selected"), Fr::ZERO);
     assert_eq!(get("c.add, two bytes", "decoded_next_pc"), f(0x1_0012));
     assert_eq!(get("exit 42", "pc_write_value"), Fr::ONE);
-    // The delegation request: an ecall that is not an exit. It carries both
-    // flags, makes the mirror query at the `a0` it read, writes 0 into `a0`,
-    // and falls through rather than halting
-    // (`docs/spec/delegation.md` §2, §5.1).
-    let d = |col: &str| get("keccak delegation request", col);
-    assert_eq!(d("is_ecall"), Fr::ONE);
-    assert_eq!(d("is_deleg_9"), Fr::ONE);
-    assert_eq!(d("rs1_read_value"), f(ecall::PRECOMPILE_KECCAK_F as u64));
-    assert_eq!(d("deleg_mask"), Fr::ONE);
-    assert_eq!(d("deleg_addr"), d("rs2_read_value"));
-    assert_eq!(d("deleg_read_ts"), Fr::ZERO);
-    assert_eq!(d("deleg_read_value"), Fr::ZERO);
-    assert_eq!(d("rd_selected"), Fr::ZERO);
-    assert_eq!(d("rd_write_value"), Fr::ZERO);
-    assert_eq!(d("pc_write_value"), d("decoded_next_pc"));
-    assert_ne!(
-        d("pc_write_value"),
-        Fr::ONE,
-        "a delegation row does not halt"
-    );
-    // And the exit row is still the only one that halts: the two ecall kinds
-    // differ in exactly the row's `is_deleg_t`.
-    assert_eq!(get("exit 42", "is_deleg_9"), Fr::ZERO);
 }
 
 // ---------------------------------------------------------------------------
@@ -890,128 +794,6 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     r.set("pc_write_value", f(0x1_0014)).set("next_pc_hi", f(1));
     cases.push(("the exit falling through", r, vec!["next_pc_rule"]));
 
-    // The delegation gates, and the three exit gates whose factor is
-    // `is_ecall - Σ is_deleg_t` (`docs/spec/add-sub.md` §2,
-    // `docs/spec/delegation.md` §5.2). Each case is one cell of the honest
-    // delegation row, or of the honest exit row, moved.
-    let deleg = || row("keccak delegation request");
-    // The flag without the ecall it must accompany.
-    let mut r = row("add, carrying");
-    r.set("is_deleg_9", Fr::ONE);
-    // A type selector without the `is_ecall` it must accompany makes the
-    // exit gates' factor `is_ecall - Σ is_deleg_t` equal -1, so all of them
-    // fire too: that is the price of subtracting rather than gating, and
-    // `deleg_9_is_an_ecall` is what makes the factor 0 or 1 on any row that
-    // passes. `deleg_space_rule` fires because the row names a type and its
-    // `deleg_space` column is 0.
-    cases.push((
-        "an add claiming to be a delegation",
-        r,
-        vec![
-            "deleg_9_is_an_ecall",
-            "ecall_is_exit",
-            "deleg_9_number",
-            "deleg_mask_rule",
-            "exit_status",
-            "deleg_space_rule",
-            "next_pc_rule",
-        ],
-    ));
-    // A delegation whose a7 is another number: `ecall_is_exit` and
-    // `deleg_9_number` partition the ecalls this family proves, so a7 = 93 with
-    // the flag set breaks `deleg_9_number`, and so does any number no
-    // delegation type declares. The number is read from `constants::ecall` and
-    // never spelled, so a renumbering needs no edit here.
-    let mut r = deleg();
-    r.set("rs1_read_value", f(93)).set("rs1_write_value", f(93));
-    cases.push((
-        "a delegation row whose a7 is EXIT",
-        r,
-        vec!["deleg_9_number"],
-    ));
-    let mut r = deleg();
-    let other = f(ecall::PRECOMPILE_KECCAK_F as u64 + 1);
-    r.set("rs1_read_value", other).set("rs1_write_value", other);
-    cases.push((
-        "a delegation row calling an unregistered number",
-        r,
-        vec!["deleg_9_number"],
-    ));
-    // An exit row that claims the delegation flag is not held to 93 by
-    // `ecall_is_exit` — but `deleg_9_number` asks a7 for `PRECOMPILE_KECCAK_F`,
-    // and `deleg_mask_rule` for the mirror query.
-    let mut r = row("exit 42");
-    r.set("is_deleg_9", Fr::ONE);
-    cases.push((
-        "an exit row claiming the delegation flag",
-        r,
-        vec![
-            "deleg_9_number",
-            "deleg_mask_rule",
-            "deleg_space_rule",
-            "next_pc_rule",
-        ],
-    ));
-    // The mirror query dropped: without it a request has no anchor and cannot
-    // pair with an invocation, so the gate has to be the one that catches it.
-    let mut r = deleg();
-    r.drop_query("deleg");
-    cases.push((
-        "a delegation request without its mirror query",
-        r,
-        vec!["deleg_mask_rule"],
-    ));
-    // The mirror query at an address other than the a0 handed over.
-    let mut r = deleg();
-    let elsewhere = r.get("deleg_addr") + f(4);
-    r.set("deleg_addr", elsewhere);
-    cases.push((
-        "a mirror query at another frame base",
-        r,
-        vec!["deleg_addr_rule"],
-    ));
-    // The three request-side zeroings, one at a time.
-    let mut r = deleg();
-    r.set("deleg_read_ts", f(4 * CYCLE + 1));
-    cases.push((
-        "a mirror query reading a stamped tuple",
-        r,
-        vec!["deleg_read_ts_zero"],
-    ));
-    let mut r = deleg();
-    r.set("deleg_read_value", f(7));
-    cases.push((
-        "a mirror query reading a nonzero value",
-        r,
-        vec!["deleg_read_value_zero"],
-    ));
-    let mut r = deleg();
-    r.set("rd_selected", f(7))
-        .set("rd_write_value", f(7))
-        .set("rd_hi", Fr::ZERO);
-    cases.push((
-        "a delegation answering something other than 0",
-        r,
-        vec!["deleg_writes_no_register"],
-    ));
-    // The mirror's leaf names the type through `deleg_space`, so a request
-    // that claims keccak and stamps another family's tag is refused: without
-    // this gate a poseidon2 invocation could answer a keccak request.
-    let mut r = deleg();
-    r.set(
-        "deleg_space",
-        f(constants::address_space::DELEGATION_POSEIDON2 as u64),
-    );
-    cases.push((
-        "a request whose anchor names another delegation type",
-        r,
-        vec!["deleg_space_rule"],
-    ));
-    // And the pc rule: a delegation row that halts.
-    let mut r = deleg();
-    r.set("pc_write_value", Fr::ONE).set("next_pc_hi", Fr::ZERO);
-    cases.push(("a delegation row halting", r, vec!["next_pc_rule"]));
-
     // The mask's bits. A lui row whose bits say add still sums — its result is
     // its immediate, and its absent operands read 0 — so what refuses it is the
     // recomposition, and the two operands an add reads and this row lacks.
@@ -1039,16 +821,11 @@ fn each_gate_is_the_one_that_refuses_its_row() {
 #[test]
 fn every_booleanity_gate_refuses_a_value_of_two() {
     let a = artifact();
-    let cases: [(&str, &str, &str); 5] = [
+    let cases: [(&str, &str, &str); 4] = [
         ("add, carrying", "wrap", "wrap_boolean"),
         ("add, carrying", "pc_wrap", "pc_wrap_boolean"),
         ("exit 42", "is_ecall", "is_ecall_boolean"),
         ("fence", "is_fence", "is_fence_boolean"),
-        (
-            "keccak delegation request",
-            "is_deleg_9",
-            "is_deleg_9_boolean",
-        ),
     ];
     for (base, column, gate) in cases {
         let mut r = row(base);

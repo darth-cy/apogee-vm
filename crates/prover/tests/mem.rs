@@ -14,11 +14,10 @@
 mod common;
 
 use constants::family;
-use program::lookup_tables::generic_commitments;
 use prover::ProverSetup;
 use trace::TraceArchive;
 use verifier::{verify_shard, PublicInputs, ShardProof};
-use verifier_core::{reduce_shard, srs_digest};
+use verifier_core::reduce_shard;
 
 const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
 const JBS: u32 = family::JUMP_BRANCH_SLT;
@@ -48,14 +47,7 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
             4 + 128 * a.layer_vars(k + 1) as usize + 4 + 32 * claims
         })
         .sum();
-    4 + 4
-        + 16
-        + 32
-        + (4 + 64 * a.witness.len())
-        + (4 + 32 * a.outputs.len())
-        + 4
-        + transitions
-        + 704
+    4 + 4 + 16 + 32 + (4 + 32 * a.outputs.len()) + 4 + transitions
 }
 
 /// The guest decodes into the five execution families it runs — add/sub and
@@ -131,7 +123,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             (family::PUBLIC_INPUT, 0),
             (family::PUBLIC_OUTPUT, 0)
         ],
-        "one shard per family that runs, in the global transcript's group order"
+        "one shard per family that runs, in statement order"
     );
 
     for proof in &proofs {
@@ -160,41 +152,40 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     assert_eq!(mw.gkr.layers[0].rounds.len(), 20);
     assert_eq!(mw.gkr.layers[0].final_evals.len(), 31 + 24 + 7);
     assert_eq!(mw.outputs.len(), 2 + 2 * 3);
-    assert_eq!(mw.to_bytes().len(), 56_268);
+    assert_eq!(mw.to_bytes().len(), 54_024);
     let ms = by_family(MS);
     assert_eq!(ms.gkr.layers.len(), 26);
     assert_eq!(ms.gkr.layers[0].final_evals.len(), 31 + 55 + 10);
     assert_eq!(ms.outputs.len(), 2 + 2 * 4);
-    assert_eq!(ms.to_bytes().len(), 68_116);
+    assert_eq!(ms.to_bytes().len(), 63_888);
     let at = by_family(AT);
     assert_eq!(at.gkr.layers.len(), 26);
     assert_eq!(at.gkr.layers[0].final_evals.len(), 26 + 54 + 9);
     assert_eq!(at.outputs.len(), 2 + 2 * 4);
-    assert_eq!(at.to_bytes().len(), 68_468);
+    assert_eq!(at.to_bytes().len(), 64_304);
 
-    // The generic table's binding (`docs/spec/lookup.md` §9): the two
-    // families that read the channel open the key's three table commitments
-    // after their own identity-committed setup columns; `mem_word`, which
-    // reads none, opens identity's list alone.
-    let table = generic_commitments(&setup.srs).map(|p| p.to_bytes());
-    assert_eq!(setup.vk.generic_table, table);
-    assert_eq!(
-        setup.vk.srs_digest,
-        srs_digest(&setup.vk.srs_verifier, &table)
-    );
-    let reduced = |proof: &ShardProof| match reduce_shard(&setup.vk, proof, &public) {
-        Ok(claim) => claim.commitments,
-        Err(e) => panic!("the honest shard reduces: {e}"),
-    };
-    let claim = reduced(mw);
-    assert_eq!(claim.len(), 31 + 24 + 7);
-    assert_eq!(&claim[55..], &setup.vk.setup_commitments[2][..]);
-    let claim = reduced(ms);
-    assert_eq!(claim.len(), 31 + 55 + 10);
-    assert_eq!(&claim[86..93], &setup.vk.setup_commitments[3][..]);
-    assert_eq!(&claim[93..], &table[..]);
-    let claim = reduced(at);
-    assert_eq!(claim.len(), 26 + 54 + 9);
-    assert_eq!(&claim[80..86], &setup.vk.setup_commitments[4][..]);
-    assert_eq!(&claim[86..], &table[..]);
+    // Each shard reduces to one claim per committed column, in layout order:
+    // memory, witness, setup.
+    //
+    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. Those claims
+    // are meant to be opened against the statement's memory commitments, the
+    // shard's witness commitments and the key's setup and generic-table
+    // commitments. Nothing is opened, so these lengths are all that can be
+    // held (`docs/architecture.md` §0).
+    for (proof, (m, w, s)) in [(mw, (31, 24, 7)), (ms, (31, 55, 10)), (at, (26, 54, 9))] {
+        let claim = match reduce_shard(&setup.vk, proof, &public) {
+            Ok(claim) => claim,
+            Err(e) => panic!("the honest shard reduces: {e}"),
+        };
+        let a = &setup.vk.circuit(proof.family).expect("a circuit").artifact;
+        assert_eq!(claim.columns, a.committed());
+        assert_eq!(
+            (a.memory.len(), a.witness.len(), a.setup.len()),
+            (m, w, s),
+            "family {}",
+            proof.family
+        );
+        assert_eq!(claim.values.len(), m + w + s);
+        assert_eq!(claim.point.len(), 20);
+    }
 }

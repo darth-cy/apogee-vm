@@ -44,11 +44,10 @@ const FIXTURE: &str = "crates/constraints/tests/vectors/lookup_toy.bin";
 ///
 /// The timestamp channel's table is `[0, 2^19)`, and a table of `2^n` rows
 /// holds at most `2^n` values, so 19 variables is the floor
-/// (`docs/spec/lookup.md` §3). A Mercury opening needs an **even** variable
-/// count, and `constants::family::HEIGHT_MENU` has only even entries, so the
-/// floor rounds up to 20. The generic channel's real tables need 131,105
-/// rows, which 20 also covers, and `crates/program` can decode a table at 20
-/// because it is on the menu.
+/// (`docs/spec/lookup.md` §3), and the first entry of
+/// `constants::family::HEIGHT_MENU` above it is 20. The generic channel's real
+/// tables need 131,105 rows, which 20 also covers, and `crates/program` can
+/// decode a table at 20 because it is on the menu.
 pub const TRACE_VARS: u32 = 20;
 
 /// The family the toy is a circuit for: its frame, its cycles and its decoded
@@ -160,9 +159,8 @@ pub fn toy() -> CircuitArtifact {
     witness.extend((0..MASK_BITS).map(|k| format!("kind_{k}")));
     // One multiplicity per channel **this toy declares**, in the order
     // `channels()` below lists them — and not one per channel that exists:
-    // `XOR8` is in `constants::lookup_channel` and not here, and iterating
-    // `NAMES` would give the toy a committed column for a channel it does not
-    // carry.
+    // iterating `NAMES` would give the toy a committed column for any channel
+    // added to the constants that it does not carry.
     witness.extend(
         TOY_CHANNELS
             .iter()

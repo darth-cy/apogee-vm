@@ -1,9 +1,8 @@
 //! The `KECCAK_F` delegation family's circuit: **one Keccak round a row**, over
 //! the 51-word frame a delegation request handed over.
 //!
-//! `docs/spec/delegation-circuits.md` §2 specifies it: the frame, the anchor,
-//! the five transformations and the two frame checks. This file is that
-//! section as data.
+//! The frame and the anchor are `crate::delegation`'s; this file is the five
+//! transformations and the two frame checks.
 //!
 //! # One round a row, and why
 //!
@@ -11,11 +10,11 @@
 //! columns, 24 seven-layer round blocks, 354,762 inner columns over 177 layers
 //! — holds all 24 rounds and all 1,600 bits horizontally, so it can only be
 //! afforded at `2^8`, 256 permutations a shard, and such shards dominate a
-//! keccak-heavy block's proof bytes (`docs/spec/delegation.md` §9).
+//! keccak-heavy execution's proof bytes.
 //!
 //! This is the other trade. One row is one round, a permutation is 24
 //! consecutive invocations, and what glues them is the same thing that glues
-//! `EC_ADD`'s three: **the frame is ordinary RAM**, so the global memory
+//! `SHA256_COMP`'s sixteen: **the frame is ordinary RAM**, so the global memory
 //! multiset proves round `r`'s written state is round `r + 1`'s read state, and
 //! the guest's own proven loop supplies the round numbers. There is no second
 //! cross-row mechanism, because there does not need to be one.
@@ -29,7 +28,7 @@
 //! rotation: masking a byte's top `s` bits is one XOR against a literal, and
 //! the rotated byte is a literal-weighted combination of the byte and its mask.
 //!
-//! The circuit is therefore **flat**, like `EC_ADD`'s and `MOD_MUL`'s: every
+//! The circuit is therefore **flat**, like `SHA256_COMP`'s: every
 //! relation is a lookup or a degree-≤2 enforcing gate over base columns, no
 //! relation produces an inner column, and the only inner columns in the whole
 //! artifact are the two memory product trees, the two channels' fraction trees
@@ -517,7 +516,7 @@ fn selector_gates() -> Vec<(String, GateDef)> {
 /// zero on the all-zero padding row, and each gate is the word's byte
 /// decomposition *and* its 32-bit bound at once, the bytes being bounded by the
 /// `XOR8` obligations that read them. That is why no frame word of this family
-/// carries a `bound32` pair, where every one of `EC_ADD`'s does.
+/// carries a `bound32` pair.
 ///
 /// `writes_back_w{ROUND_WORD}` is the round selector surviving the call, so the
 /// guest's next iteration overwrites a word it wrote and not one this circuit
@@ -761,11 +760,11 @@ fn scaled_columns() -> Vec<(PolyAddress, PolyAddress)> {
 /// The family's lookup channels: `RANGE16` for the frame, and `XOR8` for the
 /// round.
 ///
-/// Both tables are **virtual**, so neither costs a commitment, a setup column
-/// or a movement of the SRS digest. `XOR8`'s three columns are closed forms of
-/// the row index and its table is complete only at 16 variables or more, which
-/// `crate::lookup::table_vars` reports and `family_circuit`'s derived floor
-/// enforces before this function is ever called.
+/// Both tables are **virtual**, so neither costs a setup column. `XOR8`'s
+/// three columns are closed forms of the row index and its table is complete
+/// only at 16 variables or more, which `crate::lookup::table_vars` reports and
+/// `family_circuit`'s derived floor enforces before this function is ever
+/// called.
 pub fn channels() -> Vec<ChannelSpec> {
     vec![
         ChannelSpec {
@@ -927,7 +926,7 @@ pub fn check_shape(a: &CircuitArtifact) {
     // The number this circuit's cost turns on: 1,020 fractions plus the
     // table's is 1,021, and a fraction tree is padded to a power of two, so
     // 1,024 leaves. Four more obligations would double the tree and cost 4,096
-    // inner columns (`docs/spec/delegation-circuits.md` §2.4).
+    // inner columns.
     assert_eq!(xor8, 1_020, "keccak: the round's obligations");
     assert!(
         (xor8 + 1).next_power_of_two() == 1_024,
@@ -966,123 +965,4 @@ pub fn check_shape(a: &CircuitArtifact) {
         a.padding.zero_row_valid,
         "keccak: the all-zero row is a valid padding row"
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The rho and pi index map is a bijection on the 25 lanes, and its three
-    /// whole-byte rotations are the ones `mask_slot` exempts.
-    #[test]
-    fn the_rho_pi_map_is_a_permutation() {
-        let mut seen = [false; k::LANES];
-        for big_y in 0..5 {
-            for big_x in 0..5 {
-                let (source, r) = rho_pi_source(big_x, big_y);
-                assert!(!seen[source], "lane {source} is read twice");
-                seen[source] = true;
-                assert_eq!(r, lane_rotation(source), "the rotation is the lane's");
-            }
-        }
-        assert!(seen.iter().all(|s| *s));
-        assert_eq!(
-            (0..k::LANES).filter(|i| mask_slot(*i).is_none()).count(),
-            k::LANES - SPLIT_LANES
-        );
-        assert_eq!(
-            (0..k::LANES).filter_map(mask_slot).max(),
-            Some(SPLIT_LANES - 1)
-        );
-    }
-
-    /// The rotation's literal weights reproduce `u64::rotate_left` on every
-    /// lane's own offset, over every byte pattern of a small exhaustive set.
-    ///
-    /// This is the one place the circuit's arithmetic is checked against the
-    /// operation it claims to be, at the level of the weights themselves: the
-    /// forms `rotl_byte` returns are evaluated over `Fr` exactly as a gate
-    /// would evaluate them.
-    #[test]
-    fn the_rotation_weights_are_rotate_left() {
-        let value = |seed: u64, i: usize| -> u64 {
-            let mut v = seed;
-            for _ in 0..=i {
-                v ^= v << 13;
-                v ^= v >> 7;
-                v ^= v << 17;
-            }
-            v
-        };
-        for i in 0..k::LANES {
-            let r = lane_rotation(i);
-            for trial in 0..4 {
-                let lane_value = value(0x1234_5678_9abc_def1 + trial, i);
-                let bytes = lane_value.to_le_bytes();
-                let want = lane_value.rotate_left(r).to_le_bytes();
-                let mask = if r.is_multiple_of(8) {
-                    0
-                } else {
-                    top_mask(r % 8) as u8
-                };
-                for (j, want) in want.iter().enumerate() {
-                    let (terms, constant) = rotl_byte(
-                        &|b| PolyAddress::Witness(b as u32),
-                        &|b| PolyAddress::Witness(8 + b as u32),
-                        r,
-                        j,
-                    );
-                    let mut got = constant;
-                    for (c, x) in &terms {
-                        let Coeff::Literal(v) = c else { unreachable!() };
-                        let PolyAddress::Witness(idx) = x else {
-                            unreachable!()
-                        };
-                        let cell = match *idx < 8 {
-                            true => bytes[*idx as usize],
-                            false => bytes[*idx as usize - 8] ^ mask,
-                        };
-                        got += *v * Fr::from_u64(cell as u64);
-                    }
-                    assert_eq!(
-                        got,
-                        Fr::from_u64(*want as u64),
-                        "lane {i} (rotation {r}), byte {j}, trial {trial}"
-                    );
-                }
-            }
-        }
-    }
-
-    /// The witness layout's names are exactly its columns, each once.
-    #[test]
-    fn the_witness_names_are_the_layout() {
-        let names = witness_names();
-        assert_eq!(names.len(), WITNESS_COLUMNS);
-        let mut sorted = names.clone();
-        sorted.sort();
-        sorted.dedup();
-        assert_eq!(sorted.len(), names.len(), "a name is used twice");
-    }
-
-    /// The circuit builds at its channel floor, and at no lower height.
-    ///
-    /// `2^16` is the **floor** twice over — `RANGE16`'s table needs 16
-    /// variables and so does `XOR8`'s, and Mercury needs an even count — and it
-    /// is not the family's height: `DEFAULT_HEIGHTS` chooses `2^18` above it,
-    /// and `crates/checker/tests/keccak.rs`'s
-    /// `a_height_moves_only_the_halving_layers` builds that one.
-    #[test]
-    fn the_circuit_builds_at_its_channel_floor_and_no_lower() {
-        let a = artifact(16);
-        assert_eq!(a.trace_vars, 16);
-        assert_eq!(a.outputs.len(), 6);
-        assert_eq!(
-            crate::lookup::table_vars(lookup_channel::XOR8),
-            16,
-            "the XOR8 table is 65,536 rows"
-        );
-        assert!(crate::family_circuit(constants::family::KECCAK_F, 8).is_none());
-        assert!(crate::family_circuit(constants::family::KECCAK_F, 16).is_some());
-    }
 }

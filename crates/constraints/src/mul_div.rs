@@ -510,8 +510,7 @@ pub fn arithmetic_gates(word_bits: u32) -> Vec<(String, GateDef)> {
 
 /// The family's circuit over `2^trace_vars` rows, `docs/spec/mul-div.md`.
 /// `trace_vars` is at least 19, the timestamp channel's width, which the
-/// assembly refuses below; a Mercury opening needs it even as well, and at 19
-/// or more the generic table's rows fit.
+/// assembly refuses below, and at 19 or more the generic table's rows fit.
 ///
 /// Panics if the family's frame is not the four queries this file addresses,
 /// if any channel's obligation count is not the document's — 8 timestamp, 16

@@ -2,8 +2,9 @@
 
 How a guest binary becomes the static, verifier-known description of a program. `crates/loader`
 reads an ELF into a `ProgramImage`, `crates/isa` decodes its instructions, and `crates/program`
-routes them into per-family decoded tables, derives the `VmConfig` and commits to all of it as the
-**program identity**. Every step is a pure function of its input.
+routes them into per-family decoded tables, derives the `VmConfig` and digests it as the **program
+identity**, which is meant to commit to all of it and today commits to none of the code
+(**UNFINISHED**, §8). Every step is a pure function of its input.
 
 ## 1. Loading
 
@@ -17,7 +18,7 @@ sweep's refusals (§2).
 Of a program header it reads `p_type`, `p_offset`, `p_vaddr`, `p_filesz`, `p_memsz` and the `PF_X`
 bit, and nothing else: the VM has no pages, and all of RAM is addressable whatever the segments
 declare. The address map, and the segment layout a guest ELF keeps for host loaders, are
-[ecall-abi.md](ecall-abi.md) §6.
+[ecall-abi.md](ecall-abi.md) §5.
 
 ## 2. RVC expansion and slots
 
@@ -48,9 +49,9 @@ one cut off by the end of the file bytes (`TextTruncated`) or a halfword `rvc::e
 bytes at its own pc, so every `Instruction` slot is what a hart fetching there would decode; data
 that shifts the sweep off the true boundaries can only lose true instruction starts, whose pcs
 then have no table row (§5), or meet an unclaimed encoding and refuse the image.
-`crates/loader/tests/differential.rs` holds committed guests' slots to `llvm-objdump`'s listing,
-and the expansion to LLVM's own encoder over `guests/rvc-dense`, one sequence assembled compressed
-and not: a wrong expansion would be a valid proof of another program.
+`crates/loader/tests/differential.rs` holds the guests' slots, built from source, to
+`llvm-objdump`'s listing, and the expansion to LLVM's own encoder over `guests/rvc-dense`, one
+sequence assembled compressed and not: a wrong expansion would be a valid proof of another program.
 
 ## 3. `ProgramImage` and its wire form
 
@@ -108,8 +109,9 @@ family's mask (§6):
 
 `program::decode_program(image, params)` decodes every `Instruction` slot — a word `isa::decode`
 refuses fails the program, reachable or not (`NotAllOpcodesSupported`) — and builds a table for
-each family of the config. An instruction family's columns are committed setup columns, which each
-cycle's decoder lookup reads ([lookup.md](lookup.md) §10); other families' tables have none.
+each family of the config. An instruction family's columns are setup columns, which each cycle's
+decoder lookup reads ([lookup.md](lookup.md) §10) and a commitment scheme is meant to commit
+(**UNFINISHED**, §8); other families' tables have none.
 
 - **One row per halfword, absolute.** Row `i` is pc `2i`, and a table has exactly its family's
   height `h` (§7).
@@ -155,34 +157,26 @@ the family set, and nothing selects it:
 1. an **instruction** family (0–6), whose rows are cycles, is present when the image holds one of
    its instructions;
 2. a **window** family, whose rows are memory locations — `INIT_TEARDOWN` (7), `ZERO_WINDOWS` (8),
-   `PUBLIC_INPUT` (12), `PUBLIC_OUTPUT` (13), `ADVICE_WINDOWS` (14) — is always present, and
-   `FIELD_WINDOWS` (18) when one of families 19–22 is, which puts the config in the recursion
-   format (`VmConfig::is_recursion`), the one whose registry `VmConfig::circuit` reads for 18–22
-   ([recursion.md](recursion.md) §1.1, §1.2);
-3. a **delegation** family (9–11, 15–17, 19–22), whose rows are invocations, is present when the
-   image declares it by a record among its file bytes (`program::declared_delegations`,
-   [delegation.md](delegation.md) §7); a record naming a number no family answers is
-   `UnknownDelegation`.
+   `PUBLIC_INPUT` (9), `PUBLIC_OUTPUT` (10), `ADVICE_WINDOWS` (11) — is always present.
 
 A height is a parameter (`ProgramParams::heights`, defaulting to
 `constants::family::DEFAULT_HEIGHTS`, [circuits.md](circuits.md) §1), except the public families',
 pinned at `2^12` because it places their windows ([public-values.md](public-values.md) §2). Four
 things constrain it:
 
-- the menu, `constants::family::HEIGHT_MENU`: `2^8, 2^12, 2^16, 2^18, 2^20, 2^22`
-  (`HeightNotOnMenu`), even powers of two as a Mercury opening needs ([mercury.md](mercury.md) §1);
+- the menu, `constants::family::HEIGHT_MENU`: `2^12, 2^16, 2^18, 2^20, 2^22`
+  (`HeightNotOnMenu`);
 - an instruction family's code (§5);
 - the window rules (`verifier_core::window_height`, `WindowRule`; [memory.md](memory.md) §3.5),
   and RAM window 0, `[0, 4·h_w)`, holding every file byte of the image (`ImageOutsideWindow`);
 - the floor of the family's lookup channels, below which the registry has no circuit and no key
-  can be built: `2^20` for an instruction family ([lookup.md](lookup.md) §3), its own for a
-  delegation family ([delegation.md](delegation.md) §9).
+  can be built: `2^20` for an instruction family ([lookup.md](lookup.md) §3).
 
 `bytecode_size_words`, `2^20` (4 MiB) by default, is a declared ceiling on the words from
 `RAM_ORIGIN` to the image's last file byte (`ProgramTooLarge`); no circuit reads it.
 
 The wire form is `8k + 8` bytes; `VmConfig::from_bytes` refuses a wrong length, a family id above
-22, ids not strictly ascending, a height off the menu, and what `window_height` refuses:
+11, ids not strictly ascending, a height off the menu, and what `window_height` refuses:
 
 ```text
 k: u32 LE ‖ k × (family: u32 LE ‖ height: u32 LE) ‖ bytecode_size_words: u32 LE
@@ -196,36 +190,35 @@ the second message of the identity (§8) and the first of a statement's descript
 
 One `Fr`, `ProgramIdentity`, on the wire its canonical 32 bytes ([primitives.md](primitives.md)
 §1): the raw squeeze of a fresh transcript after these messages (`verifier_core::identity_digest`;
-tag values in [transcript.md](transcript.md) §5):
+tag values in [transcript.md](transcript.md) §4):
 
 | # | tag | message |
 | --- | --- | --- |
 | 1 | `PROGRAM_IDENTITY` | `[code_version]`: `constants::family::CODE_VERSION`, 0, the only one derivation builds (`UnsupportedCodeVersion`) |
 | 2 | `VM_CONFIG` | §7's |
 | 3 | `PROGRAM_ENTRY` | `[entry_pc]` |
-| 4 | `COMMITMENT`, one per family of the config, ascending | its setup commitments, four limbs a point ([transcript.md](transcript.md) §4) |
+| — | — | **UNFINISHED**: one commitment list per family of the config, its setup commitments, absent |
 
-A family's setup commitments (`program::setup_commitments`) are Mercury commitments
-([mercury.md](mercury.md) §2): of an instruction family's decoded-table columns in tuple order, 7
-or 6 points; of `INIT_TEARDOWN`'s **image column** (`program::image_init_column`), row `y` being
-`image.initial_word(4y)` over RAM window 0, one point; none, an empty message, for every other
-family.
+**ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A family's setup columns are an
+instruction family's decoded-table columns in tuple order, and `INIT_TEARDOWN`'s **image column**
+(`program::image_init_column`), row `y` being `image.initial_word(4y)` over RAM window 0. They are
+meant to be committed and the commitments digested here, a verifying key carrying the lists and
+every shard opening its setup columns against them, which is what would tie the tables a proof
+reads to the identity ([proof.md](proof.md) §3). There is no commitment scheme, so none of that
+exists.
 
-Committing needs the ceremony's SRS, with as many powers as the tallest table has rows
-([srs.md](srs.md) §1). The digest over given points (`program::identity_from_commitments`) needs
-no SRS and no curve arithmetic: a verifying key carries the lists, its load recomputes the identity
-from them, and every shard opens its setup columns against the same points ([proof.md](proof.md)
-§5, §7), which is what ties the tables a proof reads to the identity.
-
-**It binds** every instruction the sweep found, with its pc, length, operands and kind, and that
-no other pc holds one; every file byte of the image (`.text`, `.rodata`, `.data`, the delegation
-declarations among them); the entry pc; the family set, every height, `bytecode_size_words` and
-the code version. One ELF at two settings of the heights has two identities.
+**It binds** the entry pc; the family set, every height, `bytecode_size_words` and the code
+version. One ELF at two settings of the heights has two identities. It is meant to bind every
+instruction the sweep found, with its pc, length, operands and kind, and that no other pc holds
+one, and every file byte of the image (`.text`, `.rodata`, `.data`). **UNFINISHED**: it binds none
+of them, so two programs with one config and one entry pc share an identity;
+`crates/program/tests/identity.rs`' `UNFINISHED_every_code_and_image_byte_moves_the_identity` is
+that property, `#[ignore]`d until a commitment scheme restores it.
 
 **It does not bind**:
 
-- the SRS its commitments are under, or the generic lookup table: those are the SRS digest's
-  ([proof.md](proof.md) §3);
+- the generic lookup table, which a commitment scheme is meant to commit into every key
+  (**UNFINISHED**, [proof.md](proof.md) §3);
 - the circuits, which a key's load holds to the registry ([proof.md](proof.md) §7);
 - anything an execution chooses: its input, advice, shard counts, window list;
 - memory past a segment's file bytes (`.bss`, the heap and the stack): `mem_len` enters nothing,
@@ -235,4 +228,4 @@ the code version. One ELF at two settings of the heights has two identities.
 
 **A verifier takes the identity from a channel the prover does not control** and compares it with
 its key's; it never sees an ELF. Against a prover-supplied identity a proof shows only that some
-program ran. Whoever holds the ELF, the parameters and the ceremony file recomputes it.
+program ran. Whoever holds the ELF and the parameters recomputes it.

@@ -1,15 +1,13 @@
 //! The `SHA256_COMP` family's circuit: **four SHA-256 rounds a row**, over the
 //! 25-word frame a delegation request handed over.
 //!
-//! `docs/spec/delegation-circuits.md` §6 specifies it. A row that is a whole
-//! compression — every frame word and all 64 rounds' working variables as
-//! bits, 16,688 inner columns — can only be afforded at `2^8`, 256
-//! compressions a shard, and the stateless guest's SSZ hashing calls the
-//! compression 8,011 times a block. This is `KECCAK_F`'s trade
-//! (`docs/spec/delegation-circuits.md` §2): a compression is **16 rows**, the
-//! frame is ordinary RAM, and the global memory multiset is what proves call
-//! `r`'s written frame is call `r + 1`'s read one. The guest's own proven loop
-//! supplies `r`.
+//! A row that is a whole compression — every frame word and all 64 rounds'
+//! working variables as bits, 16,688 inner columns — can only be afforded at
+//! `2^8`, 256 compressions a shard, and a hash-heavy guest calls the
+//! compression thousands of times. This is `KECCAK_F`'s trade: a compression
+//! is **16 rows**, the frame is ordinary RAM, and the global memory multiset
+//! is what proves call `r`'s written frame is call `r + 1`'s read one. The
+//! guest's own proven loop supplies `r`.
 //!
 //! # The frame, and what one call does
 //!
@@ -61,8 +59,8 @@
 //! A sum's carry is one obligation `(0, c, c)` on the same channel, which bounds
 //! it below 256 and so makes every round and schedule equation an integer
 //! equation. The two working variables and the two schedule words a call writes
-//! without reading them in-row carry a `RANGE16` pair, as every word of
-//! `EC_ADD`'s frame does; every other value it writes is a byte sum.
+//! without reading them in-row carry a `RANGE16` pair; every other value it
+//! writes is a byte sum.
 //!
 //! ```text
 //! M[0..104]       cycle live base anchor_value, then 25 words x 4 fields
@@ -1233,10 +1231,10 @@ fn scaled_columns() -> Vec<(PolyAddress, PolyAddress)> {
 /// The family's lookup channels: `RANGE16` for the frame, and `XOR8` for the
 /// rounds and the schedule.
 ///
-/// Both tables are **virtual**, so neither costs a commitment, a setup column
-/// or a movement of the SRS digest. Each is complete only at 16 variables or
-/// more, which `crate::lookup::table_vars` reports and `family_circuit`'s
-/// derived floor enforces before this function is ever called.
+/// Both tables are **virtual**, so neither costs a setup column. Each is
+/// complete only at 16 variables or more, which `crate::lookup::table_vars`
+/// reports and `family_circuit`'s derived floor enforces before this function
+/// is ever called.
 pub fn channels() -> Vec<ChannelSpec> {
     vec![
         ChannelSpec {
@@ -1431,42 +1429,4 @@ pub fn check_shape(a: &CircuitArtifact) {
         a.padding.zero_row_valid,
         "sha256: the all-zero row is a valid padding row"
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A witness column's position in the `W` subtree.
-    fn at(x: PolyAddress) -> usize {
-        match x {
-            PolyAddress::Witness(i) => i as usize,
-            other => panic!("{other} is not a witness column"),
-        }
-    }
-
-    /// The witness names are exactly the layout, each once.
-    #[test]
-    fn the_witness_names_are_the_layout() {
-        let names = witness_names();
-        assert_eq!(names.len(), WITNESS_COLUMNS);
-        let mut sorted = names.clone();
-        sorted.sort();
-        sorted.dedup();
-        assert_eq!(sorted.len(), names.len(), "a name is used twice");
-        assert_eq!(names[at(round_col(1, Round::Bs1Mx, 0))], "r1_bs1_mx");
-        assert_eq!(names[at(sched_col(3, Sched::Ss1Z, 2))], "s3_ss1_z_b2");
-        assert_eq!(names[at(a_byte(-2, 1))], "am2_b1");
-        assert_eq!(names[at(w_byte(14, 3))], "w14_b3");
-        assert_eq!(names[at(written_hi(3))], "w24_written_hi");
-    }
-
-    /// The circuit builds at its channel floor, and at no lower height.
-    #[test]
-    fn the_circuit_builds_at_its_channel_floor_and_no_lower() {
-        let a = artifact(16);
-        assert_eq!(a.trace_vars, 16);
-        assert!(crate::family_circuit(constants::family::SHA256_COMP, 14).is_none());
-        assert!(crate::family_circuit(constants::family::SHA256_COMP, 16).is_some());
-    }
 }

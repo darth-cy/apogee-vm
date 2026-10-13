@@ -4,26 +4,29 @@ mod common;
 
 use loader::{load_elf, LoaderError, ProgramImage, Segment, Slot};
 
-/// The committed guests the structural checks here run over.
+/// The guests the structural checks here run over, built from `guests/`.
 ///
 /// One list rather than three copies, so that a guest added to it reaches
 /// every structural check here without a second edit -- the checks below are
 /// about the shape of an image, and there is no image they are meant to skip.
 const GUESTS: [&str; 7] = [
-    "fib.elf",
-    "echo.elf",
-    "rvc-dense.elf",
-    "amm.elf",
-    "orderbook.elf",
-    "vault.elf",
-    "atomics.elf",
+    "fib",
+    "echo",
+    "rvc-dense",
+    "amm",
+    "orderbook",
+    "vault",
+    "atomics",
 ];
 
 /// The wire form reads back to the value it was written from.
 #[test]
 fn the_image_round_trips_through_postcard() {
-    for name in ["minimal.elf"].into_iter().chain(GUESTS) {
-        let image = load_elf(&common::bytes(name)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    let elves = [("minimal.elf", common::bytes("minimal.elf"))]
+        .into_iter()
+        .chain(GUESTS.map(|name| (name, common::guest(name))));
+    for (name, elf) in elves {
+        let image = load_elf(&elf).unwrap_or_else(|e| panic!("{name}: {e:?}"));
         let wire = common::to_postcard(&image);
         let back: ProgramImage = postcard::from_bytes(&wire).expect("the wire form parses");
         assert_eq!(back, image, "{name}");
@@ -130,7 +133,7 @@ fn malformed_wire_forms_are_rejected() {
 #[test]
 fn the_slot_vector_is_structurally_sound() {
     for name in GUESTS {
-        let image = load_elf(&common::bytes(name)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        let image = load_elf(&common::guest(name)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
 
         assert_eq!(image.slot_base % 2, 0, "{name}: slot_base must be even");
         assert_eq!(

@@ -13,9 +13,7 @@
 //!   [`Transcript::challenge_scalar`] — which frames every message as
 //!   `tag, length, payload...` over that duplex.
 //!
-//! `#![no_std]`: guests and the no_std verifier core link it. The recursion
-//! guest replays the same sponge over field cells
-//! (`verifier_core::tape::CellTranscript`).
+//! `#![no_std]`: guests and the no_std verifier core link it.
 
 extern crate alloc;
 
@@ -74,55 +72,8 @@ fn internal_matrix(s: &mut [Fr; 3]) {
     s[2] = s[2] + s[2] + sum;
 }
 
-/// The guest-target backend: the permutation, delegated.
-///
-/// `docs/spec/delegation.md` §10. One ecall over a 24-word frame against 240
-/// Montgomery multiplies and 80 constant decodes in software, and the circuit
-/// that proves it is this function's own rounds. An executor without the
-/// circuit answers `-ENOSYS` and the software path below runs — which is this
-/// function, so the two are one definition.
-///
-/// Selected by `#[cfg(target_arch = "riscv32")]` alone; there is no cargo
-/// feature here.
-#[cfg(target_arch = "riscv32")]
-mod delegated {
-    use constants::poseidon2 as p2;
-    use field::Fr;
-
-    /// Permute `state` in place, or `false` on an executor with no circuit.
-    ///
-    /// The lanes cross the frame as **canonical** little-endian `Fr` — the
-    /// mathematical value, which is what `to_bytes` writes — because the
-    /// circuit computes the permutation over those values. That is the other
-    /// delegation's opposite choice and deliberately so: here the conversion
-    /// is six Montgomery operations against 240 the delegation removes, and
-    /// the circuit gets to be `poseidon2_permute` itself rather than
-    /// `poseidon2_permute` conjugated by a scaling.
-    pub fn permute(state: &mut [Fr; p2::WIDTH]) -> bool {
-        let mut frame = guest_sdk::recursion::Poseidon2Frame([0u8; p2::FRAME_BYTES]);
-        for (i, lane) in state.iter().enumerate() {
-            frame.0[32 * i..32 * i + 32].copy_from_slice(&lane.to_bytes());
-        }
-        if !guest_sdk::recursion::poseidon2(&mut frame) {
-            return false;
-        }
-        for (i, lane) in state.iter_mut().enumerate() {
-            let mut bytes = [0u8; 32];
-            bytes.copy_from_slice(&frame.0[32 * i..32 * i + 32]);
-            // The circuit's canonicity gates refuse a non-canonical lane, so
-            // an executor that answered 0 wrote one that decodes.
-            *lane = Fr::from_bytes(&bytes).expect("a delegation writes a canonical Fr");
-        }
-        true
-    }
-}
-
 /// The Poseidon2 permutation, in place.
 pub fn poseidon2_permute(state: &mut [Fr; 3]) {
-    #[cfg(target_arch = "riscv32")]
-    if delegated::permute(state) {
-        return;
-    }
     external_matrix(state);
 
     for row in POSEIDON2_RC3_INITIAL.iter() {
@@ -451,7 +402,7 @@ impl<'de> serde::Deserialize<'de> for TranscriptSnapshot {
 /// the final partial limb zero-extended, which is exactly
 /// [`Transcript::append_bytes`]'s encoding — so this function is two
 /// typed messages and one raw squeeze, in a sponge of its own, the way
-/// `sumcheck::witness_digest` and `pcs::accumulator_digest` are built. The
+/// `sumcheck::witness_digest` is built. The
 /// squeeze is a raw [`Transcript::sample`], not a challenge, because a
 /// challenge under one of these tags would be one tag in two kinds.
 ///
@@ -472,50 +423,4 @@ pub fn io_digest(public_input: &[u8], public_output: &[u8]) -> Fr {
         public_output,
     );
     sponge.sample()
-}
-
-// ---------------------------------------------------------------------------
-// G1 points, curve-free.
-// ---------------------------------------------------------------------------
-
-/// A `G1` point's four transcript limbs, from its 64-byte canonical encoding
-/// `x ‖ y`, with no curve arithmetic. `docs/spec/transcript.md` §4 specifies
-/// it.
-///
-/// All-zero bytes are the point at infinity (the curve's wire rule), which
-/// absorbs `constants::G1_INFINITY_SENTINEL`, `2^128`, in each of its four
-/// lanes. Anything else is `x[0..16], x[16..32], y[0..16], y[16..32]`, each
-/// read as a little-endian integer below `2^128` — so no real limb is the
-/// sentinel, and the split is a function of the bytes whether or not they
-/// encode a point on the curve. Validating the point is its decoder's job, not
-/// the absorber's.
-/// `pcs::append_g1_list` is this over `G1Affine::to_bytes`.
-pub fn g1_limbs(point: &[u8; 64]) -> [Fr; 4] {
-    if point.iter().all(|b| *b == 0) {
-        let sentinel = Fr::from_hex(constants::G1_INFINITY_SENTINEL)
-            .expect("the infinity sentinel is a canonical hex literal");
-        return [sentinel; 4];
-    }
-    let limb = |half: &[u8]| {
-        let mut bytes = [0u8; 32];
-        bytes[..16].copy_from_slice(half);
-        Fr::from_bytes(&bytes).expect("a 128-bit limb is below 2^128 < p")
-    };
-    [
-        limb(&point[..16]),
-        limb(&point[16..32]),
-        limb(&point[32..48]),
-        limb(&point[48..]),
-    ]
-}
-
-/// Absorb `points` under `tag` as **one** typed message of `4 * points.len()`
-/// limbs, each point through [`g1_limbs`]. The list's length is bound by the
-/// message's framed length, so `k` points are never `k` messages.
-pub fn append_g1_points(tr: &mut Transcript, tag: Tag, points: &[[u8; 64]]) {
-    let mut limbs = Vec::with_capacity(4 * points.len());
-    for point in points {
-        limbs.extend_from_slice(&g1_limbs(point));
-    }
-    tr.append_scalars(tag, &limbs);
 }
