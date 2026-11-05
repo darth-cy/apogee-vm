@@ -1,4 +1,4 @@
-//! The backward pass over the committed toy circuit: the honest run, its proof
+//! The backward pass over the toy circuit: the honest run, its proof
 //! shape, and base claims that check against the base.
 
 mod common;

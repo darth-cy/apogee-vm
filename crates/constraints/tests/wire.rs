@@ -80,15 +80,15 @@ fn toy_with_gate(gate: GateDef) -> CircuitArtifact {
 // The round trip
 // ---------------------------------------------------------------------------
 
-/// Both committed artifacts decode, re-encode to exactly the
-/// file's bytes, decode again to an equal struct, and are circuits. postcard is
+/// Both compilations decode, re-encode to exactly the same
+/// bytes, decode again to an equal struct, and are circuits. postcard is
 /// deterministic and not self-describing, so byte identity here tests the
 /// artifact's layout, not a formatter.
 #[test]
-fn both_fixtures_round_trip_byte_identically() {
+fn both_compilations_round_trip_byte_identically() {
     for (name, bytes) in [
-        ("toy_cached.bin", toy_cached_bytes()),
-        ("toy_cache_free.bin", toy_cache_free_bytes()),
+        ("the cached toy", toy_cached_bytes()),
+        ("the cache-free toy", toy_cache_free_bytes()),
     ] {
         let decoded = CircuitArtifact::from_bytes(&bytes)
             .unwrap_or_else(|e| panic!("{name} must decode: {e}"));
@@ -224,13 +224,13 @@ fn a_format_version_other_than_one_is_refused() {
     assert_eq!(CircuitArtifact::from_bytes(&s13), refused(0));
 }
 
-/// Every proper prefix of each file is refused as a buffer that ends early,
-/// from the empty string to the file less its last byte.
+/// Every proper prefix of each encoding is refused as a buffer that ends early,
+/// from the empty string to the encoding less its last byte.
 #[test]
 fn every_truncation_is_refused() {
     for (name, bytes) in [
-        ("toy_cached.bin", toy_cached_bytes()),
-        ("toy_cache_free.bin", toy_cache_free_bytes()),
+        ("the cached toy", toy_cached_bytes()),
+        ("the cache-free toy", toy_cache_free_bytes()),
     ] {
         for len in 0..bytes.len() {
             assert_eq!(
@@ -801,7 +801,7 @@ fn every_single_bit_flip_returns_without_panicking() {
     }
     assert!(
         0 < decoded && decoded < total,
-        "{decoded} of {total} single-bit flips of toy_cached.bin still decode"
+        "{decoded} of {total} single-bit flips of the cached toy still decode"
     );
-    eprintln!("{decoded} of {total} single-bit flips of toy_cached.bin still decode");
+    eprintln!("{decoded} of {total} single-bit flips of the cached toy still decode");
 }

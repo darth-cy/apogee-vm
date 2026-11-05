@@ -854,10 +854,8 @@ pub mod extra_mask {
 /// The guest memory map.
 ///
 /// RAM is the one region a program is loaded into. `crates/guest-sdk/link.ld`
-/// states the same two numbers for the linker, `docs/spec/ecall-abi.md` §5
-/// states them for a reader, and `crates/constants/tests/ecall_abi.rs` checks
-/// all three against each other — a memory map written down three times is a
-/// memory map that can disagree with itself.
+/// states the same two numbers for the linker, and
+/// `crates/constants/tests/memory.rs` holds it to these.
 ///
 /// `crates/loader` refuses a `PT_LOAD` segment that does not lie inside this
 /// window. Outside it a guest reaches only the two public windows and the

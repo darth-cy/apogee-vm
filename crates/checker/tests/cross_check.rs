@@ -89,7 +89,7 @@ fn toys_with_constants() -> [(&'static str, CircuitArtifact, VerifierConstants);
 }
 
 #[test]
-fn both_fixtures_agree_with_the_independent_description() {
+fn both_compilations_agree_with_the_independent_description() {
     for (label, a, constants) in toys_with_constants() {
         assert_eq!(cross_check(&a, &constants, reference), Ok(()), "{label}");
     }
