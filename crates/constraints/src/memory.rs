@@ -439,9 +439,8 @@ pub struct FamilySpec {
 /// obligations whatever a caller adds, so a channel list of nothing is a
 /// circuit every one of whose obligations is undischarged. The one artifact of
 /// that shape is [`frame_artifact`], a *component* that declares its
-/// obligations and discharges none, and whose bytes are committed fixtures; it
-/// is built here rather than through this entry point, and this one refuses
-/// the shape outright.
+/// obligations and discharges none; it is built here rather than through this
+/// entry point, and this one refuses the shape outright.
 pub fn frame_with_channels_artifact(
     queries: &[usize],
     trace_vars: u32,
@@ -751,9 +750,9 @@ pub(crate) fn assemble(
         panic!("memory artifact: {e}");
     }
     // A frame with no channel is a *component*: `frame_artifact` declares its
-    // obligations and discharges none, and its fixtures are those bytes. Only
-    // a circuit that declares channels claims to discharge anything, and only
-    // there is the discharge rule meaningful.
+    // obligations and discharges none. Only a circuit that declares channels
+    // claims to discharge anything, and only there is the discharge rule
+    // meaningful.
     if !channels.is_empty() {
         if let Err(e) = lookup::check_discharge(&artifact, channels) {
             panic!("memory artifact: {e}");

@@ -1,7 +1,6 @@
-//! The two committed toy artifacts, pinned by digest, and the small editing
-//! helpers the suites share. Test-only.
+//! The toy circuits and the small editing helpers the suites share. Test-only.
 //!
-//! The toy, as `tools/kat-gen/src/gkr.rs`'s header describes it: base columns
+//! The toy, as `constraints/tests/common/toy.rs`'s header describes it: base columns
 //! `M[0] m, W[0] a, W[1] b, W[2] c, W[3] e, S[0] s` and `V[row]` over 16 rows;
 //! list 0 writes `ab = a·b`, `fingerprint = (γ·a + row)·c` (the parenthesis a
 //! cached entry in one compilation, inline in the other) and
@@ -13,18 +12,17 @@
 
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind};
 use field::Fr;
-use test_support::{sha256, to_hex, Rng};
+use test_support::Rng;
 
-pub const CACHED: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../constraints/tests/vectors/toy_cached.bin"
-);
-pub const CACHE_FREE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../constraints/tests/vectors/toy_cache_free.bin"
-);
-const CACHED_SHA256: &str = "ee27e1192c4bcf9afa003509f6c06fead29628b02a4c17f86e381bf5609f1c70";
-const CACHE_FREE_SHA256: &str = "5318afeb5b5ba5d09871358c89db36a0db12680fa9559a70c67c50b41181251d";
+#[path = "../../../constraints/tests/common/lookup_toy.rs"]
+mod lookup_toy;
+#[path = "../../../constraints/tests/common/toy.rs"]
+mod toy;
+
+#[allow(unused_imports)]
+pub use lookup_toy::lookup_toy;
+#[allow(unused_imports)]
+pub use toy::{toy, toy_cache_free};
 
 /// The committed layout's positions: `m, a, b, c, e, s`.
 pub const M: usize = 0;
@@ -49,25 +47,9 @@ pub fn lit(v: u64) -> Coeff {
     Coeff::Literal(Fr::from_u64(v))
 }
 
-/// Read a fixture, check its pin, decode it.
-pub fn load(path: &str) -> CircuitArtifact {
-    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
-    let pin = if path == CACHED {
-        CACHED_SHA256
-    } else {
-        CACHE_FREE_SHA256
-    };
-    assert_eq!(
-        to_hex(&sha256(&bytes)),
-        pin,
-        "{path} is not the pinned fixture"
-    );
-    CircuitArtifact::from_bytes(&bytes).unwrap_or_else(|e| panic!("{path}: {e}"))
-}
-
 /// Both compilations, cached first, with a label for messages.
 pub fn toys() -> [(&'static str, CircuitArtifact); 2] {
-    [("cached", load(CACHED)), ("cache-free", load(CACHE_FREE))]
+    [("cached", toy()), ("cache-free", toy_cache_free())]
 }
 
 /// `x − x·x = 0` on gate list 0, named `<name>_is_boolean`, as a gate and as

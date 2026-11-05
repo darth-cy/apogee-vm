@@ -1,7 +1,7 @@
 //! Each committed toy artifact against an independent description of the toy.
 //!
 //! `toy_constants` and `reference` are written from the toy's prose description
-//! (the header of `tools/kat-gen/src/gkr.rs`, restated in `tests/common/mod.rs`)
+//! (the header of `constraints/tests/common/toy.rs`, restated in `tests/common/mod.rs`)
 //! and `docs/spec/gkr.md` — not from the code that builds the artifact, and not
 //! by reading the artifact back. `reference` is plain field arithmetic: no gate,
 //! no kernel, no layer.
@@ -83,8 +83,8 @@ fn reference_without_the_gate(base: &[Vec<Fr>], challenges: &ExternalChallenges)
 
 fn toys_with_constants() -> [(&'static str, CircuitArtifact, VerifierConstants); 2] {
     [
-        ("cached", load(CACHED), toy_constants(1)),
-        ("cache-free", load(CACHE_FREE), toy_constants(0)),
+        ("cached", toy(), toy_constants(1)),
+        ("cache-free", toy_cache_free(), toy_constants(0)),
     ]
 }
 

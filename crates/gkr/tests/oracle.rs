@@ -39,8 +39,8 @@ fn table(p: &MultilinearPoly) -> Vec<Fr> {
     (0..p.len()).map(|i| p.get(i)).collect()
 }
 
-/// The toy, by hand: the description in `tools/kat-gen/src/gkr.rs`'s module
-/// docs, not its code.
+/// The toy, by hand: the description in `constraints/tests/common/toy.rs`'s
+/// module docs, not its code.
 struct Hand {
     base: [MultilinearPoly; 6], // m a b c e s, layout order
     ab: MultilinearPoly,

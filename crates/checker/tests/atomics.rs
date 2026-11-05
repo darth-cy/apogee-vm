@@ -33,14 +33,8 @@ use constraints::{
 use field::Fr;
 use gkr::{eval_gate, gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallenges};
 use program::lookup_tables::generic_entries;
-use test_support::{sha256, to_hex};
 
 const VARS: u32 = 20;
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../constraints/tests/vectors/atomics.bin"
-);
-const FIXTURE_SHA256: &str = "b42ab89c7760a9eec86dbcaf9099157a14c79d1edcdb35bd0633f5935d2ae156";
 
 /// The cycle every hand-built row runs at, and the row it is evaluated at.
 const CYCLE: u64 = 7;
@@ -424,17 +418,14 @@ fn lookup<'a>(a: &'a CircuitArtifact, name: &str) -> &'a LookupExpr {
 // The circuit
 // ---------------------------------------------------------------------------
 
-/// The committed fixture is the constructor's bytes, and the circuit passes
+/// The circuit round-trips through its wire form, and passes
 /// both enforcement points — `validate`, which built it, and `checker`'s
 /// independent validators — plus the memory and lookup construction rules.
 #[test]
-fn the_circuit_is_the_fixture_and_keeps_every_rule() {
-    let bytes = std::fs::read(FIXTURE).expect("the atomics fixture");
-    assert_eq!(to_hex(&sha256(&bytes)), FIXTURE_SHA256);
-    assert_eq!(atomics::artifact(22).to_bytes(), bytes);
+fn the_circuit_round_trips_and_keeps_every_rule() {
     assert_eq!(
-        CircuitArtifact::from_bytes(&bytes).expect("the fixture decodes"),
-        atomics::artifact(22)
+        CircuitArtifact::from_bytes(&atomics::artifact(22).to_bytes()),
+        Ok(atomics::artifact(22))
     );
 
     let a = artifact();
@@ -1784,8 +1775,7 @@ fn an_amo_whose_rd_is_not_the_old_word_is_refused() {
         // A forgery that is not a no-op for any kind, `lr.w` included: the old
         // word plus one. Without it the `lr.w` iteration above asserts only
         // that the honest row is honest, and a `rd_value_rule` that had lost
-        // the `lr` arm from its ten-kind sum would be caught by the fixture's
-        // digest alone.
+        // the `lr` arm from its ten-kind sum would pass.
         let mut r = honest(Instr::new(bit), ADDRESS, old, src, 0x2222_2222);
         r.set("rd_selected", f(old.wrapping_add(1) as u64))
             .set("rd_write_value", f(old.wrapping_add(1) as u64));

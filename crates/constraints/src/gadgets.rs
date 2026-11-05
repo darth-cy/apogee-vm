@@ -47,8 +47,8 @@ const _: () = assert!(generic_table::SHIFT_BASE >= generic_table::SIGN_BASE + (1
 /// boolean with no gate of its own, and a row whose `enable` is 0 has
 /// `z = 0`, which keeps the all-zero row valid. Both gates are degree 2.
 ///
-/// The x0 rule is this over `x = addr`, enabled by the `rd` query's mask, so
-/// its bytes are the frame fixtures' (`docs/spec/memory.md` §2.4).
+/// The x0 rule is this over `x = addr`, enabled by the `rd` query's mask
+/// (`docs/spec/memory.md` §2.4).
 pub fn is_zero(
     x: &[(Coeff, PolyAddress)],
     inv: PolyAddress,

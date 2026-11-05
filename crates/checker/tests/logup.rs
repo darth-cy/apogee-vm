@@ -12,7 +12,7 @@
 //! it holds 144,703,478 inner cells — 4.63 GB as `Fr` — and two at once would
 //! not fit a CI runner.
 //!
-//! What the toy holds is `tools/kat-gen/src/lookup.rs`'s header. Everything
+//! What the toy holds is `constraints/tests/common/lookup_toy.rs`'s header. Everything
 //! about the artifact that does not need a forward pass — the laws, the
 //! discharge rules, the construction refusals, the table differential — is in
 //! `crates/constraints/tests/lookup.rs`, `crates/gkr/tests/lookup.rs` and
@@ -38,16 +38,10 @@ use loader::load_elf;
 use poly::{MultilinearPoly, PolyBacking};
 use program::lookup_tables::{generic_table, GENERIC_WIDTH};
 use program::{decode_program, lookup_tuple, ProgramParams};
-use test_support::{sha256, to_hex};
 use trace::build_multiplicities;
 use transcript::Transcript;
 
-const TOY: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../constraints/tests/vectors/lookup_toy.bin"
-);
-
-/// The toy's height, `tools/kat-gen/src/lookup.rs`'s `TRACE_VARS`.
+/// The toy's height, `common/lookup_toy.rs`' `TRACE_VARS`.
 const VARS: u32 = 20;
 const ROWS: usize = 1 << VARS;
 
@@ -139,8 +133,7 @@ struct Toy {
 }
 
 fn toy() -> Toy {
-    let bytes = std::fs::read(TOY).expect("reading the toy fixture");
-    let artifact = CircuitArtifact::from_bytes(&bytes).expect("the toy decodes");
+    let artifact = common::lookup_toy();
     assert_eq!(artifact.trace_vars, VARS);
     assert_eq!(artifact.validate(), Ok(()));
 
@@ -375,11 +368,6 @@ fn every_channel_holds(toy: &Toy, values: &LayerValues) -> bool {
 fn the_combined_toy_proves_and_every_channel_holds() {
     let toy = toy();
     let a = &toy.shard.artifact;
-    assert_eq!(
-        to_hex(&sha256(&a.to_bytes())),
-        to_hex(&sha256(&std::fs::read(TOY).expect("the fixture"))),
-        "the fixture is the artifact's bytes"
-    );
     assert_eq!(check_laws(a), Ok(()));
     assert_eq!(check_padding(a), Ok(()));
     assert_eq!(check_padding_identity(a), Ok(()));

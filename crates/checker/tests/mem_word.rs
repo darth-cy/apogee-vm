@@ -33,14 +33,8 @@ use constraints::memory::check_memory;
 use constraints::{family_circuit, mem_word, CircuitArtifact, GateDef, PolyAddress, VirtualKind};
 use field::Fr;
 use gkr::{eval_gate, gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallenges};
-use test_support::{sha256, to_hex};
 
 const VARS: u32 = 20;
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../constraints/tests/vectors/mem_word.bin"
-);
-const FIXTURE_SHA256: &str = "4ee759aa90134a57b15bd7bb1ba924e28a96be7304342d2ad8d221c044c853a1";
 
 /// The cycle every hand-built row runs at, and the row it is evaluated at.
 const CYCLE: u64 = 7;
@@ -382,17 +376,14 @@ fn none() -> Vec<String> {
 // The circuit
 // ---------------------------------------------------------------------------
 
-/// The committed fixture is the constructor's bytes, and the circuit passes
+/// The circuit round-trips through its wire form, and passes
 /// both enforcement points — `validate`, which built it, and `checker`'s
 /// independent validators — plus the memory and lookup construction rules.
 #[test]
-fn the_circuit_is_the_fixture_and_keeps_every_rule() {
-    let bytes = std::fs::read(FIXTURE).expect("the mem_word fixture");
-    assert_eq!(to_hex(&sha256(&bytes)), FIXTURE_SHA256);
-    assert_eq!(mem_word::artifact(22).to_bytes(), bytes);
+fn the_circuit_round_trips_and_keeps_every_rule() {
     assert_eq!(
-        CircuitArtifact::from_bytes(&bytes).expect("the fixture decodes"),
-        mem_word::artifact(22)
+        CircuitArtifact::from_bytes(&mem_word::artifact(22).to_bytes()),
+        Ok(mem_word::artifact(22))
     );
 
     let a = artifact();

@@ -34,14 +34,8 @@ use field::Fr;
 use gkr::{eval_gate, gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallenges};
 use isa::Instr as Isa;
 use program::lookup_tables::generic_entries;
-use test_support::{sha256, to_hex};
 
 const VARS: u32 = 20;
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../constraints/tests/vectors/jump_branch_slt.bin"
-);
-const FIXTURE_SHA256: &str = "77a50c13c464a30382338eed5b97df4cd621d04a7ca54b4187301b2824ee3ba4";
 
 fn artifact() -> CircuitArtifact {
     jump_branch_slt::artifact(VARS)
@@ -574,18 +568,15 @@ fn none() -> Vec<String> {
 // The circuit
 // ---------------------------------------------------------------------------
 
-/// The committed fixture is the constructor at the family's default height,
-/// and the circuit keeps every rule both enforcement points hold it to: the
+/// The circuit at the family's default height round-trips through its wire
+/// form, and keeps every rule both enforcement points hold it to: the
 /// laws, the padding contract and its product-tree clause, the memory rules,
 /// and the discharge rule — by `constraints` and, sharing no code, by this
 /// crate.
 #[test]
-fn the_circuit_is_the_fixture_and_keeps_every_rule() {
-    let bytes = std::fs::read(FIXTURE).expect("the jump/branch/slt fixture");
-    assert_eq!(to_hex(&sha256(&bytes)), FIXTURE_SHA256);
-    assert_eq!(jump_branch_slt::artifact(22).to_bytes(), bytes);
+fn the_circuit_round_trips_and_keeps_every_rule() {
     assert_eq!(
-        CircuitArtifact::from_bytes(&bytes),
+        CircuitArtifact::from_bytes(&jump_branch_slt::artifact(22).to_bytes()),
         Ok(jump_branch_slt::artifact(22))
     );
 
@@ -1513,7 +1504,7 @@ fn an_all_zero_mask_is_refused_by_the_decoder_domain_alone() {
 // ---------------------------------------------------------------------------
 
 /// The canonical padding row — all zero — passes every validator
-/// (`the_circuit_is_the_fixture_and_keeps_every_rule`) and every gate; and a
+/// (`the_circuit_round_trips_and_keeps_every_rule`) and every gate; and a
 /// mask-zero row advances the pc to its claimed fall-through rather than to 0:
 /// any `seq` with `next_pc = seq` holds, and `next_pc = 0` beside a nonzero
 /// `seq` is refused.

@@ -115,7 +115,7 @@ fn the_dump_names_everything_in_the_toy() {
 /// alone are a small number.
 #[test]
 fn a_large_literal_is_not_read_from_its_low_bytes() {
-    let mut a = load(CACHE_FREE);
+    let mut a = toy_cache_free();
     let value = (1u128 << 64) + 5;
     let mut bytes = [0u8; 32];
     bytes[..16].copy_from_slice(&value.to_le_bytes());
@@ -133,7 +133,7 @@ fn a_large_literal_is_not_read_from_its_low_bytes() {
 /// A negated literal as `-k`, a large one as 64 hex digits, a challenge by name.
 #[test]
 fn coefficients_render_one_way() {
-    let mut a = load(CACHE_FREE);
+    let mut a = toy_cache_free();
     let (terms, constant) = linear(&mut a.layers[1].producing[1].gate);
     terms[0].0 = Coeff::Literal(-Fr::from_u64(7));
     *constant = Coeff::Literal(Fr::from_u64(1 << 40));
@@ -154,7 +154,7 @@ fn coefficients_render_one_way() {
 /// prints as `?` rather than panicking.
 #[test]
 fn a_lookup_prints_its_channel_selector_and_tuple() {
-    let mut a = load(CACHED);
+    let mut a = toy();
     a.lookups.push(LookupExpr {
         name: "range".into(),
         channel: 0,
@@ -186,7 +186,7 @@ fn a_lookup_prints_its_channel_selector_and_tuple() {
 
 #[test]
 fn a_lawless_artifact_still_dumps() {
-    let mut a = load(CACHED);
+    let mut a = toy();
     a.layers[0].producing[0].relation = 99;
     a.outputs.push(inner(9, 9));
     a.padding.row.push(Fr::ONE);
@@ -205,23 +205,26 @@ fn checker(args: &[&str]) -> Output {
 }
 
 #[test]
-fn the_cli_passes_both_fixtures_and_prints_the_dump() {
-    for path in [CACHED, CACHE_FREE] {
+fn the_cli_passes_both_compilations_and_prints_the_dump() {
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    for (label, a) in toys() {
+        let path = format!("{dir}/checker-{label}.bin");
+        std::fs::write(&path, a.to_bytes()).unwrap();
         for command in ["laws", "padding"] {
-            let out = checker(&[command, path]);
+            let out = checker(&[command, &path]);
             let stderr = String::from_utf8_lossy(&out.stderr);
             assert!(out.status.success(), "{command} {path}: {stderr}");
         }
-        let out = checker(&["dump", path]);
+        let out = checker(&["dump", &path]);
         assert!(out.status.success());
-        assert_eq!(String::from_utf8(out.stdout).unwrap(), dump(&load(path)));
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), dump(&a));
     }
 }
 
 #[test]
 fn the_cli_fails_on_a_corrupted_or_lawless_file() {
     let dir = env!("CARGO_TARGET_TMPDIR");
-    let mut bytes = std::fs::read(CACHED).unwrap();
+    let mut bytes = toy().to_bytes();
     // The last byte is `zero_row_valid`, written as 1; 0xfe is no boolean.
     *bytes.last_mut().unwrap() ^= 0xff;
     let corrupted = format!("{dir}/checker-corrupted.bin");
@@ -234,7 +237,7 @@ fn the_cli_fails_on_a_corrupted_or_lawless_file() {
         );
     }
 
-    let mut a = load(CACHED);
+    let mut a = toy();
     a.layers[0].width = 4;
     let lawless = format!("{dir}/checker-lawless.bin");
     std::fs::write(&lawless, a.to_bytes()).unwrap();
@@ -243,5 +246,5 @@ fn the_cli_fails_on_a_corrupted_or_lawless_file() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("Law 2 (derived width)"));
 
     assert_eq!(checker(&["laws"]).status.code(), Some(2));
-    assert_eq!(checker(&["prove", CACHED]).status.code(), Some(2));
+    assert_eq!(checker(&["prove", &corrupted]).status.code(), Some(2));
 }

@@ -1,10 +1,7 @@
-//! The `lookup` group: the combined lookup toy circuit, written through
-//! `constraints::memory::frame_with_channels_artifact`.
-//!
-//! This function is the toy's only definition. The prover and verifier never
-//! see it: they read the committed file. It is not an oracle — it is this
-//! code's output — so what the file pins is the artifact's bytes, and CI
-//! regenerates and diffs them. The independent descriptions it is held to are
+//! The combined lookup toy circuit, written through
+//! `constraints::memory::frame_with_channels_artifact`. Test-only:
+//! `crates/checker`'s suites include this file by `#[path]`, so the toy has this
+//! one definition. The independent descriptions it is held to are
 //! `crates/checker`'s native channel sums and its discharge cross-check.
 //!
 //! ```text
@@ -27,6 +24,7 @@
 //! last      one multiplicity column per channel, last in the subtree
 //! ```
 
+use constants::generic_table::{AND_BASE, SIGN_BASE, WIDTH as GENERIC_WIDTH};
 use constants::{family, lookup_channel};
 use constraints::lookup::{range_table, ChannelSpec};
 use constraints::memory::{
@@ -34,11 +32,6 @@ use constraints::memory::{
 };
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 use field::Fr;
-use program::lookup_tables::{AND_BASE, GENERIC_WIDTH, SIGN_BASE};
-
-use crate::write_bytes;
-
-const FIXTURE: &str = "crates/constraints/tests/vectors/lookup_toy.bin";
 
 /// The toy's height, and the smallest a real execution family can have.
 ///
@@ -75,10 +68,6 @@ const TOY_CHANNELS: [u32; 4] = [
     lookup_channel::GENERIC,
     lookup_channel::DECODER,
 ];
-
-pub fn generate() {
-    write_bytes(FIXTURE, &toy().to_bytes());
-}
 
 fn lit(v: u64) -> Coeff {
     Coeff::Literal(Fr::from_u64(v))
@@ -144,7 +133,7 @@ const MULT: u32 = KIND + MASK_BITS as u32;
 const DECODER_TABLE: u32 = GENERIC_WIDTH as u32;
 
 /// The combined toy, over `TRACE_VARS` variables.
-pub fn toy() -> CircuitArtifact {
+pub fn lookup_toy() -> CircuitArtifact {
     let pc_mask = frame(0, FIELD_MASK);
     let mut witness = names(&["word", "word_hi", "and_a", "and_b", "and_c", "and_on"]);
     witness.extend(names(&["sign_h", "sign_s", "sign_on"]));
@@ -298,37 +287,5 @@ fn channel(channel: u32, at: u32) -> ChannelSpec {
         channel,
         table,
         multiplicity: w(MULT + at),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use test_support::{sha256, to_hex};
-
-    /// The committed fixture is the bytes [`super::toy`] writes today.
-    ///
-    /// Every other suite reads the *file* — `crates/checker/tests/logup.rs`
-    /// fills its columns and proves it, `crates/constraints/tests/lookup.rs`
-    /// checks its laws and its discharge — so without this the constructor
-    /// above is covered by nothing but CI's regenerate-and-diff step, and a
-    /// change to it that a developer regenerates over is a change no test sees.
-    /// `crates/constraints/tests/memory.rs`' `the_fixtures_are_the_constructors_bytes`
-    /// is the same assertion for the memory frames.
-    #[test]
-    fn the_fixture_is_the_constructors_bytes() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join(super::FIXTURE);
-        let committed =
-            std::fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
-        let built = super::toy().to_bytes();
-        assert_eq!(
-            to_hex(&sha256(&built)),
-            to_hex(&sha256(&committed)),
-            "the toy's constructor and `{}` have diverged; `cargo run -p kat-gen -- lookup` \
-             writes the constructor's bytes",
-            super::FIXTURE
-        );
-        assert_eq!(built, committed);
     }
 }

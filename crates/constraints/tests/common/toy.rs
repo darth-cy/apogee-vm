@@ -1,11 +1,7 @@
-//! The `gkr` group: the toy circuit, written directly as a
-//! `CircuitArtifact`, and its cache-free compilation.
-//!
-//! This function is the toy's only definition. The prover and verifier never
-//! see it: they read the two committed files. Neither file is an oracle — both
-//! are this code's output — so what they pin is the artifact's bytes, and CI
-//! regenerates and diffs them. The independent description the artifact is
-//! held to is `crates/checker/tests/cross_check.rs`, written separately.
+//! The toy circuit, written directly as a `CircuitArtifact`, and its cache-free
+//! compilation. Test-only: `crates/gkr`'s and `crates/checker`'s suites include
+//! this file by `#[path]`, so the toy has this one definition. The independent
+//! description it is held to is `crates/checker/tests/cross_check.rs`.
 //!
 //! ```text
 //! base      M[0] m   W[0] a   W[1] b   W[2] c   W[3] e   S[0] s   V[row]      16 rows
@@ -29,21 +25,11 @@ use constraints::{
 };
 use field::Fr;
 
-use crate::write_bytes;
-
-const CACHED: &str = "crates/constraints/tests/vectors/toy_cached.bin";
-const CACHE_FREE: &str = "crates/constraints/tests/vectors/toy_cache_free.bin";
-
-pub fn generate() {
-    let cached = toy();
-    if let Err(e) = cached.validate() {
-        panic!("the toy circuit is not a circuit: {e}");
-    }
-    let cache_free = cached
+/// The toy's cache-free compilation.
+pub fn toy_cache_free() -> CircuitArtifact {
+    toy()
         .inline_cached()
-        .unwrap_or_else(|e| panic!("the toy circuit does not compile cache-free: {e}"));
-    write_bytes(CACHED, &cached.to_bytes());
-    write_bytes(CACHE_FREE, &cache_free.to_bytes());
+        .unwrap_or_else(|e| panic!("the toy circuit does not compile cache-free: {e}"))
 }
 
 fn lit(v: u64) -> Coeff {
@@ -73,7 +59,8 @@ fn names(list: &[&str]) -> Vec<String> {
     list.iter().map(|s| s.to_string()).collect()
 }
 
-fn toy() -> CircuitArtifact {
+/// The toy, cached.
+pub fn toy() -> CircuitArtifact {
     let m = PolyAddress::Memory(0);
     let (a, b, c, e) = (
         PolyAddress::Witness(0),
