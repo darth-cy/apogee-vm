@@ -1,32 +1,13 @@
 //! Fixture plumbing for `crates/isa`'s suites.
 //!
-//! This crate's own fixtures live in `tests/vectors/` and are pinned by
-//! SHA-256 in [`PINS`]. The guests are built from `guests/` and listed by the
-//! pinned toolchain's `llvm-objdump` as the tests run (`test_support`).
+//! This crate's own fixtures live in `tests/vectors/`. The guests are built from
+//! `guests/` and listed by the pinned toolchain's `llvm-objdump` as the tests run
+//! (`test_support`).
 
 #![allow(dead_code)]
 
 use std::fs;
 use std::path::PathBuf;
-
-use test_support::{sha256, to_hex};
-
-/// Every committed fixture of this crate, and the digest it must have.
-/// Refresh with `cargo run -p kat-gen -- isa`, which prints the digests.
-pub const PINS: [(&str, &str); 3] = [
-    (
-        "isa_corpus.elf",
-        "a6172fcd6e4c1c5da73dfb3db6e1a7029fee212f9cb891f80da622d57008719b",
-    ),
-    (
-        "isa_corpus.objdump.txt",
-        "c121d3f5b8db8563356dfa7810ef25c860fabf0d52f38226f550b99abd13a0b2",
-    ),
-    (
-        "isa_negative.txt",
-        "4be04b33f55c7624da5d7e6ed57c329c925d9091e385f7f683ef20892468992f",
-    ),
-];
 
 pub fn own(name: &str) -> Vec<u8> {
     read(
@@ -38,10 +19,6 @@ pub fn own(name: &str) -> Vec<u8> {
 
 fn read(path: PathBuf) -> Vec<u8> {
     fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
-}
-
-pub fn digest(bytes: &[u8]) -> String {
-    to_hex(&sha256(bytes))
 }
 
 /// Every non-comment, non-blank line.

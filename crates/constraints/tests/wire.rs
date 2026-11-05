@@ -80,15 +80,15 @@ fn toy_with_gate(gate: GateDef) -> CircuitArtifact {
 // The round trip
 // ---------------------------------------------------------------------------
 
-/// Both committed artifacts decode, re-encode to exactly the
-/// file's bytes, decode again to an equal struct, and are circuits. postcard is
+/// Both compilations decode, re-encode to exactly the same
+/// bytes, decode again to an equal struct, and are circuits. postcard is
 /// deterministic and not self-describing, so byte identity here tests the
 /// artifact's layout, not a formatter.
 #[test]
-fn both_fixtures_round_trip_byte_identically() {
+fn both_compilations_round_trip_byte_identically() {
     for (name, bytes) in [
-        ("toy_cached.bin", toy_cached_bytes()),
-        ("toy_cache_free.bin", toy_cache_free_bytes()),
+        ("the cached toy", toy_cached_bytes()),
+        ("the cache-free toy", toy_cache_free_bytes()),
     ] {
         let decoded = CircuitArtifact::from_bytes(&bytes)
             .unwrap_or_else(|e| panic!("{name} must decode: {e}"));
@@ -224,13 +224,13 @@ fn a_format_version_other_than_one_is_refused() {
     assert_eq!(CircuitArtifact::from_bytes(&s13), refused(0));
 }
 
-/// Every proper prefix of each file is refused as a buffer that ends early,
-/// from the empty string to the file less its last byte.
+/// Every proper prefix of each encoding is refused as a buffer that ends early,
+/// from the empty string to the encoding less its last byte.
 #[test]
 fn every_truncation_is_refused() {
     for (name, bytes) in [
-        ("toy_cached.bin", toy_cached_bytes()),
-        ("toy_cache_free.bin", toy_cache_free_bytes()),
+        ("the cached toy", toy_cached_bytes()),
+        ("the cache-free toy", toy_cache_free_bytes()),
     ] {
         for len in 0..bytes.len() {
             assert_eq!(
@@ -363,13 +363,9 @@ fn a_nonzero_unused_address_field_is_refused() {
 
 /// Virtual kinds are 0 (`V[row]`), 1 (`V[ram_live]`), 2 (`V[range19]`),
 /// 3 (`V[range16]`), and 4, 5 and 6, the `XOR8` table's three columns; a tag
-/// is never reassigned, and a kind is printed by its short name.
-///
-/// The `kinds.len()` refusal at the end is what makes this a fixed numbering
-/// and not merely a list: adding a kind without a tag, or a tag without a decoder arm,
-/// fails here. `crates/verifier-core/src/types.rs` carries the **same** seven
-/// tags for a `ChannelSpec`'s table addresses, and
-/// `the_two_virtual_tag_tables_agree` below holds the two equal.
+/// is never reassigned, and a kind is printed by its short name. A tag no kind
+/// has is refused. `crates/verifier-core/src/types.rs` carries the **same**
+/// tags for a `ChannelSpec`'s table addresses.
 #[test]
 fn virtual_kind_tags_are_append_only() {
     let kinds = [
@@ -386,10 +382,11 @@ fn virtual_kind_tags_are_append_only() {
         assert_eq!(postcard::from_bytes::<VirtualKind>(&[tag]), Ok(kind));
         assert_eq!(PolyAddress::Virtual(kind).to_string(), name);
     }
+    // The largest tag one varint byte can hold, so a new kind does not reach it.
     assert_eq!(
-        postcard::from_bytes::<VirtualKind>(&[kinds.len() as u8]),
+        postcard::from_bytes::<VirtualKind>(&[0x7f]),
         Err(postcard::Error::SerdeDeCustom),
-        "the first tag no kind has"
+        "a tag no kind has"
     );
 }
 
@@ -805,7 +802,7 @@ fn every_single_bit_flip_returns_without_panicking() {
     }
     assert!(
         0 < decoded && decoded < total,
-        "{decoded} of {total} single-bit flips of toy_cached.bin still decode"
+        "{decoded} of {total} single-bit flips of the cached toy still decode"
     );
-    eprintln!("{decoded} of {total} single-bit flips of toy_cached.bin still decode");
+    eprintln!("{decoded} of {total} single-bit flips of the cached toy still decode");
 }

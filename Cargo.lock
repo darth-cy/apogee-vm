@@ -191,7 +191,6 @@ dependencies = [
  "field",
  "postcard",
  "serde",
- "test-support",
 ]
 
 [[package]]
@@ -385,16 +384,7 @@ version = "0.1.0"
 dependencies = [
  "ark-ff",
  "ark-poly",
- "checker",
- "constants",
- "constraints",
- "field",
- "loader",
- "poly",
- "program",
  "test-support",
- "transcript",
- "verifier-core",
 ]
 
 [[package]]

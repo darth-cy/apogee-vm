@@ -3,8 +3,8 @@
 The binaries around the prover and verifier, none on a proof path: `bench` measures components
 (§1), `profiler` counts a guest's cycles (§2), a `debug-info` build logs a proving run (§3),
 `checker` validates circuits and the global transcript (§4), `artifact-dump` exports a guest's
-`ProgramImage` (§5), `verifier` checks a proof from files (§6), `kat-gen` regenerates the
-committed fixtures (§7), and a generator outside the workspace is a reference oracle (§8).
+`ProgramImage` (§5), `verifier` checks a proof from files (§6), `kat-gen` writes the committed
+reference vectors (§7), and a generator outside the workspace is a reference oracle (§8).
 
 ## 1. bench
 
@@ -117,8 +117,8 @@ cargo run -p checker -- dump <artifact>       the circuit, readably (checker::du
 cargo run -p checker -- tape <verifying-key> <public-inputs>
 ```
 
-An artifact is a `CircuitArtifact` file, decoded for encoding only so that a lawless one reaches
-the checks, such as `crates/constraints/tests/vectors/*.bin`. The validators are
+An artifact is a `CircuitArtifact` file, the bytes of `to_bytes`, decoded for encoding only so that
+a lawless one reaches the checks. No artifact is committed. The validators are
 [circuits.md](spec/circuits.md) §3's, independent of `constraints`; `padding` omits the
 product-tree clause; `dump` prints any decodable artifact.
 
@@ -168,19 +168,23 @@ statement's shards, each once, in any order; the second verifies a `BlockProof` 
 malformed identity. **Every run prints a warning to stderr that a proof which verifies is
 UNSOUND**: there is no commitment scheme ([architecture.md](architecture.md) §0).
 
-## 7. kat-gen and the committed fixtures
+## 7. kat-gen and the committed vectors
 
-`cargo run -p kat-gen` regenerates every group, `cargo run -p kat-gen -- <group>` one.
-Each file written prints its SHA-256, which the tests reading it pin.
+`cargo run -p kat-gen` writes every group, `cargo run -p kat-gen -- <group>` one.
 
 | group | writes | from |
 | --- | --- | --- |
 | `field`, `poly` | `Fr` arithmetic and multilinear-polynomial vectors | arkworks' `ark-ff` and `ark-poly` |
 | `loader`, `isa` | synthetic ELFs, fib's public-I/O record; an RV32IMA corpus, words that must not decode | the pinned toolchain's `llvm-objdump` |
-| `program`, `tape` | a mul-free program; `guests/shards`' global tape | `program`; `checker` |
-| `gkr`, `memory`, `lookup`, `family` | `CircuitArtifact` files: toy circuits; the three distinct frames, the two RAM-window circuits and the seven execution circuits, at `2^22` | `constraints` |
+| `program` | a mul-free program | hand-built |
 
-CI runs every group and the oracle (§8) and fails on any `git diff` in the vector directories.
+**A file is committed only if no implementation change can move it.** `kat-gen` links nothing of the
+repository's but `test-support`. A test holds the implementation to a vector's contents; nothing
+pins a vector by hash and CI does not regenerate one, so run the generator when you change it.
+
+**No circuit is committed.** A suite calls the constructor; the toys are
+`crates/constraints/tests/common/{toy,lookup_toy}.rs`, which other crates' suites include by `#[path]`.
+
 **No guest ELF is committed**, nor anything derived from one. A guest ELF is not reproducible across
 machines, since rustc embeds absolute paths in the panic-location strings of `core` and of crates
 outside the guest workspace, which the guest build does not remap, and every guest-sdk edit moves

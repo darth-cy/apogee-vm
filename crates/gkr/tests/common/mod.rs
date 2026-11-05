@@ -16,36 +16,14 @@ use gkr::{
 };
 use poly::{MultilinearPoly, PolyBacking};
 use sumcheck::{absorb_witness_digest, witness_digest};
-use test_support::{sha256, to_hex, Rng};
+use test_support::Rng;
 use transcript::Transcript;
 
-pub const TOY_CACHED_SHA256: &str =
-    "ee27e1192c4bcf9afa003509f6c06fead29628b02a4c17f86e381bf5609f1c70";
-pub const TOY_CACHE_FREE_SHA256: &str =
-    "5318afeb5b5ba5d09871358c89db36a0db12680fa9559a70c67c50b41181251d";
+#[path = "../../../constraints/tests/common/toy.rs"]
+mod toy;
 
-/// A committed artifact, pinned before it is decoded.
-pub fn fixture(name: &str, digest: &str) -> CircuitArtifact {
-    let path = format!(
-        "{}/../constraints/tests/vectors/{name}",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
-    assert_eq!(
-        to_hex(&sha256(&bytes)),
-        digest,
-        "{name} changed: regenerate with `cargo run -p kat-gen -- gkr` and repin"
-    );
-    CircuitArtifact::from_bytes(&bytes).unwrap_or_else(|e| panic!("decoding {name}: {e}"))
-}
-
-pub fn toy() -> CircuitArtifact {
-    fixture("toy_cached.bin", TOY_CACHED_SHA256)
-}
-
-pub fn toy_cache_free() -> CircuitArtifact {
-    fixture("toy_cache_free.bin", TOY_CACHE_FREE_SHA256)
-}
+#[allow(unused_imports)]
+pub use toy::{toy, toy_cache_free};
 
 /// The toy's committed columns, in layout order `m, a, b, c, e, s`, as raw
 /// tables. `a`, `b`, `c`, `m` random; `s` random bits; `e = a` wherever

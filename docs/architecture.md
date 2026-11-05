@@ -166,8 +166,8 @@ own independent oracle.
 | the memory and lookup arguments | native evaluators in `checker` over executed traces |
 | the executor | its own trace's self-check and the arguments above; there is no second executor |
 
-Committed fixtures are regenerated and compared in CI ([tools.md](tools.md) §7). The suites that
-prove real shards need tens of GiB and run outside CI; `.github/workflows/ci.yml` lists them.
+The suites that prove real shards need tens of GiB and run outside CI;
+`.github/workflows/ci.yml` lists them.
 
 ## 7. Cost
 

@@ -1,5 +1,5 @@
-//! The standalone checkers, over a committed `CircuitArtifact` file or over a
-//! verifying key and a statement.
+//! The standalone checkers, over a `CircuitArtifact` file or over a verifying
+//! key and a statement.
 //!
 //!     cargo run -p checker -- laws <artifact>      # Laws 1-4 and the lookup rules, gkr.md §4.2
 //!     cargo run -p checker -- padding <artifact>   # the padding contract, gkr.md §4.3

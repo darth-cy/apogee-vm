@@ -1,11 +1,8 @@
-//! The two committed toy artifacts, pinned by SHA-256 before they are decoded,
-//! and the short constructors the suites build mutations from. Hex and SHA-256
-//! are shared with the other suites and live in `tools/test-support`.
-//! Test-only; never compiled into the library.
+//! The toy circuits, and the short constructors the suites build mutations
+//! from. Test-only; never compiled into the library.
 //!
-//! The toy's structure is the doc comment at the top of
-//! `tools/kat-gen/src/gkr.rs`, reproduced here because every mutation below is
-//! written against it:
+//! The toy's structure is the doc comment at the top of `toy.rs`, reproduced
+//! here because every mutation below is written against it:
 //!
 //! ```text
 //! base      M[0] m   W[0] a   W[1] b   W[2] c   W[3] e   S[0] s   V[row]      16 rows
@@ -23,49 +20,23 @@
 #![allow(dead_code)]
 
 use constants::challenge_slot;
-use constraints::{CircuitArtifact, Coeff, PolyAddress, VirtualKind};
+use constraints::{Coeff, PolyAddress, VirtualKind};
 use field::Fr;
-use test_support::{sha256, to_hex};
 
-pub const TOY_CACHED_SHA256: &str =
-    "ee27e1192c4bcf9afa003509f6c06fead29628b02a4c17f86e381bf5609f1c70";
-pub const TOY_CACHE_FREE_SHA256: &str =
-    "5318afeb5b5ba5d09871358c89db36a0db12680fa9559a70c67c50b41181251d";
+mod lookup_toy;
+mod toy;
 
-/// A committed artifact's bytes, pinned before anything reads them.
-pub fn fixture_bytes(name: &str, digest: &str) -> Vec<u8> {
-    let path = format!("{}/tests/vectors/{name}", env!("CARGO_MANIFEST_DIR"));
-    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
-    assert_eq!(
-        to_hex(&sha256(&bytes)),
-        digest,
-        "{name} changed. Regenerate it with `cargo run -p kat-gen -- gkr`, review the \
-         diff, then update the pinned digest deliberately."
-    );
-    bytes
-}
+#[allow(unused_imports)]
+pub use lookup_toy::lookup_toy;
+#[allow(unused_imports)]
+pub use toy::{toy, toy_cache_free};
 
 pub fn toy_cached_bytes() -> Vec<u8> {
-    fixture_bytes("toy_cached.bin", TOY_CACHED_SHA256)
+    toy().to_bytes()
 }
 
 pub fn toy_cache_free_bytes() -> Vec<u8> {
-    fixture_bytes("toy_cache_free.bin", TOY_CACHE_FREE_SHA256)
-}
-
-fn decode(name: &str, bytes: &[u8]) -> CircuitArtifact {
-    CircuitArtifact::from_bytes(bytes).unwrap_or_else(|e| panic!("decoding {name}: {e}"))
-}
-
-/// The cached toy, decoded. Its fields are public, which is what lets a test
-/// break exactly one law.
-pub fn toy() -> CircuitArtifact {
-    decode("toy_cached.bin", &toy_cached_bytes())
-}
-
-/// The toy's cache-free compilation, decoded.
-pub fn toy_cache_free() -> CircuitArtifact {
-    decode("toy_cache_free.bin", &toy_cache_free_bytes())
+    toy_cache_free().to_bytes()
 }
 
 // ---------------------------------------------------------------------------

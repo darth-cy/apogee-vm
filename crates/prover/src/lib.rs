@@ -247,10 +247,8 @@ impl ProverSetup {
             circuits: families.iter().map(|f| f.circuit.clone()).collect(),
         };
         vk.check().map_err(ProverError::Key)?;
-        // Identity in full, not truncated: it is the value a reader compares
-        // against a pinned constant rather than against another run, and a
-        // stale pin is this repository's most repeated failure
-        // (`docs/tools.md` §3).
+        // Identity in full, not truncated: it is the value the `verifier` CLI
+        // is handed (`docs/tools.md` §6).
         dlog!(
             Phase,
             "apogee setup    key ok families={} entry_pc={:#x} identity={}",

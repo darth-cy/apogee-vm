@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{fixture_bytes, toy, toy_cache_free};
+use common::{lookup_toy, toy, toy_cache_free};
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, CATALOGUE};
 
 /// The variant count, and each variant's name, written as an exhaustive match
@@ -91,16 +91,7 @@ fn every_gate(a: &CircuitArtifact) -> Vec<&GateDef> {
     gates
 }
 
-/// The combined lookup toy, the one toy circuit with a fraction tree in it.
-fn lookup_toy() -> CircuitArtifact {
-    let bytes = fixture_bytes(
-        "lookup_toy.bin",
-        "4f47409bf6c36f37719393abef9ed0bf8ad250a9dd89ccbeacd270f355bc95b8",
-    );
-    CircuitArtifact::from_bytes(&bytes).expect("the lookup toy decodes")
-}
-
-/// Across the committed toy circuits — the audit runs over all of them, since
+/// Across the toy circuits — the audit runs over all of them, since
 /// a variant absent from one may be the one another uses — every `GateDef`
 /// variant is emitted, so none is dead and none needs to be documented as
 /// reserved. Each emitted gate is mapped to its catalogue row by this file's
@@ -110,7 +101,7 @@ fn lookup_toy() -> CircuitArtifact {
 /// The GKR toy emits no `TreeCross`: a fraction tree is the one thing that
 /// halves two columns together, and only the lookup toy has one.
 #[test]
-fn the_audit_over_every_committed_circuit_emits_every_variant() {
+fn the_audit_over_every_toy_circuit_emits_every_variant() {
     let mut emitted = [false; VARIANTS];
     for a in [toy(), toy_cache_free(), lookup_toy()] {
         for g in every_gate(&a) {

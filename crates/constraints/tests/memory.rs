@@ -1,9 +1,9 @@
 //! `constraints::memory`, `docs/spec/memory.md` §2, §3.3 and §8: every memory
 //! artifact — one frame per execution family, and the two RAM windows —
 //! validates and keeps the construction-time rules at two heights, their
-//! layouts, obligations and read sets are the document's, the committed
-//! fixtures are the constructors' bytes, and `check_memory` refuses each thing
-//! §8 names. The dropped-obligation negative control is the unit test in
+//! layouts, obligations and read sets are the document's, and `check_memory`
+//! refuses each thing §8 names. The dropped-obligation negative control is the
+//! unit test in
 //! `src/memory.rs`, which reaches the private construction.
 //!
 //! A family's frame holds only the queries its instructions can make (§2.1), so
@@ -28,15 +28,6 @@ use constraints::{
 };
 use field::Fr;
 use std::collections::HashSet;
-use test_support::{sha256, to_hex};
-
-const FRAME_REG_SHA256: &str = "bd55a15ee9b2d7fc5afd11ba5d4dbca6ce876bc8cce784570555500bf6829308";
-const FRAME_MEM_SHA256: &str = "f4ab6499b1a476ada2a8ef338ac019b983828eb97f2c41431134fd94f0e3ec68";
-const FRAME_ATOMICS_SHA256: &str =
-    "af7cf287bb4b3b2951812e2540e77bad9621d5950da42df65df0bb73909d84ce";
-const IMAGE_WINDOW_SHA256: &str =
-    "39a8655d430ed5c031e4f27075662fe92a9a1274cd23dc300ae5e2e82df67ecc";
-const ZERO_WINDOW_SHA256: &str = "f08dde677a70c8a15cc7b67b35806e6ee5d9afff9cb703586f21426baa51ec1c";
 
 /// The seven execution families, ascending: every family that runs cycles and
 /// so carries a frame. `INIT_TEARDOWN` and `ZERO_WINDOWS` have none — their
@@ -103,7 +94,7 @@ const FRAME_SHAPES: [(u32, &[usize], usize, usize, usize, usize, usize); 7] = [
 
 /// The three *distinct* frames: families sharing a query list share their
 /// artifact byte for byte, so these three stand for all seven.
-/// `the_seven_families_frames_are_the_three_fixtures` is what holds that.
+/// `the_seven_families_frames_are_three_circuits` is what holds that.
 const DISTINCT_FRAMES: [u32; 3] = [family::JUMP_BRANCH_SLT, family::MEM_WORD, family::ATOMICS];
 
 /// Every memory artifact there is, at `trace_vars`: one frame per execution
@@ -129,91 +120,40 @@ fn every_artifact(trace_vars: u32) -> Vec<(String, CircuitArtifact)> {
     all
 }
 
-fn fixture(name: &str) -> Vec<u8> {
-    let path = format!("{}/tests/vectors/{name}", env!("CARGO_MANIFEST_DIR"));
-    std::fs::read(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"))
-}
-
-/// Each committed fixture is pinned, then held to its constructor's bytes at
-/// `trace_vars` 22 — the three distinct frames and the two windows. The
-/// constructors are the only definition; the pin is what makes a changed
-/// circuit a deliberate refresh.
-#[test]
-fn the_fixtures_are_the_constructors_bytes() {
-    let fixtures = [
-        (
-            "memory_frame_reg.bin",
-            FRAME_REG_SHA256,
-            family_frame_artifact(family::JUMP_BRANCH_SLT, 22),
-        ),
-        (
-            "memory_frame_mem.bin",
-            FRAME_MEM_SHA256,
-            family_frame_artifact(family::MEM_WORD, 22),
-        ),
-        (
-            "memory_frame_atomics.bin",
-            FRAME_ATOMICS_SHA256,
-            family_frame_artifact(family::ATOMICS, 22),
-        ),
-        (
-            "image_window.bin",
-            IMAGE_WINDOW_SHA256,
-            image_window_artifact(22),
-        ),
-        (
-            "zero_window.bin",
-            ZERO_WINDOW_SHA256,
-            zero_window_artifact(22),
-        ),
-    ];
-    for (name, digest, artifact) in fixtures {
-        let bytes = fixture(name);
-        assert_eq!(
-            to_hex(&sha256(&bytes)),
-            digest,
-            "{name} changed. Regenerate it with `cargo run -p kat-gen -- memory`, review the \
-             diff, then update the pinned digest deliberately."
-        );
-        assert_eq!(bytes, artifact.to_bytes(), "{name}");
-        assert_eq!(CircuitArtifact::from_bytes(&bytes), Ok(artifact), "{name}");
-    }
-}
-
-/// Three files pin seven families: a family's frame is decided by its query
-/// list alone, so families sharing one share their artifact byte for byte —
+/// Seven families, three frames: a family's frame is decided by its query list
+/// alone, so families sharing one share their artifact byte for byte —
 /// `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE` and `MUL_DIV` are one
-/// frame, `MEM_WORD` and `MEM_SUBWORD` another. Every execution family is held
-/// to the fixture `kat-gen` writes for it, and the three fixtures are pairwise
-/// distinct, so a family quietly re-pointed at another's frame fails here.
+/// frame, `MEM_WORD` and `MEM_SUBWORD` another. The three are pairwise distinct,
+/// so a family quietly re-pointed at another's frame fails here.
 #[test]
-fn the_seven_families_frames_are_the_three_fixtures() {
-    let files = [
-        (family::ADD_SUB_LUI_AUIPC, "memory_frame_reg.bin"),
-        (family::JUMP_BRANCH_SLT, "memory_frame_reg.bin"),
-        (family::SHIFT_BITWISE, "memory_frame_reg.bin"),
-        (family::MUL_DIV, "memory_frame_reg.bin"),
-        (family::MEM_WORD, "memory_frame_mem.bin"),
-        (family::MEM_SUBWORD, "memory_frame_mem.bin"),
-        (family::ATOMICS, "memory_frame_atomics.bin"),
+fn the_seven_families_frames_are_three_circuits() {
+    let frames = [
+        (family::ADD_SUB_LUI_AUIPC, family::JUMP_BRANCH_SLT),
+        (family::JUMP_BRANCH_SLT, family::JUMP_BRANCH_SLT),
+        (family::SHIFT_BITWISE, family::JUMP_BRANCH_SLT),
+        (family::MUL_DIV, family::JUMP_BRANCH_SLT),
+        (family::MEM_WORD, family::MEM_WORD),
+        (family::MEM_SUBWORD, family::MEM_WORD),
+        (family::ATOMICS, family::ATOMICS),
     ];
-    assert_eq!(files.map(|(id, _)| id), EXECUTION_FAMILIES);
-    for (id, name) in files {
+    assert_eq!(frames.map(|(id, _)| id), EXECUTION_FAMILIES);
+    for (id, frame) in frames {
         assert_eq!(
             family_frame_artifact(id, 22).to_bytes(),
-            fixture(name),
-            "family {id} is {name}"
+            family_frame_artifact(frame, 22).to_bytes(),
+            "family {id}'s frame is family {frame}'s"
         );
     }
     let distinct: HashSet<Vec<u8>> = DISTINCT_FRAMES
         .iter()
         .map(|&id| family_frame_artifact(id, 22).to_bytes())
         .collect();
-    assert_eq!(distinct.len(), 3, "the three fixtures are three circuits");
+    assert_eq!(distinct.len(), 3, "the three frames are three circuits");
 }
 
 /// Every constructor there is — the seven families' frames and the two
-/// windows — at both a small height and the default one.
+/// windows — at both a small height and the default one, through the wire form
+/// and back.
 #[test]
 fn every_constructor_validates_and_keeps_the_memory_rules_at_12_and_22() {
     for trace_vars in [12, 22] {
@@ -223,6 +163,7 @@ fn every_constructor_validates_and_keeps_the_memory_rules_at_12_and_22() {
             assert_eq!(a.validate(), Ok(()), "{label} at {trace_vars}");
             assert_eq!(check_memory(&a), Ok(()), "{label} at {trace_vars}");
             assert_eq!(a.trace_vars, trace_vars, "{label}");
+            assert_eq!(CircuitArtifact::from_bytes(&a.to_bytes()), Ok(a), "{label}");
         }
     }
 }

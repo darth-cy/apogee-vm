@@ -1,13 +1,11 @@
 //! Known-answer tests against the committed arkworks-generated vector file.
 //!
-//! The file is data, never inline literals, and is pinned by SHA-256. Refresh
-//! it with `cargo run -p kat-gen`, then update `KAT_SHA256` deliberately.
+//! The file is data, never inline literals; `cargo run -p kat-gen` writes it.
 
 use field::Fr;
-use test_support::{hex_to_32, sha256, to_hex};
+use test_support::{hex_to_32, to_hex};
 
 const KAT_PATH: &str = "tests/vectors/fr_kats.txt";
-const KAT_SHA256: &str = "f245dfb27cdb35ca69c111f736e53b7de2ecb27744f60b9eb24f0c6db662f2cd";
 
 /// One parsed line: an operator and its whitespace-separated fields, the last
 /// of which is the expected result.
@@ -17,10 +15,9 @@ struct Kat {
     fields: Vec<String>,
 }
 
-fn read_kats() -> (String, Vec<Kat>) {
+fn read_kats() -> Vec<Kat> {
     let text = std::fs::read_to_string(KAT_PATH).expect("committed KAT file must be readable");
-    let kats = text
-        .lines()
+    text.lines()
         .enumerate()
         .filter(|(_, l)| !l.trim().is_empty() && !l.starts_with('#'))
         .map(|(i, l)| {
@@ -35,8 +32,7 @@ fn read_kats() -> (String, Vec<Kat>) {
                 fields: it.map(|s| s.to_string()).collect(),
             }
         })
-        .collect();
-    (text, kats)
+        .collect()
 }
 
 /// Parse canonical bytes into an `Fr`, refusing anything the wire form rejects.
@@ -114,18 +110,8 @@ fn check(kat: &Kat) -> Result<(), String> {
 }
 
 #[test]
-fn kat_file_is_pinned_by_content() {
-    let (text, _) = read_kats();
-    assert_eq!(
-        to_hex(&sha256(text.as_bytes())),
-        KAT_SHA256,
-        "{KAT_PATH} changed; regenerate with `cargo run -p kat-gen` and update KAT_SHA256"
-    );
-}
-
-#[test]
 fn kat_file_covers_every_operator() {
-    let (_, kats) = read_kats();
+    let kats = read_kats();
     assert!(
         kats.len() >= 50,
         "need at least 50 vectors, have {}",
@@ -139,7 +125,7 @@ fn kat_file_covers_every_operator() {
 
 #[test]
 fn all_kats_match() {
-    let (_, kats) = read_kats();
+    let kats = read_kats();
     let failures: Vec<String> = kats.iter().filter_map(|k| check(k).err()).collect();
     assert!(
         failures.is_empty(),
@@ -154,7 +140,7 @@ fn all_kats_match() {
 /// local to this test; the committed file is untouched.
 #[test]
 fn corrupted_kats_are_rejected() {
-    let (_, kats) = read_kats();
+    let kats = read_kats();
 
     for op in ["add", "sub", "mul", "square", "inv", "pow"] {
         let good = kats

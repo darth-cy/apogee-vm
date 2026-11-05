@@ -3,9 +3,8 @@
 //! The guests are built from `guests/` and listed by the pinned toolchain's
 //! `llvm-objdump` and `llvm-nm` as the tests run ([`guest`], [`objdump`],
 //! [`nm`]); nothing derived from a guest build is committed. The committed
-//! fixtures are the synthetic ELFs, their index and fib's public-I/O record,
-//! which `cargo run -p kat-gen -- loader` regenerates byte for byte and
-//! `differential.rs` pins.
+//! fixtures are the synthetic ELFs and fib's public-I/O record, which
+//! `cargo run -p kat-gen -- loader` writes.
 
 #![allow(dead_code)]
 
@@ -15,7 +14,6 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use loader::{ProgramImage, Slot};
-use test_support::{sha256, to_hex};
 
 /// Guest `name`'s ELF, built from `guests/` (`test_support::guest_elf`): no
 /// guest ELF is committed.
@@ -34,34 +32,6 @@ pub fn bytes(name: &str) -> Vec<u8> {
 
 pub fn text(name: &str) -> String {
     String::from_utf8(bytes(name)).expect("a committed listing is UTF-8")
-}
-
-pub fn digest(name: &str) -> String {
-    to_hex(&sha256(&bytes(name)))
-}
-
-/// One synthetic ELF, checked against the digest `synthetic_elfs.txt` records.
-///
-/// The index is itself pinned in `differential.rs`, so editing a synthetic
-/// fixture means editing both files and a source constant.
-pub fn synthetic(name: &str) -> Vec<u8> {
-    let want = synthetic_index()
-        .remove(name)
-        .unwrap_or_else(|| panic!("{name} is not in synthetic_elfs.txt"));
-    let file = bytes(name);
-    assert_eq!(
-        to_hex(&sha256(&file)),
-        want,
-        "{name} does not match the digest synthetic_elfs.txt records"
-    );
-    file
-}
-
-pub fn synthetic_index() -> BTreeMap<String, String> {
-    rows("synthetic_elfs.txt")
-        .into_iter()
-        .map(|f| (f[0].clone(), f[1].clone()))
-        .collect()
 }
 
 /// Every non-comment, non-blank line of a listing, split on whitespace.
@@ -183,7 +153,7 @@ pub fn build(name: &str, slot: &str) -> Vec<u8> {
 /// optimisation level part of the statement being proven.
 ///
 /// `layout.rs` and `reproducible.rs` stay on debug deliberately -- they are
-/// about the committed artifacts, which are dev builds.
+/// about dev builds.
 pub fn profile() -> String {
     std::env::var("APOGEE_GUEST_PROFILE").unwrap_or_else(|_| "debug".into())
 }

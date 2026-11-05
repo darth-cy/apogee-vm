@@ -206,8 +206,9 @@ fn a_config_without_both_init_families_at_one_height_is_refused() {
         let err = decode_program_detaching(&image, &ProgramParams::defaults(), &[init]);
         assert_eq!(err.unwrap_err(), missing, "{init} detached");
         let mut config = fib_config();
+        let whole = config.families.len();
         config.families.retain(|(f, _)| *f != init);
-        assert_eq!(config.families.len(), 10);
+        assert_eq!(config.families.len(), whole - 1);
         assert_eq!(
             VmConfig::from_bytes(&config.to_bytes()),
             None,

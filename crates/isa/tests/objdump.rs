@@ -276,15 +276,3 @@ fn a_perturbed_word_disagrees_with_the_listing() {
         "only {caught} of 64 perturbations were caught"
     );
 }
-
-#[test]
-fn committed_fixtures_match_their_pins() {
-    for (name, want) in common::PINS {
-        assert_eq!(
-            common::digest(&common::own(name)),
-            want,
-            "{name} has changed. If that was deliberate, rerun `cargo run -p kat-gen -- isa` \
-             and update the digest in tests/common/mod.rs."
-        );
-    }
-}

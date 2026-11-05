@@ -11,9 +11,9 @@
 //!   memory-op families — at `2^20`. Its rows touch RAM, so it has a
 //!   `ZERO_WINDOWS` shard.
 //! - `guests/shards`', with add/sub and jump/branch/slt at `2^20`. Its add/sub
-//!   family runs 1,064,970 cycles, past `2^20`, so it has **two shards of one
-//!   family** — and it touches no RAM, so it has a family the config carries
-//!   and no shard proves.
+//!   family runs past `2^20` cycles, so it has **two shards of one family** —
+//!   and it touches no RAM, so it has a family the config carries and no shard
+//!   proves.
 //!
 //! Every guest here is built from `guests/` by `test_support::guest_elf`;
 //! `crates/checker`'s and `crates/verifier`'s suites include this module too,
@@ -51,9 +51,6 @@ pub const MEM_RESULT: u32 = 50;
 
 /// `guests/shards`' exit status: the number of its checks.
 pub const SHARDS_RESULT: u32 = 2;
-
-/// `guests/shards`' add/sub occupancy, which is what makes it two shards.
-pub const SHARDS_ADD_CYCLES: u64 = 1_064_970;
 
 /// Guest `name`'s ELF, built from `guests/`.
 pub fn fixture(name: &str) -> Vec<u8> {

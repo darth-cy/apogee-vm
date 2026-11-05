@@ -537,17 +537,6 @@ fn the_discharge_cross_check_refuses_an_unconsumed_and_a_doubled_obligation() {
     );
 }
 
-/// The combined lookup toy, `lookup_toy.bin`: a committed circuit whose gate
-/// list 0 carries lookup denominators.
-fn lookup_toy() -> CircuitArtifact {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../constraints/tests/vectors/lookup_toy.bin"
-    );
-    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
-    CircuitArtifact::from_bytes(&bytes).expect("the lookup toy decodes")
-}
-
 /// `checker::check_channel_roots`' negative control: a root pair that is not the
 /// native recomputation is refused, on each half of the pair separately. Kills a
 /// comparison that looks at one half, or at neither.

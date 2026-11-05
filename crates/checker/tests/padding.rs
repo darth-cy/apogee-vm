@@ -59,7 +59,7 @@ fn an_invalid_zero_row_must_be_declared_invalid() {
 
 #[test]
 fn a_padding_row_of_the_wrong_length_is_rejected() {
-    let mut a = load(CACHED);
+    let mut a = toy();
     a.padding.row.pop();
     assert!(check_padding(&a)
         .unwrap_err()

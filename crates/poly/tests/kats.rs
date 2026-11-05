@@ -9,14 +9,11 @@
 
 mod common;
 
-use common::{
-    assert_sha256, corrupt, data_lines, field_element, index, read_vectors, vertex, Line,
-};
+use common::{corrupt, data_lines, field_element, index, read_vectors, vertex, Line};
 use field::Fr;
 use poly::{eq_eval, eq_table, MultilinearPoly, PolyBacking};
 
 const KATS_PATH: &str = "tests/vectors/poly_kats.txt";
-const KATS_SHA256: &str = "428c7a938a81e2a4dcefe3861250aefb6e740dcd3192327da00c855d1bc96746";
 
 // ---------------------------------------------------------------------------
 // The committed file
@@ -201,9 +198,7 @@ fn parse(text: &str) -> Result<Kats, String> {
 }
 
 fn load() -> Kats {
-    let text = read_vectors(KATS_PATH);
-    assert_sha256(KATS_PATH, &text, KATS_SHA256);
-    parse(&text).expect("the committed fixture must parse")
+    parse(&read_vectors(KATS_PATH)).expect("the committed fixture must parse")
 }
 
 fn source_poly(k: &Kats) -> MultilinearPoly {
@@ -330,8 +325,7 @@ fn eq_table_matches_eq_eval_over_the_whole_cube() {
 // ---------------------------------------------------------------------------
 
 /// One flipped digit anywhere in the file — in an expected value or in an input
-/// the replay reads — has to be caught. The digest pin catches it first; these
-/// assertions prove the replays themselves would too.
+/// the replay reads — has to be caught by the replays.
 #[test]
 fn a_corrupted_fixture_is_rejected() {
     let text = read_vectors(KATS_PATH);
@@ -359,14 +353,6 @@ fn a_corrupted_fixture_is_rejected() {
     let k = parse(&flipped).expect("still parses");
     assert!(replay_bind_chain(&k).is_err());
     assert!(replay_eq_tables(&k).is_err());
-
-    // And the pin itself: the same file with one digit moved is a different file.
-    assert_ne!(
-        test_support::to_hex(&test_support::sha256(text.as_bytes())),
-        test_support::to_hex(&test_support::sha256(
-            corrupt(&text, "bind 1 0 ").as_bytes()
-        ))
-    );
 }
 
 /// The parser is a checker too, so it has to be able to fail.

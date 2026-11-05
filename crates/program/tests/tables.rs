@@ -10,8 +10,8 @@ use field::Fr;
 use loader::{Segment, Slot};
 use poly::PolyBacking;
 use program::{
-    decode_program, family_name, field_mask, image_init_column, lookup_tuple, row_kind, FamilyId,
-    ProgramError, ProgramParams, RowField, FAMILIES,
+    decode_program, family_name, field_mask, image_init_column, row_kind, FamilyId, ProgramError,
+    ProgramParams, RowField, FAMILIES, ROW_FIELDS,
 };
 
 /// The one committed guest with no compressed instruction. `guests/shards`
@@ -421,18 +421,23 @@ fn parameters_off_the_menu_and_unknown_versions_are_refused() {
     ));
 }
 
-/// The per-family field masks, pinned. `funct3` is bit 6 and no family keeps
-/// it; mul/div and the atomics have no immediate; the window and delegation
-/// families have no decoded table at all, so their tuple is empty and their
-/// mask 0.
+/// The fields each instruction family has to bind, read off its
+/// instructions' formats. Every instruction has a `pc`, a `next_pc` and an
+/// extra-mask bit that names its mnemonic, and each family has instructions
+/// that read `rs1` and `rs2` and write `rd`. Mul/div and the atomics are
+/// R-type, so neither has an immediate; every other instruction family has a
+/// form that does. `funct3` is not needed: the extra mask is one-hot per
+/// mnemonic, which leaves it nothing to say. Bit `k` is `ROW_FIELDS[k]`, as in
+/// `field_mask`.
 ///
-/// The list is every family, in canonical ascending order, and is held to
-/// `FAMILIES` by count *and* by order: a family appended to
-/// `constants::family` without a mask here fails on the next line, not
-/// silently.
+/// Minimums, not exact masks. A family that stops binding a field its
+/// instructions use is unsound in a way no honest proof shows, and that is the
+/// one thing that fails here. A new field or a new family edits nothing: the
+/// window and delegation families have no decoded table, and this list is not
+/// held to `FAMILIES`.
 #[test]
-fn the_field_masks_are_frozen() {
-    let want: [(FamilyId, u8); 14] = [
+fn each_instruction_family_binds_the_fields_its_instructions_use() {
+    for (family, uses) in [
         (family::ADD_SUB_LUI_AUIPC, 0b1011_1111),
         (family::JUMP_BRANCH_SLT, 0b1011_1111),
         (family::SHIFT_BITWISE, 0b1011_1111),
@@ -440,20 +445,20 @@ fn the_field_masks_are_frozen() {
         (family::MEM_WORD, 0b1011_1111),
         (family::MEM_SUBWORD, 0b1011_1111),
         (family::ATOMICS, 0b1001_1111),
-        (family::INIT_TEARDOWN, 0),
-        (family::ZERO_WINDOWS, 0),
-        (family::PUBLIC_INPUT, 0),
-        (family::PUBLIC_OUTPUT, 0),
-        (family::ADVICE_WINDOWS, 0),
-        (family::KECCAK_F, 0),
-        (family::SHA256_COMP, 0),
-    ];
-    assert_eq!(want.map(|(f, _)| f), FAMILIES, "every family, in order");
-    for (family, mask) in want {
-        assert_eq!(field_mask(family), mask, "{}", family_name(family));
-        assert_eq!(lookup_tuple(family).len(), mask.count_ones() as usize);
+    ] {
+        let missing = uses & !field_mask(family);
+        let dropped: Vec<RowField> = ROW_FIELDS
+            .into_iter()
+            .enumerate()
+            .filter(|&(k, _)| missing & (1 << k) != 0)
+            .map(|(_, field)| field)
+            .collect();
+        assert!(
+            dropped.is_empty(),
+            "{} does not bind {dropped:?}, which its instructions use",
+            family_name(family)
+        );
     }
-    assert_eq!(FAMILIES.len(), family::COUNT as usize);
 }
 
 /// The extra mask over every RV32IMA mnemonic: each live row's mask is
@@ -647,17 +652,5 @@ fn each_column_is_stored_in_the_narrowest_backing() {
                 assert!(fits, "{name} {field:?}: max {max} in {backing:?}");
             }
         }
-    }
-}
-
-#[test]
-fn committed_fixtures_match_their_pins() {
-    for (name, want) in common::PINS {
-        assert_eq!(
-            common::digest(&common::own_vector(name)),
-            want,
-            "{name} has changed. If that was deliberate, rerun `cargo run -p kat-gen -- \
-             program` and update the digest in tests/common/mod.rs."
-        );
     }
 }

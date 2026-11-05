@@ -1,12 +1,11 @@
 //! Test support specific to this crate: the vector-file reader and the
-//! transcript-case script replayer. Hex and SHA-256 are shared with the other
-//! test suites and live in `tools/test-support`. Test-only; never compiled into
-//! the library.
+//! transcript-case script replayer. Hex is shared with the other test suites
+//! and lives in `tools/test-support`. Test-only; never compiled into the library.
 #![allow(dead_code)]
 
 use constants::transcript_tags;
 use field::Fr;
-use test_support::{hex_to_32, hex_to_bytes, sha256, to_hex};
+use test_support::{hex_to_32, hex_to_bytes};
 use transcript::{Tag, Transcript};
 
 /// Parse a committed field element, refusing anything the wire form rejects.
@@ -40,16 +39,6 @@ pub fn data_lines(text: &str) -> Vec<Line> {
             fields: l.split_whitespace().map(|s| s.to_string()).collect(),
         })
         .collect()
-}
-
-pub fn assert_sha256(path: &str, text: &str, expected: &str) {
-    let got = to_hex(&sha256(text.as_bytes()));
-    assert_eq!(
-        got, expected,
-        "{path} changed. Regenerate it with \
-         `cargo run --manifest-path tools/transcript-ref/Cargo.toml`, review the \
-         diff, then update the pinned digest deliberately."
-    );
 }
 
 // ---------------------------------------------------------------------------

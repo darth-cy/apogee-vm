@@ -247,20 +247,3 @@ fn paired_regions() -> (Vec<common::Expanded>, Vec<common::Expanded>) {
         region("__norvcpair_begin", "__norvcpair_end"),
     )
 }
-
-/// The committed fixtures are what they were when the digests were written
-/// down. Each is a function of nothing in the tree but its generator, so a
-/// digest here moves only when that generator does.
-#[test]
-fn committed_fixtures_match_their_pins() {
-    assert_eq!(
-        common::digest("synthetic_elfs.txt"),
-        "4b637a7fc691b033a952ef1d2ecb28e4d18f6da8c3136c2fe224ddedca168436",
-        "the synthetic ELF index has changed"
-    );
-    assert_eq!(
-        common::digest("fib_io.txt"),
-        "5cba0ad4b4c9006919f6fb5cb8d24412e3eab2b0ffc234b47dc7d46282090070",
-        "the fib public-I/O record has changed"
-    );
-}

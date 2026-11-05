@@ -68,7 +68,7 @@ fn malformed_wire_forms_are_rejected() {
     let good = wire(0x0001_0000, &[(1, NOP), (1, RET)]);
     assert_eq!(
         postcard::from_bytes::<ProgramImage>(&good).expect("the hand-built form parses"),
-        load_elf(&common::synthetic("minimal.elf")).expect("minimal.elf loads"),
+        load_elf(&common::bytes("minimal.elf")).expect("minimal.elf loads"),
         "the hand-built wire form must be the one the loader produces, or the \
          refusals below prove nothing"
     );
@@ -232,7 +232,7 @@ fn the_slot_vector_is_structurally_sound() {
 /// vector a hostile `p_memsz` can ask for.
 #[test]
 fn segments_must_lie_inside_the_guest_ram_window() {
-    let good = common::synthetic("minimal.elf");
+    let good = common::bytes("minimal.elf");
     assert!(load_elf(&good).is_ok());
 
     // p_memsz is the sixth word of the one program header, which starts at 52.
@@ -345,7 +345,7 @@ fn the_image_does_not_depend_on_where_the_bytes_came_from() {
 /// at index 5, and the last slot comes back `NonInstruction`.
 #[test]
 fn the_sweep_resynchronises_after_a_run_of_padding() {
-    let image = load_elf(&common::synthetic("zero_halfword_run.elf")).expect("it loads");
+    let image = load_elf(&common::bytes("zero_halfword_run.elf")).expect("it loads");
     let kinds: Vec<Slot> = (0..6)
         .map(|i| {
             image

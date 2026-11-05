@@ -1,4 +1,4 @@
-//! The LogUp channels as data: the committed toy pinned, the discharge rule and
+//! The LogUp channels as data: the combined toy, the discharge rule and
 //! its negative controls, the channel construction refusals, the
 //! copower-pairing assertion, and the wire form of `TreeCross` and the range
 //! tables' virtual kinds.
@@ -9,7 +9,6 @@
 
 mod common;
 
-use common::fixture_bytes;
 use constants::{challenge_slot, family, lookup_channel};
 use constraints::lookup::{
     beta_power, check_copowers, check_discharge, range_table, row_denominator, table_denominator,
@@ -19,11 +18,7 @@ use constraints::memory::{frame_queries, frame_with_channels_artifact, FamilySpe
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 use field::Fr;
 
-/// `tools/kat-gen/src/lookup.rs`'s output.
-const TOY: &str = "lookup_toy.bin";
-const TOY_SHA256: &str = "4f47409bf6c36f37719393abef9ed0bf8ad250a9dd89ccbeacd270f355bc95b8";
-
-/// The toy's family, height and mask width, as that file fixes them.
+/// The toy's family, height and mask width, as `common/lookup_toy.rs` fixes them.
 const FAMILY: u32 = family::JUMP_BRANCH_SLT;
 const VARS: u32 = 20;
 const MASK_BITS: usize = 12;
@@ -46,17 +41,16 @@ fn column(x: PolyAddress) -> GateDef {
 }
 
 fn toy() -> CircuitArtifact {
-    let bytes = fixture_bytes(TOY, TOY_SHA256);
-    CircuitArtifact::from_bytes(&bytes).expect("the toy decodes")
+    common::lookup_toy()
 }
 
 /// The channels the toy actually carries, ascending: the order its multiplicity
 /// columns, its `ChannelSpec`s and its output root pairs all take.
 ///
 /// **Not `lookup_channel::COUNT`.** The toy is one family's shape, and
-/// `tools/kat-gen/src/lookup.rs`'s `TOY_CHANNELS` declares the four
+/// `common/lookup_toy.rs`'s `TOY_CHANNELS` declares the four
 /// `JUMP_BRANCH_SLT` carries. That those are every channel today is not
-/// something the fixture should rest on: sized off the global count, it would be
+/// something the toy should rest on: sized off the global count, it would be
 /// asked for a root pair and a `TreeCross` per halving list on any channel added
 /// later, one it has no lookup, no table and no multiplicity column for.
 fn toy_channels(a: &CircuitArtifact) -> Vec<u32> {
@@ -66,13 +60,13 @@ fn toy_channels(a: &CircuitArtifact) -> Vec<u32> {
     channels
 }
 
-/// The committed toy is a circuit: it validates, keeps the memory rules, and
+/// The toy is a circuit: it validates, keeps the memory rules, and
 /// every one of its lookups is discharged by exactly one gate-list-0 column.
-/// Its shape is the one `tools/kat-gen/src/lookup.rs` describes: four channels,
+/// Its shape is the one `common/lookup_toy.rs` describes: four channels,
 /// the memory roots first in the output map and each channel's `(num, den)`
 /// pair after them, in channel order.
 #[test]
-fn the_committed_toy_is_a_circuit_that_discharges_every_lookup() {
+fn the_toy_is_a_circuit_that_discharges_every_lookup() {
     let a = toy();
     assert_eq!(a.trace_vars, VARS);
     assert_eq!(a.validate(), Ok(()));
@@ -403,7 +397,7 @@ fn swap_leaf_gates(a: &mut CircuitArtifact, j: usize, k: usize) {
     a.relations[rk].gate = gj;
 }
 
-/// The toy's four channels, as `tools/kat-gen/src/lookup.rs` declares them.
+/// The toy's four channels, as `common/lookup_toy.rs` declares them.
 fn toy_specs() -> Vec<ChannelSpec> {
     let a = toy();
     let table = |names: &[&str]| -> Vec<PolyAddress> { names.iter().map(|n| at(&a, n)).collect() };
@@ -812,7 +806,7 @@ fn at(a: &CircuitArtifact, name: &str) -> PolyAddress {
 /// both range virtual kinds through the wire form.
 #[test]
 fn the_toy_round_trips_with_the_new_shapes() {
-    let bytes = fixture_bytes(TOY, TOY_SHA256);
+    let bytes = toy().to_bytes();
     let a = CircuitArtifact::from_bytes(&bytes).expect("decodes");
     assert_eq!(a.to_bytes(), bytes, "byte for byte");
 

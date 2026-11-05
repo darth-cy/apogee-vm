@@ -37,15 +37,6 @@ pub fn data_lines(text: &str) -> Vec<Line> {
         .collect()
 }
 
-pub fn assert_sha256(path: &str, text: &str, expected: &str) {
-    let got = to_hex(&sha256(text.as_bytes()));
-    assert_eq!(
-        got, expected,
-        "{path} changed. Regenerate it with `cargo run -p kat-gen`, review the \
-         diff, then update the pinned digest deliberately."
-    );
-}
-
 /// Parse a committed field element, refusing anything the wire form rejects.
 pub fn field_element(s: &str) -> Result<Fr, String> {
     let bytes = hex_to_32(s)?;

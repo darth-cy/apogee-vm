@@ -24,15 +24,8 @@ use constraints::memory::check_memory;
 use constraints::{add_sub, family_circuit, CircuitArtifact, PolyAddress, VirtualKind};
 use field::Fr;
 use gkr::{gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallenges};
-use test_support::{sha256, to_hex};
 
 const VARS: u32 = 20;
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../constraints/tests/vectors/add_sub.bin"
-);
-/// The fixture's digest: the constructor's bytes at `2^22`.
-const FIXTURE_SHA256: &str = "ce0aa2f96ebfd31beae12db8a21709de5c807eefb8ed7174e60f1e0a74371e7b";
 
 fn artifact() -> CircuitArtifact {
     add_sub::artifact(VARS)
@@ -350,18 +343,15 @@ fn names(list: &[&str]) -> Vec<String> {
 // The circuit
 // ---------------------------------------------------------------------------
 
-/// The committed fixture is the constructor at the family's default height,
-/// and the circuit keeps every rule both enforcement points hold it to: the
+/// The circuit at the family's default height round-trips through its wire
+/// form, and keeps every rule both enforcement points hold it to: the
 /// laws, the padding contract and its product-tree clause, the memory rules,
 /// and the discharge rule — by `constraints` and, sharing no code, by this
 /// crate.
 #[test]
-fn the_circuit_is_the_fixture_and_keeps_every_rule() {
-    let bytes = std::fs::read(FIXTURE).expect("the add/sub fixture");
-    assert_eq!(to_hex(&sha256(&bytes)), FIXTURE_SHA256);
-    assert_eq!(add_sub::artifact(22).to_bytes(), bytes);
+fn the_circuit_round_trips_and_keeps_every_rule() {
     assert_eq!(
-        CircuitArtifact::from_bytes(&bytes),
+        CircuitArtifact::from_bytes(&add_sub::artifact(22).to_bytes()),
         Ok(add_sub::artifact(22))
     );
 

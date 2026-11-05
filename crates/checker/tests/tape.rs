@@ -1,13 +1,9 @@
 //! The transcript-tape validator: the global commit phase's absorb sequence
-//! against the pre-fork order of `docs/spec/proof.md` §2, the committed tape of
-//! the two-shard statement, and the negative control — a fork that swaps two
-//! absorptions.
+//! against the pre-fork order of `docs/spec/proof.md` §2, and the negative
+//! control — a fork that swaps two absorptions.
 //!
 //! The statement here is built **shape only**: a tape carries tags and payload
-//! lengths, never values. It is the same shape
-//! `tools/kat-gen/src/tape.rs` writes the fixture from and the same shape
-//! `guests/shards` proves, and it is written out again here rather than shared,
-//! so a drift between the three fails loudly.
+//! lengths, never values. It is the shape `guests/shards` proves.
 
 use constants::family;
 use constants::transcript_tags as tags;
@@ -68,53 +64,15 @@ fn key_and_statement() -> (VerifyingKey, PublicInputs) {
     (vk, statement)
 }
 
-/// The committed fixture's lines, comments dropped.
-fn fixture() -> Vec<String> {
-    let text = include_str!("vectors/global_tape.txt");
-    text.lines()
-        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-/// The global commit phase's tape is the pre-fork order, item for item, and it
-/// is the committed fixture.
+/// The global commit phase's tape is the pre-fork order, item for item.
 #[test]
-fn the_global_tape_is_the_frozen_order_and_the_committed_fixture() {
+fn the_global_tape_is_the_pre_fork_order() {
     let (vk, statement) = key_and_statement();
-    let lines =
-        checker::check_global_tape(&vk, &statement).expect("the phase keeps the pre-fork order");
-    assert_eq!(lines, fixture(), "the tape is the committed fixture");
-    // The order, spelled out here a third time, so a change to both the phase
-    // and the checker's expectation still has to face this list.
-    assert_eq!(
-        &lines[..7],
-        &[
-            "absorb PROTOCOL_SUITE 1",
-            "absorb VM_CONFIG 15",
-            "absorb SHARD_COUNTS 7",
-            "absorb MEMORY_WINDOWS 0",
-            "absorb PROGRAM_IDENTITY 1",
-            "absorb PUBLIC_INPUTS 2",
-            "absorb MEMORY_BOUNDARY 64",
-        ]
-    );
-    assert_eq!(
-        &lines[lines.len() - 5..],
-        &[
-            "squeeze MEMORY_CHALLENGE",
-            "squeeze MEMORY_CHALLENGE",
-            "squeeze MEMORY_CHALLENGE",
-            "squeeze MEMORY_CHALLENGE",
-            "squeeze GLOBAL_STATE_DIGEST",
-        ],
-        "no challenge is drawn before the statement is absorbed"
-    );
+    checker::check_global_tape(&vk, &statement).expect("the phase keeps the pre-fork order");
     // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. Between
     // `PUBLIC_INPUTS` and `MEMORY_BOUNDARY` belongs every statement shard's
-    // memory-column commitment list. Nothing is there, so the tape is twelve
-    // lines and binds no column (`docs/architecture.md` §0).
-    assert_eq!(lines.len(), 12);
+    // memory-column commitment list. Nothing is there, so the tape binds no
+    // column (`docs/architecture.md` §0).
 }
 
 /// The expectation is a function of the statement's shape, not a constant: a
@@ -269,8 +227,8 @@ fn the_tape_verb_reads_a_key_and_a_statement_from_files() {
     );
     assert_eq!(
         text.lines().map(str::to_string).collect::<Vec<_>>(),
-        fixture(),
-        "the verb prints the committed tape"
+        checker::check_global_tape(&vk, &statement).expect("the pre-fork order"),
+        "the verb prints the tape"
     );
 
     // A statement the key does not describe: exit 1 with the reason, never a

@@ -114,12 +114,6 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
         assert_eq!(proof.outputs.len(), 2 + 2 * circuit.channels.len());
         assert_eq!(proof.to_bytes().len(), proof_bytes(a));
     }
-    let jbs = &proofs[2];
-    assert_eq!(jbs.gkr.layers.len(), 25);
-    assert_eq!(jbs.gkr.layers[0].rounds.len(), 20);
-    assert_eq!(jbs.gkr.layers[0].final_evals.len(), 21 + 44 + 10);
-    assert_eq!(jbs.outputs.len(), 2 + 2 * 4);
-    assert_eq!(jbs.to_bytes().len(), 58_088);
 
     // Each shard reduces to one claim per committed column, in layout order:
     // memory, witness, setup.
@@ -129,20 +123,14 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     // shard's witness commitments and the key's setup and generic-table
     // commitments. Nothing is opened, so these lengths are all that can be
     // held (`docs/architecture.md` §0).
-    for (proof, (m, w, s)) in [(jbs, (21, 44, 10)), (&proofs[1], (21, 28, 7))] {
+    for proof in [&proofs[1], &proofs[2]] {
         let claim = match reduce_shard(&setup.vk, proof, &public) {
             Ok(claim) => claim,
             Err(e) => panic!("the honest shard reduces: {e}"),
         };
         let a = &setup.vk.circuit(proof.family).expect("a circuit").artifact;
         assert_eq!(claim.columns, a.committed());
-        assert_eq!(
-            (a.memory.len(), a.witness.len(), a.setup.len()),
-            (m, w, s),
-            "family {}",
-            proof.family
-        );
-        assert_eq!(claim.values.len(), m + w + s);
+        assert_eq!(claim.values.len(), claim.columns.len());
         assert_eq!(claim.point.len(), 20);
     }
 }

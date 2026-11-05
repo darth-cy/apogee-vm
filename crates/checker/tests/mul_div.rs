@@ -22,14 +22,8 @@ use constraints::{family_circuit, mul_div, CircuitArtifact, GateDef, PolyAddress
 use field::Fr;
 use gkr::{eval_gate, gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallenges};
 use program::lookup_tables::generic_entries;
-use test_support::{sha256, to_hex};
 
 const VARS: u32 = 20;
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../constraints/tests/vectors/mul_div.bin"
-);
-const FIXTURE_SHA256: &str = "57120c7b886d27a82f112d57af620e4de2caec2c8a78cf31ba0facd684ef4ab5";
 
 /// The cycle every hand-built row runs at, and the row it is evaluated at.
 const CYCLE: u64 = 7;
@@ -549,16 +543,13 @@ fn none() -> Vec<String> {
 // The circuit
 // ---------------------------------------------------------------------------
 
-/// The committed fixture is the constructor's bytes, and the circuit passes
+/// The circuit round-trips through its wire form, and passes
 /// both enforcement points plus the memory and lookup construction rules.
 #[test]
-fn the_circuit_is_the_fixture_and_keeps_every_rule() {
-    let bytes = std::fs::read(FIXTURE).expect("the mul/div fixture");
-    assert_eq!(to_hex(&sha256(&bytes)), FIXTURE_SHA256);
-    assert_eq!(mul_div::artifact(22).to_bytes(), bytes);
+fn the_circuit_round_trips_and_keeps_every_rule() {
     assert_eq!(
-        CircuitArtifact::from_bytes(&bytes).expect("the fixture decodes"),
-        mul_div::artifact(22)
+        CircuitArtifact::from_bytes(&mul_div::artifact(22).to_bytes()),
+        Ok(mul_div::artifact(22))
     );
 
     let a = artifact();
