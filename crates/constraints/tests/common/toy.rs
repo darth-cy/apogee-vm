@@ -12,9 +12,14 @@
 //!           0 = e·s − a·s                                  (enforcing, Quadratic)
 //! list 1    L{2}[0] abm          = ab·masked_m
 //!           L{2}[1] fingerprint3 = fingerprint + 3
-//! list 2    L{3}[0] abm_product          = Π abm           (halving)
-//!           L{3}[1] fingerprint3_product = Π fingerprint3  (halving)
-//! outputs   L{3}[1], L{3}[0]
+//! list 2    L{3}[0] abm_product          = abm(·,0)·abm(·,1)                    (halving)
+//!           L{3}[1] fingerprint3_product = fingerprint3(·,0)·fingerprint3(·,1)  (halving)
+//! list 3    L{4}[0] abm_product_2, L{4}[1] fingerprint3_product_2: list 2's two
+//!           trees halved again                                        (halving)
+//! list 4    L{5}[0] abm_product_3, L{5}[1] fingerprint3_product_3     (halving)
+//! list 5    L{6}[0] abm_root          = Π abm                         (halving)
+//!           L{6}[1] fingerprint3_root = Π fingerprint3                (halving)
+//! outputs   L{6}[1], L{6}[0]: the top, of no variables
 //! ```
 
 use constants::challenge_slot;
@@ -75,7 +80,7 @@ pub fn toy() -> CircuitArtifact {
 
     // The flat list, over base and scratch addresses. Its index is what a gate
     // names in `relation`.
-    let relations = vec![
+    let mut relations = vec![
         Relation {
             name: "define_ab".into(),
             output: Some(0),
@@ -134,7 +139,7 @@ pub fn toy() -> CircuitArtifact {
         },
     ];
 
-    let layers = vec![
+    let mut layers = vec![
         LayerSpec {
             halving: false,
             num_vars: 4,
@@ -234,6 +239,49 @@ pub fn toy() -> CircuitArtifact {
         name: name.into(),
         address: inner(layer, offset),
     };
+    let mut slots = vec![
+        slot("ab", 1, 0),
+        slot("fingerprint", 1, 1),
+        slot("masked_m", 1, 2),
+        slot("abm", 2, 0),
+        slot("fingerprint3", 2, 1),
+        slot("abm_product", 3, 0),
+        slot("fingerprint3_product", 3, 1),
+    ];
+
+    // Lists 3, 4 and 5 halve both trees again, down to the roots at layer 6:
+    // list `k`'s entry `j` halves `L{k}[j]`, its relation the tree of that
+    // column's scratch slot, `scratch[2k − 1 + j]`.
+    for (k, pair) in (3u32..).zip([
+        ["abm_product_2", "fingerprint3_product_2"],
+        ["abm_product_3", "fingerprint3_product_3"],
+        ["abm_root", "fingerprint3_root"],
+    ]) {
+        let mut producing = Vec::new();
+        for (j, name) in (0u32..).zip(pair) {
+            producing.push(ProducingEntry {
+                relation: relations.len() as u32,
+                output: inner(k + 1, j),
+                gate: GateDef::TreeProduct { input: inner(k, j) },
+            });
+            relations.push(Relation {
+                name: format!("define_{name}"),
+                output: Some(slots.len() as u32),
+                gate: GateDef::TreeProduct {
+                    input: scratch(2 * k - 1 + j),
+                },
+            });
+            slots.push(slot(name, k + 1, j));
+        }
+        layers.push(LayerSpec {
+            halving: true,
+            num_vars: 5 - k,
+            width: 2,
+            cached: vec![],
+            producing,
+            enforcing: vec![],
+        });
+    }
 
     CircuitArtifact {
         format_version: FORMAT_VERSION,
@@ -246,16 +294,8 @@ pub fn toy() -> CircuitArtifact {
         layers,
         relations,
         lookups: vec![],
-        scratch: vec![
-            slot("ab", 1, 0),
-            slot("fingerprint", 1, 1),
-            slot("masked_m", 1, 2),
-            slot("abm", 2, 0),
-            slot("fingerprint3", 2, 1),
-            slot("abm_product", 3, 0),
-            slot("fingerprint3_product", 3, 1),
-        ],
-        outputs: vec![inner(3, 1), inner(3, 0)],
+        scratch: slots,
+        outputs: vec![inner(6, 1), inner(6, 0)],
         // The inactive row is all zero: with s = 0, masked_m is the product
         // tree's identity and the gated equality holds whatever e and a are.
         padding: Padding {

@@ -15,7 +15,7 @@ use core::fmt;
 use constants::transcript_tags;
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind};
 use field::Fr;
-use poly::{eq_eval, MultilinearPoly};
+use poly::eq_eval;
 use transcript::Transcript;
 
 pub use sumcheck::SumcheckProof;
@@ -63,13 +63,6 @@ impl ExternalChallenges {
     }
 }
 
-/// What the verifier is told the top layer holds: one table per output-map
-/// entry, in output-map order. A tree root is a table of one value.
-#[derive(Clone, Debug)]
-pub struct OutputClaims {
-    pub tables: Vec<MultilinearPoly>,
-}
-
 /// A claim about a committed base column, left for the caller to discharge.
 /// `point[j]` is the value bound to variable `j`, so it is exactly what
 /// `MultilinearPoly::evaluate` takes.
@@ -93,7 +86,7 @@ pub struct GkrProof {
 pub enum GkrError {
     /// A gate names a challenge slot the caller did not supply.
     MissingChallenge { slot: u32 },
-    /// `OutputClaims` does not match the output map in count or variables.
+    /// The outputs are not one value per output-map entry.
     OutputShape,
     /// Transition `layer` has the wrong round or claim count; `layer` equal to
     /// the circuit's depth means the proof has the wrong number of layers.
@@ -626,7 +619,8 @@ pub fn verify_sumcheck(claim: Fr, rounds: &[[Fr; 4]], t: &mut Transcript) -> Opt
 // verify
 // ---------------------------------------------------------------------------
 
-/// Reduce `outputs` to claims about the committed base columns, or reject.
+/// Reduce `outputs`, one value per output-map entry in output-map order, to
+/// claims about the committed base columns, or reject.
 ///
 /// `t` must already be bound to the base layer, exactly as the prover's was;
 /// this function absorbs nothing of the base. It checks every challenge slot
@@ -644,17 +638,14 @@ pub fn verify_sumcheck(claim: Fr, rounds: &[[Fr; 4]], t: &mut Transcript) -> Opt
 pub fn verify(
     artifact: &CircuitArtifact,
     proof: &GkrProof,
-    outputs: &OutputClaims,
+    outputs: &[Fr],
     challenges: &ExternalChallenges,
     t: &mut Transcript,
 ) -> Result<Vec<BaseClaim>, GkrError> {
     check_challenges(artifact, challenges)?;
 
     let depth = artifact.depth();
-    let top_vars = artifact.layer_vars(depth) as usize;
-    if outputs.tables.len() != artifact.outputs.len()
-        || outputs.tables.iter().any(|t| t.num_vars() != top_vars)
-    {
+    if outputs.len() != artifact.outputs.len() {
         return Err(GkrError::OutputShape);
     }
     if proof.layers.len() != depth {
@@ -668,19 +659,14 @@ pub fn verify(
         }
     }
 
-    // O1, O2: the outputs, then the point they are claimed at.
-    let mut message: Vec<Fr> = Vec::new();
-    for table in &outputs.tables {
-        message.extend((0..table.len()).map(|i| table.get(i)));
-    }
-    t.append_scalars(transcript_tags::GKR_OUTPUTS, &message);
-    let mut point: Vec<Fr> = (0..top_vars)
-        .map(|_| t.challenge_scalar(transcript_tags::GKR_OUTPUT_POINT))
-        .collect();
+    // O1: the outputs. The top has no variables (Law 3), so each output is
+    // its column's one value, claimed at the empty point.
+    t.append_scalars(transcript_tags::GKR_OUTPUTS, outputs);
+    let mut point: Vec<Fr> = Vec::new();
     let mut values = vec![Fr::ZERO; artifact.outputs.len()];
-    for (table, out) in outputs.tables.iter().zip(&artifact.outputs) {
+    for (value, out) in outputs.iter().zip(&artifact.outputs) {
         if let PolyAddress::Inner { offset, .. } = *out {
-            values[offset as usize] = table.evaluate(&point);
+            values[offset as usize] = *value;
         }
     }
 

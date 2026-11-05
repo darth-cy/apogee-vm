@@ -247,9 +247,6 @@ fn one_claim_after_each_batch(a: &constraints::CircuitArtifact, log: &[Transcrip
     let mut previous: Option<TranscriptEvent> = None;
     for (i, event) in log.iter().enumerate() {
         match *event {
-            Challenge {
-                tag: tags::GKR_OUTPUT_POINT,
-            } => outstanding = 1,
             Absorb {
                 tag: tags::GKR_OUTPUTS,
                 ..
@@ -266,8 +263,6 @@ fn one_claim_after_each_batch(a: &constraints::CircuitArtifact, log: &[Transcrip
                     }) | Some(Absorb {
                         tag: tags::GKR_OUTPUTS,
                         ..
-                    }) | Some(Challenge {
-                        tag: tags::GKR_OUTPUT_POINT
                     }) | Some(Challenge {
                         tag: tags::GKR_CHILD
                     })
@@ -308,13 +303,8 @@ fn gkr_schedule(a: &constraints::CircuitArtifact) -> Vec<TranscriptEvent> {
     let depth = a.depth();
     let mut events = vec![Absorb {
         tag: tags::GKR_OUTPUTS,
-        n_scalars: a.outputs.len() << a.layer_vars(depth),
+        n_scalars: a.outputs.len(),
     }];
-    for _ in 0..a.layer_vars(depth) {
-        events.push(Challenge {
-            tag: tags::GKR_OUTPUT_POINT,
-        });
-    }
     for k in (0..depth).rev() {
         events.push(Challenge {
             tag: tags::GKR_BATCH,
@@ -422,9 +412,9 @@ fn a6_a8_every_base_claim_is_at_one_point_and_the_schedule_holds() {
         );
         let last_gkr = one_claim_after_each_batch(a, &log);
         // And the schedule event for event, `docs/spec/gkr.md` §5.2: the
-        // outputs and the top point, then per transition from the top the
-        // batch, every round's cubic and challenge, the claims, and a halving
-        // transition's child challenge.
+        // outputs, then per transition from the top the batch, every round's
+        // cubic and challenge, the claims, and a halving transition's child
+        // challenge.
         assert_eq!(log[4..=last_gkr], gkr_schedule(a)[..], "the GKR schedule");
         // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The
         // opening of every committed column at the pass's point belongs after

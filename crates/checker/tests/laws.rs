@@ -10,9 +10,9 @@
 //! entry no gate names, the halving rules — so a mutant that breaks one of those
 //! as well is marked `only_laws: false` and left out of that comparison.)
 //!
-//! The tables: 36 mutants of both compilations — 4 lawful controls and 32 that
+//! The tables: 37 mutants of both compilations — 4 lawful controls and 33 that
 //! break a law, 2 of those also breaking a rule outside the laws — and 4 of the
-//! cached compilation's cached entries, each breaking a law. 76 runs, 72 of
+//! cached compilation's cached entries, each breaking a law. 78 runs, 74 of
 //! them compared against `validate`.
 
 mod common;
@@ -79,10 +79,11 @@ fn enforcing_products(a: &mut CircuitArtifact) -> &mut Vec<(Coeff, PolyAddress, 
     }
 }
 
-/// Replaced whole: over a one-column base, gate list 0 is halving with width 0
-/// and no gates, and row-wise gate list 1 writes the constant 5 into `L{2}[0]`,
-/// the one output. Every law holds but Law 2's: a halving list reads inner
-/// columns, never the base, and its width is `w_0 = 1`.
+/// Replaced whole: over a one-column base of two rows, gate list 0 is halving
+/// with width 0 and no gates, and row-wise gate list 1 writes the constant 5
+/// into `L{2}[0]`, the one output, at a top of no variables. Every law holds
+/// but Law 2's: a halving list reads inner columns, never the base, and its
+/// width is `w_0 = 1`.
 fn halving_list_zero(a: &mut CircuitArtifact) {
     let five = GateDef::Linear {
         terms: vec![],
@@ -90,7 +91,7 @@ fn halving_list_zero(a: &mut CircuitArtifact) {
     };
     let list = |halving, producing: Vec<ProducingEntry>| LayerSpec {
         halving,
-        num_vars: 3,
+        num_vars: 0,
         width: producing.len() as u32,
         cached: vec![],
         producing,
@@ -101,7 +102,7 @@ fn halving_list_zero(a: &mut CircuitArtifact) {
         output: inner(2, 0),
         gate: five.clone(),
     };
-    a.trace_vars = 4;
+    a.trace_vars = 1;
     a.memory = vec!["m".to_string()];
     a.witness.clear();
     a.setup.clear();
@@ -203,19 +204,19 @@ fn mutants() -> Vec<Mutant> {
             &[],
             halving_list_zero,
         ),
-        // L{2}[1] is then read by no gate, but that is this defect itself: a
+        // L{5}[1] is then read by no gate, but that is this defect itself: a
         // halving list reads every column of its layer once.
         m(
-            "halving list 2 halves only L{2}[0], its product relation and slot removed",
+            "halving list 5 halves only L{5}[0], its root relation and slot removed",
             2,
             &[],
             |a| {
-                a.layers[2].producing.truncate(1);
-                a.layers[2].width = 1;
-                a.outputs.retain(|o| *o == inner(3, 0));
+                a.layers[5].producing.truncate(1);
+                a.layers[5].width = 1;
+                a.outputs.retain(|o| *o == inner(6, 0));
                 let (r, i) = (
-                    relation(a, "define_fingerprint3_product"),
-                    slot(a, "fingerprint3_product"),
+                    relation(a, "define_fingerprint3_root"),
+                    slot(a, "fingerprint3_root"),
                 );
                 assert_eq!((r + 1, i + 1), (a.relations.len(), a.scratch.len()));
                 a.relations.pop();
@@ -274,12 +275,13 @@ fn mutants() -> Vec<Mutant> {
                 }
             },
         ),
-        // Law 3: a top layer and an output map that are not one set.
+        // Law 3: a top layer and an output map that are not one set, or a top
+        // with a variable left.
         m(
-            "the output map drops L{3}[0], which the top layer holds",
+            "the output map drops L{6}[0], which the top layer holds",
             3,
             &[],
-            |a| a.outputs.retain(|o| *o != inner(3, 0)),
+            |a| a.outputs.retain(|o| *o != inner(6, 0)),
         ),
         m(
             "the output map adds L{2}[0], which is not on the top layer",
@@ -288,16 +290,29 @@ fn mutants() -> Vec<Mutant> {
             |a| a.outputs.push(inner(2, 0)),
         ),
         m(
-            "the output map names L{3}[1] twice, in place of L{3}[0]",
+            "the output map names L{6}[1] twice, in place of L{6}[0]",
             3,
             &[],
             |a| a.outputs[1] = a.outputs[0],
         ),
         m(
-            "the output map names L{3}[1] twice, beside every top column",
+            "the output map names L{6}[1] twice, beside every top column",
             3,
             &[],
             |a| a.outputs.push(a.outputs[0]),
+        ),
+        m(
+            "the last halving list cut with its roots, the top keeping a variable",
+            3,
+            &[],
+            |a| {
+                a.layers.pop();
+                let roots = relation(a, "define_abm_root");
+                assert_eq!(roots + 2, a.relations.len());
+                a.relations.truncate(roots);
+                a.scratch.truncate(slot(a, "abm_root"));
+                a.outputs = vec![inner(5, 1), inner(5, 0)];
+            },
         ),
         // Law 4, cardinality.
         m("a relation dropped from the flat list", 4, &[], |a| {
@@ -511,7 +526,7 @@ fn every_mutant_fails_exactly_the_laws_it_breaks() {
             ),
         }
     }
-    assert_eq!(all.len(), 2 * 36 + 4, "mutant runs");
+    assert_eq!(all.len(), 2 * 37 + 4, "mutant runs");
 }
 
 /// `checker` and `constraints::validate` agree on every mutant whose only
@@ -534,6 +549,6 @@ fn check_laws_agrees_with_validate() {
             ));
         }
     }
-    assert_eq!(compared, 2 * 34 + 4, "mutants compared");
+    assert_eq!(compared, 2 * 35 + 4, "mutants compared");
     assert!(disagreements.is_empty(), "{}", disagreements.join("\n"));
 }

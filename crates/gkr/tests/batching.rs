@@ -11,9 +11,10 @@ use gkr::{forward, prove, verify};
 use transcript::TranscriptEvent::{self, Absorb, Challenge};
 
 /// The toy's schedule written out: after the binding and the external
-/// challenge, the outputs (two tables of 8), the 3-coordinate point, then the
-/// halving transition (3 rounds, 4 child claims, the child challenge), then two
-/// row-wise transitions of 4 rounds each, leaving 3 and then 6 claims.
+/// challenge, the outputs (the two roots), then the four halving transitions
+/// from the top (0, 1, 2 and 3 rounds, each leaving 4 child claims and drawing
+/// the child challenge), then two row-wise transitions of 4 rounds each,
+/// leaving 3 and then 6 claims.
 fn expected_log() -> Vec<TranscriptEvent> {
     let mut log = vec![
         Absorb {
@@ -25,14 +26,9 @@ fn expected_log() -> Vec<TranscriptEvent> {
         },
         Absorb {
             tag: tags::GKR_OUTPUTS,
-            n_scalars: 16,
+            n_scalars: 2,
         },
     ];
-    log.extend(
-        [Challenge {
-            tag: tags::GKR_OUTPUT_POINT,
-        }; 3],
-    );
     let transition = |log: &mut Vec<TranscriptEvent>, rounds: usize, claims: usize| {
         log.push(Challenge {
             tag: tags::GKR_BATCH,
@@ -51,10 +47,12 @@ fn expected_log() -> Vec<TranscriptEvent> {
             n_scalars: claims,
         });
     };
-    transition(&mut log, 3, 4);
-    log.push(Challenge {
-        tag: tags::GKR_CHILD,
-    });
+    for rounds in 0..4 {
+        transition(&mut log, rounds, 4);
+        log.push(Challenge {
+            tag: tags::GKR_CHILD,
+        });
+    }
     transition(&mut log, 4, 3);
     transition(&mut log, 4, 6);
     log
@@ -75,14 +73,16 @@ fn outstanding_claims_never_exceed_one(
     log: &[TranscriptEvent],
 ) -> (usize, usize) {
     let depth = artifact.depth();
-    // Points awaiting reduction: none until the outputs' point exists.
+    // Points awaiting reduction: none until the outputs are absorbed, at the
+    // top's one point, which has no coordinates.
     let mut outstanding = 0usize;
     let mut previous: Option<TranscriptEvent> = None;
     let (mut batches, mut children) = (0, 0);
     for event in log {
         match *event {
-            Challenge {
-                tag: tags::GKR_OUTPUT_POINT,
+            Absorb {
+                tag: tags::GKR_OUTPUTS,
+                ..
             } => outstanding = 1,
             Challenge {
                 tag: tags::GKR_BATCH,
@@ -95,10 +95,8 @@ fn outstanding_claims_never_exceed_one(
                 let last_absorb = matches!(
                     previous,
                     Some(Absorb {
-                        tag: tags::GKR_LAYER_CLAIMS,
+                        tag: tags::GKR_LAYER_CLAIMS | tags::GKR_OUTPUTS,
                         ..
-                    }) | Some(Challenge {
-                        tag: tags::GKR_OUTPUT_POINT
                     }) | Some(Challenge {
                         tag: tags::GKR_CHILD
                     })
@@ -183,8 +181,8 @@ fn every_reduction_follows_the_claims_it_reduces() {
     );
     assert_eq!(
         outstanding_claims_never_exceed_one(&artifact, verifier.event_log()),
-        (3, 1),
-        "one batch per transition, one child reduction for the halving list"
+        (6, 4),
+        "one batch per transition, one child reduction per halving list"
     );
 }
 
@@ -195,7 +193,7 @@ fn the_walker_rejects_a_reduction_before_its_claims() {
     let artifact = toy();
     assert_eq!(
         outstanding_claims_never_exceed_one(&artifact, &expected_log()),
-        (3, 1),
+        (6, 4),
         "the control walks"
     );
     let mut early_child = expected_log();
@@ -218,19 +216,20 @@ fn the_walker_rejects_a_reduction_before_its_claims() {
     );
 
     let mut early_batch = expected_log();
-    let point = early_batch
+    let outputs = early_batch
         .iter()
         .position(|e| {
             matches!(
                 e,
-                Challenge {
-                    tag: tags::GKR_OUTPUT_POINT
+                Absorb {
+                    tag: tags::GKR_OUTPUTS,
+                    ..
                 }
             )
         })
         .unwrap();
     early_batch.insert(
-        point,
+        outputs,
         Challenge {
             tag: tags::GKR_BATCH,
         },

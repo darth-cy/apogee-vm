@@ -7,7 +7,9 @@
 //! list 0    L{1}[0] mixed = 7 + γ·a + 3·b·c                  (Quadratic)
 //!           0 = a·b + c·d − e·f                              (enforcing, Quadratic)
 //! list 1    L{2}[0] squared = mixed·mixed
-//! outputs   L{2}[0]
+//! list 2    L{3}[0] squared_product = squared(·,0)·squared(·,1)   (halving)
+//! list 3    L{4}[0] squared_root    = Π squared                   (halving)
+//! outputs   L{4}[0]
 //! ```
 //!
 //! `a·b + c·d − e·f` fits no other shape: `Linear` is degree 1, `Product` one
@@ -61,20 +63,26 @@ fn balance() -> GateDef {
 }
 
 fn balance_circuit() -> CircuitArtifact {
-    let (l1, l2) = (
-        PolyAddress::Inner {
-            layer: 1,
-            offset: 0,
-        },
-        PolyAddress::Inner {
-            layer: 2,
-            offset: 0,
-        },
-    );
+    let inner = |layer: u32| PolyAddress::Inner { layer, offset: 0 };
+    let (l1, l2) = (inner(1), inner(2));
     let square = |x: PolyAddress| GateDef::Product {
         coeff: lit(1),
         left: x,
         right: x,
+    };
+    let tree = |input: PolyAddress| GateDef::TreeProduct { input };
+    // List `k` halves `L{k}[0]` into `L{k+1}[0]`.
+    let halving = |k: u32, relation: u32| LayerSpec {
+        halving: true,
+        num_vars: 3 - k,
+        width: 1,
+        cached: vec![],
+        producing: vec![ProducingEntry {
+            relation,
+            output: inner(k + 1),
+            gate: tree(inner(k)),
+        }],
+        enforcing: vec![],
     };
     let relation = |name: &str, output: Option<u32>, gate: GateDef| Relation {
         name: name.into(),
@@ -112,14 +120,31 @@ fn balance_circuit() -> CircuitArtifact {
                 }],
                 enforcing: vec![],
             },
+            halving(2, 3),
+            halving(3, 4),
         ],
         vec![
             relation("define_mixed", Some(0), mixed(w(0), w(1), w(2))),
             relation("ab_plus_cd_is_ef", None, balance()),
             relation("define_squared", Some(1), square(PolyAddress::Scratch(0))),
+            relation(
+                "define_squared_product",
+                Some(2),
+                tree(PolyAddress::Scratch(1)),
+            ),
+            relation(
+                "define_squared_root",
+                Some(3),
+                tree(PolyAddress::Scratch(2)),
+            ),
         ],
-        &[("mixed", l1), ("squared", l2)],
-        vec![l2],
+        &[
+            ("mixed", l1),
+            ("squared", l2),
+            ("squared_product", inner(3)),
+            ("squared_root", inner(4)),
+        ],
+        vec![inner(4)],
     )
 }
 
@@ -173,8 +198,8 @@ fn an_honest_quadratic_circuit_proves_and_verifies() {
         let (_, proof, result) = honest(&artifact, &base);
         assert_eq!(
             proof.layers.len(),
-            2,
-            "mixed's claim descends through list 1"
+            4,
+            "mixed's claim descends through list 1, below the two halving lists"
         );
         let claims = result.expect("an honest proof verifies");
         assert_eq!(claims.len(), 6);

@@ -1,7 +1,7 @@
 //! Circuits at the edges of what `docs/spec/gkr.md` calls legal, which the toy
-//! never reaches: transitions with no rounds, `trace_vars = 1`, a 0-variable
-//! layer, a list of enforcing gates only under a width-0 top, and two enforcing
-//! gates in one list.
+//! never reaches: two transitions with no rounds, `trace_vars = 1`, a list of
+//! enforcing gates only under a width-0 top, and two enforcing gates in one
+//! list.
 
 mod common;
 

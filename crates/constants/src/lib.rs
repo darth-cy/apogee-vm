@@ -190,7 +190,8 @@ pub const POSEIDON2_RC3_TERMINAL: [[&str; 3]; 4] = [
 /// stream, so changing one changes the protocol.
 ///
 /// `0` is deliberately not a tag, so an uninitialised tag can never be a valid
-/// message.
+/// message. `13` is retired: no message carries it, and it is never
+/// reassigned.
 ///
 /// **One tag, one message kind.** The typed layer frames every message as
 /// `tag, length, payload...` and nothing more, so injectivity of the absorbed
@@ -258,14 +259,11 @@ pub mod transcript_tags {
     /// message it counts shards for and before [`MEMORY_WINDOWS`].
     pub const SHARD_COUNTS: u64 = 11;
 
-    /// Scalars. A GKR circuit's claimed output tables, output-map order, as
-    /// one message, absorbed before the top-layer point is drawn so that no
-    /// output can be chosen after the point is known. `docs/spec/gkr.md` §5.2.
+    /// Scalars. A GKR circuit's claimed outputs, one value per output-map
+    /// entry in output-map order, as one message, absorbed before the first
+    /// [`GKR_BATCH`] is drawn so that no output can be chosen after the batch
+    /// is known. `docs/spec/gkr.md` §5.2.
     pub const GKR_OUTPUTS: u64 = 12;
-
-    /// Challenge. One coordinate of a GKR circuit's top-layer point, drawn
-    /// after [`GKR_OUTPUTS`].
-    pub const GKR_OUTPUT_POINT: u64 = 13;
 
     /// Challenge. The RLC that batches a layer transition's claims — one per
     /// column of the layer written, then its enforcing gates — into the one
@@ -330,7 +328,8 @@ pub mod transcript_tags {
     /// transcript's absorb sequence with them, which is what makes a tape
     /// diffable against the order `docs/spec/proof.md` §2 specifies.
     ///
-    /// One entry per tag above. The lookup itself lives in `checker::tape`.
+    /// One entry per tag above, and `"RETIRED"` at the retired 13. The lookup
+    /// itself lives in `checker::tape`.
     pub const NAMES: [&str; 24] = [
         "PROTOCOL_SUITE",
         "PUBLIC_INPUTS",
@@ -344,7 +343,7 @@ pub mod transcript_tags {
         "VM_CONFIG",
         "SHARD_COUNTS",
         "GKR_OUTPUTS",
-        "GKR_OUTPUT_POINT",
+        "RETIRED",
         "GKR_BATCH",
         "GKR_LAYER_CLAIMS",
         "GKR_CHILD",

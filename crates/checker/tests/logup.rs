@@ -910,25 +910,18 @@ fn verify_claiming(
     let bound = || Transcript::restore(&toy.seeded);
     let proof = gkr::prove(a, values, &shard.challenges, &mut bound());
     let top = values.layers.last().expect("a top layer");
-    let mut tables: Vec<MultilinearPoly> = a
+    let mut outputs: Vec<Fr> = a
         .outputs
         .iter()
         .map(|out| match *out {
-            PolyAddress::Inner { offset, .. } => top[offset as usize].clone(),
+            PolyAddress::Inner { offset, .. } => top[offset as usize].get(0),
             other => panic!("an output is an inner address, not {other}"),
         })
         .collect();
     // The channel pairs are the outputs after the two memory roots.
     for (i, num, den) in claimed {
-        tables[2 + 2 * i] = MultilinearPoly::new(PolyBacking::Fr(vec![*num]));
-        tables[2 + 2 * i + 1] = MultilinearPoly::new(PolyBacking::Fr(vec![*den]));
+        outputs[2 + 2 * i] = *num;
+        outputs[2 + 2 * i + 1] = *den;
     }
-    gkr::verify(
-        a,
-        &proof,
-        &gkr::OutputClaims { tables },
-        &shard.challenges,
-        &mut bound(),
-    )
-    .map(|_| ())
+    gkr::verify(a, &proof, &outputs, &shard.challenges, &mut bound()).map(|_| ())
 }

@@ -1,5 +1,5 @@
 //! What `verify` rejects: the tamper twin, the cancellation control, a forged
-//! output table, a wrong child pair, a lying row-wise final eval, every
+//! output pair, a wrong child pair, a lying row-wise final eval, every
 //! malformed shape and every missing slot — each as
 //! a returned error, never a panic — and what the self-check names.
 
@@ -16,9 +16,9 @@ use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress};
 use field::Fr;
 use gkr::{
     forward, gate_values, self_check, verify, ExternalChallenges, GkrError, LayerValues,
-    OutputClaims, SelfCheckError,
+    SelfCheckError,
 };
-use poly::{eq_eval, eq_table, MultilinearPoly, PolyBacking};
+use poly::{eq_table, MultilinearPoly, PolyBacking};
 
 fn fr(v: u32) -> Fr {
     Fr::from_u64(v as u64)
@@ -178,56 +178,41 @@ fn a_cancelling_violation_is_rejected() {
     assert_eq!(result, Err(GkrError::LayerInconsistency { layer: 0 }));
 }
 
-/// O1, the outputs absorbed before their point, is what stops this forgery.
-/// Without O1 the output point is what a transcript bound to the base draws
-/// next, so a prover knows it before choosing a table, and can choose one that
-/// differs from the true table yet agrees with it there. The forgery is built
-/// at exactly that point, so a verifier that never absorbs the outputs accepts
-/// it: this test fails under the mutant deleting the `GKR_OUTPUTS` absorb from
-/// both sides. The real verifier absorbs the forged table, draws another
-/// point, and rejects.
+/// O1, the outputs absorbed before the first batch, is what stops this
+/// forgery. Without O1 the top transition's batch `λ` is what a transcript
+/// bound to the base draws next, so a prover knows it before choosing its
+/// outputs, and can choose a pair that differs from the true one yet batches
+/// to the same claim. The forgery is built at exactly that `λ`, so a verifier
+/// that never absorbs the outputs accepts it: this test fails under the mutant
+/// deleting the `GKR_OUTPUTS` absorb from both sides. The real verifier
+/// absorbs the forged pair, draws another `λ`, and rejects.
 #[test]
-fn a_forged_output_table_is_rejected() {
+fn a_forged_output_pair_is_rejected() {
     let artifact = toy();
     let base = toy_base(&toy_columns(0x5313_0600));
     let (values, proof, result) = honest(&artifact, &base);
     result.expect("the honest run verifies");
     let outputs = output_claims(&artifact, &values);
 
-    // The point a transcript without O1 draws: the binding, then O2 at once.
+    // The batch a transcript without O1 draws: the binding, then L1 at once.
     let (mut t, challenges) = bind(&artifact, &base);
-    let r: Vec<Fr> = (0..3)
-        .map(|_| t.challenge_scalar(transcript_tags::GKR_OUTPUT_POINT))
-        .collect();
+    let lambda = t.challenge_scalar(transcript_tags::GKR_BATCH);
 
-    // Move row 1 by delta and row 6 by what keeps the evaluation at r.
-    let honest_table = &outputs.tables[0];
-    let mut forged: Vec<Fr> = (0..honest_table.len())
-        .map(|i| honest_table.get(i))
-        .collect();
-    let bit = |i: usize| -> Vec<Fr> {
-        (0..3)
-            .map(|j| Fr::from_u64(((i >> j) & 1) as u64))
-            .collect()
-    };
+    // The output map is `L{6}[1], L{6}[0]`, so the top's claim is
+    // `outputs[1] + λ·outputs[0]`: move the first output by delta and the
+    // second by what keeps that claim at λ.
     let delta = Fr::from_u64(99);
-    let shift = delta * eq_eval(&r, &bit(1)) * eq_eval(&r, &bit(6)).inverse().unwrap();
-    forged[1] += delta;
-    forged[6] -= shift;
-    let forged = MultilinearPoly::new(PolyBacking::Fr(forged));
+    let forged = vec![outputs[0] + delta, outputs[1] - lambda * delta];
     assert_eq!(
-        forged.evaluate(&r),
-        honest_table.evaluate(&r),
-        "same value at r"
+        forged[1] + lambda * forged[0],
+        outputs[1] + lambda * outputs[0],
+        "the same claim at λ"
     );
 
-    let claims = OutputClaims {
-        tables: vec![forged, outputs.tables[1].clone()],
-    };
     let (mut verifier, _) = bind(&artifact, &base);
     assert_eq!(
-        verify(&artifact, &proof, &claims, &challenges, &mut verifier),
-        Err(GkrError::LayerInconsistency { layer: 2 })
+        verify(&artifact, &proof, &forged, &challenges, &mut verifier),
+        Err(GkrError::LayerInconsistency { layer: 5 })
     );
 }
 
@@ -309,7 +294,7 @@ fn malformed_shapes_are_errors_in_order() {
     let (values, proof, _) = honest(&artifact, &base);
     let outputs = output_claims(&artifact, &values);
     let (_, challenges) = bind(&artifact, &base);
-    let check = |proof: &gkr::GkrProof, outputs: &OutputClaims, ch: &gkr::ExternalChallenges| {
+    let check = |proof: &gkr::GkrProof, outputs: &[Fr], ch: &gkr::ExternalChallenges| {
         let (mut t, _) = bind(&artifact, &base);
         let before = t.snapshot();
         let result = verify(&artifact, proof, outputs, ch, &mut t);
@@ -335,7 +320,7 @@ fn malformed_shapes_are_errors_in_order() {
     shallow.layers.pop();
     assert_eq!(
         check(&shallow, &outputs, &challenges),
-        Err(GkrError::ProofShape { layer: 3 })
+        Err(GkrError::ProofShape { layer: 6 })
     );
 
     // Too long, not only too short: a layer beyond the depth is refused
@@ -344,7 +329,7 @@ fn malformed_shapes_are_errors_in_order() {
     deep.layers.push(proof.layers[2].clone());
     assert_eq!(
         check(&deep, &outputs, &challenges),
-        Err(GkrError::ProofShape { layer: 3 })
+        Err(GkrError::ProofShape { layer: 6 })
     );
     // Two malformed transitions: the lowest is reported.
     let mut twice = proof.clone();
@@ -355,26 +340,11 @@ fn malformed_shapes_are_errors_in_order() {
         Err(GkrError::ProofShape { layer: 0 })
     );
 
-    let one = OutputClaims {
-        tables: vec![outputs.tables[0].clone()],
-    };
+    let one = [outputs[0]];
     assert_eq!(check(&proof, &one, &challenges), Err(GkrError::OutputShape));
-    let three = OutputClaims {
-        tables: vec![
-            outputs.tables[0].clone(),
-            outputs.tables[1].clone(),
-            outputs.tables[0].clone(),
-        ],
-    };
+    let three = [outputs[0], outputs[1], outputs[0]];
     assert_eq!(
         check(&proof, &three, &challenges),
-        Err(GkrError::OutputShape)
-    );
-    let wide = OutputClaims {
-        tables: vec![values.layers[1][0].clone(), outputs.tables[1].clone()],
-    };
-    assert_eq!(
-        check(&proof, &wide, &challenges),
         Err(GkrError::OutputShape)
     );
 

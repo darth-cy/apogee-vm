@@ -13,9 +13,15 @@
 //!           0 = e·s − a·s                                  relation 3 (enforcing, Quadratic)
 //! list 1    L{2}[0] abm          = ab·masked_m             relation 4, scratch[3]
 //!           L{2}[1] fingerprint3 = fingerprint + 3         relation 5, scratch[4]
-//! list 2    L{3}[0] abm_product          = Π abm           relation 6, scratch[5] (halving)
-//!           L{3}[1] fingerprint3_product = Π fingerprint3  relation 7, scratch[6] (halving)
-//! outputs   L{3}[1], L{3}[0]
+//! list 2    L{3}[0] abm_product            = abm(·,0)·abm(·,1)   relation 6, scratch[5] (halving)
+//!           L{3}[1] fingerprint3_product   likewise              relation 7, scratch[6] (halving)
+//! list 3    L{4}[0] abm_product_2          halving L{3}[0]       relation 8, scratch[7]
+//!           L{4}[1] fingerprint3_product_2 halving L{3}[1]       relation 9, scratch[8]
+//! list 4    L{5}[0] abm_product_3                                relation 10, scratch[9]
+//!           L{5}[1] fingerprint3_product_3                       relation 11, scratch[10]
+//! list 5    L{6}[0] abm_root               = Π abm               relation 12, scratch[11]
+//!           L{6}[1] fingerprint3_root      = Π fingerprint3      relation 13, scratch[12]
+//! outputs   L{6}[1], L{6}[0]: the top, of no variables
 //! ```
 #![allow(dead_code)]
 

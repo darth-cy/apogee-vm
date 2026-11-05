@@ -842,10 +842,7 @@ fn replay_point(
 ) -> (Vec<Fr>, TranscriptSnapshot) {
     let mut t = Transcript::restore(from);
     t.append_scalars(tags::GKR_OUTPUTS, outputs);
-    let top = artifact.layer_vars(artifact.depth());
-    let mut point: Vec<Fr> = (0..top)
-        .map(|_| t.challenge_scalar(tags::GKR_OUTPUT_POINT))
-        .collect();
+    let mut point: Vec<Fr> = Vec::new();
     for k in (0..artifact.depth()).rev() {
         t.challenge_scalar(tags::GKR_BATCH);
         let layer = &proof.layers[k];

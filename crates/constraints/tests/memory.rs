@@ -819,7 +819,7 @@ fn a_tuple_fed_from_a_witness_column_is_refused() {
 /// §8's forward-provenance counterexample, built whole:
 ///
 /// ```text
-/// base    M[0] a   W[0] w                      2 rows
+/// base    M[0] a   W[0] w                      1 row, so the top has no variables
 /// list 0  L{1}[0] tuple = α_addr·a + γ_M        names a slot, reads no W
 ///         L{1}[1] copy  = w                     reads W, names no slot
 /// list 1  L{2}[0] mixed = tuple·copy            both, through its operands only
@@ -871,7 +871,7 @@ fn a_product_of_a_tuple_and_a_witness_copy_two_layers_up_is_refused() {
         let mut scratch = vec![slot("tuple", inner(1, 0)), slot("copy", inner(1, 1))];
         let mut list1 = LayerSpec {
             halving: false,
-            num_vars: 1,
+            num_vars: 0,
             width: 1,
             cached: vec![],
             producing: vec![],
@@ -894,7 +894,7 @@ fn a_product_of_a_tuple_and_a_witness_copy_two_layers_up_is_refused() {
         let artifact = CircuitArtifact {
             format_version: FORMAT_VERSION,
             coefficient_encoding: COEFFICIENT_ENCODING_CANONICAL_LE,
-            trace_vars: 1,
+            trace_vars: 0,
             memory: vec!["a".into()],
             witness: vec!["w".into()],
             setup: vec![],
@@ -902,7 +902,7 @@ fn a_product_of_a_tuple_and_a_witness_copy_two_layers_up_is_refused() {
             layers: vec![
                 LayerSpec {
                     halving: false,
-                    num_vars: 1,
+                    num_vars: 0,
                     width: 2,
                     cached: vec![],
                     producing: vec![
@@ -972,21 +972,21 @@ fn a_root_read_from_a_witness_column_alone_is_refused() {
     );
 }
 
-/// One gate list over `M[0] a` and `W[0] w`, 2 rows: `cached`, then one
+/// One gate list over `M[0] a` and `W[0] w`, 1 row: `cached`, then one
 /// producing gate `gate` writing the top column `out`, whose relation is
 /// `flat`, the same polynomial with the cached entries substituted.
 fn cached_circuit(cached: Vec<(&str, GateDef)>, gate: GateDef, flat: GateDef) -> CircuitArtifact {
     let artifact = CircuitArtifact {
         format_version: FORMAT_VERSION,
         coefficient_encoding: COEFFICIENT_ENCODING_CANONICAL_LE,
-        trace_vars: 1,
+        trace_vars: 0,
         memory: vec!["a".into()],
         witness: vec!["w".into()],
         setup: vec![],
         virtuals: vec![],
         layers: vec![LayerSpec {
             halving: false,
-            num_vars: 1,
+            num_vars: 0,
             width: 1,
             cached: cached
                 .into_iter()
