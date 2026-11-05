@@ -102,5 +102,13 @@ fn the_linker_script_is_the_memory_map() {
             guest_memory::STACK_RESERVE.is_multiple_of(4096),
             "the stack's reserve is whole pages"
         );
+        // At least a native main thread's stack on Linux and macOS, 8 MiB, so
+        // a program whose call depth fits on the host fits here. A smaller
+        // reserve lets that program's stack run into heap blocks, and nothing
+        // detects it.
+        assert!(
+            guest_memory::STACK_RESERVE >= 8 << 20,
+            "the stack's reserve is at least a native main thread's 8 MiB"
+        );
     }
 }

@@ -10,8 +10,8 @@ use field::Fr;
 use loader::{Segment, Slot};
 use poly::PolyBacking;
 use program::{
-    decode_program, family_name, field_mask, image_init_column, lookup_tuple, row_kind, FamilyId,
-    ProgramError, ProgramParams, RowField, FAMILIES,
+    decode_program, family_name, field_mask, image_init_column, row_kind, FamilyId, ProgramError,
+    ProgramParams, RowField, FAMILIES, ROW_FIELDS,
 };
 
 /// The one committed guest with no compressed instruction. `guests/shards`
@@ -421,15 +421,41 @@ fn parameters_off_the_menu_and_unknown_versions_are_refused() {
     ));
 }
 
-/// A family's lookup tuple is one column per field its mask keeps, so a family
-/// with no decoded table has an empty tuple and a mask of 0.
+/// The fields each instruction family has to bind, read off its
+/// instructions' formats. Every instruction has a `pc`, a `next_pc` and an
+/// extra-mask bit that names its mnemonic, and each family has instructions
+/// that read `rs1` and `rs2` and write `rd`. Mul/div and the atomics are
+/// R-type, so neither has an immediate; every other instruction family has a
+/// form that does. `funct3` is not needed: the extra mask is one-hot per
+/// mnemonic, which leaves it nothing to say. Bit `k` is `ROW_FIELDS[k]`, as in
+/// `field_mask`.
+///
+/// Minimums, not exact masks. A family that stops binding a field its
+/// instructions use is unsound in a way no honest proof shows, and that is the
+/// one thing that fails here. A new field or a new family edits nothing: the
+/// window and delegation families have no decoded table, and this list is not
+/// held to `FAMILIES`.
 #[test]
-fn a_familys_lookup_tuple_is_the_fields_its_mask_keeps() {
-    for family in FAMILIES {
-        assert_eq!(
-            lookup_tuple(family).len(),
-            field_mask(family).count_ones() as usize,
-            "{}",
+fn each_instruction_family_binds_the_fields_its_instructions_use() {
+    for (family, uses) in [
+        (family::ADD_SUB_LUI_AUIPC, 0b1011_1111),
+        (family::JUMP_BRANCH_SLT, 0b1011_1111),
+        (family::SHIFT_BITWISE, 0b1011_1111),
+        (family::MUL_DIV, 0b1001_1111),
+        (family::MEM_WORD, 0b1011_1111),
+        (family::MEM_SUBWORD, 0b1011_1111),
+        (family::ATOMICS, 0b1001_1111),
+    ] {
+        let missing = uses & !field_mask(family);
+        let dropped: Vec<RowField> = ROW_FIELDS
+            .into_iter()
+            .enumerate()
+            .filter(|&(k, _)| missing & (1 << k) != 0)
+            .map(|(_, field)| field)
+            .collect();
+        assert!(
+            dropped.is_empty(),
+            "{} does not bind {dropped:?}, which its instructions use",
             family_name(family)
         );
     }
