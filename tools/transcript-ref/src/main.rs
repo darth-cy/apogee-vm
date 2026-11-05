@@ -224,9 +224,9 @@ impl SpecDuplex {
 // Spec section 2 is also exactly Plonky3's `DuplexChallenger` at width 3 and
 // rate 2, so every raw operation runs through both and must agree: the committed
 // values come from the spec transcription above, and the reference type confirms
-// each one as it is produced. A disagreement fails the generator, and therefore
-// CI. Section 3 — the framing — is this protocol's own and has no upstream
-// counterpart, so it is written out once.
+// each one as it is produced. A disagreement fails the generator. Section 3 —
+// the framing — is this protocol's own and has no upstream counterpart, so it is
+// written out once.
 // ---------------------------------------------------------------------------
 
 type Challenger = DuplexChallenger<Bn254, Poseidon2Bn254<3>, 3, RATE>;

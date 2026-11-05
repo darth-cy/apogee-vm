@@ -153,7 +153,7 @@ pub fn build(name: &str, slot: &str) -> Vec<u8> {
 /// optimisation level part of the statement being proven.
 ///
 /// `layout.rs` and `reproducible.rs` stay on debug deliberately -- they are
-/// about the committed artifacts, which are dev builds.
+/// about dev builds.
 pub fn profile() -> String {
     std::env::var("APOGEE_GUEST_PROFILE").unwrap_or_else(|_| "debug".into())
 }

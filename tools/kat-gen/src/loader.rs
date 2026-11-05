@@ -1,10 +1,10 @@
 //! `crates/loader`'s fixtures: the synthetic ELFs and the fib public-I/O
 //! record.
 //!
-//! Everything here is a deterministic function of nothing at all, which is what
-//! lets CI regenerate it and diff. No guest ELF is a fixture: a suite that runs
-//! one builds it from `guests/` (`test_support::guest_elf`), and lists it with
-//! the pinned toolchain's `llvm-objdump` and `llvm-nm` there.
+//! Everything here is a deterministic function of nothing at all. No guest ELF
+//! is a fixture: a suite that runs one builds it from `guests/`
+//! (`test_support::guest_elf`), and lists it with the pinned toolchain's
+//! `llvm-objdump` and `llvm-nm` there.
 
 use crate::write_vectors;
 
