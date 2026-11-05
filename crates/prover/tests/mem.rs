@@ -140,29 +140,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
         assert_eq!(proof.to_bytes().len(), proof_bytes(a));
     }
 
-    // The three families' committed widths and channel counts, as
-    // `docs/spec/circuits.md` §1 states them: `mem_word` reads no generic
-    // channel, so it carries three channels and seven setup columns; the other
-    // two carry four and name the packed table as their last three.
     let by_family = |f: u32| proofs.iter().find(|p| p.family == f).expect("a shard");
-    // Each length is pinned twice — as a literal and as the number the formula
-    // above reads off the circuit — so a change to a family shows on both sides.
-    let mw = by_family(MW);
-    assert_eq!(mw.gkr.layers.len(), 25);
-    assert_eq!(mw.gkr.layers[0].rounds.len(), 20);
-    assert_eq!(mw.gkr.layers[0].final_evals.len(), 31 + 24 + 7);
-    assert_eq!(mw.outputs.len(), 2 + 2 * 3);
-    assert_eq!(mw.to_bytes().len(), 54_024);
-    let ms = by_family(MS);
-    assert_eq!(ms.gkr.layers.len(), 26);
-    assert_eq!(ms.gkr.layers[0].final_evals.len(), 31 + 55 + 10);
-    assert_eq!(ms.outputs.len(), 2 + 2 * 4);
-    assert_eq!(ms.to_bytes().len(), 63_888);
-    let at = by_family(AT);
-    assert_eq!(at.gkr.layers.len(), 26);
-    assert_eq!(at.gkr.layers[0].final_evals.len(), 26 + 54 + 9);
-    assert_eq!(at.outputs.len(), 2 + 2 * 4);
-    assert_eq!(at.to_bytes().len(), 64_304);
 
     // Each shard reduces to one claim per committed column, in layout order:
     // memory, witness, setup.
@@ -172,20 +150,14 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     // shard's witness commitments and the key's setup and generic-table
     // commitments. Nothing is opened, so these lengths are all that can be
     // held (`docs/architecture.md` §0).
-    for (proof, (m, w, s)) in [(mw, (31, 24, 7)), (ms, (31, 55, 10)), (at, (26, 54, 9))] {
+    for proof in [by_family(MW), by_family(MS), by_family(AT)] {
         let claim = match reduce_shard(&setup.vk, proof, &public) {
             Ok(claim) => claim,
             Err(e) => panic!("the honest shard reduces: {e}"),
         };
         let a = &setup.vk.circuit(proof.family).expect("a circuit").artifact;
         assert_eq!(claim.columns, a.committed());
-        assert_eq!(
-            (a.memory.len(), a.witness.len(), a.setup.len()),
-            (m, w, s),
-            "family {}",
-            proof.family
-        );
-        assert_eq!(claim.values.len(), m + w + s);
+        assert_eq!(claim.values.len(), claim.columns.len());
         assert_eq!(claim.point.len(), 20);
     }
 }

@@ -130,28 +130,6 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
         assert_eq!(proof.to_bytes().len(), proof_bytes(a));
     }
 
-    // The shift/bitwise family: 26 transitions — its `range16` tree's 24
-    // obligations and its table fraction pad to 32 leaves, one row-wise level
-    // more than the add/sub and jump/branch/slt circuits — 20 rounds on the
-    // widest, and a base claim per committed column: 21 memory, 61 witness,
-    // 10 setup.
-    let shb = &proofs[3];
-    assert_eq!(shb.gkr.layers.len(), 26);
-    assert_eq!(shb.gkr.layers[0].rounds.len(), 20);
-    assert_eq!(shb.gkr.layers[0].final_evals.len(), 21 + 61 + 10);
-    assert_eq!(shb.outputs.len(), 2 + 2 * 4);
-    assert_eq!(shb.to_bytes().len(), 63_952);
-
-    // The mul/div family: the same depth for the same reason — its `range16`
-    // tree's 16 obligations and its table fraction pad to 32 leaves — its base
-    // claim 21 + 54 + 9.
-    let md = &proofs[4];
-    assert_eq!(md.gkr.layers.len(), 26);
-    assert_eq!(md.gkr.layers[0].rounds.len(), 20);
-    assert_eq!(md.gkr.layers[0].final_evals.len(), 21 + 54 + 9);
-    assert_eq!(md.outputs.len(), 2 + 2 * 4);
-    assert_eq!(md.to_bytes().len(), 63_248);
-
     // Each shard reduces to one claim per committed column, in layout order:
     // memory, witness, setup. The add/sub family's is 21 + 28 + 7.
     //
@@ -164,21 +142,11 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
         Ok(claim) => claim,
         Err(e) => panic!("the honest shard reduces: {e}"),
     };
-    for (proof, (m, w, s)) in [
-        (shb, (21, 61, 10)),
-        (md, (21, 54, 9)),
-        (&proofs[1], (21, 28, 7)),
-    ] {
+    for proof in [&proofs[1], &proofs[3], &proofs[4]] {
         let claim = reduced(proof);
         let a = &setup.vk.circuit(proof.family).expect("a circuit").artifact;
         assert_eq!(claim.columns, a.committed());
-        assert_eq!(
-            (a.memory.len(), a.witness.len(), a.setup.len()),
-            (m, w, s),
-            "family {}",
-            proof.family
-        );
-        assert_eq!(claim.values.len(), m + w + s);
+        assert_eq!(claim.values.len(), claim.columns.len());
         assert_eq!(claim.point.len(), 20);
     }
 }

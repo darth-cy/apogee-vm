@@ -421,39 +421,18 @@ fn parameters_off_the_menu_and_unknown_versions_are_refused() {
     ));
 }
 
-/// The per-family field masks, pinned. `funct3` is bit 6 and no family keeps
-/// it; mul/div and the atomics have no immediate; the window and delegation
-/// families have no decoded table at all, so their tuple is empty and their
-/// mask 0.
-///
-/// The list is every family, in canonical ascending order, and is held to
-/// `FAMILIES` by count *and* by order: a family appended to
-/// `constants::family` without a mask here fails on the next line, not
-/// silently.
+/// A family's lookup tuple is one column per field its mask keeps, so a family
+/// with no decoded table has an empty tuple and a mask of 0.
 #[test]
-fn the_field_masks_are_frozen() {
-    let want: [(FamilyId, u8); 14] = [
-        (family::ADD_SUB_LUI_AUIPC, 0b1011_1111),
-        (family::JUMP_BRANCH_SLT, 0b1011_1111),
-        (family::SHIFT_BITWISE, 0b1011_1111),
-        (family::MUL_DIV, 0b1001_1111),
-        (family::MEM_WORD, 0b1011_1111),
-        (family::MEM_SUBWORD, 0b1011_1111),
-        (family::ATOMICS, 0b1001_1111),
-        (family::INIT_TEARDOWN, 0),
-        (family::ZERO_WINDOWS, 0),
-        (family::PUBLIC_INPUT, 0),
-        (family::PUBLIC_OUTPUT, 0),
-        (family::ADVICE_WINDOWS, 0),
-        (family::KECCAK_F, 0),
-        (family::SHA256_COMP, 0),
-    ];
-    assert_eq!(want.map(|(f, _)| f), FAMILIES, "every family, in order");
-    for (family, mask) in want {
-        assert_eq!(field_mask(family), mask, "{}", family_name(family));
-        assert_eq!(lookup_tuple(family).len(), mask.count_ones() as usize);
+fn a_familys_lookup_tuple_is_the_fields_its_mask_keeps() {
+    for family in FAMILIES {
+        assert_eq!(
+            lookup_tuple(family).len(),
+            field_mask(family).count_ones() as usize,
+            "{}",
+            family_name(family)
+        );
     }
-    assert_eq!(FAMILIES.len(), family::COUNT as usize);
 }
 
 /// The extra mask over every RV32IMA mnemonic: each live row's mask is

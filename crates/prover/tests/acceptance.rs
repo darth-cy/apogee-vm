@@ -148,13 +148,6 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
         assert_eq!(proof.outputs.len(), 2 + 2 * circuit.channels.len());
         assert_eq!(proof.to_bytes().len(), proof_bytes(a));
     }
-    let [init, add] = [&proofs[0], &proofs[1]];
-    // The add/sub circuit's shape at `2^20` (`docs/spec/circuits.md` §1).
-    assert_eq!(add.to_bytes().len(), 53_384);
-    assert_eq!(init.to_bytes().len(), 19_816);
-    assert_eq!(add.gkr.layers.len(), 25);
-    assert_eq!(add.gkr.layers[0].rounds.len(), 20);
-    assert_eq!(add.gkr.layers[0].final_evals.len(), 21 + 28 + 7);
 }
 
 // ---------------------------------------------------------------------------

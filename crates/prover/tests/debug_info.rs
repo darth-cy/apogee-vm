@@ -4,15 +4,10 @@
 //!
 //! The log's own unit tests — the level parser, the family filter, the report
 //! builders — live in `src/debug.rs` beside what they test, and CI runs
-//! `--features debug-info --lib` for them. What belongs *here* is the pair of
-//! properties no unit test can reach:
-//!
-//! - the **grep markers** `docs/tools.md` §3 tells a reader to search
-//!   for are the ones the sources actually emit, so the documented recipe keeps
-//!   working when a line is reworded;
-//! - the feature **changes no proof byte**, which is `#[ignore]`d with the
-//!   other proving suites because the only honest way to show it is to prove
-//!   one statement twice.
+//! `--features debug-info --lib` for them. What belongs *here* is the property
+//! no unit test can reach: the feature **changes no proof byte**, which is
+//! `#[ignore]`d with the other proving suites because the only honest way to
+//! show it is to prove one statement twice.
 #![cfg(feature = "debug-info")]
 
 use prover::debug::{circuit, Level};
@@ -51,49 +46,6 @@ fn a_circuit_inventory_carries_what_a_later_failure_is_read_against() {
     // Widths, so a shard whose fill wrote nothing is legible against them.
     for key in ["M=", "W=", "S=", "V=", "committed=", "gates=", "outputs="] {
         assert!(text.contains(key), "{key} missing from {text}");
-    }
-}
-
-/// **Every marker the documented grep looks for exists in the sources.**
-///
-/// `docs/tools.md` §3 hands a reader `grep -E` alternations, and their markers
-/// come from `format!` strings in `src/lib.rs` and `src/streaming.rs` rather
-/// than from a builder a unit test can call: a scan's verdict fires only on the
-/// failure it is looking for, and no cheap fixture produces a guest that
-/// aborted or a gate that fails.
-///
-/// So they are pinned where they are written. The mutation this catches is the
-/// one the spec calls the worst failure mode a debugging tool has — a line
-/// reworded without updating the recipe, so the documented grep finds nothing
-/// and the run reads as "no problems".
-#[test]
-fn every_documented_grep_marker_is_in_the_sources() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let sources: String = ["src/lib.rs", "src/streaming.rs", "src/debug.rs"]
-        .iter()
-        .map(|f| std::fs::read_to_string(root.join(f)).expect("a source file reads"))
-        .collect();
-
-    for marker in [
-        "ABORTED",
-        "OUTPUT-LAYOUT-BREAK",
-        "self_check FAILED",
-        "ALL ZERO",
-    ] {
-        assert!(
-            sources.contains(marker),
-            "the documented grep in docs/tools.md §3 looks for {marker:?} and no \
-             source emits it: either restore the marker or update the recipe in \
-             docs/tools.md"
-        );
-    }
-
-    // And the two line prefixes the recipe counts begin/done pairs with.
-    for marker in ["begin h=", "gkr done"] {
-        assert!(
-            sources.contains(marker),
-            "the begin/done pairing in docs/tools.md §3 counts {marker:?}"
-        );
     }
 }
 

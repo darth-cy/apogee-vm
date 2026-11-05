@@ -417,13 +417,11 @@ pub fn circuit(c: &FamilyCircuit, h: u32) -> String {
 /// bytes, which is what the `verifier` CLI takes as its `<identity-hex>`
 /// argument and what every wire form in this repository carries
 /// (`docs/spec/primitives.md` §1). So a value this log prints can be pasted
-/// into the CLI, or grepped against a pinned fixture, without reversing
-/// anything.
+/// into the CLI without reversing anything.
 ///
 /// In full, not truncated, for the identity, which a reader compares against
-/// a **pinned constant** rather than against another run — a run that prints
-/// it, every time, shows a stale pin in one line — and for the global digest,
-/// where two runs that should agree diverge first.
+/// the value the `verifier` CLI is handed, and for the global digest, where two
+/// runs that should agree diverge first.
 pub fn fr_full(x: &Fr) -> String {
     x.to_bytes().iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -564,9 +562,8 @@ mod tests {
     }
 
     /// The order is `to_bytes`', so a printed value pastes into the `verifier`
-    /// CLI and greps against a pinned fixture. `fr_full` is the full canonical
-    /// encoding of the same bytes, and this holds the two equal by
-    /// construction.
+    /// CLI. `fr_full` is the full canonical encoding of the same bytes, and this
+    /// holds the two equal by construction.
     #[test]
     fn a_field_element_prints_in_to_bytes_order() {
         for x in [Fr::ZERO, Fr::ONE, Fr::MINUS_ONE, Fr::from_u64(1 << 40)] {

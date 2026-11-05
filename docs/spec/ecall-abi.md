@@ -4,8 +4,8 @@ The ecall convention, every ecall number, the guest's address space and the SDK 
 has no file descriptors and no I/O syscall: its public input, journal and advice are memory
 ([public-values.md](public-values.md)), so an ecall ends the execution or hands a frame to a
 delegation.
-`crates/constants/tests/ecall_abi.rs` holds this page's tables to `constants::ecall` and its
-`MEMORY` line to `link.ld`.
+`constants::ecall` and `constants::guest_memory` are the numbers' one home; this page describes them,
+and `crates/constants/tests/memory.rs` holds `link.ld`'s `MEMORY` line to the map.
 
 ## 1. The calling convention
 

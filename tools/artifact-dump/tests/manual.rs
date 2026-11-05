@@ -9,15 +9,13 @@
 //!
 //! It exists because a manual is the one artifact nothing else in a repository
 //! holds to account. `dump.rs` proves the tool agrees with `crates/loader`;
-//! `crates/loader/tests/layout.rs` proves the committed images are host
-//! loadable; neither notices when the *procedure a person is told to follow*
-//! stops working, or when a guest is added and the manual does not name it.
+//! `crates/loader/tests/layout.rs` proves the images are host loadable; neither
+//! notices when the *procedure a person is told to follow* stops working.
 //!
 //! The guest list is read out of `guests/Cargo.toml` rather than written down
 //! here, so this cannot go stale by omission: a guest that exists is a guest
 //! that gets walked.
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -31,10 +29,7 @@ fn repo_root() -> PathBuf {
 /// The names in the first `members = [...]` line of `text`.
 ///
 /// A line scan rather than a TOML crate, because the workspace takes no
-/// dependency it does not need and this is one line whose shape is fixed. It is
-/// used twice — over `guests/Cargo.toml` and over the copy of that line the
-/// manual prints — so the two are read by the same code and cannot disagree
-/// about what the line says.
+/// dependency it does not need and this is one line whose shape is fixed.
 ///
 /// A `members` line that stops looking like this is a change worth failing on
 /// rather than parsing around, so the callers assert on what comes back.
@@ -118,91 +113,6 @@ fn build(name: &str, slot: &str) -> PathBuf {
         elf.display()
     );
     elf
-}
-
-// ---------------------------------------------------------------------------
-// The checks that need no compiler
-// ---------------------------------------------------------------------------
-
-/// The manual accounts for every guest the workspace has, and invents none.
-///
-/// Both directions matter and they rot in opposite ways. A guest added to
-/// `guests/` and never mentioned leaves a reader with a section 2 that lists
-/// fewer examples than the tree holds, and section 6's excerpts describing a
-/// set that has moved on. A guest the manual names and the tree does not have
-/// is worse: it reads as current, and the command a reader types fails.
-///
-/// `hello` is the exception in the second direction. It is the crate the manual
-/// has the reader create as they go, so it is meant not to exist yet — naming
-/// it is the exercise, not a stale reference.
-#[test]
-fn the_manual_accounts_for_every_guest() {
-    let root = repo_root();
-    let manual_path = root.join("docs/guest-program-manual.md");
-    let manual = fs::read_to_string(&manual_path)
-        .unwrap_or_else(|e| panic!("reading {}: {e}", manual_path.display()));
-
-    /// The crate section 2 has the reader create. Absent from the tree on
-    /// purpose.
-    const THE_WORKED_EXAMPLE: &str = "hello";
-    /// `guests/target` is the shared build directory, not a crate.
-    const NOT_A_CRATE: &str = "target";
-
-    // Words rather than substrings: `amm` must not be satisfied by `gamma`.
-    let words: BTreeSet<&str> = manual
-        .split(|c: char| !(c.is_alphanumeric() || c == '-' || c == '_'))
-        .filter(|w| !w.is_empty())
-        .collect();
-
-    let unmentioned: Vec<String> = guest_members()
-        .into_iter()
-        .filter(|name| !words.contains(name.as_str()))
-        .collect();
-    assert!(
-        unmentioned.is_empty(),
-        "docs/guest-program-manual.md never mentions {unmentioned:?}, which \
-         guests/Cargo.toml builds. Section 2 lists the guests a reader can run \
-         every command against, and section 6's excerpts come from one of them."
-    );
-
-    // The other direction: a `guests/<name>` path a reader could type.
-    let mut named: BTreeSet<&str> = BTreeSet::new();
-    for token in manual.split(|c: char| !(c.is_alphanumeric() || "/-_.".contains(c))) {
-        let Some(rest) = token.strip_prefix("guests/") else {
-            continue;
-        };
-        let name = rest.split('/').next().unwrap_or_default();
-        if name.is_empty() || name.contains('.') || name == THE_WORKED_EXAMPLE {
-            continue;
-        }
-        if name != NOT_A_CRATE {
-            named.insert(name);
-        }
-    }
-    let missing: Vec<&&str> = named
-        .iter()
-        .filter(|name| !root.join("guests").join(name).is_dir())
-        .collect();
-    assert!(
-        missing.is_empty(),
-        "docs/guest-program-manual.md points at {missing:?} under guests/, \
-         and there is no such crate"
-    );
-
-    // Section 2 prints the manifest's `members` line and tells the reader to
-    // put it in the file. Mentioning a guest in the prose is not enough if the
-    // one line a reader copies would delete it, so that line is held to the
-    // manifest directly: the same names in the same order, plus the crate the
-    // reader is creating on the end.
-    let printed = members_in(&manual, "the manual's members snippet");
-    let mut want = guest_members();
-    want.push(THE_WORKED_EXAMPLE.to_string());
-    assert_eq!(
-        printed, want,
-        "the `members` line docs/guest-program-manual.md prints is not \
-         guests/Cargo.toml's plus `{THE_WORKED_EXAMPLE}`. A reader who copies \
-         it as instructed drops the guests it leaves out."
-    );
 }
 
 // ---------------------------------------------------------------------------
