@@ -1,19 +1,17 @@
-//! Fixture plumbing shared by the test suites and the fixture generators:
-//! a seeded RNG, SHA-256, and the hex codec that turns a digest or a field
-//! element into the text a committed vector file holds; and the guests, built
-//! from source.
+//! Plumbing shared by the test suites and the vector generators: a seeded RNG,
+//! SHA-256, and the hex codec that turns a digest or a field element into the
+//! text a committed vector file holds; and the guests, built from source.
 //!
-//! Every committed fixture is pinned by hash and regenerates byte for byte, so
-//! every crate that writes or reads one needs the same three things. This crate
-//! is where they live, once. **No guest ELF is a committed fixture**: `guests/`
-//! holds the programs as source, and a suite that runs one builds it with
-//! [`guest_elf`].
+//! **No guest ELF is a committed fixture**: `guests/` holds the programs as
+//! source, and a suite that runs one builds it with [`guest_elf`]. Nor is
+//! anything else an implementation change could move, so a committed vector is
+//! never pinned by hash.
 //!
-//! **It has no dependencies.** That is what lets the reference oracles,
-//! `tools/transcript-ref` and `tools/stateless-ref` — deliberately outside the
-//! workspace so their dependency graphs cannot unify a feature into its
-//! crates — link it without linking anything of ours that they are supposed to
-//! be checking. `no_dependencies` below holds it to that.
+//! **It has no dependencies.** That is what lets the reference oracle,
+//! `tools/transcript-ref` — deliberately outside the workspace so its dependency
+//! graph cannot unify a feature into its crates — link it without linking
+//! anything of ours that it is supposed to be checking. `no_dependencies` below
+//! holds it to that.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -116,11 +114,10 @@ pub fn hex_to_bytes(s: &str) -> Result<Vec<u8>, String> {
 }
 
 // ---------------------------------------------------------------------------
-// SHA-256 (FIPS 180-4). Pins committed fixture files by content.
+// SHA-256 (FIPS 180-4).
 //
 // Owned rather than taken as a dependency: it is 60 lines, it is checked
-// against the NIST vectors below, and a fixture pin that depends on a crates.io
-// version is a fixture pin with a moving part in it.
+// against the NIST vectors below, and this crate takes no dependency at all.
 // ---------------------------------------------------------------------------
 
 const K: [u32; 64] = [
@@ -497,7 +494,6 @@ mod tests {
         );
     }
 
-    /// Every fixture pin in the repository is only as good as this hash.
     /// FIPS 180-4 appendix B, plus the empty string.
     #[test]
     fn sha256_matches_nist_vectors() {

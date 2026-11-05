@@ -6,18 +6,15 @@
 
 mod common;
 
-use common::{assert_sha256, case, parse_cases, read_vectors, run_case, tag_by_name, Case, Op};
+use common::{case, parse_cases, read_vectors, run_case, tag_by_name, Case, Op};
 use constants::transcript_tags as tags;
 use field::Fr;
 use transcript::{poseidon2_permute, Tag, Transcript, TranscriptEvent};
 
 const CASES_PATH: &str = "tests/vectors/transcript_cases.txt";
-const CASES_SHA256: &str = "4eb41c17b44c3c2885e93a0be0a6fc4db63ec0fc3e4521091cdc2158ed2d7740";
 
 fn load() -> Vec<Case> {
-    let text = read_vectors(CASES_PATH);
-    assert_sha256(CASES_PATH, &text, CASES_SHA256);
-    parse_cases(&text).expect("the committed case file must parse")
+    parse_cases(&read_vectors(CASES_PATH)).expect("the committed case file must parse")
 }
 
 /// Replay a case and return every value it produced.

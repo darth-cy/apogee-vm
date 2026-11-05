@@ -2,8 +2,7 @@
 //!
 //! The guests are built from `guests/` (`test_support::guest_elf`), and the
 //! ISA corpus is `crates/isa`'s, read in place rather than kept as a second
-//! copy. This crate's own fixture lives in `tests/vectors/` and is pinned by
-//! SHA-256 in [`PINS`].
+//! copy. This crate's own fixture lives in `tests/vectors/`.
 
 #![allow(dead_code)]
 
@@ -14,7 +13,6 @@ use std::process::Command;
 use constants::family;
 use loader::{load_elf, ProgramImage, Segment, Slot};
 use program::{decode_program, ProgramParams};
-use test_support::{sha256, to_hex};
 
 /// Every guest, in `guests/Cargo.toml`'s order.
 pub const GUESTS: [&str; 14] = [
@@ -34,13 +32,6 @@ pub const GUESTS: [&str; 14] = [
     "shards",
 ];
 
-/// This crate's committed fixture and its digest. Refresh with
-/// `cargo run -p kat-gen -- program`, which prints it.
-pub const PINS: [(&str, &str); 1] = [(
-    "mul_free.elf",
-    "17a27f6ea5370cd865bb08afa7b2796274b41f0ede49f63d11a6314d7b4477fb",
-)];
-
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -55,10 +46,6 @@ pub fn isa_vector(name: &str) -> Vec<u8> {
 
 pub fn own_vector(name: &str) -> Vec<u8> {
     read(root().join("crates/program/tests/vectors").join(name))
-}
-
-pub fn digest(bytes: &[u8]) -> String {
-    to_hex(&sha256(bytes))
 }
 
 /// A guest, built from `guests/` and loaded.

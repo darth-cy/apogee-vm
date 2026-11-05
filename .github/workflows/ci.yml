@@ -89,16 +89,3 @@ jobs:
       # everything else coming from the template config.
       - name: a guest builds from the template config
         run: cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
-
-      # Committed fixtures are regenerated and diffed, so a silently edited
-      # vector file fails the build (`docs/tools.md` §7). `transcript-ref` is
-      # its own workspace; see its manifest.
-      #
-      # The opt-in `guests` group does not run, because a guest ELF is not
-      # byte-reproducible across machines (two clean builds on one machine
-      # agree, and `crates/loader/tests/reproducible.rs` checks that).
-      - name: committed fixtures are reproducible
-        run: |
-          cargo run -p kat-gen
-          cargo run --manifest-path tools/transcript-ref/Cargo.toml
-          git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/

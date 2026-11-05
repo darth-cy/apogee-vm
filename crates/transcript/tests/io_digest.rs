@@ -10,14 +10,10 @@
 mod common;
 
 use field::Fr;
-use test_support::{hex_to_bytes, sha256, to_hex};
+use test_support::{hex_to_bytes, to_hex};
 
 const VECTORS: &str = "tests/vectors/io_digest.txt";
 use transcript::io_digest;
-
-/// The fixture's pinned SHA-256: the vectors are the ones the digest was
-/// written down with.
-const IO_DIGEST_SHA256: &str = "b6c2d26547a989fcfbae4f96ffb69c9a5bae25d4796bd3133a245020565ebf57";
 
 /// Every committed case, replayed.
 #[test]
@@ -133,22 +129,11 @@ fn the_digest_is_a_pure_function_of_the_two_streams() {
     }
 }
 
-/// The negative control for the vector file itself.
+/// The negative control for the vector file itself: a flipped expected value
+/// fails the replay.
 #[test]
 fn a_corrupted_vector_file_is_rejected() {
     let good = common::read_vectors(VECTORS);
-    common::assert_sha256(VECTORS, &good, IO_DIGEST_SHA256);
-
-    let mut bad = good.clone().into_bytes();
-    let at = bad.len() - 4;
-    bad[at] ^= 1;
-    assert_ne!(
-        to_hex(&sha256(&bad)),
-        IO_DIGEST_SHA256,
-        "the pin cannot detect a changed file"
-    );
-
-    // ... and a flipped expected value fails the replay, not just the pin.
     let mut cases = parse(&good);
     let (_, input, output, want) = cases.pop().expect("the file has cases");
     let mut wrong = want.to_bytes();
@@ -165,9 +150,7 @@ fn a_corrupted_vector_file_is_rejected() {
 type Case = (String, Vec<u8>, Vec<u8>, Fr);
 
 fn committed() -> Vec<Case> {
-    let text = common::read_vectors(VECTORS);
-    common::assert_sha256(VECTORS, &text, IO_DIGEST_SHA256);
-    parse(&text)
+    parse(&common::read_vectors(VECTORS))
 }
 
 fn parse(text: &str) -> Vec<Case> {

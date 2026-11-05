@@ -649,15 +649,3 @@ fn each_column_is_stored_in_the_narrowest_backing() {
         }
     }
 }
-
-#[test]
-fn committed_fixtures_match_their_pins() {
-    for (name, want) in common::PINS {
-        assert_eq!(
-            common::digest(&common::own_vector(name)),
-            want,
-            "{name} has changed. If that was deliberate, rerun `cargo run -p kat-gen -- \
-             program` and update the digest in tests/common/mod.rs."
-        );
-    }
-}

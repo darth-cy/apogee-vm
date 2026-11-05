@@ -16,7 +16,7 @@
 //! * `io_digest.txt`        — the public I/O digest, `docs/spec/public-values.md` §5.
 //!
 //! Deterministic: same revisions in, byte-identical files out, so a refresh is
-//! run-and-diff. CI runs exactly that.
+//! run-and-diff.
 
 use std::fmt::Write as _;
 use std::fs;

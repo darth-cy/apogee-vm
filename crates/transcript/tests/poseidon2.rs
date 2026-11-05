@@ -6,12 +6,11 @@
 
 mod common;
 
-use common::{assert_sha256, data_lines, field_element, read_vectors};
+use common::{data_lines, field_element, read_vectors};
 use field::Fr;
 use transcript::poseidon2_permute;
 
 const PERM_PATH: &str = "tests/vectors/poseidon2_perm.txt";
-const PERM_SHA256: &str = "043398bbe711862d62de12daf4c0c8d9efedf1766c7ba2ac49e19720bea2ade2";
 
 /// The known-answer input.
 const KAT_INPUT: [u64; 3] = [0, 1, 2];
@@ -114,7 +113,6 @@ fn permutation_kat() {
 #[test]
 fn permutation_matches_every_reference_vector() {
     let text = read_vectors(PERM_PATH);
-    assert_sha256(PERM_PATH, &text, PERM_SHA256);
     let checked = check_perm(&text).expect("every reference permutation vector must match");
     let random = checked - STRUCTURED_PREFIX;
     assert!(

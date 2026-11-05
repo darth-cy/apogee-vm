@@ -55,8 +55,9 @@ verifier = { path = "crates/verifier" }
 prover = { path = "crates/prover" }
 host = { path = "crates/host" }
 
-# Test-only, and a dev-dependency everywhere it appears: SHA-256 for pinning
-# committed fixtures, and the hex codec those files are written in.
+# Test-only, and a dev-dependency everywhere it appears: a seeded RNG, SHA-256,
+# the hex codec the committed vectors are written in, and the guests built from
+# source.
 test-support = { path = "tools/test-support" }
 
 # Data parallelism. Beside it the workspace has one thread scope and one lock,
