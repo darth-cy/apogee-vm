@@ -382,8 +382,9 @@ fn virtual_kind_tags_are_append_only() {
         assert_eq!(postcard::from_bytes::<VirtualKind>(&[tag]), Ok(kind));
         assert_eq!(PolyAddress::Virtual(kind).to_string(), name);
     }
+    // The largest tag one varint byte can hold, so a new kind does not reach it.
     assert_eq!(
-        postcard::from_bytes::<VirtualKind>(&[u8::MAX]),
+        postcard::from_bytes::<VirtualKind>(&[0x7f]),
         Err(postcard::Error::SerdeDeCustom),
         "a tag no kind has"
     );
