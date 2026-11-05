@@ -68,8 +68,8 @@ lists r+1 …    halving, one per variable: TreeProduct on a product, TreeCross 
 top            no variables: read_root, write_root, then (num, den) per channel
 ```
 
-`r` is the largest tree's depth, so the circuit has `r + 1` row-wise lists; every registered
-circuit ends in a top with no variables. `crates/constraints/src/build.rs`
+`r` is the largest tree's depth, so the circuit has `r + 1` row-wise lists; it ends in a top with
+no variables, as Law 3 requires ([gkr.md](gkr.md) §4.2). `crates/constraints/src/build.rs`
 assembles it, writing the flat relation list and an all-zero padding row, `zero_row_valid` read off
 the gates' constants, and validating ([gkr.md](gkr.md) §4). `constraints::memory::assemble` gives
 it the product trees and `lookup::channel_trees`' fraction trees ([lookup.md](lookup.md) §11), then

@@ -17,8 +17,8 @@ Layer `k`, `0 ≤ k ≤ N`, `N ≥ 1`, is `w_k` columns of `n_k` variables, inde
 [primitives.md](primitives.md) §2 fixes. **Layer 0** is the committed columns `M`, `W`, `S` in
 layout order at `n_0 = trace_vars`, beside the virtual tables the artifact lists (§2.1), which
 count in no width. **Gate list** `k` reads layer `k` and writes layer `k + 1`; the **top**, layer
-`N`, is exactly the outputs. A list is **row-wise**, `n_{k+1} = n_k`, or **halving**,
-`n_{k+1} = n_k − 1`.
+`N`, has no variables, `n_N = 0`, and is exactly the outputs, one value each. A list is
+**row-wise**, `n_{k+1} = n_k`, or **halving**, `n_{k+1} = n_k − 1`.
 
 A halving list halves each column of its layer: it writes `w_k` columns by halving shapes (§3)
 reading layer-`k` columns at both **children** — child 0 is rows `[0, h)`, child 1 rows `[h, 2h)`,
@@ -125,8 +125,8 @@ LookupExpr      = (name, channel, selector: PolyAddress, tuple: [GateDef])
 `validate` holds the first three to those values and every name to non-empty `[a-z0-9_]`, unique
 in the artifact; names mean nothing to the engine. Encoding 0, `COEFFICIENT_ENCODING_CANONICAL_LE`,
 is every `Fr` canonical 32-byte little-endian, and 30 is `MAX_TRACE_VARS`. `outputs` orders the
-top layer as `OutputClaims` lists it; a relation with an output defines that slot, one without is
-enforcing; `lookups` are [lookup.md](lookup.md) §1's.
+top layer as `verify` takes the outputs' values; a relation with an output defines that slot, one
+without is enforcing; `lookups` are [lookup.md](lookup.md) §1's.
 
 ### 4.1 Wire form
 
@@ -166,7 +166,8 @@ enforces Laws 1–4 and the lookup rules again, sharing no code with `crates/con
    if listed, a `C{k}[j]` only one of list `k`'s own, from a producing or enforcing gate.
 2. **Derived width.** A list's stored `width` is its producing count, entry `j` writes
    `L{k+1}[j]`, and its stored `num_vars` is `n_k`, or `n_k − 1` if halving.
-3. **Top layer.** `outputs` is a permutation of `L{N}[0..w_N)`.
+3. **Top layer.** `n_N = 0`, so every output is one value, and `outputs` is a permutation of
+   `L{N}[0..w_N)`.
 4. **Single source of truth.** Relations and gate entries correspond one to one, a producing
    entry's relation defining the slot the bijection maps to its output, an enforcing entry's none,
    and each pair is one polynomial, scratch read through the bijection and cached entries
@@ -205,8 +206,8 @@ it, and `checker::check_padding` and `checker::check_padding_identity` test it.
 
 `gkr::forward` materializes every layer from the committed columns; `gkr::prove` proves those
 values as they stand, one `sumcheck::SumcheckProof` per transition; `gkr_verify::verify` replays
-the schedule, checking, from `OutputClaims`, one table per output, to `BaseClaim`s or a
-`GkrError`. `gkr::self_check`, naming the first failing gate, row and relation, and
+the schedule, checking, from the outputs, one value each, to `BaseClaim`s or a `GkrError`.
+`gkr::self_check`, naming the first failing gate, row and relation, and
 `gkr::explain_self_check`, listing that row's operands, are a debugging hook costing a second
 forward pass ([tools.md](../tools.md) §3). Rayon splits rows and row pairs, never lists or rounds:
 proofs do not depend on the thread count.
@@ -234,17 +235,15 @@ layer the next list writes.
 
 | step | op | tag | message |
 | --- | --- | --- | --- |
-| O1 | absorb | `GKR_OUTPUTS` | the output tables in output-map order, rows in index order: one message of `w_N·2^{n_N}` scalars |
-| O2 | squeeze ×`n_N` | `GKR_OUTPUT_POINT` | `p = r`, `r_i` binding variable `i`; `v_j = tables[i](r)` for `outputs[i] = L{N}[j]` |
+| O1 | absorb | `GKR_OUTPUTS` | the outputs in output-map order, one message of `w_N` scalars; `p` is the empty point and `v_j = outputs[i]` for `outputs[i] = L{N}[j]` |
 | L1 | squeeze | `GKR_BATCH` | `λ`; the claim is `c = Σ_j λ^j·v_j` |
 | L2 | ×`n_{k+1}`: absorb, squeeze | `SUMCHECK_ROUND`, `SUMCHECK_CHALLENGE` | a round's cubic, then `ρ_i`, binding variable `i` |
 | L3 | absorb | `GKR_LAYER_CLAIMS` | row-wise: `L{k}[j](ρ)` per `j` in offset order, layout order at `k = 0`; halving: `L{k}[j](ρ,0), L{k}[j](ρ,1)` per `j` |
 | L4 | squeeze, halving only | `GKR_CHILD` | `τ`; `p = (ρ, τ)`; `v_j = L{k}[j](ρ,0) + τ·(L{k}[j](ρ,1) − L{k}[j](ρ,0))` |
 
 L1–L4 run for `k = N − 1` down to 0; after a row-wise list `p = ρ` and `v` is L3's message. The
-base claims are layer 0's, in layout order at one point. Every registered circuit halves to a top
-with no variables ([circuits.md](circuits.md) §2), so O2 draws nothing and O1 fixes the roots
-before `λ`.
+base claims are layer 0's, in layout order at one point. The top having no variables (Law 3), its
+claims are the outputs themselves, and O1 fixes them before the first `λ`.
 
 ### 5.3 The layer sumcheck
 
@@ -268,12 +267,11 @@ is `c = S_k(values)`. A zero claim is legal. `gkr::prove_sumcheck` and
 
 Each challenge is drawn after what it protects:
 
-- **`r` after the outputs**, or a prover predicting `r` claims another table agreeing with the
-  true one there.
-- **`λ` after the claims and `p`.** If some `v_j` is not the true `v̂_j`, or some `E_e` is nonzero
-  on the cube, `Σ_j λ^j·(v_j − v̂_j) − Σ_e λ^{w_{k+1}+e}·Ê_e(p)` is a nonzero polynomial in `λ` of
-  degree below `w_{k+1} + |E_k|`; `Ê_e`, the extension of `E_e`'s values, is fixed before `p` is
-  drawn and vanishes there with probability at most `n_{k+1}/|Fr|`.
+- **`λ` after the claims and `p`**, at the top after the outputs, or a prover predicting `λ`
+  moves two outputs so that their batch is unchanged. If some `v_j` is not the true `v̂_j`, or
+  some `E_e` is nonzero on the cube, `Σ_j λ^j·(v_j − v̂_j) − Σ_e λ^{w_{k+1}+e}·Ê_e(p)` is a nonzero
+  polynomial in `λ` of degree below `w_{k+1} + |E_k|`; `Ê_e`, the extension of `E_e`'s values, is
+  fixed before `p` is drawn and vanishes there with probability at most `n_{k+1}/|Fr|`.
 - **`ρ_i` after round `i`**: a wrong cubic agrees with the true one there with chance ≤ `3/|Fr|`.
 - **`τ` after both children**: a wrong pair's line meets `τ ↦ L{k}[j](ρ, τ)` in at most one point.
 
@@ -289,7 +287,7 @@ before touching the transcript, and on a validated artifact never panics on proo
 | `GkrError` | when |
 | --- | --- |
 | `MissingChallenge { slot }` | a gate names a slot not supplied |
-| `OutputShape` | `OutputClaims` mismatches the output map in count or variables |
+| `OutputShape` | the outputs are not one value per output-map entry |
 | `ProofShape { layer }` | `layer = N`: a wrong transition count; else transition `layer`, lowest first, has a wrong round or claim count |
 | `LayerInconsistency { layer }` | a round or the final check of transition `layer` fails |
 

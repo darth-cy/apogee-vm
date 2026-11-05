@@ -91,11 +91,11 @@ order G1–G9 ([tools.md](../tools.md) §4).
 
 ## 4. Tags
 
-`Tag = u64`: `constants::transcript_tags`, 24 tags numbered from 1 and named by
-`transcript_tags::NAMES[tag − 1]`; 0 is not a tag. Kinds: **S** scalars, **B** bytes, **C**
-challenge. Where: G1–G9 and the shard transcript are [proof.md](proof.md) §2, §4; identity
-[program.md](program.md) §8; GKR [gkr.md](gkr.md) §5; `io_digest`
-[public-values.md](public-values.md) §5. † marks a tag on no proof path.
+`Tag = u64`: `constants::transcript_tags`, 23 tags numbered from 1 to 24 and named by
+`transcript_tags::NAMES[tag − 1]`; 0 is not a tag, and 13 is retired, never to be reassigned.
+Kinds: **S** scalars, **B** bytes, **C** challenge. Where: G1–G9 and the shard transcript are
+[proof.md](proof.md) §2, §4; identity [program.md](program.md) §8; GKR [gkr.md](gkr.md) §5;
+`io_digest` [public-values.md](public-values.md) §5. † marks a tag on no proof path.
 
 | tag | | | where |
 | --- | --- | --- | --- |
@@ -110,8 +110,8 @@ challenge. Where: G1–G9 and the shard transcript are [proof.md](proof.md) §2,
 | 9 | `PROGRAM_IDENTITY` | S | identity: `[code_version]`; G5: `[identity]` |
 | 10 | `VM_CONFIG` | S | identity; G2 |
 | 11 | `SHARD_COUNTS` | S | G3 |
-| 12 | `GKR_OUTPUTS` | S | GKR: the output tables |
-| 13 | `GKR_OUTPUT_POINT` | C | GKR: the top point |
+| 12 | `GKR_OUTPUTS` | S | GKR: the outputs |
+| 13 | — | | retired: no message carries it |
 | 14 | `GKR_BATCH` | C | GKR: a transition's claim batch |
 | 15 | `GKR_LAYER_CLAIMS` | S | GKR: a transition's claimed values |
 | 16 | `GKR_CHILD` | C | GKR: a halving transition's line point |
