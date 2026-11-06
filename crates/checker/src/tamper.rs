@@ -264,12 +264,7 @@ fn prove_all(
                 .unwrap_or_else(|| panic!("shard ({family}, {index}) has no {}", c.address));
             column.1 = with_cell(&column.1, c.row, c.value);
         }
-        let circuit = &setup
-            .families
-            .iter()
-            .find(|f| f.family == family)
-            .expect("a registered family")
-            .circuit;
+        let circuit = setup.circuit(family);
         // The honest prover's recount over the tampered columns, one channel at
         // a time: a channel whose counts are the tamper keeps them, and one
         // whose table does not hold a tampered tuple has no count and keeps its

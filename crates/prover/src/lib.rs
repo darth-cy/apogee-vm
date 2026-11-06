@@ -148,8 +148,9 @@ pub struct Program {
 }
 
 /// One family as a statement registers it: its id and height from the
-/// `VmConfig`, its circuit from `VmConfig::circuit`, and the fill that routes
-/// its trace buffer into the circuit's columns.
+/// `VmConfig`, and the fill that routes its trace buffer into its circuit's
+/// columns. The circuit itself, from `VmConfig::circuit`, is the verifying
+/// key's, which holds every circuit once ([`ProverSetup::circuit`]).
 ///
 /// **The family-registration surface**, `docs/spec/circuits.md` §1 and §2: a
 /// family is a circuit in the registry and a fill in [`family_fill`], and adding
@@ -158,13 +159,14 @@ pub struct Program {
 pub struct FamilyRegistration {
     pub family: FamilyId,
     pub height: u32,
-    pub circuit: FamilyCircuit,
     pub fill: Fill,
 }
 
-/// Every family of `config`, registered in its order, or the first one with no
-/// circuit at its height or no fill.
-pub fn register(config: &VmConfig) -> Result<Vec<FamilyRegistration>, ProverError> {
+/// Every family of `config`, registered in its order, with its circuit beside
+/// it, or the first one with no circuit at its height or no fill.
+pub fn register(
+    config: &VmConfig,
+) -> Result<(Vec<FamilyRegistration>, Vec<FamilyCircuit>), ProverError> {
     config
         .families
         .iter()
@@ -174,14 +176,17 @@ pub fn register(config: &VmConfig) -> Result<Vec<FamilyRegistration>, ProverErro
                 .circuit(family, height.trailing_zeros())
                 .ok_or(unregistered.clone())?;
             let fill = family_fill(family).ok_or(unregistered)?;
-            Ok(FamilyRegistration {
-                family,
-                height,
+            Ok((
+                FamilyRegistration {
+                    family,
+                    height,
+                    fill,
+                },
                 circuit,
-                fill,
-            })
+            ))
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()
+        .map(|registered| registered.into_iter().unzip())
 }
 
 /// Everything proving one program needs that no execution changes: the
@@ -197,14 +202,14 @@ impl ProverSetup {
     /// key: the identity and every circuit, held to the key's own load rules
     /// (`docs/spec/proof.md` §7.2) before it is returned.
     pub fn new(program: Program) -> Result<ProverSetup, ProverError> {
-        let families = register(&program.config)?;
-        debug_only!(for f in &families {
+        let (families, circuits) = register(&program.config)?;
+        debug_only!(for (f, circuit) in families.iter().zip(&circuits) {
             dlog!(
                 Detail,
                 family = f.family,
                 "apogee setup    {:<18} {}",
                 debug::family_name(f.family),
-                debug::circuit(&f.circuit, f.height)
+                debug::circuit(circuit, f.height)
             );
             // **The output layout, which two conventions read two ways.**
             // `verifier_core::reduce_shard` step 9 takes channel `j`'s root pair
@@ -219,8 +224,8 @@ impl ProverSetup {
             // would have the discharge validating one pair and the verifier
             // reading another, and it would surface as `Lookup { channel }` on a
             // channel that is innocent. One integer, printed every run.
-            let want = 2 + 2 * f.circuit.channels.len();
-            if f.circuit.artifact.outputs.len() != want {
+            let want = 2 + 2 * circuit.channels.len();
+            if circuit.artifact.outputs.len() != want {
                 dlog!(
                     Phase,
                     "apogee setup    {} OUTPUT-LAYOUT-BREAK outputs={} want={want} \
@@ -228,7 +233,7 @@ impl ProverSetup {
                      constraints::lookup::channel_cones index from opposite ends and \
                      disagree",
                     debug::family_name(f.family),
-                    f.circuit.artifact.outputs.len()
+                    circuit.artifact.outputs.len()
                 );
             }
         });
@@ -244,7 +249,7 @@ impl ProverSetup {
             config: program.config.clone(),
             entry_pc: program.image.entry,
             identity: identity_digest(code_version, &program.config, program.image.entry),
-            circuits: families.iter().map(|f| f.circuit.clone()).collect(),
+            circuits,
         };
         vk.check().map_err(ProverError::Key)?;
         // Identity in full, not truncated: it is the value the `verifier` CLI
@@ -268,6 +273,14 @@ impl ProverSetup {
             .iter()
             .find(|f| f.family == family)
             .unwrap_or_else(|| panic!("family {family} is not registered for this program"))
+    }
+
+    /// The circuit of registered family `family`: the verifying key's, which
+    /// holds every circuit once.
+    pub fn circuit(&self, family: FamilyId) -> &FamilyCircuit {
+        self.vk
+            .circuit(family)
+            .unwrap_or_else(|| panic!("family {family} has no circuit in this program's key"))
     }
 }
 
@@ -525,9 +538,9 @@ pub(crate) fn shard_columns_of(
     family: FamilyId,
     source: &ShardSource,
 ) -> Result<Vec<(PolyAddress, MultilinearPoly)>, ProverError> {
-    let reg = setup.registration(family);
-    let mut columns = (reg.fill)(source).map_err(ProverError::Trace)?;
-    let counted = build_multiplicities(&reg.circuit.artifact, &columns, &reg.circuit.channels)
+    let circuit = setup.circuit(family);
+    let mut columns = (setup.registration(family).fill)(source).map_err(ProverError::Trace)?;
+    let counted = build_multiplicities(&circuit.artifact, &columns, &circuit.channels)
         .map_err(ProverError::Trace)?;
     columns.extend(counted);
     Ok(columns)
@@ -601,8 +614,8 @@ impl ProvingContext<'_> {
     /// claims' one point is read back by replaying the schedule over the proof,
     /// which checks nothing: a tampered witness still gets its proof.
     pub(crate) fn gkr_part(&self, family: FamilyId, index: u32, base: &BaseLayer) -> ShardGkr {
-        let reg = self.setup.registration(family);
-        let artifact = &reg.circuit.artifact;
+        let circuit = self.setup.circuit(family);
+        let artifact = &circuit.artifact;
         // The begin line, before any work, and **the one line the whole log is
         // built around**: shards are proved concurrently, so a run that is
         // killed, OOMs or hangs leaves its last `begin` without a `done`, and
@@ -618,7 +631,7 @@ impl ProvingContext<'_> {
                 &self.global.statement.shard_counts
             )
             .len(),
-            debug::height(reg.height),
+            debug::height(self.setup.registration(family).height),
             artifact.witness.len()
         );
         // Declared under the `cfg` and read only inside one, so the default
@@ -633,7 +646,7 @@ impl ProvingContext<'_> {
         let ts_window = ts_window(family, base);
         let (mut t, g, beta) = shard_transcript(self.global.digest, family, index, ts_window);
         let challenges = shard_challenges(
-            &reg.circuit,
+            circuit,
             index,
             &self.global.statement.windows,
             &self.global.memory_challenges,

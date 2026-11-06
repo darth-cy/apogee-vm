@@ -212,13 +212,13 @@ pub fn advance(
     }
     let ctx = ProvingContext { setup, global };
     let shards = statement_shards(&setup.vk.config, &ctx.global.statement.shard_counts);
-    let windows = ctx.global.statement.windows.clone();
+    let windows = &ctx.global.statement.windows;
     // The base layer of one shard, built inside that shard's own rayon task:
     // no shared state, and the columns are dropped with the task that made
     // them.
     let base =
         |archive: &TraceArchive, (family, index): (u32, u32)| -> Result<BaseLayer, ProverError> {
-            let columns = shard_columns(setup, archive, family, index, &windows)?;
+            let columns = shard_columns(setup, archive, family, index, windows)?;
             Ok(BaseLayer::new(columns))
         };
 

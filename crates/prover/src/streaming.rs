@@ -47,7 +47,9 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::Instant;
 
+use constraints::PolyAddress;
 use emulator::{GuestIo, ShardChunk, StreamedExecution, StreamingRun};
+use poly::MultilinearPoly;
 use rayon::prelude::*;
 use trace::{build_boundary_finals, init_windows, plan_shards, RowSlice};
 use verifier_core::{statement_shards, window_height, BlockProof, PublicInputs, ShardProof};
@@ -76,9 +78,9 @@ pub struct StreamingReport {
     pub shards: usize,
     /// The most shards held at once in either pass, each claimed by a worker —
     /// or in one of the window families' batches — and not yet finished: its
-    /// rows, and whatever columns, forward pass and proof it had grown into so
-    /// far. At most `max_in_flight`, which is what the peak is a
-    /// function of.
+    /// rows until its columns are filled, and whatever columns, forward pass and
+    /// proof it had grown into since. At most `max_in_flight`, which is what the
+    /// peak is a function of.
     ///
     /// It does not count a shard the executor has filled and no worker has
     /// claimed yet. That is rows and nothing else, at most one shard of them
@@ -135,7 +137,7 @@ pub fn prove_block_streaming(
         ..StreamingReport::default()
     };
     let (global, done) = pass1(setup, io, max_in_flight, &mut report)?;
-    let proofs = pass2(setup, io, &global, &done, max_in_flight, &mut report)?;
+    let (proofs, global) = pass2(setup, io, global, &done, max_in_flight, &mut report)?;
     let statement = public_inputs(&global, &proofs);
     let block = BlockProof {
         config: setup.program.config.clone(),
@@ -279,28 +281,34 @@ fn chunk_source<'a>(
 /// so that a pass which built different columns produces a proof that fails
 /// verification. With no commitments and no opening, nothing does
 /// (`docs/architecture.md` §0).
+///
+/// Every shard's proof starts from `global`, which pass 2 holds for the whole
+/// pass and hands back with the proofs.
 fn pass2(
     setup: &ProverSetup,
     io: &GuestIo,
-    global: &GlobalCommitState,
+    global: GlobalCommitState,
     pass1: &StreamedExecution,
     max_in_flight: usize,
     report: &mut StreamingReport,
-) -> Result<Vec<ShardProof>, ProverError> {
+) -> Result<(Vec<ShardProof>, GlobalCommitState), ProverError> {
     let started = Instant::now();
     let config = &setup.program.config;
     let order = statement_shards(config, &global.statement.shard_counts);
-    let ctx = ProvingContext {
-        setup,
-        global: global.clone(),
-    };
+    let ctx = ProvingContext { setup, global };
+    let global = &ctx.global;
 
     let run = StreamingRun::new(&setup.program.image, io, &setup.program.tables, config)
         .map_err(|e| ProverError::Trace(e.to_string()))?;
+    // A shard's rows are read by its fill alone, so they go once its columns
+    // are filled: the columns made from them do not share the shard's forward
+    // pass with them.
     let piped = pipeline(2, run, max_in_flight, |chunk| {
-        let height = setup.registration(chunk.family).height;
-        let source = chunk_source(setup, io, chunk, height);
-        prove_source(&ctx, chunk.family, chunk.index, &source)
+        let (family, index) = (chunk.family, chunk.index);
+        prove_filled(&ctx, family, index, move || {
+            let height = setup.registration(family).height;
+            crate::shard_columns_of(setup, family, &chunk_source(setup, io, &chunk, height))
+        })
     })?;
     report.pass2_execute_ns = piped.execute_ns;
     let mut peak = piped.peak_in_flight;
@@ -347,7 +355,7 @@ fn pass2(
 
     // The window families last, over pass 2's own final state, in batches under
     // the same bound.
-    let windows = global.statement.windows.clone();
+    let windows = &global.statement.windows;
     let mut pending: Vec<(FamilyId, u32)> = Vec::new();
     for (at, (family, index)) in order.iter().enumerate() {
         if proofs[at].is_none() {
@@ -368,9 +376,11 @@ fn pass2(
                         rows: ShardRows::Window(&done.state),
                         index,
                         height: height as usize,
-                        window: window_of(family, index, &windows, height),
+                        window: window_of(family, index, windows, height),
                     };
-                    prove_source(&ctx, family, index, &source)
+                    prove_filled(&ctx, family, index, || {
+                        crate::shard_columns_of(setup, family, &source)
+                    })
                 })
                 .collect(),
         )?;
@@ -403,21 +413,21 @@ fn pass2(
         peak,
         max_in_flight
     );
-    Ok(proofs)
+    Ok((proofs, ctx.global))
 }
 
-/// One shard's proof from its fill's source: the committed columns, then the
-/// GKR proof over one base layer. Pass 2's work on a shard, for a chunk a worker
-/// claimed and for a window shard alike.
-fn prove_source(
+/// One shard's proof: `fill` builds its committed columns, and whatever it read
+/// them from goes with it, before the GKR proof over one base layer. Pass 2's
+/// work on a shard, for a chunk a worker claimed and for a window shard alike.
+fn prove_filled(
     ctx: &ProvingContext,
     family: FamilyId,
     index: u32,
-    source: &ShardSource,
+    fill: impl FnOnce() -> Result<Vec<(PolyAddress, MultilinearPoly)>, ProverError>,
 ) -> Result<ShardProof, ProverError> {
     #[cfg(feature = "debug-info")]
     let clock = debug::Clock::start();
-    let columns = crate::shard_columns_of(ctx.setup, family, source)?;
+    let columns = fill()?;
     #[cfg(feature = "debug-info")]
     let fill_ms = clock.ms();
     let (proof, _events) = crate::prove_shard_columns(ctx, family, index, columns);
@@ -503,7 +513,7 @@ fn pipeline<T: Send>(
     pass: u8,
     run: StreamingRun<'_>,
     workers: usize,
-    work: impl Fn(&ShardChunk) -> Result<T, ProverError> + Sync,
+    work: impl Fn(ShardChunk) -> Result<T, ProverError> + Sync,
 ) -> Result<Piped<T>, ProverError> {
     let source = Mutex::new(Source::new(pass, workers, run));
     let joined: Vec<_> = std::thread::scope(|scope| {
@@ -541,7 +551,7 @@ fn pipeline<T: Send>(
 /// nothing is left to claim or the pipeline has stopped.
 fn worker<T>(
     source: &Mutex<Source<'_>>,
-    work: &impl Fn(&ShardChunk) -> Result<T, ProverError>,
+    work: &impl Fn(ShardChunk) -> Result<T, ProverError>,
 ) -> Vec<(ShardId, T)> {
     let _stop = StopOnPanic(source);
     let mut mine = Vec::new();
@@ -564,15 +574,17 @@ fn worker<T>(
         let Some((seq, chunk)) = claimed else {
             return mine;
         };
-        match work(&chunk) {
+        // `work` takes the shard's rows and drops them when it is done with
+        // them, and at the latest before it returns: before the next claim, so
+        // a worker never holds two shards' rows.
+        let id = (chunk.family, chunk.index);
+        match work(chunk) {
             Ok(result) => {
-                mine.push(((chunk.family, chunk.index), result));
+                mine.push((id, result));
                 held = Some((seq, None));
             }
             Err(error) => held = Some((seq, Some(error))),
         }
-        // `chunk`, the shard's rows, goes here: before the next claim, so a
-        // worker never holds two shards' rows.
     }
 }
 
@@ -842,7 +854,7 @@ mod tests {
             let piped = pipeline(1, run(&guest), workers, |chunk| {
                 let start = Instant::now();
                 std::thread::sleep(Duration::from_millis(2));
-                Ok((rows(chunk), start, Instant::now()))
+                Ok((rows(&chunk), start, Instant::now()))
             })
             .expect("nothing here fails");
 

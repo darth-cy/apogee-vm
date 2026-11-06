@@ -108,8 +108,8 @@ asserts that each family's count is the plan's.
 filled shards no worker has claimed, and the counts. Under the lock a worker gives back its shard
 and claims the next: a waiting one, or else it steps the executor itself until a buffer fills
 (`Source::claim`, the only place the guest runs). Outside the lock it builds the shard's columns,
-works it and drops it. These are the prover's only threads and only lock; within a shard,
-parallelism is rayon over data.
+drops the rows they were built from, proves the shard and drops the rest. These are the prover's
+only threads and only lock; within a shard, parallelism is rayon over data.
 
 | held | bound | by |
 | --- | --- | --- |
