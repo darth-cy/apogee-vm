@@ -153,16 +153,11 @@ fn every_reduction_follows_the_claims_it_reduces() {
     let base = toy_base(&toy_columns(0x5313_0900));
     let (mut prover, challenges) = bind(&artifact, &base);
     let values = forward(&artifact, &base, &challenges);
-    let proof = prove(&artifact, &values, &challenges, &mut prover);
+    let outputs = output_claims(&artifact, &values);
+    let proof = prove(&artifact, values, &challenges, &mut prover);
     let (mut verifier, challenges) = bind(&artifact, &base);
-    verify(
-        &artifact,
-        &proof,
-        &output_claims(&artifact, &values),
-        &challenges,
-        &mut verifier,
-    )
-    .expect("the honest run verifies");
+    verify(&artifact, &proof, &outputs, &challenges, &mut verifier)
+        .expect("the honest run verifies");
 
     assert_eq!(
         prover.event_log(),

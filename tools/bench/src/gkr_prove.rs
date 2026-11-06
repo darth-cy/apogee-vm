@@ -424,9 +424,12 @@ pub fn run() {
     let mut proof = None;
     for _ in 0..REPS {
         drop(proof.take());
+        // `prove` consumes what it proves: each repetition gets its own
+        // forward pass, copied before the clock starts.
+        let owned = values.clone();
         let mut t = Transcript::new();
         let start = Instant::now();
-        let p = prove(&artifact, &values, &challenges, &mut t);
+        let p = prove(&artifact, owned, &challenges, &mut t);
         best.record(start.elapsed());
         proof = Some(p);
     }

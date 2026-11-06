@@ -81,7 +81,7 @@ impl BaseLayer {
 
 /// Every layer of one forward pass: the base, then `layers[k - 1]` for layer
 /// `k = 1..=N`, each in offset order. Cached entries are not columns and are
-/// not here.
+/// not here. [`prove`] consumes it, a layer at a time.
 #[derive(Clone, Debug)]
 pub struct LayerValues {
     pub base: BaseLayer,
@@ -691,13 +691,35 @@ pub struct LayerSummand<'a> {
     pub challenges: &'a ExternalChallenges,
 }
 
-/// The tables a layer sumcheck binds, all with the eq point's variable count:
-/// layer `k`'s columns — child 0 of each, for a halving list — and, for a
-/// halving list, child 1 of each. Virtual tables are not here: they are never
-/// materialized, and the driver evaluates their closed form where it needs one.
-pub struct LayerTables {
-    pub lower: Vec<MultilinearPoly>,
-    pub upper: Vec<MultilinearPoly>,
+/// One column of layer `k` as transition `k`'s sumcheck binds it, at the
+/// column's own height. A halving list's child 0 is the column's low half and
+/// child 1 its high half: the child bit is the highest variable, so binding the
+/// low variables binds both children at once and the column is never split.
+/// Virtual tables are not tables here: they are never materialized, and the
+/// driver evaluates their closed form where it needs one.
+pub enum LayerTable<'v> {
+    /// A committed column, read where the base holds it until its first bind
+    /// folds it into a half-size table of its own. The base is never written.
+    Base(&'v MultilinearPoly),
+    /// A column the sumcheck owns — an inner layer's, taken from the forward
+    /// pass, or a base column after its first bind — bound in place.
+    Owned(MultilinearPoly),
+}
+
+impl LayerTable<'_> {
+    fn column(&self) -> &MultilinearPoly {
+        match self {
+            LayerTable::Base(column) => column,
+            LayerTable::Owned(column) => column,
+        }
+    }
+
+    fn bind(&mut self, r: Fr) {
+        match self {
+            LayerTable::Base(column) => *self = LayerTable::Owned(column.bound(r)),
+            LayerTable::Owned(column) => column.bind(r),
+        }
+    }
 }
 
 /// `[1/2, 1/3, 1/6]`, derived rather than transcribed.
@@ -743,11 +765,14 @@ struct PairScratch {
     gates: Vec<Fr>,
 }
 
-/// The line `lo + X·(hi − lo)` of pair `i` of every table, into `lo` and `step`.
-fn lines(tables: &[MultilinearPoly], i: usize, lo: &mut [Fr], step: &mut [Fr]) {
+/// The line `lo + X·(hi − lo)` of pair `i` of every table, into `lo` and `step`,
+/// the pair read `offset` rows into each table: 0 for a row-wise list's columns
+/// and a halving list's child 0, the child's length for its child 1.
+fn lines(tables: &[LayerTable], offset: usize, i: usize, lo: &mut [Fr], step: &mut [Fr]) {
     for (t, (lo, step)) in tables.iter().zip(lo.iter_mut().zip(step.iter_mut())) {
-        *lo = t.get(2 * i);
-        *step = t.get(2 * i + 1) - *lo;
+        let column = t.column();
+        *lo = column.get(offset + 2 * i);
+        *step = column.get(offset + 2 * i + 1) - *lo;
     }
 }
 
@@ -782,9 +807,12 @@ fn step(values: &mut [Fr], steps: &[Fr]) {
 }
 
 /// Prove `claim = Σ_y eq(eq_point, y) · S(y)` for the summand and tables
-/// given: one cubic per variable of the eq point, each absorbed as
+/// given — layer `k`'s columns in its value order, a row-wise list's with the
+/// eq point's variable count and a halving list's with one more, the child
+/// bit — one cubic per variable of the eq point, each absorbed as
 /// `SUMCHECK_ROUND` and followed by the `SUMCHECK_CHALLENGE` that binds it.
-/// Returns the rounds and the bound point; every table is left bound to it.
+/// Returns the rounds and the bound point; every table is left bound to it,
+/// one value each, or a halving list's two: child 0, then child 1.
 ///
 /// The claim itself is not an input: an honest round 0 sums to it by
 /// construction, and a claim the tables do not support is the verifier's to
@@ -792,44 +820,42 @@ fn step(values: &mut [Fr], steps: &[Fr]) {
 pub fn prove_sumcheck(
     eq_point: &[Fr],
     summand: &LayerSummand,
-    tables: &mut LayerTables,
+    tables: &mut [LayerTable],
     t: &mut Transcript,
 ) -> (Vec<[Fr; 4]>, Vec<Fr>) {
     let n = eq_point.len();
     let artifact = summand.artifact;
-    let kinds: Vec<VirtualKind> = if artifact.layers[summand.layer].halving {
+    let halving = artifact.layers[summand.layer].halving;
+    let kinds: Vec<VirtualKind> = if halving {
         Vec::new()
     } else {
         artifact.virtuals.iter().map(|(kind, _)| *kind).collect()
     };
-    // Debugging aids, not runtime checks (see `check_slots`). Without them a
-    // table shorter than the eq point, or a halving list missing a child table,
-    // panics on a read past its end; a taller table is read only in part, and
-    // an extra child table is bound and never read.
-    // for table in tables.lower.iter().chain(&tables.upper) {
+    // A debugging aid, not a runtime check (see `check_slots`). Without it a
+    // table shorter than its list needs panics on a read past its end, and a
+    // taller one is read only in part.
+    // for table in tables.iter() {
     //     assert_eq!(
-    //         table.num_vars(),
-    //         n,
+    //         table.column().num_vars(),
+    //         n + halving as usize,
     //         "prove_sumcheck: a table has {} variables, the eq point {n}",
-    //         table.num_vars()
-    //     );
-    // }
-    // if artifact.layers[summand.layer].halving {
-    //     assert_eq!(
-    //         tables.upper.len(),
-    //         tables.lower.len(),
-    //         "prove_sumcheck: halving gate list {} needs both children of every column",
-    //         summand.layer
+    //         table.column().num_vars()
     //     );
     // }
     let resolved = ResolvedList::new(artifact, summand.layer, summand.challenges);
     let mut eq = fr_poly(eq_table(eq_point));
     let constants = interpolation_constants();
+    let width = tables.len();
+    let children = if halving { width } else { 0 };
     let mut rounds = Vec::with_capacity(n);
     let mut point = Vec::with_capacity(n);
     for _ in 0..n {
         let half = eq.len() / 2;
         let bound = point.len();
+        // A halving column is its two children end to end, each as long as
+        // the eq table: child 1's pairs start that far in.
+        let child = eq.len();
+        let read: &[LayerTable] = tables;
         let at_nodes = (0..half)
             .into_par_iter()
             .map_init(
@@ -837,10 +863,10 @@ pub fn prove_sumcheck(
                     let mut at = vec![Fr::ZERO; n];
                     at[..bound].copy_from_slice(&point);
                     PairScratch {
-                        lower: vec![Fr::ZERO; tables.lower.len()],
-                        lower_step: vec![Fr::ZERO; tables.lower.len()],
-                        upper: vec![Fr::ZERO; tables.upper.len()],
-                        upper_step: vec![Fr::ZERO; tables.upper.len()],
+                        lower: vec![Fr::ZERO; width],
+                        lower_step: vec![Fr::ZERO; width],
+                        upper: vec![Fr::ZERO; children],
+                        upper_step: vec![Fr::ZERO; children],
                         virtuals: vec![Fr::ZERO; kinds.len()],
                         virtuals_step: vec![Fr::ZERO; kinds.len()],
                         point: at,
@@ -848,8 +874,10 @@ pub fn prove_sumcheck(
                     }
                 },
                 |s, i| {
-                    lines(&tables.lower, i, &mut s.lower, &mut s.lower_step);
-                    lines(&tables.upper, i, &mut s.upper, &mut s.upper_step);
+                    lines(read, 0, i, &mut s.lower, &mut s.lower_step);
+                    if halving {
+                        lines(read, child, i, &mut s.upper, &mut s.upper_step);
+                    }
                     if !kinds.is_empty() {
                         virtual_lines(
                             &kinds,
@@ -888,7 +916,7 @@ pub fn prove_sumcheck(
         let g = interpolate_cubic(&at_nodes, &constants);
         t.append_scalars(transcript_tags::SUMCHECK_ROUND, &g);
         let r = t.challenge_scalar(transcript_tags::SUMCHECK_CHALLENGE);
-        for table in tables.lower.iter_mut().chain(tables.upper.iter_mut()) {
+        for table in tables.iter_mut() {
             table.bind(r);
         }
         eq.bind(r);
@@ -902,26 +930,17 @@ pub fn prove_sumcheck(
 // prove
 // ---------------------------------------------------------------------------
 
-/// A halving list's two child tables of `column`, each copied once, straight
-/// from the column: child 0 is the first `half` rows, child 1 the rest, the
-/// child bit being the highest variable. A halving list never reads the base,
-/// so its column is one `forward` wrote, in `Fr`; any other backing is read
-/// through `get`.
-fn children(column: &MultilinearPoly, half: usize) -> (MultilinearPoly, MultilinearPoly) {
-    let (lo, hi) = match column.backing() {
-        PolyBacking::Fr(v) => (v[..half].to_vec(), v[half..].to_vec()),
-        _ => (
-            (0..half).map(|i| column.get(i)).collect(),
-            (half..2 * half).map(|i| column.get(i)).collect(),
-        ),
-    };
-    (fr_poly(lo), fr_poly(hi))
-}
-
 /// Prove the circuit's outputs, as `values` holds them, down to its committed
 /// base columns, on `t` — which the caller has already bound to the base.
 /// Absorbs nothing of the base. Follows `docs/spec/gkr.md` §5.2 step for step,
 /// exactly as `verify` does.
+///
+/// **Consumes the forward pass.** Each inner layer is read by one transition
+/// alone, so its columns are taken from `values`, bound in place and dropped
+/// once that transition is proven: the backward pass copies no layer, and what
+/// it holds shrinks as it descends. The base is shared with the caller and only
+/// read; each of its columns becomes a half-size table of the transition's own
+/// at its first bind.
 ///
 /// Checks nothing about its inputs, as `forward` does not. It does not check
 /// that `values` satisfies the gates either — `self_check` does — so a proof
@@ -932,28 +951,30 @@ fn children(column: &MultilinearPoly, half: usize) -> (MultilinearPoly, Multilin
 /// that breaks a law the proof means nothing, and the call may panic.
 pub fn prove(
     artifact: &CircuitArtifact,
-    values: &LayerValues,
+    values: LayerValues,
     challenges: &ExternalChallenges,
     t: &mut Transcript,
 ) -> GkrProof {
     // Debugging aids, not runtime checks (see `check_slots`):
     // check_slots(artifact, challenges, "gkr::prove");
-    // check_values(artifact, values, "gkr::prove");
+    // check_values(artifact, &values, "gkr::prove");
     let depth = artifact.depth();
+    let LayerValues { base, mut layers } = values;
 
     // O1: the top has no variables (Law 3), so each output is its column's
-    // one value, claimed at the empty point.
-    let top = &values.layers[depth - 1];
+    // one value, claimed at the empty point. Nothing reads the top again.
+    let top = layers.pop().expect("a circuit has a top layer");
     let mut message: Vec<Fr> = Vec::new();
     for out in &artifact.outputs {
         if let PolyAddress::Inner { offset, .. } = *out {
             message.push(top[offset as usize].get(0));
         }
     }
+    drop(top);
     t.append_scalars(transcript_tags::GKR_OUTPUTS, &message);
     let mut point: Vec<Fr> = Vec::new();
 
-    let mut layers: Vec<Option<SumcheckProof>> = vec![None; depth];
+    let mut proofs: Vec<Option<SumcheckProof>> = vec![None; depth];
     for k in (0..depth).rev() {
         let list = &artifact.layers[k];
 
@@ -966,32 +987,41 @@ pub fn prove(
             challenges,
         };
 
-        // L2: one binding copy per column, at the column's width. The first
-        // bind folds a narrow copy straight into a half-size `Fr` table.
-        let columns = layer_columns(artifact, &values.base, &values.layers, k);
-        let mut tables = if list.halving {
-            let half = 1usize << (artifact.layer_vars(k) - 1);
-            let (lower, upper) = columns.iter().map(|c| children(c, half)).unzip();
-            LayerTables { lower, upper }
+        // L2: layer `k`'s columns, bound where they are. An inner layer's are
+        // the forward pass's own, the last layer it still holds; the base's
+        // are read in place.
+        let mut tables: Vec<LayerTable> = if k == 0 {
+            artifact
+                .committed()
+                .iter()
+                .map(|a| {
+                    LayerTable::Base(
+                        base.get(*a)
+                            .unwrap_or_else(|| panic!("the base has no column {a}")),
+                    )
+                })
+                .collect()
         } else {
-            LayerTables {
-                lower: columns.into_iter().cloned().collect(),
-                upper: Vec::new(),
-            }
+            layers
+                .pop()
+                .expect("one layer per gate list")
+                .into_iter()
+                .map(LayerTable::Owned)
+                .collect()
         };
         let (rounds, rho) = prove_sumcheck(&point, &summand, &mut tables, t);
 
-        // L3: every table is bound to rho, one value each.
+        // L3: every table is bound to rho: one value each, or a halving
+        // column's two, child 0 then child 1. The layer goes with its tables.
         let final_evals: Vec<Fr> = if list.halving {
             tables
-                .lower
                 .iter()
-                .zip(&tables.upper)
-                .flat_map(|(lo, hi)| [lo.get(0), hi.get(0)])
+                .flat_map(|c| [c.column().get(0), c.column().get(1)])
                 .collect()
         } else {
-            tables.lower.iter().map(|c| c.get(0)).collect()
+            tables.iter().map(|c| c.column().get(0)).collect()
         };
+        drop(tables);
         t.append_scalars(transcript_tags::GKR_LAYER_CLAIMS, &final_evals);
 
         // L4.
@@ -999,14 +1029,14 @@ pub fn prove(
         if list.halving {
             point.push(t.challenge_scalar(transcript_tags::GKR_CHILD));
         }
-        layers[k] = Some(SumcheckProof {
+        proofs[k] = Some(SumcheckProof {
             rounds,
             final_evals,
         });
     }
 
     GkrProof {
-        layers: layers
+        layers: proofs
             .into_iter()
             .map(|l| l.expect("every transition was proven"))
             .collect(),

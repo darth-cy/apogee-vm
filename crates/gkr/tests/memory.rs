@@ -396,15 +396,10 @@ fn prove_and_verify(
 ) -> Result<(), GkrError> {
     let (mut prover, challenges) = bind(a, base, window);
     let values = forward(a, base, &challenges);
-    let proof = prove(a, &values, &challenges, &mut prover);
+    let outputs = output_claims(a, &values);
+    let proof = prove(a, values, &challenges, &mut prover);
     let (mut verifier, challenges) = bind(a, base, window);
-    let claims = verify(
-        a,
-        &proof,
-        &output_claims(a, &values),
-        &challenges,
-        &mut verifier,
-    )?;
+    let claims = verify(a, &proof, &outputs, &challenges, &mut verifier)?;
     discharge(base, &claims).expect("an honest proof's base claims discharge");
     Ok(())
 }

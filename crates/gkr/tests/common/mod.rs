@@ -134,7 +134,8 @@ pub fn output_claims(artifact: &CircuitArtifact, values: &LayerValues) -> Vec<Fr
 
 /// One honest run: forward over `base`, prove over `values` (which a test may
 /// have tampered with), and verify against `outputs`, each side on its own
-/// transcript bound to `bound` — the base the digest is taken over.
+/// transcript bound to `bound` — the base the digest is taken over. `prove`
+/// consumes what it proves, so it is handed a copy and the test keeps `values`.
 pub fn run(
     artifact: &CircuitArtifact,
     bound: &BaseLayer,
@@ -142,7 +143,7 @@ pub fn run(
     outputs: &[Fr],
 ) -> (GkrProof, Result<Vec<BaseClaim>, GkrError>) {
     let (mut prover, challenges) = bind(artifact, bound);
-    let proof = prove(artifact, values, &challenges, &mut prover);
+    let proof = prove(artifact, values.clone(), &challenges, &mut prover);
     let (mut verifier, challenges) = bind(artifact, bound);
     let result = verify(artifact, &proof, outputs, &challenges, &mut verifier);
     (proof, result)

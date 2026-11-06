@@ -278,7 +278,7 @@ fn prove_and_verify(
         t
     };
     let challenges = ExternalChallenges::new();
-    let proof = prove(a, values, &challenges, &mut bound());
+    let proof = prove(a, values.clone(), &challenges, &mut bound());
     let top = values.layers.last().expect("a top layer");
     let outputs: Vec<Fr> = a
         .outputs

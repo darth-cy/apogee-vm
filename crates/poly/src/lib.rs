@@ -172,16 +172,24 @@ impl MultilinearPoly {
                 values.truncate(half);
                 values
             }
-            small => (0..half)
-                .map(|i| {
-                    let lo = small.entry(2 * i);
-                    let hi = small.entry(2 * i + 1);
-                    lo + r * (hi - lo)
-                })
-                .collect(),
+            small => fold(&small, half, r),
         };
         self.backing = PolyBacking::Fr(values);
         self.num_vars -= 1;
+    }
+
+    /// What [`MultilinearPoly::bind`] would leave, as a new half-size `Fr`
+    /// table, with `self` left as it is: how a caller binds a column it reads
+    /// but does not own, without copying it first.
+    pub fn bound(&self, r: Fr) -> MultilinearPoly {
+        assert!(
+            self.num_vars > 0,
+            "MultilinearPoly::bound: the polynomial has no variables left to bind"
+        );
+        MultilinearPoly {
+            backing: PolyBacking::Fr(fold(&self.backing, self.len() / 2, r)),
+            num_vars: self.num_vars - 1,
+        }
     }
 
     /// The value off the cube at `point`, where `point[j]` is variable `j`.
@@ -223,6 +231,18 @@ impl MultilinearPoly {
     pub fn backing(&self) -> &PolyBacking {
         &self.backing
     }
+}
+
+/// `f'(i) = f(2i) + r·(f(2i+1) − f(2i))` for `i < half`, each entry read
+/// through the one lift, into a new table.
+fn fold(backing: &PolyBacking, half: usize, r: Fr) -> Vec<Fr> {
+    (0..half)
+        .map(|i| {
+            let lo = backing.entry(2 * i);
+            let hi = backing.entry(2 * i + 1);
+            lo + r * (hi - lo)
+        })
+        .collect()
 }
 
 /// `eq(r, y)` for every `y` in `{0,1}^r.len()`, indexed by the same convention

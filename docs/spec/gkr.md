@@ -205,7 +205,9 @@ it, and `checker::check_padding` and `checker::check_padding_identity` test it.
 ## 5. The backward pass
 
 `gkr::forward` materializes every layer from the committed columns; `gkr::prove` proves those
-values as they stand, one `sumcheck::SumcheckProof` per transition; `gkr_verify::verify` replays
+values as they stand, one `sumcheck::SumcheckProof` per transition, consuming them: each layer is
+bound in place, a halving column whole, its child bit being the highest variable, and the base is
+only read; `gkr_verify::verify` replays
 the schedule, checking, from the outputs, one value each, to `BaseClaim`s or a `GkrError`.
 `gkr::self_check`, naming the first failing gate, row and relation, and
 `gkr::explain_self_check`, listing that row's operands, are a debugging hook costing a second

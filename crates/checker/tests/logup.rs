@@ -908,7 +908,7 @@ fn verify_claiming(
     let shard = &toy.shard;
     let a = &shard.artifact;
     let bound = || Transcript::restore(&toy.seeded);
-    let proof = gkr::prove(a, values, &shard.challenges, &mut bound());
+    let proof = gkr::prove(a, values.clone(), &shard.challenges, &mut bound());
     let top = values.layers.last().expect("a top layer");
     let mut outputs: Vec<Fr> = a
         .outputs

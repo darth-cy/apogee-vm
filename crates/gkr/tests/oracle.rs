@@ -202,7 +202,7 @@ fn prove_toy(seed: u64) -> (ToyColumns, GkrProof, Transcript, Fr) {
     let base = toy_base(&cols);
     let (mut prover, challenges) = bind(&artifact, &base);
     let values = forward(&artifact, &base, &challenges);
-    let proof = prove(&artifact, &values, &challenges, &mut prover);
+    let proof = prove(&artifact, values, &challenges, &mut prover);
     let (replay, challenges) = bind(&artifact, &base);
     let gamma = challenges.get(constants::challenge_slot::TOY).unwrap();
     (cols, proof, replay, gamma)

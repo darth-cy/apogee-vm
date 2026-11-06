@@ -597,7 +597,8 @@ pub fn witness_row(a: &CircuitArtifact, values: &LayerValues, row: usize) -> Wit
 
 /// Prove `values` and verify the proof, each on a fresh transcript bound to
 /// the committed columns' witness digest as `crates/gkr`'s test harness binds a
-/// base, then discharge every base claim against its column.
+/// base, then discharge every base claim against its column. `prove` consumes
+/// what it proves, so it is handed a copy and the caller keeps `values`.
 pub fn prove_and_verify(shard: &Shard, values: &LayerValues) -> Result<(), GkrError> {
     let digest = witness_digest(&committed(shard));
     let bound = || {
@@ -606,7 +607,7 @@ pub fn prove_and_verify(shard: &Shard, values: &LayerValues) -> Result<(), GkrEr
         t
     };
     let a = &shard.artifact;
-    let proof = prove(a, values, &shard.challenges, &mut bound());
+    let proof = prove(a, values.clone(), &shard.challenges, &mut bound());
     let top = values.layers.last().expect("a top layer");
     let outputs: Vec<Fr> = a
         .outputs

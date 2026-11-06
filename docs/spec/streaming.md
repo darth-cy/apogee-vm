@@ -23,7 +23,9 @@ exists; executing twice (§2) costs time instead.
 A shard costs its height times its circuit's width ([circuits.md](circuits.md) §1), however few
 of its rows are live. `gkr::forward` holds every inner layer as field elements,
 `32·Σ_{k≥1} w_k·2^{n_k}` bytes over layer `k`'s width and variable count (8.4 GiB for a `2^20`
-`SHIFT_BITWISE` shard), and `gkr::prove` adds a copy of the layer it reduces and an `eq` table.
+`SHIFT_BITWISE` shard). `gkr::prove` copies no layer: it binds each in place and drops it once
+reduced, so what it holds only shrinks, beside an `eq` table and, at the base, a half-size table
+per committed column.
 
 ## 2. The two passes
 

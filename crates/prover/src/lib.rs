@@ -743,7 +743,7 @@ impl ProvingContext<'_> {
                 })
                 .collect();
             let replay_from = t.snapshot();
-            let gkr = prove(artifact, &values, &challenges, &mut t);
+            let gkr = prove(artifact, values, &challenges, &mut t);
             (outputs, gkr, replay_from)
         };
         let (point, replayed) = replay_point(artifact, &gkr, &outputs, &replay_from);
