@@ -33,7 +33,7 @@ pub enum ConstraintError {
     /// Law 2: layer `layer`'s stored width or variable count is not what the
     /// gates below it produce.
     DerivedWidth { layer: u32, detail: String },
-    /// Law 3: the top layer is not exactly the output map.
+    /// Law 3: the top layer has a variable, or is not exactly the output map.
     TopLayer { detail: String },
     /// Law 4: the flat list and the gates disagree, in count or in meaning.
     SingleSource { detail: String },
@@ -698,10 +698,16 @@ fn relations(a: &CircuitArtifact, shapes: &[(u32, u32)]) -> Result<(), Constrain
     Ok(())
 }
 
-/// Law 3.
+/// Law 3: the top layer has no variables, so every output is one value, and
+/// the output map is a permutation of it.
 fn top_layer(a: &CircuitArtifact, shapes: &[(u32, u32)]) -> Result<(), ConstraintError> {
     let n = a.layers.len() as u32;
-    let width = shapes[n as usize].1;
+    let (vars, width) = shapes[n as usize];
+    if vars != 0 {
+        return Err(ConstraintError::TopLayer {
+            detail: format!("the top, layer {n}, has {vars} variables, not 0"),
+        });
+    }
     if a.outputs.len() != width as usize {
         return Err(ConstraintError::TopLayer {
             detail: format!(

@@ -10,8 +10,8 @@ use common::{bind, discharge, fr_base, honest, opposed_circuit};
 use constants::transcript_tags as tags;
 use constraints::PolyAddress;
 use field::Fr;
-use gkr::{verify, verify_sumcheck, GkrError, GkrProof, OutputClaims, SumcheckProof};
-use poly::{eq_eval, MultilinearPoly, PolyBacking};
+use gkr::{verify, verify_sumcheck, GkrError, GkrProof, SumcheckProof};
+use poly::eq_eval;
 use transcript::Transcript;
 
 fn cubic(g: &[Fr; 4], x: Fr) -> Fr {
@@ -79,12 +79,15 @@ fn every_round_is_held_to_the_claim_it_inherits() {
     }
 }
 
-/// Mutant B end to end: a forged output table on `opposed_circuit`, over an
-/// honest base. The forger's round 0 is flat at half the forged claim, so it
-/// sums to it; round 1, the last, is the true cubic `eq(p, (ρ0, X))·S(ρ0, X)`,
-/// so it ends exactly where the final check wants and leaves true base claims.
-/// Only round 1's own check — against the claim round 0 hands it — sees the
-/// seam. Under mutant B this proof verifies and its base claims discharge.
+/// Mutant B end to end: a forged output on `opposed_circuit`, over an honest
+/// base. The forger carries its root down through the two halving transitions,
+/// meeting each final check by its choice of children: transition 2 has no
+/// round, and transition 1's one round is its round 0, flat at half the claim.
+/// At transition 0 its round 0 is flat at half the forged claim, so it sums to
+/// it; round 1, the last, is the true cubic `eq(p, (ρ0, X))·S(ρ0, X)`, so it
+/// ends exactly where the final check wants and leaves true base claims. Only
+/// round 1's own check — against the claim round 0 hands it — sees the seam.
+/// Under mutant B this proof verifies and its base claims discharge.
 #[test]
 fn a_repaired_last_round_does_not_forge_an_output() {
     let artifact = opposed_circuit();
@@ -93,22 +96,35 @@ fn a_repaired_last_round_does_not_forge_an_output() {
     let (values, _, result) = honest(&artifact, &base);
     discharge(&base, &result.expect("the honest run verifies")).expect("and discharges");
     let truth = &values.layers[0][0];
+    let outputs = [values.layers[2][0].get(0) + Fr::ONE];
 
-    let mut forged = column.clone();
-    forged[0] += Fr::ONE;
-    let outputs = OutputClaims {
-        tables: vec![MultilinearPoly::new(PolyBacking::Fr(forged.clone()))],
-    };
-
-    // The forger follows the schedule, O1 through L3.
+    // The forger follows the schedule. O1, then transition 2, with no round:
+    // its final check asks only that the two children multiply to the root.
     let (mut t, _) = bind(&artifact, &base);
-    t.append_scalars(tags::GKR_OUTPUTS, &forged);
-    let p: Vec<Fr> = (0..2)
-        .map(|_| t.challenge_scalar(tags::GKR_OUTPUT_POINT))
-        .collect();
-    let lambda = t.challenge_scalar(tags::GKR_BATCH);
-    let claim = outputs.tables[0].evaluate(&p);
+    t.append_scalars(tags::GKR_OUTPUTS, &outputs);
+    t.challenge_scalar(tags::GKR_BATCH);
+    let top = [Fr::ONE, outputs[0]];
+    t.append_scalars(tags::GKR_LAYER_CLAIMS, &top);
+    let tau = t.challenge_scalar(tags::GKR_CHILD);
+    let claim = top[0] + tau * (top[1] - top[0]);
+
+    // Transition 1: its one round flat at half the claim, then children whose
+    // product meets the final check at the round's challenge.
+    t.challenge_scalar(tags::GKR_BATCH);
+    let flat = [claim * inv(2), Fr::ZERO, Fr::ZERO, Fr::ZERO];
+    t.append_scalars(tags::SUMCHECK_ROUND, &flat);
+    let r = t.challenge_scalar(tags::SUMCHECK_CHALLENGE);
+    let eq = eq_eval(&[tau], &[r])
+        .inverse()
+        .expect("eq(τ, r) is nonzero");
+    let middle = [Fr::ONE, cubic(&flat, r) * eq];
+    t.append_scalars(tags::GKR_LAYER_CLAIMS, &middle);
+    let p = [r, t.challenge_scalar(tags::GKR_CHILD)];
+    let claim = middle[0] + p[1] * (middle[1] - middle[0]);
     assert_ne!(claim, truth.evaluate(&p), "the forged claim is wrong");
+
+    // Transition 0.
+    let lambda = t.challenge_scalar(tags::GKR_BATCH);
     let round0 = [claim * inv(2), Fr::ZERO, Fr::ZERO, Fr::ZERO];
     t.append_scalars(tags::SUMCHECK_ROUND, &round0);
     let rho0 = t.challenge_scalar(tags::SUMCHECK_CHALLENGE);
@@ -132,10 +148,20 @@ fn a_repaired_last_round_does_not_forge_an_output() {
     let rho1 = t.challenge_scalar(tags::SUMCHECK_CHALLENGE);
     let rho = [rho0, rho1];
     let proof = GkrProof {
-        layers: vec![SumcheckProof {
-            rounds: vec![round0, round1],
-            final_evals: vec![a.evaluate(&rho), b.evaluate(&rho)],
-        }],
+        layers: vec![
+            SumcheckProof {
+                rounds: vec![round0, round1],
+                final_evals: vec![a.evaluate(&rho), b.evaluate(&rho)],
+            },
+            SumcheckProof {
+                rounds: vec![flat],
+                final_evals: middle.to_vec(),
+            },
+            SumcheckProof {
+                rounds: vec![],
+                final_evals: top.to_vec(),
+            },
+        ],
     };
     assert_eq!(
         cubic(&round1, rho1),

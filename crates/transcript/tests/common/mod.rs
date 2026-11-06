@@ -78,7 +78,6 @@ pub fn tag_by_name(name: &str) -> Result<Tag, String> {
         "VM_CONFIG" => Ok(transcript_tags::VM_CONFIG),
         "SHARD_COUNTS" => Ok(transcript_tags::SHARD_COUNTS),
         "GKR_OUTPUTS" => Ok(transcript_tags::GKR_OUTPUTS),
-        "GKR_OUTPUT_POINT" => Ok(transcript_tags::GKR_OUTPUT_POINT),
         "GKR_BATCH" => Ok(transcript_tags::GKR_BATCH),
         "GKR_LAYER_CLAIMS" => Ok(transcript_tags::GKR_LAYER_CLAIMS),
         "GKR_CHILD" => Ok(transcript_tags::GKR_CHILD),

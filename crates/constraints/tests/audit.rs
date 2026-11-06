@@ -168,7 +168,7 @@ fn cached_and_cache_free_compilations_have_the_same_shape() {
     let cached = toy();
     let free = toy_cache_free();
 
-    assert_eq!(cached.depth(), 3);
+    assert_eq!(cached.depth(), 6);
     assert_eq!(cached.depth(), free.depth());
     for k in 0..=cached.depth() {
         assert_eq!(cached.layer_width(k), free.layer_width(k), "w_{k}");
@@ -180,7 +180,10 @@ fn cached_and_cache_free_compilations_have_the_same_shape() {
             .map(|l| (l.producing.len(), l.enforcing.len()))
             .collect()
     };
-    assert_eq!(totals(&cached), vec![(3, 1), (2, 0), (2, 0)]);
+    assert_eq!(
+        totals(&cached),
+        vec![(3, 1), (2, 0), (2, 0), (2, 0), (2, 0), (2, 0)]
+    );
     assert_eq!(totals(&cached), totals(&free));
 
     let cached_entries: usize = cached.layers.iter().map(|l| l.cached.len()).sum();

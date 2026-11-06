@@ -46,10 +46,24 @@ struct Hand {
     ab: MultilinearPoly,
     fingerprint: MultilinearPoly,
     masked_m: MultilinearPoly,
-    abm: MultilinearPoly,
-    fingerprint3: MultilinearPoly,
-    abm_product: MultilinearPoly,
-    fingerprint3_product: MultilinearPoly,
+    /// The `abm` tree, level by level: level `j` is layer `2 + j`'s first
+    /// column, level 0 `abm` itself and level 4 its root.
+    abm: Vec<MultilinearPoly>,
+    /// The `fingerprint3` tree, likewise: layer `2 + j`'s second column.
+    fingerprint3: Vec<MultilinearPoly>,
+}
+
+/// `column` and every level of its product tree above it: level `j + 1`'s row
+/// `i` is level `j`'s rows `i` and `i + half` multiplied, the child bit being
+/// the highest variable, down to one row.
+fn tree(column: Vec<Fr>) -> Vec<MultilinearPoly> {
+    let mut levels = vec![column];
+    while let Some(below) = levels.last().filter(|level| level.len() > 1) {
+        let half = below.len() / 2;
+        let above: Vec<Fr> = (0..half).map(|i| below[i] * below[i + half]).collect();
+        levels.push(above);
+    }
+    levels.into_iter().map(poly).collect()
 }
 
 fn hand(cols: &ToyColumns, gamma: Fr) -> Hand {
@@ -71,25 +85,22 @@ fn hand(cols: &ToyColumns, gamma: Fr) -> Hand {
     let masked_m: Vec<Fr> = rows.clone().map(|y| m[y] * s[y] + Fr::ONE - s[y]).collect();
     let abm: Vec<Fr> = rows.clone().map(|y| ab[y] * masked_m[y]).collect();
     let fingerprint3: Vec<Fr> = rows.map(|y| fingerprint[y] + Fr::from_u64(3)).collect();
-    let half = TOY_ROWS / 2;
-    let tree = |v: &[Fr]| -> Vec<Fr> { (0..half).map(|i| v[i] * v[i + half]).collect() };
     Hand {
-        abm_product: poly(tree(&abm)),
-        fingerprint3_product: poly(tree(&fingerprint3)),
+        abm: tree(abm),
+        fingerprint3: tree(fingerprint3),
         base: [poly(m), poly(a), poly(b), poly(c), poly(e), poly(s)],
         ab: poly(ab),
         fingerprint: poly(fingerprint),
         masked_m: poly(masked_m),
-        abm: poly(abm),
-        fingerprint3: poly(fingerprint3),
     }
 }
 
 /// One transition's summand, with the challenges it is weighted by.
 #[derive(Clone, Copy)]
 enum Summand {
-    /// Transition 2, halving: `abm(x,0)·abm(x,1) + λ·fp3(x,0)·fp3(x,1)`.
-    Two { lambda: Fr },
+    /// Transition `2 + level`, halving the trees' level `level`:
+    /// `abm(x,0)·abm(x,1) + λ·fp3(x,0)·fp3(x,1)`.
+    Halving { level: usize, lambda: Fr },
     /// Transition 1: `ab·masked_m + λ·(fingerprint + 3)`.
     One { lambda: Fr },
     /// Transition 0: `a·b + λ·(γ·a + row)·c + λ²·(m·s + 1 − s) + λ³·(e − a)·s`.
@@ -97,16 +108,23 @@ enum Summand {
 }
 
 impl Hand {
+    /// A halving transition's four claims at `y`: level `level` of the `abm`
+    /// tree at `(y, 0)` and `(y, 1)`, then the `fingerprint3` tree's.
+    fn children(&self, level: usize, y: &[Fr]) -> Vec<Fr> {
+        let child = |column: &MultilinearPoly, b: u64| {
+            let mut point = y.to_vec();
+            point.push(Fr::from_u64(b));
+            column.evaluate(&point)
+        };
+        let (abm, fp3) = (&self.abm[level], &self.fingerprint3[level]);
+        vec![child(abm, 0), child(abm, 1), child(fp3, 0), child(fp3, 1)]
+    }
+
     fn summand(&self, s: Summand, y: &[Fr]) -> Fr {
         match s {
-            Summand::Two { lambda } => {
-                let child = |p: &MultilinearPoly, b: u64| {
-                    let mut point = y.to_vec();
-                    point.push(Fr::from_u64(b));
-                    p.evaluate(&point)
-                };
-                child(&self.abm, 0) * child(&self.abm, 1)
-                    + lambda * child(&self.fingerprint3, 0) * child(&self.fingerprint3, 1)
+            Summand::Halving { level, lambda } => {
+                let c = self.children(level, y);
+                c[0] * c[1] + lambda * c[2] * c[3]
             }
             Summand::One { lambda } => {
                 self.ab.evaluate(y) * self.masked_m.evaluate(y)
@@ -167,14 +185,12 @@ impl Hand {
         bound
     }
 
-    /// O1 and O2, replayed: the output map is `L{3}[1], L{3}[0]`.
-    fn output_point(&self, t: &mut Transcript) -> Vec<Fr> {
-        let mut outputs = table(&self.fingerprint3_product);
-        outputs.extend(table(&self.abm_product));
+    /// O1, replayed: the output map is `L{6}[1], L{6}[0]`, the two roots. The
+    /// top has no variables, so the point they are claimed at is empty.
+    fn absorb_outputs(&self, t: &mut Transcript) {
+        let mut outputs = table(&self.fingerprint3[4]);
+        outputs.extend(table(&self.abm[4]));
         t.append_scalars(tags::GKR_OUTPUTS, &outputs);
-        (0..3)
-            .map(|_| t.challenge_scalar(tags::GKR_OUTPUT_POINT))
-            .collect()
     }
 }
 
@@ -198,27 +214,24 @@ fn every_round_of_every_transition_matches_the_definition() {
         let (cols, proof, mut t, gamma) = prove_toy(0x5313_1200 + seed);
         let h = hand(&cols, gamma);
         let mut compared = 0;
-        let r = h.output_point(&mut t);
+        h.absorb_outputs(&mut t);
+        let mut p: Vec<Fr> = Vec::new();
 
-        // Transition 2, halving.
-        let lambda = t.challenge_scalar(tags::GKR_BATCH);
-        let s = Summand::Two { lambda };
-        let rho = h.rounds(s, &mut t, &r, &proof.layers[2].rounds, &mut compared);
-        let child = |p: &MultilinearPoly, b: u64| {
-            let mut point = rho.clone();
-            point.push(Fr::from_u64(b));
-            p.evaluate(&point)
-        };
-        let claims = vec![
-            child(&h.abm, 0),
-            child(&h.abm, 1),
-            child(&h.fingerprint3, 0),
-            child(&h.fingerprint3, 1),
-        ];
-        assert_eq!(proof.layers[2].final_evals, claims, "the child claims");
-        t.append_scalars(tags::GKR_LAYER_CLAIMS, &claims);
-        let mut p = rho;
-        p.push(t.challenge_scalar(tags::GKR_CHILD));
+        // Transitions 5 down to 2, halving the trees' levels 3 down to 0.
+        for k in (2..6).rev() {
+            let level = k - 2;
+            let lambda = t.challenge_scalar(tags::GKR_BATCH);
+            let s = Summand::Halving { level, lambda };
+            let rho = h.rounds(s, &mut t, &p, &proof.layers[k].rounds, &mut compared);
+            let claims = h.children(level, &rho);
+            assert_eq!(
+                proof.layers[k].final_evals, claims,
+                "transition {k}'s child claims"
+            );
+            t.append_scalars(tags::GKR_LAYER_CLAIMS, &claims);
+            p = rho;
+            p.push(t.challenge_scalar(tags::GKR_CHILD));
+        }
 
         // Transition 1.
         let lambda = t.challenge_scalar(tags::GKR_BATCH);
@@ -239,31 +252,41 @@ fn every_round_of_every_transition_matches_the_definition() {
         let claims: Vec<Fr> = h.base.iter().map(|c| c.evaluate(&rho)).collect();
         assert_eq!(proof.layers[0].final_evals, claims, "the base claims");
 
-        assert_eq!(compared, 4 * (3 + 4 + 4), "every node of every round");
+        // The halving transitions' 0, 1, 2 and 3 rounds, then 4 and 4.
+        assert_eq!(
+            compared,
+            4 * (1 + 2 + 3 + 4 + 4),
+            "every node of every round"
+        );
     }
 }
 
 /// The oracle can fail: one bumped coefficient of one round disagrees with the
-/// definition at every node but `X = 0`.
+/// definition at every node but `X = 0`. The round is transition 4's one,
+/// reached through O1 and transition 5, which has none.
 #[test]
 fn the_oracle_rejects_a_perturbed_round() {
     let (cols, proof, mut t, gamma) = prove_toy(0x5313_1300);
     let h = hand(&cols, gamma);
-    let r = h.output_point(&mut t);
-    let s = Summand::Two {
+    h.absorb_outputs(&mut t);
+    t.challenge_scalar(tags::GKR_BATCH);
+    t.append_scalars(tags::GKR_LAYER_CLAIMS, &h.children(3, &[]));
+    let p = [t.challenge_scalar(tags::GKR_CHILD)];
+    let s = Summand::Halving {
+        level: 2,
         lambda: t.challenge_scalar(tags::GKR_BATCH),
     };
     assert_eq!(
-        cubic_at(&proof.layers[2].rounds[0], Fr::from_u64(2)),
-        h.naive(s, &r, &[], Fr::from_u64(2)),
+        cubic_at(&proof.layers[4].rounds[0], Fr::from_u64(2)),
+        h.naive(s, &p, &[], Fr::from_u64(2)),
         "the unperturbed round matches"
     );
-    let mut broken = proof.layers[2].rounds[0];
+    let mut broken = proof.layers[4].rounds[0];
     broken[1] += Fr::ONE;
     let mismatches = (0..4u64)
         .filter(|&node| {
             let x = Fr::from_u64(node);
-            cubic_at(&broken, x) != h.naive(s, &r, &[], x)
+            cubic_at(&broken, x) != h.naive(s, &p, &[], x)
         })
         .count();
     assert_eq!(mismatches, 3, "a bumped X coefficient agrees only at X = 0");

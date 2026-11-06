@@ -12,7 +12,7 @@ use constraints::{
 use field::Fr;
 use gkr::{
     forward, prove, verify, BaseClaim, BaseLayer, ExternalChallenges, GkrError, GkrProof,
-    LayerValues, OutputClaims,
+    LayerValues,
 };
 use poly::{MultilinearPoly, PolyBacking};
 use sumcheck::{absorb_witness_digest, witness_digest};
@@ -118,19 +118,18 @@ pub fn bind(artifact: &CircuitArtifact, base: &BaseLayer) -> (Transcript, Extern
     (t, challenges)
 }
 
-/// The top layer as the verifier is told it: one table per output-map entry.
-pub fn output_claims(artifact: &CircuitArtifact, values: &LayerValues) -> OutputClaims {
+/// The top layer as the verifier is told it: one value per output-map entry,
+/// the top having no variables.
+pub fn output_claims(artifact: &CircuitArtifact, values: &LayerValues) -> Vec<Fr> {
     let top = values.layers.last().expect("a circuit has a top layer");
-    OutputClaims {
-        tables: artifact
-            .outputs
-            .iter()
-            .map(|out| match *out {
-                PolyAddress::Inner { offset, .. } => top[offset as usize].clone(),
-                other => panic!("an output is an inner address, not {other}"),
-            })
-            .collect(),
-    }
+    artifact
+        .outputs
+        .iter()
+        .map(|out| match *out {
+            PolyAddress::Inner { offset, .. } => top[offset as usize].get(0),
+            other => panic!("an output is an inner address, not {other}"),
+        })
+        .collect()
 }
 
 /// One honest run: forward over `base`, prove over `values` (which a test may
@@ -140,7 +139,7 @@ pub fn run(
     artifact: &CircuitArtifact,
     bound: &BaseLayer,
     values: &LayerValues,
-    outputs: &OutputClaims,
+    outputs: &[Fr],
 ) -> (GkrProof, Result<Vec<BaseClaim>, GkrError>) {
     let (mut prover, challenges) = bind(artifact, bound);
     let proof = prove(artifact, values, &challenges, &mut prover);
@@ -348,58 +347,86 @@ pub fn root_circuit() -> CircuitArtifact {
     )
 }
 
-/// Two enforcing gates in one list, each the other's negation:
+/// Two enforcing gates in one list, each the other's negation, beside a copy of
+/// `a` that two halving lists fold to the root:
 ///
 /// ```text
 /// base      W[0] a   W[1] b                      4 rows
 /// list 0    L{1}[0] copy = a
 ///           0 = a − b                            (enforcing, a_eq_b)
 ///           0 = b − a                            (enforcing, b_eq_a)
-/// outputs   L{1}[0]
+/// list 1    L{2}[0] copy_product = copy(·,0)·copy(·,1)    (halving)
+/// list 2    L{3}[0] copy_root    = Π a                    (halving)
+/// outputs   L{3}[0]
 /// ```
 ///
 /// Where `a ≠ b` the two residuals cancel on every row, so only their distinct
 /// batch weights keep a violation visible.
 pub fn opposed_circuit() -> CircuitArtifact {
     let (a, b) = (PolyAddress::Witness(0), PolyAddress::Witness(1));
-    let out = PolyAddress::Inner {
-        layer: 1,
-        offset: 0,
-    };
+    let inner = |layer: u32| PolyAddress::Inner { layer, offset: 0 };
     let minus = |x: PolyAddress, y: PolyAddress| GateDef::Linear {
         terms: vec![(lit(1), x), (neg(1), y)],
         constant: lit(0),
     };
+    let tree = |input: PolyAddress| GateDef::TreeProduct { input };
+    // List `k` halves `L{k}[0]` into `L{k+1}[0]`.
+    let halving = |k: u32, relation: u32| LayerSpec {
+        halving: true,
+        num_vars: 2 - k,
+        width: 1,
+        cached: vec![],
+        producing: vec![ProducingEntry {
+            relation,
+            output: inner(k + 1),
+            gate: tree(inner(k)),
+        }],
+        enforcing: vec![],
+    };
     circuit(
         2,
         &["a", "b"],
-        vec![LayerSpec {
-            halving: false,
-            num_vars: 2,
-            width: 1,
-            cached: vec![],
-            producing: vec![ProducingEntry {
-                relation: 0,
-                output: out,
-                gate: copy(a),
-            }],
-            enforcing: vec![
-                EnforcingEntry {
-                    relation: 1,
-                    gate: minus(a, b),
-                },
-                EnforcingEntry {
-                    relation: 2,
-                    gate: minus(b, a),
-                },
-            ],
-        }],
+        vec![
+            LayerSpec {
+                halving: false,
+                num_vars: 2,
+                width: 1,
+                cached: vec![],
+                producing: vec![ProducingEntry {
+                    relation: 0,
+                    output: inner(1),
+                    gate: copy(a),
+                }],
+                enforcing: vec![
+                    EnforcingEntry {
+                        relation: 1,
+                        gate: minus(a, b),
+                    },
+                    EnforcingEntry {
+                        relation: 2,
+                        gate: minus(b, a),
+                    },
+                ],
+            },
+            halving(1, 3),
+            halving(2, 4),
+        ],
         vec![
             relation("define_copy", Some(0), copy(a)),
             relation("a_eq_b", None, minus(a, b)),
             relation("b_eq_a", None, minus(b, a)),
+            relation(
+                "define_copy_product",
+                Some(1),
+                tree(PolyAddress::Scratch(0)),
+            ),
+            relation("define_copy_root", Some(2), tree(PolyAddress::Scratch(1))),
         ],
-        &[("copy", out)],
-        vec![out],
+        &[
+            ("copy", inner(1)),
+            ("copy_product", inner(2)),
+            ("copy_root", inner(3)),
+        ],
+        vec![inner(3)],
     )
 }

@@ -5,8 +5,9 @@
 //! list 0 writes `ab = a·b`, `fingerprint = (γ·a + row)·c` (the parenthesis a
 //! cached entry in one compilation, inline in the other) and
 //! `masked_m = m·s + (1 − s)`, and enforces `0 = e·s − a·s` (a `Quadratic`); list 1 writes
-//! `abm = ab·masked_m` and `fingerprint3 = fingerprint + 3`; list 2 halves
-//! both into their products; the outputs are `L{3}[1]` then `L{3}[0]`.
+//! `abm = ab·masked_m` and `fingerprint3 = fingerprint + 3`; lists 2 to 5
+//! halve both, a variable each, into their roots; the outputs are `L{6}[1]`
+//! then `L{6}[0]`.
 
 #![allow(dead_code)]
 
@@ -201,7 +202,7 @@ use constraints::memory::{
 use emulator::{trace_run, GuestIo};
 use gkr::{
     boundary_factors, forward, prove, reconciles, verify, window_challenges, BaseLayer,
-    BoundaryFinals, ExternalChallenges, GkrError, LayerValues, OutputClaims,
+    BoundaryFinals, ExternalChallenges, GkrError, LayerValues,
 };
 use loader::{load_elf, ProgramImage};
 use poly::{MultilinearPoly, PolyBacking};
@@ -607,13 +608,14 @@ pub fn prove_and_verify(shard: &Shard, values: &LayerValues) -> Result<(), GkrEr
     let a = &shard.artifact;
     let proof = prove(a, values, &shard.challenges, &mut bound());
     let top = values.layers.last().expect("a top layer");
-    let tables = a.outputs.iter().map(|out| match *out {
-        PolyAddress::Inner { offset, .. } => top[offset as usize].clone(),
-        other => panic!("an output is an inner address, not {other}"),
-    });
-    let outputs = OutputClaims {
-        tables: tables.collect(),
-    };
+    let outputs: Vec<Fr> = a
+        .outputs
+        .iter()
+        .map(|out| match *out {
+            PolyAddress::Inner { offset, .. } => top[offset as usize].get(0),
+            other => panic!("an output is an inner address, not {other}"),
+        })
+        .collect();
     let claims = verify(a, &proof, &outputs, &shard.challenges, &mut bound())?;
     for claim in claims {
         let column = shard.base.get(claim.address).expect("a committed column");

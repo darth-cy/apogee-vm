@@ -27,8 +27,8 @@ use field::Fr;
 use gkr::ExternalChallenges;
 
 /// What a verifier expects of the toy: 16 rows; list 0 row-wise, width 3, one
-/// enforcing gate and `cached` cached entries; list 1 row-wise, width 2; list 2
-/// halving both columns.
+/// enforcing gate and `cached` cached entries; list 1 row-wise, width 2; lists
+/// 2 to 5 halving both columns, down to a top of no variables, the two roots.
 fn toy_constants(cached: usize) -> VerifierConstants {
     VerifierConstants {
         trace_vars: 4,
@@ -36,12 +36,12 @@ fn toy_constants(cached: usize) -> VerifierConstants {
         witness: vec!["a", "b", "c", "e"],
         setup: vec!["s"],
         virtuals: vec!["row"],
-        halving: vec![false, false, true],
-        num_vars: vec![4, 4, 3],
-        widths: vec![3, 2, 2],
-        enforcing: vec![1, 0, 0],
-        cached: vec![cached, 0, 0],
-        outputs: vec!["fingerprint3_product", "abm_product"],
+        halving: vec![false, false, true, true, true, true],
+        num_vars: vec![4, 4, 3, 2, 1, 0],
+        widths: vec![3, 2, 2, 2, 2, 2],
+        enforcing: vec![1, 0, 0, 0, 0, 0],
+        cached: vec![cached, 0, 0, 0, 0, 0],
+        outputs: vec!["fingerprint3_root", "abm_root"],
         challenge_slots: vec![challenge_slot::TOY],
     }
 }
@@ -59,9 +59,8 @@ fn reference(base: &[Vec<Fr>], challenges: &ExternalChallenges) -> ReferenceRun 
     let fingerprint3: Vec<Fr> = (0..rows)
         .map(|y| (gamma * a[y] + Fr::from_u64(y as u64)) * c[y] + Fr::from_u64(3))
         .collect();
-    // One halving: the child bit is the highest variable, so row i pairs with
-    // row i + 8.
-    let product = |t: &[Fr]| (0..rows / 2).map(|i| t[i] * t[i + rows / 2]).collect();
+    // Halving down to the root multiplies every row in.
+    let product = |t: &[Fr]| t.iter().fold(Fr::ONE, |acc, x| acc * *x);
     let gated_equality = (0..rows).map(|y| (e[y] - a[y]) * s[y]).collect();
     ReferenceRun {
         outputs: vec![product(&fingerprint3), product(&abm)],
@@ -69,9 +68,9 @@ fn reference(base: &[Vec<Fr>], challenges: &ExternalChallenges) -> ReferenceRun 
     }
 }
 
-fn reference_one_row_off(base: &[Vec<Fr>], challenges: &ExternalChallenges) -> ReferenceRun {
+fn reference_one_root_off(base: &[Vec<Fr>], challenges: &ExternalChallenges) -> ReferenceRun {
     let mut run = reference(base, challenges);
-    run.outputs[1][5] += Fr::ONE;
+    run.outputs[1] += Fr::ONE;
     run
 }
 
@@ -98,7 +97,7 @@ fn both_compilations_agree_with_the_independent_description() {
 #[test]
 fn a_wrong_description_is_rejected() {
     for (label, a, constants) in toys_with_constants() {
-        let e = cross_check(&a, &constants, reference_one_row_off).unwrap_err();
+        let e = cross_check(&a, &constants, reference_one_root_off).unwrap_err();
         assert!(e.contains("output 1 differs"), "{label}: {e}");
         let e = cross_check(&a, &constants, reference_without_the_gate).unwrap_err();
         assert!(e.contains("enforcing relation 0 differs"), "{label}: {e}");
@@ -210,14 +209,20 @@ fn perturbations() -> Vec<Perturbation> {
         p("a num_vars", "Law 2", false, |a| a.layers[2].num_vars = 4),
         p("trace_vars", "Law 2", false, |a| a.trace_vars = 5),
         p(
-            "trace_vars and every num_vars after it",
+            "trace_vars and every num_vars after it, a halving list fewer",
             "cross_check: trace_vars",
             true,
             |a| {
-                a.trace_vars = 5;
+                // The last list goes with its roots' relations and slots, so
+                // the top is again of no variables, its outputs moved down.
+                a.trace_vars = 3;
+                a.layers.pop();
                 for list in &mut a.layers {
-                    list.num_vars += 1;
+                    list.num_vars -= 1;
                 }
+                a.relations.truncate(a.relations.len() - 2);
+                a.scratch.truncate(a.scratch.len() - 2);
+                a.outputs = vec![inner(5, 1), inner(5, 0)];
             },
         ),
         p("the output order", "cross_check: outputs", true, |a| {
@@ -228,7 +233,7 @@ fn perturbations() -> Vec<Perturbation> {
             "cross_check: outputs",
             true,
             |a| {
-                let i = slot(a, "abm_product");
+                let i = slot(a, "abm_root");
                 a.scratch[i].name = "abm_tree".to_string();
             },
         ),

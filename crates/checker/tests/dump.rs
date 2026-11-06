@@ -24,7 +24,7 @@ fn the_dump_names_everything_in_the_toy() {
             "  format version        1",
             "  coefficient encoding  0 (every Fr canonical 32-byte little-endian)",
             "  trace length          2^4 rows",
-            "  depth                 3 gate lists",
+            "  depth                 6 gate lists",
         ];
         let columns = [
             "  M[0]  m",
@@ -42,7 +42,13 @@ fn the_dump_names_everything_in_the_toy() {
             "gate list 1  row-wise, layer 1 -> layer 2",
             "layer 2  row-wise  2^4 rows, width 2",
             "gate list 2  halving, layer 2 -> layer 3",
-            "layer 3  halving, top  2^3 rows, width 2",
+            "layer 3  halving  2^3 rows, width 2",
+            "gate list 3  halving, layer 3 -> layer 4",
+            "layer 4  halving  2^2 rows, width 2",
+            "gate list 4  halving, layer 4 -> layer 5",
+            "layer 5  halving  2^1 rows, width 2",
+            "gate list 5  halving, layer 5 -> layer 6",
+            "layer 6  halving, top  2^0 rows, width 2",
         ];
         let catalogue = [
             "  0 Linear",
@@ -69,6 +75,12 @@ fn the_dump_names_everything_in_the_toy() {
             "define_fingerprint3",
             "define_abm_product",
             "define_fingerprint3_product",
+            "define_abm_product_2",
+            "define_fingerprint3_product_2",
+            "define_abm_product_3",
+            "define_fingerprint3_product_3",
+            "define_abm_root",
+            "define_fingerprint3_root",
         ];
         for (r, name) in relations.iter().enumerate() {
             assert!(text.contains(&format!("  {r} {name}: ")), "{label}: {name}");
@@ -100,7 +112,7 @@ fn the_dump_names_everything_in_the_toy() {
             "  3 gated_equality: 0 = (0 + 1·W[3]·S[0] + -1·W[0]·S[0])   for every y",
             "  L{3}[0](x) = Σ_y eq(x, y) · L{2}[0](y, 0)·L{2}[0](y, 1)   [relation 6 define_abm_product]",
             "  scratch[0] = L{1}[0]  ab",
-            "  0  L{3}[1]  fingerprint3_product",
+            "  0  L{6}[1]  fingerprint3_root",
         ];
         if label == "cached" {
             exact.push("  C{0}[0](y) = (toy·W[0] + 1·V[row] + 0)   [cached shifted_a]");

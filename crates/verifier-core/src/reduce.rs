@@ -23,7 +23,7 @@ use constants::{family, guest_memory};
 use constraints::PolyAddress;
 use field::Fr;
 use gkr_verify::{
-    boundary_factors, channel_holds, reconciles, verify, ExternalChallenges, GkrError, OutputClaims,
+    boundary_factors, channel_holds, reconciles, verify, ExternalChallenges, GkrError,
 };
 use poly::{MultilinearPoly, PolyBacking};
 
@@ -191,15 +191,8 @@ pub fn verify_shard_local(
         g,
         beta,
     );
-    let outputs = OutputClaims {
-        tables: proof
-            .outputs
-            .iter()
-            .map(|v| MultilinearPoly::new(PolyBacking::Fr(Vec::from([*v]))))
-            .collect(),
-    };
     let claims =
-        verify(artifact, &proof.gkr, &outputs, &challenges, &mut t).map_err(|e| match e {
+        verify(artifact, &proof.gkr, &proof.outputs, &challenges, &mut t).map_err(|e| match e {
             GkrError::LayerInconsistency { layer } => VerifyError::Constraint { layer },
             GkrError::ProofShape { .. } => malformed("a GKR transition is not its layer's shape"),
             GkrError::OutputShape => malformed("the outputs are not the circuit's output map"),

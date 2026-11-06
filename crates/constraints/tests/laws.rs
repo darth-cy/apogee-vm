@@ -310,9 +310,9 @@ fn law2_refuses_a_declared_variable_count_the_list_does_not_write() {
 
 /// The toy with list 1's two columns in the other order, renumbered through
 /// everything that names them: list 1's outputs and their scratch slots, and
-/// list 2's trees — entry `j` halves column `j`, so the two trees trade
-/// relations — and their scratch slots. A legal circuit, and the control for
-/// the two out-of-order refusals.
+/// every halving list's trees — entry `j` halves column `j`, so the two trees
+/// trade relations — and their scratch slots. A legal circuit, and the control
+/// for the two out-of-order refusals.
 fn toy_with_list_1_reordered() -> CircuitArtifact {
     let mut a = toy();
     a.layers[1].producing.swap(0, 1);
@@ -320,10 +320,17 @@ fn toy_with_list_1_reordered() -> CircuitArtifact {
     a.layers[1].producing[1].output = inner(2, 1);
     a.scratch[3].address = inner(2, 1); // abm
     a.scratch[4].address = inner(2, 0); // fingerprint3
-    a.layers[2].producing[0].relation = 7; // halves L{2}[0], now fingerprint3
-    a.layers[2].producing[1].relation = 6; // halves L{2}[1], now abm
-    a.scratch[5].address = inner(3, 1); // abm_product
-    a.scratch[6].address = inner(3, 0); // fingerprint3_product
+    for k in 2..6u32 {
+        // List k halves L{k}[0], now fingerprint3's tree, and L{k}[1], abm's.
+        let list = &mut a.layers[k as usize];
+        let abm = list.producing[0].relation;
+        list.producing[0].relation = list.producing[1].relation;
+        list.producing[1].relation = abm;
+        // abm's slot at layer k + 1, then fingerprint3's.
+        let slot = (2 * k + 1) as usize;
+        a.scratch[slot].address = inner(k + 1, 1);
+        a.scratch[slot + 1].address = inner(k + 1, 0);
+    }
     a
 }
 
@@ -344,17 +351,21 @@ fn law2_refuses_outputs_out_of_order() {
 // Law 3: the top layer
 // ---------------------------------------------------------------------------
 
-/// Law 3: the output map is a permutation of layer 3, nothing
+/// Law 3: the output map is a permutation of layer 6, nothing
 /// more and nothing less. The reversed order validates. Refused: an output
 /// dropped (the top layer then holds a column absent from the map), an output
 /// replaced by `L{2}[0]` from below the top, an output duplicated, a third
-/// output `L{3}[2]` past the top layer's width, and — with the count right —
-/// `[L{3}[1], L{3}[2]]`, whose second output is past the width.
+/// output `L{6}[2]` past the top layer's width, and — with the count right —
+/// `[L{6}[1], L{6}[2]]`, whose second output is past the width.
 ///
 /// The last case catches the top-layer `offset < width` test made vacuous:
 /// the third-output case is refused by the count before the offset is looked
 /// at, so only a map of the right length can see it, and under that mutation
 /// the map validates.
+///
+/// And the top has no variables: the toy cut below its last halving list, the
+/// roots' two relations and slots dropped and the outputs moved down to
+/// layer 5, keeps every other law and is refused, its top having a variable.
 #[test]
 fn law3_refuses_an_output_map_that_is_not_the_top_layer() {
     let mut reversed = toy();
@@ -363,33 +374,52 @@ fn law3_refuses_an_output_map_that_is_not_the_top_layer() {
 
     let mut dropped = toy();
     dropped.outputs.pop();
-    assert_top_layer(&dropped, "layer 3 has 2 columns but the output map has 1");
+    assert_top_layer(&dropped, "layer 6 has 2 columns but the output map has 1");
 
     let mut replaced = toy();
     replaced.outputs[0] = inner(2, 0);
     assert_top_layer(
         &replaced,
-        "output 0 is L{2}[0], not a distinct column of layer 3",
+        "output 0 is L{2}[0], not a distinct column of layer 6",
     );
 
     let mut duplicated = toy();
     duplicated.outputs[1] = duplicated.outputs[0];
     assert_top_layer(
         &duplicated,
-        "output 1 is L{3}[1], not a distinct column of layer 3",
+        "output 1 is L{6}[1], not a distinct column of layer 6",
     );
 
     let mut extra = toy();
-    extra.outputs.push(inner(3, 2));
-    assert_top_layer(&extra, "layer 3 has 2 columns but the output map has 3");
+    extra.outputs.push(inner(6, 2));
+    assert_top_layer(&extra, "layer 6 has 2 columns but the output map has 3");
 
     let mut past = toy();
-    past.outputs[1] = inner(3, 2);
-    assert_eq!(past.outputs, [inner(3, 1), inner(3, 2)]);
+    past.outputs[1] = inner(6, 2);
+    assert_eq!(past.outputs, [inner(6, 1), inner(6, 2)]);
     assert_top_layer(
         &past,
-        "output 1 is L{3}[2], not a distinct column of layer 3",
+        "output 1 is L{6}[2], not a distinct column of layer 6",
     );
+
+    assert_top_layer(
+        &toy_without_its_roots(),
+        "the top, layer 5, has 1 variables, not 0",
+    );
+}
+
+/// The toy without its last halving list: list 5, the roots' two relations and
+/// their two scratch slots removed, and the outputs moved down to layer 5's two
+/// columns, a variable short of the root.
+fn toy_without_its_roots() -> CircuitArtifact {
+    let mut a = toy();
+    a.layers.pop();
+    let roots = a.relations.len() - 2;
+    assert_eq!(a.relations[roots].name, "define_abm_root");
+    a.relations.truncate(roots);
+    a.scratch.truncate(a.scratch.len() - 2);
+    a.outputs = vec![inner(5, 1), inner(5, 0)];
+    a
 }
 
 // ---------------------------------------------------------------------------
@@ -496,9 +526,9 @@ fn law4_merges_equal_monomials_before_comparing() {
 /// renamed to relation 4, which `abm`'s gate already names, is refused as a
 /// relation encoded twice.
 ///
-/// Not isolable: with eight gates over eight relations, a relation named twice
-/// leaves another named by none, and `fingerprint3`'s gate no longer writes the
-/// column its relation defines. The duplicate is reported first.
+/// Not isolable: with fourteen gates over fourteen relations, a relation named
+/// twice leaves another named by none, and `fingerprint3`'s gate no longer
+/// writes the column its relation defines. The duplicate is reported first.
 #[test]
 fn law4_refuses_two_gates_naming_one_relation() {
     let mut a = toy();
@@ -559,7 +589,8 @@ fn shift_relations_after(a: &mut CircuitArtifact, removed: u32) {
 
 /// Law 4 (count): the flat list and the gates have equal
 /// cardinality. List 0's enforcing gate deleted, its relation `gated_equality`
-/// left in the flat list, is refused as eight relations against seven gates.
+/// left in the flat list, is refused as fourteen relations against thirteen
+/// gates.
 /// Deleting both, with every later relation index fixed up, validates (`e` is
 /// then read by nothing, which is legal for a committed column: it is still
 /// opened).
@@ -573,7 +604,7 @@ fn law4_refuses_a_flat_list_longer_than_the_gates() {
 
     let mut a = toy();
     a.layers[0].enforcing.clear();
-    assert_single_source(&a, "8 relations in the flat list but 7 gates");
+    assert_single_source(&a, "14 relations in the flat list but 13 gates");
 }
 
 /// Law 4 (count), from the other side: `gated_equality` deleted from the flat
@@ -581,10 +612,11 @@ fn law4_refuses_a_flat_list_longer_than_the_gates() {
 ///
 /// This cannot be refused *as a count*. The count compares the gates to the
 /// relations only once every gate has named a distinct, existing relation, and
-/// eight gates cannot do that over seven relations — so the orphaned gate is
-/// refused first, by what it now names. Left at index 3, it names `define_abm`,
-/// which is producing; pointed past the end, at 7, it names nothing. Both are
-/// `SingleSource`, and the control is the previous test's legal deletion.
+/// fourteen gates cannot do that over thirteen relations — so the orphaned gate
+/// is refused first, by what it now names. Left at index 3, it names
+/// `define_abm`, which is producing; pointed past the end, at 13, it names
+/// nothing. Both are `SingleSource`, and the control is the previous test's
+/// legal deletion.
 #[test]
 fn law4_refuses_a_relation_deleted_under_its_gate() {
     let mut orphaned = toy();
@@ -596,13 +628,14 @@ fn law4_refuses_a_relation_deleted_under_its_gate() {
         "an enforcing gate encodes relation `define_abm`, which is producing",
     );
 
-    orphaned.layers[0].enforcing[0].relation = 7;
-    assert_single_source(&orphaned, "a gate names relation 7, which does not exist");
+    orphaned.layers[0].enforcing[0].relation = 13;
+    assert_single_source(&orphaned, "a gate names relation 13, which does not exist");
 }
 
 /// The review's cost artifact at `t` terms, made not to vanish: one committed
-/// column `m`; a cached entry `C{0}[0]` of `t` alternating `±1·m` terms plus one
-/// more `1·m`, so it is `m` for even `t`; one enforcing gate
+/// column `m` over one row, so that the top, of width 0, has no variables; a
+/// cached entry `C{0}[0]` of `t` alternating `±1·m` terms plus one more `1·m`,
+/// so it is `m` for even `t`; one enforcing gate
 /// `(Σ_t 1·C{0}[0] + 0)·(Σ_t 1·C{0}[0] + 0)`, which is `t²·m²`; and its relation
 /// spelled `t²·m·m`, the same polynomial. Every law holds and the gate is
 /// degree 2. (The review's own spelling was identically zero, which an
@@ -616,14 +649,14 @@ fn cancelling_square(t: usize) -> CircuitArtifact {
     CircuitArtifact {
         format_version: FORMAT_VERSION,
         coefficient_encoding: COEFFICIENT_ENCODING_CANONICAL_LE,
-        trace_vars: 4,
+        trace_vars: 0,
         memory: vec!["m".into()],
         witness: vec![],
         setup: vec![],
         virtuals: vec![],
         layers: vec![LayerSpec {
             halving: false,
-            num_vars: 4,
+            num_vars: 0,
             width: 0,
             cached: vec![cached_entry("alternating", 0, linear(&alternating, lit(0)))],
             producing: vec![],
@@ -960,15 +993,17 @@ fn a_halving_list_refuses_a_gate_that_halves_nothing() {
 
 /// Gate list 0 reads the base and cannot halve. Marked halving with nothing
 /// else changed, its stored variable count no longer matches and Law 2 refuses
-/// it at layer 1. With every variable count fixed through (3, 3, 2), Law 2 is
-/// satisfied and the halving rule itself refuses it.
+/// it at layer 1. Halving, list 0 takes a variable the toy's last list would
+/// have, so on the toy without that list, with every variable count fixed
+/// through (3, 3, 2, 1, 0), Law 2 is satisfied and the halving rule itself
+/// refuses it.
 ///
 /// Not isolable beyond that: list 0 also has a cached entry, an enforcing gate
 /// and gates that are not trees, each forbidden in a halving list. The base
 /// check comes first.
 #[test]
 fn gate_list_zero_cannot_halve() {
-    let mut flagged = toy();
+    let mut flagged = toy_without_its_roots();
     flagged.layers[0].halving = true;
     assert_derived_width(
         &flagged,
@@ -976,7 +1011,7 @@ fn gate_list_zero_cannot_halve() {
         "stored num_vars 4 but gate list 0 writes 3 variables",
     );
 
-    for (list, vars) in [3, 3, 2].into_iter().enumerate() {
+    for (list, vars) in [3, 3, 2, 1, 0].into_iter().enumerate() {
         flagged.layers[list].num_vars = vars;
     }
     assert_malformed(
@@ -999,7 +1034,7 @@ fn a_halving_list_refuses_an_enforcing_gate() {
             gate: linear(&[(lit(1), slot)], lit(0)),
         });
         a.layers[k].enforcing.push(EnforcingEntry {
-            relation: 8,
+            relation: a.relations.len() as u32 - 1,
             gate: linear(&[(lit(1), column)], lit(0)),
         });
         a
@@ -1047,12 +1082,12 @@ fn a_row_wise_list_refuses_a_tree() {
 
 /// The toy with a fourth list-0 column `L{1}[3] = a_copy = W[0]`: its relation,
 /// scratch slot and list-0 width all consistent. If `read`, list 1 reads it, as
-/// a second term of `fingerprint3` (its relation gaining `scratch[7]`).
+/// a second term of `fingerprint3` (its relation gaining `a_copy_slot`).
 fn toy_with_a_copy(read: bool) -> CircuitArtifact {
     let mut a = toy();
     a.relations.push(Relation {
         name: "define_a_copy".into(),
-        output: Some(7),
+        output: Some(a.scratch.len() as u32),
         gate: linear(&[(lit(1), A)], lit(0)),
     });
     a.scratch.push(ScratchSlot {
@@ -1060,7 +1095,7 @@ fn toy_with_a_copy(read: bool) -> CircuitArtifact {
         address: inner(1, 3),
     });
     a.layers[0].producing.push(ProducingEntry {
-        relation: 8,
+        relation: a.relations.len() as u32 - 1,
         output: inner(1, 3),
         gate: linear(&[(lit(1), A)], lit(0)),
     });
@@ -1068,9 +1103,14 @@ fn toy_with_a_copy(read: bool) -> CircuitArtifact {
     if read {
         a.layers[1].producing[1].gate =
             linear(&[(lit(1), inner(1, 1)), (lit(1), inner(1, 3))], lit(3));
-        a.relations[5].gate = linear(&[(lit(1), scratch(1)), (lit(1), scratch(7))], lit(3));
+        a.relations[5].gate = linear(&[(lit(1), scratch(1)), (lit(1), a_copy_slot())], lit(3));
     }
     a
+}
+
+/// `a_copy`'s slot in `toy_with_a_copy`: the first past the toy's own.
+fn a_copy_slot() -> PolyAddress {
+    scratch(toy().scratch.len() as u32)
 }
 
 /// No relation is constructed and then dropped. A column
@@ -1104,7 +1144,7 @@ fn a_cached_entry_no_gate_names_is_refused() {
 /// §4.2: "read" is decided on the gates' normalized expansions, so a term that
 /// cancels reads nothing. `toy_with_a_copy(false)` — `L{1}[3]` written, nothing
 /// reading it — with `fingerprint3 = 1·L{1}[1] + 1·L{1}[3] − 1·L{1}[3] + 3`,
-/// its relation spelled the same way over `scratch[7]`: the gate names
+/// its relation spelled the same way over `a_copy`'s slot: the gate names
 /// `L{1}[3]` twice and reads it not at all, and is refused, naming the column.
 /// The same gate with the cancelling term removed, `1·L{1}[1] + 1·L{1}[3] + 3`,
 /// reads it and validates.
@@ -1129,8 +1169,8 @@ fn a_column_read_only_by_cancelling_terms_is_refused() {
         ],
         &[
             (lit(1), scratch(1)),
-            (lit(1), scratch(7)),
-            (neg(1), scratch(7)),
+            (lit(1), a_copy_slot()),
+            (neg(1), a_copy_slot()),
         ],
     );
     assert!(cancelling.layers[1]
@@ -1144,7 +1184,7 @@ fn a_column_read_only_by_cancelling_terms_is_refused() {
 
     let reading = with_terms(
         &[(lit(1), inner(1, 1)), (lit(1), inner(1, 3))],
-        &[(lit(1), scratch(1)), (lit(1), scratch(7))],
+        &[(lit(1), scratch(1)), (lit(1), a_copy_slot())],
     );
     assert_eq!(reading.validate(), Ok(()));
 }
@@ -1484,21 +1524,17 @@ fn a_padding_row_of_the_wrong_length_is_refused() {
     }
 }
 
-/// A trace is at most `2^30` rows. With every list's variable count fixed
-/// through, `trace_vars` 30 validates and 31 is refused.
+/// A trace is at most `2^30` rows. A circuit at 30 variables validates — the
+/// `ZERO_WINDOWS` window's, since a top with no variables takes a halving list
+/// per variable and the toy has four — and the same circuit with `trace_vars`
+/// 31 is refused, the header being checked first.
 #[test]
 fn trace_vars_above_thirty_is_refused() {
-    let with_vars = |n: u32| {
-        let mut a = toy();
-        a.trace_vars = n;
-        a.layers[0].num_vars = n;
-        a.layers[1].num_vars = n;
-        a.layers[2].num_vars = n - 1;
-        a
-    };
+    let mut a = constraints::memory::zero_window_artifact(30);
     assert_eq!(constraints::MAX_TRACE_VARS, 30);
-    assert_eq!(with_vars(30).validate(), Ok(()));
-    assert_malformed(&with_vars(31), "trace_vars 31 is above 30");
+    assert_eq!(a.validate(), Ok(()));
+    a.trace_vars = 31;
+    assert_malformed(&a, "trace_vars 31 is above 30");
 }
 
 /// The first two words of the artifact are 1 and 0, and nothing else: a format

@@ -19,7 +19,7 @@
 //! outputs   L{2+VARS}[0..16]: the 16 product-tree roots
 //! ```
 //!
-//! The outputs are roots, as a real circuit's are, so absorbing them is 16
+//! The outputs are roots, as every circuit's are, so absorbing them is 16
 //! scalars and every pass's time is the engine's own.
 //!
 //! Not measured: the base's digest. The prover and verifier each start from an
@@ -36,9 +36,7 @@ use constraints::{
     FORMAT_VERSION,
 };
 use field::Fr;
-use gkr::{
-    forward, prove, self_check, verify, BaseLayer, ExternalChallenges, LayerValues, OutputClaims,
-};
+use gkr::{forward, prove, self_check, verify, BaseLayer, ExternalChallenges, LayerValues};
 use poly::{MultilinearPoly, PolyBacking};
 use test_support::Rng;
 use transcript::Transcript;
@@ -436,16 +434,14 @@ pub fn run() {
     let proof = proof.expect("REPS is at least one");
 
     let top = values.layers.last().expect("a circuit has a top layer");
-    let outputs = OutputClaims {
-        tables: artifact
-            .outputs
-            .iter()
-            .map(|out| match *out {
-                PolyAddress::Inner { offset, .. } => top[offset as usize].clone(),
-                other => panic!("an output is an inner address, not {other}"),
-            })
-            .collect(),
-    };
+    let outputs: Vec<Fr> = artifact
+        .outputs
+        .iter()
+        .map(|out| match *out {
+            PolyAddress::Inner { offset, .. } => top[offset as usize].get(0),
+            other => panic!("an output is an inner address, not {other}"),
+        })
+        .collect();
     let mut best = Best::new();
     for _ in 0..REPS {
         let mut t = Transcript::new();

@@ -11,7 +11,7 @@ use constraints::{
 use field::Fr;
 use gkr::{
     channel_holds, forward, insert_lookup_challenges, prove, self_check, verify, virtual_at_point,
-    virtual_at_row, BaseLayer, ExternalChallenges, GkrError, OutputClaims,
+    virtual_at_row, BaseLayer, ExternalChallenges, GkrError,
 };
 use poly::{MultilinearPoly, PolyBacking};
 use sumcheck::{absorb_witness_digest, witness_digest};
@@ -280,22 +280,15 @@ fn prove_and_verify(
     let challenges = ExternalChallenges::new();
     let proof = prove(a, values, &challenges, &mut bound());
     let top = values.layers.last().expect("a top layer");
-    let tables = a
+    let outputs: Vec<Fr> = a
         .outputs
         .iter()
         .map(|out| match *out {
-            PolyAddress::Inner { offset, .. } => top[offset as usize].clone(),
+            PolyAddress::Inner { offset, .. } => top[offset as usize].get(0),
             other => panic!("an output is an inner address, not {other}"),
         })
         .collect();
-    verify(
-        a,
-        &proof,
-        &OutputClaims { tables },
-        &challenges,
-        &mut bound(),
-    )
-    .map(|_| ())
+    verify(a, &proof, &outputs, &challenges, &mut bound()).map(|_| ())
 }
 
 // ---------------------------------------------------------------------------

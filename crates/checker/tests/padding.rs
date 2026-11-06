@@ -7,9 +7,7 @@ mod common;
 
 use checker::{check_laws, check_padding, check_padding_identity};
 use common::*;
-use constraints::{
-    CircuitArtifact, Coeff, GateDef, LayerSpec, PolyAddress, ProducingEntry, Relation, ScratchSlot,
-};
+use constraints::{CircuitArtifact, Coeff, GateDef};
 use field::Fr;
 
 #[test]
@@ -70,8 +68,8 @@ fn a_padding_row_of_the_wrong_length_is_rejected() {
 /// The toy does not keep the clause. Its padding row is all zero, so
 /// `abm = a·b·masked_m = 0`, and `fingerprint3 = (γ·a + row)·c + 3` is 3
 /// whatever the row — no mask reaches `fingerprint3` at all, so no padding row
-/// could make it 1. The first column its halving list reads, `L{2}[0]`, is the
-/// one named.
+/// could make it 1. The first column its first halving list reads, `L{2}[0]`,
+/// is the one named.
 #[test]
 fn the_toy_does_not_keep_the_product_tree_clause() {
     for (label, a) in toys() {
@@ -161,57 +159,19 @@ fn a_leaf_that_is_1_at_row_0_alone_fails() {
     }
 }
 
-/// That edit with a second halving list stacked on the first — list 3 halves
-/// `L{3}[0]` and `L{3}[1]` again into `L{4}[0]` and `L{4}[1]`, the new outputs —
-/// keeps the laws and still passes, and moving a leaf off 1 still fails naming
-/// list 2's operand. The clause is about the first halving list alone: every
-/// later one reads a `TreeProduct`'s output, which no row-local relation defines.
+/// That edit over the toy's four halving lists: list 2's trees are halved
+/// again by lists 3, 4 and 5, down to the roots, and the edit still passes;
+/// moving a leaf off 1 fails naming list 2's operand. The clause is about the
+/// first halving list alone: every later one reads a `TreeProduct`'s output,
+/// which no row-local relation defines.
 ///
 /// Kills a clause reading the last halving list instead of the first, and one
-/// reading every halving list: both refuse the lawful two-level tree.
+/// reading every halving list: both refuse the lawful tree.
 #[test]
 fn a_second_halving_list_is_not_read() {
     for (label, a) in toys() {
         let mut a = identity_padded(a);
-        let (abm_product, fingerprint3_product) = (inner(3, 0), inner(3, 1));
-        let tree = |input| GateDef::TreeProduct { input };
-        let first = a.relations.len() as u32;
-        a.relations.push(Relation {
-            name: "define_abm_product_2".into(),
-            output: Some(7),
-            gate: tree(PolyAddress::Scratch(5)),
-        });
-        a.relations.push(Relation {
-            name: "define_fingerprint3_product_2".into(),
-            output: Some(8),
-            gate: tree(PolyAddress::Scratch(6)),
-        });
-        a.layers.push(LayerSpec {
-            halving: true,
-            num_vars: 2,
-            width: 2,
-            cached: vec![],
-            producing: vec![
-                ProducingEntry {
-                    relation: first,
-                    output: inner(4, 0),
-                    gate: tree(abm_product),
-                },
-                ProducingEntry {
-                    relation: first + 1,
-                    output: inner(4, 1),
-                    gate: tree(fingerprint3_product),
-                },
-            ],
-            enforcing: vec![],
-        });
-        for (name, offset) in [("abm_product_2", 0), ("fingerprint3_product_2", 1)] {
-            a.scratch.push(ScratchSlot {
-                name: name.into(),
-                address: inner(4, offset),
-            });
-        }
-        a.outputs = vec![inner(4, 1), inner(4, 0)];
+        assert!(a.layers[3..].iter().all(|l| l.halving), "{label}");
         assert_eq!(check_laws(&a), Ok(()), "{label}");
         assert_eq!(check_padding_identity(&a), Ok(()), "{label}");
 
@@ -223,17 +183,22 @@ fn a_second_halving_list_is_not_read() {
 }
 
 /// An artifact with no halving list has no product tree over its rows, and
-/// passes whatever its padding row: the toy cut below its halving list — list
-/// 2, its two relations and its two scratch slots removed, the outputs
-/// `L{2}[0]` and `L{2}[1]` — keeps the laws and passes, with the zero padding
-/// row the whole toy fails on.
+/// passes whatever its padding row. A top of no variables leaves only a
+/// one-row trace without one: the toy cut below its halving lists — lists 2 to
+/// 5, their relations and their scratch slots removed, the outputs `L{2}[0]`
+/// and `L{2}[1]` — over one row keeps the laws and passes, with the zero
+/// padding row the whole toy fails on.
 #[test]
 fn an_artifact_with_no_halving_list_passes() {
     for (label, mut a) in toys() {
-        a.layers.pop();
+        a.layers.truncate(2);
         a.relations.truncate(relation(&a, "define_abm_product"));
         a.scratch.truncate(slot(&a, "abm_product"));
         a.outputs = vec![inner(2, 0), inner(2, 1)];
+        a.trace_vars = 0;
+        for list in &mut a.layers {
+            list.num_vars = 0;
+        }
         assert_eq!(check_laws(&a), Ok(()), "{label}");
         assert_eq!(check_padding_identity(&a), Ok(()), "{label}");
     }

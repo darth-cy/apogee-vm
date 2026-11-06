@@ -577,7 +577,8 @@ pub struct CircuitArtifact {
     pub lookups: Vec<LookupExpr>,
     /// The scratch bijection: `scratch[i]` is `scratch[i].address`.
     pub scratch: Vec<ScratchSlot>,
-    /// The output map: a permutation of the top layer, in `OutputClaims` order.
+    /// The output map: a permutation of the top layer, which has no
+    /// variables, in the order `gkr_verify::verify` takes the outputs' values.
     pub outputs: Vec<PolyAddress>,
     pub padding: Padding,
 }

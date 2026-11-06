@@ -941,19 +941,17 @@ pub fn prove(
     // check_values(artifact, values, "gkr::prove");
     let depth = artifact.depth();
 
-    // O1, O2.
+    // O1: the top has no variables (Law 3), so each output is its column's
+    // one value, claimed at the empty point.
     let top = &values.layers[depth - 1];
     let mut message: Vec<Fr> = Vec::new();
     for out in &artifact.outputs {
         if let PolyAddress::Inner { offset, .. } = *out {
-            let column = &top[offset as usize];
-            message.extend((0..column.len()).map(|i| column.get(i)));
+            message.push(top[offset as usize].get(0));
         }
     }
     t.append_scalars(transcript_tags::GKR_OUTPUTS, &message);
-    let mut point: Vec<Fr> = (0..artifact.layer_vars(depth))
-        .map(|_| t.challenge_scalar(transcript_tags::GKR_OUTPUT_POINT))
-        .collect();
+    let mut point: Vec<Fr> = Vec::new();
 
     let mut layers: Vec<Option<SumcheckProof>> = vec![None; depth];
     for k in (0..depth).rev() {

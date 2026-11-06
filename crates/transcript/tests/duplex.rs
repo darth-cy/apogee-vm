@@ -402,7 +402,6 @@ fn tag_table_is_well_formed() {
         "VM_CONFIG",
         "SHARD_COUNTS",
         "GKR_OUTPUTS",
-        "GKR_OUTPUT_POINT",
         "GKR_BATCH",
         "GKR_LAYER_CLAIMS",
         "GKR_CHILD",
@@ -424,12 +423,15 @@ fn tag_table_is_well_formed() {
     sorted.dedup();
     assert_eq!(sorted.len(), names.len(), "tag values must be distinct");
     assert!(values.iter().all(|v| *v != 0), "0 is not a tag");
-    // Sequential from 1, with nothing skipped: the table is a registry, and a
-    // hole in it is a tag someone allocated and forgot to name here.
+    // Sequential from 1, with nothing skipped but the retired 13: the table is
+    // a registry, and any other hole in it is a tag someone allocated and
+    // forgot to name here.
     assert_eq!(
         sorted,
-        (1..=names.len() as u64).collect::<Vec<u64>>(),
-        "tags are sequential from 1"
+        (1..=names.len() as u64 + 1)
+            .filter(|tag| *tag != 13)
+            .collect::<Vec<u64>>(),
+        "tags are sequential from 1, 13 retired"
     );
 }
 

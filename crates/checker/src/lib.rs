@@ -291,7 +291,8 @@ pub fn check_law2(a: &CircuitArtifact) -> Result<(), String> {
     Ok(())
 }
 
-/// Law 3, top layer: there is at least one gate list, and `outputs` is a
+/// Law 3, top layer: there is at least one gate list, the last list's stored
+/// variable count is 0, so the top has no variables, and `outputs` is a
 /// permutation of `L{N}[0..w_N)`, `w_N` the last list's stored width — every
 /// top-layer address exactly once, and nothing else.
 ///
@@ -305,6 +306,12 @@ pub fn check_law3(a: &CircuitArtifact) -> Result<(), String> {
         ));
     };
     let (n, width) = (a.layers.len() as u32, last.width);
+    if last.num_vars != 0 {
+        return Err(format!(
+            "{LAW3}: top layer {n} has {} variables; the top has none",
+            last.num_vars
+        ));
+    }
     for (i, out) in a.outputs.iter().enumerate() {
         let on_top =
             matches!(*out, PolyAddress::Inner { layer, offset } if layer == n && offset < width);
@@ -1869,11 +1876,12 @@ pub struct VerifierConstants {
     pub challenge_slots: Vec<u32>,
 }
 
-/// What an independent description computes from a base: the output tables in
-/// output-map order, and each enforcing relation's name and residual table over
-/// the rows of the layer its list reads, in gate-list then entry order.
+/// What an independent description computes from a base: the outputs, one
+/// value each, in output-map order, and each enforcing relation's name and
+/// residual table over the rows of the layer its list reads, in gate-list then
+/// entry order.
 pub struct ReferenceRun {
-    pub outputs: Vec<Vec<Fr>>,
+    pub outputs: Vec<Fr>,
     pub enforcing: Vec<(String, Vec<Fr>)>,
 }
 
@@ -1884,7 +1892,7 @@ fn table(column: &MultilinearPoly) -> Vec<Fr> {
 /// Hold `a` to an independent description: first `check_laws`; then every
 /// field of `expected`; then the semantics — a pseudo-random base at the trace
 /// height and pseudo-random challenge values through `gkr::forward`, whose
-/// output tables and enforcing residuals (`gkr::gate_values` on every row of
+/// outputs and enforcing residuals (`gkr::gate_values` on every row of
 /// the forward values) must equal `reference`'s on the same base, given as
 /// layout-order tables, and challenges.
 ///
@@ -1965,12 +1973,13 @@ pub fn cross_check(
     let values = forward(a, &BaseLayer::new(columns), &challenges);
 
     let top = values.layers.last().expect("Law 3: there is a top layer");
-    let mut got_outputs: Vec<Vec<Fr>> = Vec::new();
+    let mut got_outputs: Vec<Fr> = Vec::new();
     for out in &a.outputs {
         let PolyAddress::Inner { offset, .. } = *out else {
             panic!("Law 3: output {out} is on the top layer");
         };
-        got_outputs.push(table(&top[offset as usize]));
+        // Law 3: the top has no variables, so the column is one value.
+        got_outputs.push(top[offset as usize].get(0));
     }
     let mut got_enforcing: Vec<(String, Vec<Fr>)> = Vec::new();
     // A list with no enforcing gate has no residual; a halving list never has one.
