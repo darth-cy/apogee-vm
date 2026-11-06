@@ -84,18 +84,21 @@ of degree 0.
 | 6 | `TreeCross { left, right }` | `p(·,0)·q(·,1) + p(·,1)·q(·,0)` |
 
 `Quadratic` spells degree-2 relations, such as `a·b + c·d − e·f`, that no product of affine forms
-does. **The kernel**, `gkr_verify::eval_gate`, takes one value per operand in `GateDef::operands`
-order, a halving shape's each at child 0 then child 1, and is the semantic authority. Both passes
-reach it through `gkr_verify::ResolvedList`, and `crates/checker` calls it over the relations.
+does. **The kernel**, `gkr_verify::eval_gate_with`, reads one value per operand in
+`GateDef::operands` order, a halving shape's each at child 0 then child 1, wherever its caller holds
+it, and is the semantic authority; `eval_gate` is it over a slice. Both passes reach it through
+`gkr_verify::ResolvedList`, which copies no operand, and `crates/checker` calls `eval_gate` over the
+relations.
 
 ### 3.1 Cached entries and the degree ceiling
 
 A **cached entry** `C{k}[j] = H` is a sub-expression of row-wise list `k` over its layer's columns,
 not another cached entry, substituted into the gates of its list naming it, with no table, claim
-or width. The prover evaluates `H` at every round node and never binds it: a bound table is
-the extension of `H`'s values, which for a degree-2 `H` is not `H` of the extensions. No
-registered circuit has one. `CircuitArtifact::inline_cached` writes a `Product` with one `Linear`
-cached factor as an `AffineProduct` and refuses any other reference; both prove the same bytes.
+or width. The engine evaluates `H` wherever a gate names it, at every row and round node, and
+neither stores nor binds it: a bound table is the extension of `H`'s values, which for a degree-2
+`H` is not `H` of the extensions. No registered circuit has one. `CircuitArtifact::inline_cached`
+writes a `Product` with one `Linear` cached factor as an `AffineProduct` and refuses any other
+reference; both prove the same bytes.
 
 **Degree** is read from the shape after substitution — a column or virtual table 1, a challenge 0,
 `C{k}[j]` its expression's, a halving shape 2, a `Quadratic` its widest term — and `validate` holds

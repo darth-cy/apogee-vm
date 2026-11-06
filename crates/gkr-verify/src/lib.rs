@@ -125,17 +125,14 @@ fn coefficient(c: Coeff, challenges: &ExternalChallenges) -> Fr {
     }
 }
 
-/// **The** gate kernel: `gate` at one point, given one value per operand in
-/// `GateDef::operands` order — two for `TreeProduct`, its input's children.
-/// Every pass evaluates gates through this function and no other, so it is the
-/// semantic authority: where a comment and this disagree, this wins.
+/// The gate kernel over values held in a slice: [`eval_gate_with`], operand
+/// `i`'s value being `values[i]`. What the checker and the memory argument's
+/// boundary call, each with its operands gathered already.
 pub fn eval_gate(gate: &GateDef, values: &[Fr], challenges: &ExternalChallenges) -> Fr {
     // A debugging aid, not a runtime check: one value per operand. Every caller
-    // gathers exactly `operands()`'s count — `ResolvedList` from the resolved
-    // operands, the checker from `operands()` itself — so it cannot fail there,
-    // and this is the hottest path in the prover: every gate at every row and
-    // at every sumcheck node. Too few values panic on an index or leave terms
-    // out of a sum; `values` never comes from a proof.
+    // gathers exactly `operands()`'s count — the checker from `operands()`
+    // itself — so it cannot fail there. Too few values panic on an index or
+    // leave terms out of a sum; `values` never comes from a proof.
     // let arity = match gate {
     //     GateDef::Linear { terms, .. } => terms.len(),
     //     GateDef::Product { .. }
@@ -153,40 +150,62 @@ pub fn eval_gate(gate: &GateDef, values: &[Fr], challenges: &ExternalChallenges)
     //     "eval_gate: {} values for a gate reading {arity}",
     //     values.len()
     // );
+    eval_gate_with(gate, |i| values[i], challenges)
+}
+
+/// **The** gate kernel: `gate` at one point, operand `i`'s value — in
+/// `GateDef::operands` order, two for `TreeProduct`, its input's children —
+/// read through `value(i)` wherever the caller holds it, so that no pass copies
+/// its operands into a buffer to evaluate a gate over them. Every pass evaluates
+/// gates through this function and no other, so it is the semantic authority:
+/// where a comment and this disagree, this wins.
+///
+/// The hottest path in the prover: every gate at every row and at every
+/// sumcheck node. `value` is asked for each operand position once.
+pub fn eval_gate_with(
+    gate: &GateDef,
+    value: impl Fn(usize) -> Fr,
+    challenges: &ExternalChallenges,
+) -> Fr {
     let c = |x: &Coeff| coefficient(*x, challenges);
-    let affine = |terms: &[(Coeff, PolyAddress)], constant: &Coeff, values: &[Fr]| {
+    // `Σ c_i·x_i + c_0` over the operands from `first` on.
+    let affine = |terms: &[(Coeff, PolyAddress)], constant: &Coeff, first: usize| {
         terms
             .iter()
-            .zip(values)
-            .fold(c(constant), |acc, ((k, _), v)| acc + c(k) * *v)
+            .enumerate()
+            .fold(c(constant), |acc, (i, (k, _))| {
+                acc + c(k) * value(first + i)
+            })
     };
     match gate {
-        GateDef::Linear { terms, constant } => affine(terms, constant, values),
-        GateDef::Product { coeff, .. } => c(coeff) * values[0] * values[1],
-        GateDef::MaskIntoIdentity { .. } => values[0] * values[1] + Fr::ONE - values[1],
+        GateDef::Linear { terms, constant } => affine(terms, constant, 0),
+        GateDef::Product { coeff, .. } => c(coeff) * value(0) * value(1),
+        GateDef::MaskIntoIdentity { .. } => {
+            let mask = value(1);
+            value(0) * mask + Fr::ONE - mask
+        }
         GateDef::AffineProduct {
             left,
             left_constant,
             right,
             right_constant,
-        } => {
-            let t = left.len();
-            affine(left, left_constant, &values[..t]) * affine(right, right_constant, &values[t..])
-        }
-        GateDef::TreeProduct { .. } => values[0] * values[1],
+        } => affine(left, left_constant, 0) * affine(right, right_constant, left.len()),
+        GateDef::TreeProduct { .. } => value(0) * value(1),
         // p(·,0)·q(·,1) + p(·,1)·q(·,0), the operands being p then q and each
         // read at child 0 then child 1.
-        GateDef::TreeCross { .. } => values[0] * values[3] + values[1] * values[2],
+        GateDef::TreeCross { .. } => value(0) * value(3) + value(1) * value(2),
         GateDef::Quadratic {
             constant,
             linear,
             products,
         } => {
             let t = linear.len();
-            products.iter().zip(values[t..].chunks_exact(2)).fold(
-                affine(linear, constant, &values[..t]),
-                |acc, ((b, _, _), yz)| acc + c(b) * yz[0] * yz[1],
-            )
+            products
+                .iter()
+                .enumerate()
+                .fold(affine(linear, constant, 0), |acc, (j, (b, _, _))| {
+                    acc + c(b) * value(t + 2 * j) * value(t + 2 * j + 1)
+                })
         }
     }
 }
@@ -275,30 +294,40 @@ fn byte_at_point(point: &[Fr], first: usize) -> Fr {
     acc
 }
 
-/// Where one operand of a [`ResolvedList`] is read at a point.
+/// One operand a [`ResolvedList`] asks its caller for: a value the caller
+/// holds at the point, wherever it holds it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Operand {
+    /// Column `x` of layer `k` in its value order, or child 0 of it for a
+    /// halving list.
+    Lower(usize),
+    /// Child 1 of column `x`, for a halving list.
+    Upper(usize),
+    /// Virtual table `artifact.virtuals[x]`, which only list 0 reads.
+    Virtual(usize),
+}
+
+/// Where one gate operand of a [`ResolvedList`] comes from.
 #[derive(Clone, Copy, Debug)]
 enum Source {
-    /// `lower[i]`: a column of layer `k`, or child 0 of one.
-    Lower(usize),
-    /// `upper[i]`: child 1 of a column of layer `k`.
-    Upper(usize),
-    /// `virtuals[i]`.
-    Virtual(usize),
-    /// Cached entry `i`, evaluated at the same point.
+    /// A value the caller reads.
+    Read(Operand),
+    /// Cached entry `i`: its expression, evaluated where it is named.
     Cached(usize),
 }
 
-/// Gate list `k` with every operand resolved, once, to the index its value is
-/// read at: a column of the lower layer, a child-1 value, a virtual table or a
+/// Gate list `k` with every operand resolved, once, to where its value comes
+/// from: a column of the lower layer, a child-1 value, a virtual table or a
 /// cached entry. [`gate_values`] and [`summand`] go through it, and the prover
 /// holds one per gate list per call, so every pass evaluates the same gates
-/// through [`eval_gate`] in the same order.
+/// through [`eval_gate_with`] in the same order.
 ///
-/// Evaluating allocates nothing. The caller owns a scratch buffer from
-/// [`ResolvedList::scratch`] — one per thread of work, reused point after point
-/// — and at each point calls [`ResolvedList::cache`] before reading gates with
-/// [`ResolvedList::gate`], or calls [`ResolvedList::summand`], which does both.
-/// `lower`, `upper` and `virtuals` are as [`gate_values`] takes them.
+/// Evaluating allocates nothing and copies no operand: each is read where the
+/// caller holds it, through the `read` the caller passes, and a cached entry
+/// is substituted — its expression evaluated at the point wherever a gate
+/// names it, so no value of one is ever stored. A cached entry named by `m`
+/// gates is evaluated `m` times; no registered circuit has one
+/// (`docs/spec/gkr.md` §3.1).
 ///
 /// It is public because the prover half is another crate; the verifier's
 /// [`gate_values`] and [`summand`] are wrappers over it.
@@ -306,21 +335,19 @@ pub struct ResolvedList<'a> {
     challenges: &'a ExternalChallenges,
     /// The cached entries, then the producing gates, then the enforcing gates.
     gates: Vec<&'a GateDef>,
-    /// Gate `i` reads `sources[bounds[i]..bounds[i + 1]]`, in [`eval_gate`]'s
-    /// value order.
+    /// Gate `i` reads `sources[bounds[i]..bounds[i + 1]]`, in
+    /// [`eval_gate_with`]'s value order.
     sources: Vec<Source>,
     bounds: Vec<usize>,
     cached: usize,
     producing: usize,
     enforcing: usize,
-    /// The cached values, then room for the widest gate's operands.
-    scratch: usize,
 }
 
 impl<'a> ResolvedList<'a> {
     /// Resolve gate list `k` of `artifact`. A halving gate reads each of its
-    /// operands at both children — column `x` gives `lower[x]` then
-    /// `upper[x]`, in operand order — and a halving list's cached and
+    /// operands at both children — column `x` gives `Lower(x)` then
+    /// `Upper(x)`, in operand order — and a halving list's cached and
     /// enforcing lists are not read. Panics on an operand a validated artifact
     /// cannot hold.
     pub fn new(
@@ -337,22 +364,25 @@ impl<'a> ResolvedList<'a> {
                 gates.push(&entry.gate);
                 for op in entry.gate.operands() {
                     let x = column_index(artifact, k, &op);
-                    sources.extend([Source::Lower(x), Source::Upper(x)]);
+                    sources.extend([
+                        Source::Read(Operand::Lower(x)),
+                        Source::Read(Operand::Upper(x)),
+                    ]);
                 }
                 bounds.push(sources.len());
             }
             (0, 0)
         } else {
             let resolve = |op: PolyAddress| match op {
-                PolyAddress::Virtual(kind) => Source::Virtual(
+                PolyAddress::Virtual(kind) => Source::Read(Operand::Virtual(
                     artifact
                         .virtuals
                         .iter()
                         .position(|(v, _)| *v == kind)
                         .expect("a validated artifact lists every virtual table it reads"),
-                ),
+                )),
                 PolyAddress::Cached { offset, .. } => Source::Cached(offset as usize),
-                other => Source::Lower(column_index(artifact, k, &other)),
+                other => Source::Read(Operand::Lower(column_index(artifact, k, &other))),
             };
             let all = list
                 .cached
@@ -367,7 +397,6 @@ impl<'a> ResolvedList<'a> {
             }
             (list.cached.len(), list.enforcing.len())
         };
-        let widest = bounds.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0);
         ResolvedList {
             challenges,
             gates,
@@ -376,7 +405,6 @@ impl<'a> ResolvedList<'a> {
             cached,
             producing: list.producing.len(),
             enforcing,
-            scratch: cached + widest,
         }
     }
 
@@ -390,43 +418,20 @@ impl<'a> ResolvedList<'a> {
         self.enforcing
     }
 
-    /// A scratch buffer of the length evaluation needs.
-    pub fn scratch(&self) -> Vec<Fr> {
-        vec![Fr::ZERO; self.scratch]
+    /// Gate `j` at the point — producing gates first, then enforcing — each
+    /// operand read through `read`.
+    pub fn gate(&self, j: usize, read: &impl Fn(Operand) -> Fr) -> Fr {
+        self.eval(self.cached + j, read)
     }
 
-    /// Evaluate every cached entry at the point into `scratch`, where
-    /// [`ResolvedList::gate`] substitutes them.
-    pub fn cache(&self, lower: &[Fr], upper: &[Fr], virtuals: &[Fr], scratch: &mut [Fr]) {
-        for i in 0..self.cached {
-            let value = self.eval(i, lower, upper, virtuals, scratch);
-            scratch[i] = value;
-        }
+    /// Cached entry `j` at the point, for a caller that shows one.
+    pub fn cached(&self, j: usize, read: &impl Fn(Operand) -> Fr) -> Fr {
+        self.eval(j, read)
     }
 
-    /// Gate `j` at the point — producing gates first, then enforcing — with
-    /// the cached values [`ResolvedList::cache`] last left in `scratch`.
-    pub fn gate(
-        &self,
-        j: usize,
-        lower: &[Fr],
-        upper: &[Fr],
-        virtuals: &[Fr],
-        scratch: &mut [Fr],
-    ) -> Fr {
-        self.eval(self.cached + j, lower, upper, virtuals, scratch)
-    }
-
-    /// `S_k` at the point: the cached entries, then every gate weighted by
-    /// `weights`, as [`summand`] defines it.
-    pub fn summand(
-        &self,
-        weights: &[Fr],
-        lower: &[Fr],
-        upper: &[Fr],
-        virtuals: &[Fr],
-        scratch: &mut [Fr],
-    ) -> Fr {
+    /// `S_k` at the point: every gate weighted by `weights`, as [`summand`]
+    /// defines it.
+    pub fn summand(&self, weights: &[Fr], read: &impl Fn(Operand) -> Fr) -> Fr {
         // A debugging aid, not a runtime check: one weight per gate. Both callers
         // build `weights` with `powers` over exactly this count — `verify` two
         // lines before it calls — and the prover reaches this at every sumcheck
@@ -438,39 +443,43 @@ impl<'a> ResolvedList<'a> {
         //     "summand: {} weights for {gates} gates",
         //     weights.len()
         // );
-        self.cache(lower, upper, virtuals, scratch);
-        weights.iter().enumerate().fold(Fr::ZERO, |acc, (j, w)| {
-            acc + self.gate(j, lower, upper, virtuals, scratch) * *w
-        })
+        weights
+            .iter()
+            .enumerate()
+            .fold(Fr::ZERO, |acc, (j, w)| acc + self.gate(j, read) * *w)
     }
 
-    /// Gate `i` of the whole list — cached entries included — through the
-    /// kernel, its operands gathered into `scratch` past the cached values.
-    fn eval(
-        &self,
-        i: usize,
-        lower: &[Fr],
-        upper: &[Fr],
-        virtuals: &[Fr],
-        scratch: &mut [Fr],
-    ) -> Fr {
-        let (cached, operands) = scratch.split_at_mut(self.cached);
+    /// Entry `i` of the whole list — cached entries included — through the
+    /// kernel, a cached operand evaluated in its place.
+    fn eval(&self, i: usize, read: &impl Fn(Operand) -> Fr) -> Fr {
         let sources = &self.sources[self.bounds[i]..self.bounds[i + 1]];
-        let operands = &mut operands[..sources.len()];
-        for (slot, source) in operands.iter_mut().zip(sources) {
-            *slot = match *source {
-                Source::Lower(x) => lower[x],
-                Source::Upper(x) => upper[x],
-                Source::Virtual(x) => virtuals[x],
-                Source::Cached(x) => cached[x],
-            };
-        }
-        eval_gate(self.gates[i], operands, self.challenges)
+        eval_gate_with(
+            self.gates[i],
+            |p| match sources[p] {
+                Source::Read(op) => read(op),
+                Source::Cached(x) => self.eval(x, read),
+            },
+            self.challenges,
+        )
+    }
+}
+
+/// A [`ResolvedList`]'s `read` over values held in three slices, as
+/// [`gate_values`] takes them: `lower[x]`, `upper[x]` and `virtuals[x]`.
+pub fn read_slices<'s>(
+    lower: &'s [Fr],
+    upper: &'s [Fr],
+    virtuals: &'s [Fr],
+) -> impl Fn(Operand) -> Fr + 's {
+    move |op| match op {
+        Operand::Lower(x) => lower[x],
+        Operand::Upper(x) => upper[x],
+        Operand::Virtual(x) => virtuals[x],
     }
 }
 
 /// Every gate of list `k` at one point: one value per producing gate, then one
-/// per enforcing gate, cached entries evaluated once and substituted.
+/// per enforcing gate, cached entries substituted.
 ///
 /// `lower` holds one value per column of layer `k` — offset order, or layout
 /// order at `k = 0` — and, for a halving list, `upper` the matching child-1
@@ -478,7 +487,7 @@ impl<'a> ResolvedList<'a> {
 /// one value per `artifact.virtuals` entry. It resolves the list through a
 /// [`ResolvedList`], which the forward pass, the self-check and the prover's
 /// layer sumcheck use directly, and which reads every gate through
-/// [`eval_gate`].
+/// [`eval_gate_with`].
 pub fn gate_values(
     artifact: &CircuitArtifact,
     k: usize,
@@ -489,10 +498,9 @@ pub fn gate_values(
 ) -> Vec<Fr> {
     check_children(artifact, k, lower, upper, "gate_values");
     let resolved = ResolvedList::new(artifact, k, challenges);
-    let mut scratch = resolved.scratch();
-    resolved.cache(lower, upper, virtuals, &mut scratch);
+    let read = read_slices(lower, upper, virtuals);
     (0..resolved.producing() + resolved.enforcing())
-        .map(|j| resolved.gate(j, lower, upper, virtuals, &mut scratch))
+        .map(|j| resolved.gate(j, &read))
         .collect()
 }
 
@@ -512,8 +520,7 @@ pub fn summand(
     // `gate_values`.
     check_children(artifact, k, lower, upper, "gate_values");
     let resolved = ResolvedList::new(artifact, k, challenges);
-    let mut scratch = resolved.scratch();
-    resolved.summand(weights, lower, upper, virtuals, &mut scratch)
+    resolved.summand(weights, &read_slices(lower, upper, virtuals))
 }
 
 /// A halving list reads both children of every column.

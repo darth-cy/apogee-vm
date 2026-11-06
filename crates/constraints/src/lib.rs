@@ -384,7 +384,7 @@ pub struct CatalogueEntry {
 }
 
 const DEFINED_IN: &str = "crates/constraints/src/lib.rs, GateDef";
-const EVALUATED_IN: &str = "crates/gkr-verify/src/lib.rs, eval_gate: gkr::forward per row, \
+const EVALUATED_IN: &str = "crates/gkr-verify/src/lib.rs, eval_gate_with: gkr::forward per row, \
      gkr::prove per round node, gkr_verify::verify at the final check";
 const ROW_WISE_OUTPUT: &str =
     "producing: L{k+1}[j]; enforcing: nothing; cached: C{k}[j] (row-wise lists)";

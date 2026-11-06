@@ -12,7 +12,10 @@
 //! Per-row work — a gate list's rows, a round's row pairs — is split over
 //! rayon. Field arithmetic is exact, so no split and no reduction order can
 //! change a value. Nothing is allocated per row, per row pair or per node:
-//! each rayon task owns its buffers and overwrites them.
+//! each rayon task owns its buffers and overwrites them. And nothing is copied
+//! to be read: a gate reads each operand where it is held — in its column, in a
+//! row of layer 0 lifted once, or in a round's line — and no layer is copied to
+//! be bound.
 //!
 //! Nothing here checks its inputs at run time. The artifact is assumed to have
 //! passed `CircuitArtifact::validate` where its key is loaded, and the base, the
@@ -188,23 +191,31 @@ fn check_base(artifact: &CircuitArtifact, base: &BaseLayer, what: &str) {
 /// Rows per rayon task in the forward pass and the self-check.
 const BLOCK: usize = 1 << 10;
 
-/// What gate list `k` reads, row by row: layer `k`'s columns in place, and the
-/// virtual tables' closed forms for a row-wise list.
+/// What gate list `k` reads, row by row: layer `k`'s columns, read where they
+/// are held, and for list 0 the virtual tables' closed forms, which no other
+/// list reads (Law 1).
+///
+/// **Only a row of layer 0 is lifted first.** Its columns are narrow — bits,
+/// bytes, words — and list 0's gates read each one about six times a row, so
+/// each is lifted to `Fr` once per row into a buffer of the rayon task's own,
+/// beside the virtual tables' values. Every layer above is `Fr` already, and
+/// its gates read each column about one and a half times a row: they read it
+/// where the forward pass wrote it, and no row of it is copied.
 struct RowReader<'v> {
     columns: Vec<&'v MultilinearPoly>,
-    halving: bool,
+    /// List 0's: whether rows are lifted, and the virtual tables it lists.
+    lifted: bool,
     kinds: Vec<VirtualKind>,
     /// The rows the list defines: layer `k`'s, or half of them for a halving
     /// list, whose row `i` reads rows `i` and `i + rows` of layer `k`.
     rows: usize,
 }
 
-/// One rayon task's buffers for [`RowReader::load`], overwritten row after row.
-struct RowScratch {
-    lower: Vec<Fr>,
-    upper: Vec<Fr>,
+/// One rayon task's row of layer 0, lifted, overwritten row after row: one
+/// value per column and per virtual table. Empty above layer 0.
+struct LiftedRow {
+    columns: Vec<Fr>,
     virtuals: Vec<Fr>,
-    gates: Vec<Fr>,
 }
 
 impl<'v> RowReader<'v> {
@@ -214,52 +225,56 @@ impl<'v> RowReader<'v> {
         layers: &'v [Vec<MultilinearPoly>],
         k: usize,
     ) -> RowReader<'v> {
-        let halving = artifact.layers[k].halving;
         let rows_in = 1usize << artifact.layer_vars(k);
         RowReader {
             columns: layer_columns(artifact, base, layers, k),
-            halving,
-            kinds: if halving {
-                Vec::new()
-            } else {
-                artifact.virtuals.iter().map(|(kind, _)| *kind).collect()
+            lifted: k == 0,
+            kinds: match k {
+                0 => artifact.virtuals.iter().map(|(kind, _)| *kind).collect(),
+                _ => Vec::new(),
             },
-            rows: if halving { rows_in / 2 } else { rows_in },
+            rows: match artifact.layers[k].halving {
+                true => rows_in / 2,
+                false => rows_in,
+            },
         }
     }
 
-    fn scratch(&self, resolved: &ResolvedList) -> RowScratch {
-        let width = self.columns.len();
-        RowScratch {
-            lower: vec![Fr::ZERO; width],
-            upper: vec![Fr::ZERO; if self.halving { width } else { 0 }],
+    /// A task's buffer for [`RowReader::lift`]: a row of layer 0, or nothing.
+    fn row(&self) -> LiftedRow {
+        let width = if self.lifted { self.columns.len() } else { 0 };
+        LiftedRow {
+            columns: vec![Fr::ZERO; width],
             virtuals: vec![Fr::ZERO; self.kinds.len()],
-            gates: resolved.scratch(),
         }
     }
 
-    /// Row `y`'s inputs into `s` — both children for a halving list, the
-    /// virtual tables for a row-wise one — and its cached entries evaluated.
-    fn load(&self, y: usize, resolved: &ResolvedList, s: &mut RowScratch) {
-        if self.halving {
-            for (column, (lo, hi)) in self
-                .columns
-                .iter()
-                .zip(s.lower.iter_mut().zip(&mut s.upper))
-            {
-                *lo = column.get(y);
-                *hi = column.get(y + self.rows);
-            }
-        } else {
-            for (column, value) in self.columns.iter().zip(s.lower.iter_mut()) {
-                *value = column.get(y);
-            }
-            // A virtual table is never materialized: its closed form, per row.
-            for (kind, value) in self.kinds.iter().zip(s.virtuals.iter_mut()) {
-                *value = virtual_at_row(*kind, y);
-            }
+    /// Row `y` of layer 0 into `row`, each column lifted once and each virtual
+    /// table at its closed form. Nothing above layer 0.
+    fn lift(&self, y: usize, row: &mut LiftedRow) {
+        if !self.lifted {
+            return;
         }
-        resolved.cache(&s.lower, &s.upper, &s.virtuals, &mut s.gates);
+        for (column, value) in self.columns.iter().zip(row.columns.iter_mut()) {
+            *value = column.get(y);
+        }
+        // A virtual table is never materialized: its closed form, per row.
+        for (kind, value) in self.kinds.iter().zip(row.virtuals.iter_mut()) {
+            *value = virtual_at_row(*kind, y);
+        }
+    }
+
+    /// Operand `op` at row `y`: out of the lifted row at layer 0, out of its
+    /// column above it — child 1 of a halving list's row `y` being the
+    /// column's row `y + rows`.
+    fn read(&self, op: Operand, y: usize, row: &LiftedRow) -> Fr {
+        match (self.lifted, op) {
+            (true, Operand::Lower(x)) => row.columns[x],
+            (true, Operand::Virtual(x)) => row.virtuals[x],
+            (false, Operand::Lower(x)) => self.columns[x].get(y),
+            (false, Operand::Upper(x)) => self.columns[x].get(y + self.rows),
+            (_, other) => panic!("a validated gate list cannot read {other:?} at its layer"),
+        }
     }
 }
 
@@ -322,12 +337,14 @@ fn produce(
         }
     }
     blocks.into_par_iter().enumerate().for_each_init(
-        || reader.scratch(&resolved),
-        |s, (b, mut block)| {
+        || reader.row(),
+        |row, (b, mut block)| {
             for i in 0..block[0].len() {
-                reader.load(b * BLOCK + i, &resolved, s);
+                let y = b * BLOCK + i;
+                reader.lift(y, row);
+                let read = |op: Operand| reader.read(op, y, row);
                 for (j, column) in block.iter_mut().enumerate() {
-                    column[i] = resolved.gate(j, &s.lower, &s.upper, &s.virtuals, &mut s.gates);
+                    column[i] = resolved.gate(j, &read);
                 }
             }
         },
@@ -373,21 +390,18 @@ pub fn self_check(
         let first = (0..rows.div_ceil(BLOCK))
             .into_par_iter()
             .map_init(
-                || reader.scratch(&resolved),
-                |s, b| {
+                || reader.row(),
+                |row, b| {
                     for y in b * BLOCK..rows.min((b + 1) * BLOCK) {
-                        reader.load(y, &resolved, s);
+                        reader.lift(y, row);
+                        let read = |op: Operand| reader.read(op, y, row);
                         for (j, column) in written.iter().enumerate().take(producing) {
-                            let value =
-                                resolved.gate(j, &s.lower, &s.upper, &s.virtuals, &mut s.gates);
-                            if value != column.get(y) {
+                            if resolved.gate(j, &read) != column.get(y) {
                                 return Some((y, j));
                             }
                         }
                         for j in producing..producing + enforcing {
-                            let value =
-                                resolved.gate(j, &s.lower, &s.upper, &s.virtuals, &mut s.gates);
-                            if value != Fr::ZERO {
+                            if resolved.gate(j, &read) != Fr::ZERO {
                                 return Some((y, j));
                             }
                         }
@@ -461,8 +475,9 @@ pub fn explain_self_check(
         )];
     }
     let resolved = ResolvedList::new(artifact, k, challenges);
-    let mut s = reader.scratch(&resolved);
-    reader.load(y, &resolved, &mut s);
+    let mut row = reader.row();
+    reader.lift(y, &mut row);
+    let read = |op: Operand| reader.read(op, y, &row);
     let (producing, enforcing) = (resolved.producing(), resolved.enforcing());
     let written = &values.layers[k];
 
@@ -470,7 +485,7 @@ pub fn explain_self_check(
     // of the row before its enforcing ones.
     let mut failing = None;
     for (j, column) in written.iter().enumerate().take(producing) {
-        let value = resolved.gate(j, &s.lower, &s.upper, &s.virtuals, &mut s.gates);
+        let value = resolved.gate(j, &read);
         if value != column.get(y) {
             failing = Some((j, value, Some(column.get(y))));
             break;
@@ -478,7 +493,7 @@ pub fn explain_self_check(
     }
     if failing.is_none() {
         for j in producing..producing + enforcing {
-            let value = resolved.gate(j, &s.lower, &s.upper, &s.virtuals, &mut s.gates);
+            let value = resolved.gate(j, &read);
             if value != Fr::ZERO {
                 failing = Some((j, value, None));
                 break;
@@ -532,12 +547,15 @@ pub fn explain_self_check(
                     .iter()
                     .position(|(v, _)| *v == kind)
                     .expect("a validated artifact lists every virtual table it reads");
-                out.push(format!("  {op} = {}   {label}", show(s.virtuals[i])));
+                out.push(format!(
+                    "  {op} = {}   {label}",
+                    show(read(Operand::Virtual(i)))
+                ));
             }
             PolyAddress::Cached { offset, .. } => {
                 out.push(format!(
                     "  {op} = {}   {label}",
-                    show(s.gates[offset as usize])
+                    show(resolved.cached(offset as usize, &read))
                 ));
             }
             other => {
@@ -545,11 +563,14 @@ pub fn explain_self_check(
                 if halving {
                     out.push(format!(
                         "  {op} = ({}, {})   {label}, the two children",
-                        show(s.lower[i]),
-                        show(s.upper[i])
+                        show(read(Operand::Lower(i))),
+                        show(read(Operand::Upper(i)))
                     ));
                 } else {
-                    out.push(format!("  {op} = {}   {label}", show(s.lower[i])));
+                    out.push(format!(
+                        "  {op} = {}   {label}",
+                        show(read(Operand::Lower(i)))
+                    ));
                 }
             }
         }
@@ -751,8 +772,8 @@ fn interpolate_cubic(v: &[Fr; 4], c: &[Fr; 3]) -> [Fr; 4] {
 
 /// One rayon task's buffers for a round's row pairs, overwritten pair after
 /// pair: the line of every table and every virtual table as `(value, step)`,
-/// the point a virtual table's closed form is evaluated at, and the resolved
-/// list's scratch.
+/// which the gates read at each node in place, and the point a virtual table's
+/// closed form is evaluated at.
 struct PairScratch {
     lower: Vec<Fr>,
     lower_step: Vec<Fr>,
@@ -762,7 +783,6 @@ struct PairScratch {
     virtuals_step: Vec<Fr>,
     /// The round's bound challenges first; the rest is written per pair.
     point: Vec<Fr>,
-    gates: Vec<Fr>,
 }
 
 /// The line `lo + X·(hi − lo)` of pair `i` of every table, into `lo` and `step`,
@@ -826,10 +846,10 @@ pub fn prove_sumcheck(
     let n = eq_point.len();
     let artifact = summand.artifact;
     let halving = artifact.layers[summand.layer].halving;
-    let kinds: Vec<VirtualKind> = if halving {
-        Vec::new()
-    } else {
-        artifact.virtuals.iter().map(|(kind, _)| *kind).collect()
+    // Only list 0 reads a virtual table (Law 1), and it is row-wise.
+    let kinds: Vec<VirtualKind> = match summand.layer {
+        0 => artifact.virtuals.iter().map(|(kind, _)| *kind).collect(),
+        _ => Vec::new(),
     };
     // A debugging aid, not a runtime check (see `check_slots`). Without it a
     // table shorter than its list needs panics on a read past its end, and a
@@ -870,7 +890,6 @@ pub fn prove_sumcheck(
                         virtuals: vec![Fr::ZERO; kinds.len()],
                         virtuals_step: vec![Fr::ZERO; kinds.len()],
                         point: at,
-                        gates: resolved.scratch(),
                     }
                 },
                 |s, i| {
@@ -896,10 +915,7 @@ pub fn prove_sumcheck(
                         *node = eq_at
                             * resolved.summand(
                                 &summand.weights,
-                                &s.lower,
-                                &s.upper,
-                                &s.virtuals,
-                                &mut s.gates,
+                                &read_slices(&s.lower, &s.upper, &s.virtuals),
                             );
                         eq_at += eq_step;
                         step(&mut s.lower, &s.lower_step);
