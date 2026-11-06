@@ -146,6 +146,29 @@ impl<'a> RowSlice<'a> {
     pub fn cycles(&self) -> &'a [u64] {
         &self.trace.cycle[self.start..self.start + self.len]
     }
+
+    /// Row `i`'s query in `role`, if the cycle has one: [`Row::query`], read
+    /// from the buffer's columns without gathering the row.
+    pub(crate) fn query(&self, i: usize, role: Role) -> Option<Query> {
+        assert!(i < self.len, "row {i} of a {}-row shard", self.len);
+        let at = self.start + i;
+        (self.trace.present[at] & (1 << role as u8) != 0).then(|| {
+            let c = &self.trace.queries[role as usize];
+            Query {
+                addr: c.addr[at],
+                read_ts: c.read_ts[at],
+                read_value: c.read_value[at],
+                write_value: c.write_value[at],
+            }
+        })
+    }
+
+    /// Row `i`'s pc and the next pc it wrote.
+    pub(crate) fn pc(&self, i: usize) -> (u32, u32) {
+        assert!(i < self.len, "row {i} of a {}-row shard", self.len);
+        let at = self.start + i;
+        (self.trace.pc[at], self.trace.next_pc[at])
+    }
 }
 
 /// One shard's invocations of one delegation family: a borrowed window into a

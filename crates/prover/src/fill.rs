@@ -295,83 +295,111 @@ fn keccak_f(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
             kec_circuit::base_room_hi(),
         ],
     );
-    let witness: Vec<KeccakRow> = (0..frames.len())
-        .map(|r| keccak_row(frames, r))
-        .collect::<Result<Vec<_>, String>>()?;
+    let byte = |lane: u64, b: usize| ((lane >> (8 * b)) & 0xff) as u32;
+    let rc_byte = move |w: &KeccakRow, b: usize| byte(keccak::ROUND_CONSTANTS[w.round], b);
+    let mut columns: Vec<RowColumn<KeccakRow>> = Vec::new();
 
     // The round selector, one-hot, and the round constant it names.
     for round in 0..keccak::ROUNDS {
-        let values: Vec<u32> = witness
-            .iter()
-            .map(|w| u32::from(w.round == round))
-            .collect();
-        out.push((kec_circuit::round_sel(round), u32_column(values, h)));
+        columns.push((
+            kec_circuit::round_sel(round),
+            Box::new(move |w| u32::from(w.round == round)),
+        ));
     }
-    for (t, b) in keccak::IOTA_BYTES.iter().enumerate() {
-        let values: Vec<u32> = witness
-            .iter()
-            .map(|w| ((keccak::ROUND_CONSTANTS[w.round] >> (8 * b)) & 0xff) as u32)
-            .collect();
-        out.push((kec_circuit::rc(t), u32_column(values, h)));
+    for (t, &b) in keccak::IOTA_BYTES.iter().enumerate() {
+        columns.push((kec_circuit::rc(t), Box::new(move |w| rc_byte(w, b))));
     }
 
     // The round's stages, byte by byte, in the circuit's layout order.
-    let byte = |lane: u64, b: usize| ((lane >> (8 * b)) & 0xff) as u32;
-    let push_state = |out: &mut Vec<(PolyAddress, MultilinearPoly)>,
-                      address: &dyn Fn(usize, usize) -> PolyAddress,
-                      lane: &dyn Fn(&KeccakRow) -> [u64; keccak::LANES]| {
+    let state = |columns: &mut Vec<RowColumn<KeccakRow>>,
+                 address: fn(usize, usize) -> PolyAddress,
+                 lane: fn(&KeccakRow, usize) -> u64| {
         for i in 0..keccak::LANES {
             for b in 0..8 {
-                let values: Vec<u32> = witness.iter().map(|w| byte(lane(w)[i], b)).collect();
-                out.push((address(i, b), u32_column(values, h)));
+                columns.push((address(i, b), Box::new(move |w| byte(lane(w, i), b))));
             }
         }
     };
-    push_state(&mut out, &kec_circuit::state_in, &|w| w.state_in);
+    state(&mut columns, kec_circuit::state_in, |w, i| w.state_in[i]);
     for x in 0..5 {
         for b in 0..8 {
             for s in 0..4 {
-                let values: Vec<u32> = witness.iter().map(|w| byte(w.parity[x][s], b)).collect();
-                out.push((kec_circuit::parity(x, b, s), u32_column(values, h)));
+                columns.push((
+                    kec_circuit::parity(x, b, s),
+                    Box::new(move |w| byte(w.parity[x][s], b)),
+                ));
             }
         }
     }
     for x in 0..5 {
         for b in 0..8 {
-            let values: Vec<u32> = witness.iter().map(|w| byte(w.c_mask[x], b)).collect();
-            out.push((kec_circuit::c_mask(x, b), u32_column(values, h)));
+            columns.push((
+                kec_circuit::c_mask(x, b),
+                Box::new(move |w| byte(w.c_mask[x], b)),
+            ));
         }
     }
     for x in 0..5 {
         for b in 0..8 {
-            let values: Vec<u32> = witness.iter().map(|w| byte(w.theta_d[x], b)).collect();
-            out.push((kec_circuit::theta_d(x, b), u32_column(values, h)));
+            columns.push((
+                kec_circuit::theta_d(x, b),
+                Box::new(move |w| byte(w.theta_d[x], b)),
+            ));
         }
     }
-    push_state(&mut out, &kec_circuit::theta_a, &|w| w.theta_a);
+    state(&mut columns, kec_circuit::theta_a, |w, i| w.theta_a[i]);
     for i in 0..keccak::LANES {
         if keccak::ROTATIONS[i / 5][i % 5].is_multiple_of(8) {
             continue;
         }
         for b in 0..8 {
-            let values: Vec<u32> = witness.iter().map(|w| byte(w.rho_mask[i], b)).collect();
-            out.push((kec_circuit::rho_mask(i, b), u32_column(values, h)));
+            columns.push((
+                kec_circuit::rho_mask(i, b),
+                Box::new(move |w| byte(w.rho_mask[i], b)),
+            ));
         }
     }
-    push_state(&mut out, &kec_circuit::rho_out, &|w| w.rho_out);
-    push_state(&mut out, &kec_circuit::chi_and, &|w| w.chi_and);
-    push_state(&mut out, &kec_circuit::chi_out, &|w| w.chi_out);
-    for (t, b) in keccak::IOTA_BYTES.iter().enumerate() {
-        let values: Vec<u32> = witness
-            .iter()
-            .map(|w| {
-                byte(w.chi_out[0], *b)
-                    ^ ((keccak::ROUND_CONSTANTS[w.round] >> (8 * b)) & 0xff) as u32
-            })
-            .collect();
-        out.push((kec_circuit::iota_out(t), u32_column(values, h)));
+    state(&mut columns, kec_circuit::rho_out, |w, i| w.rho_out[i]);
+    state(&mut columns, kec_circuit::chi_and, |w, i| w.chi_and[i]);
+    state(&mut columns, kec_circuit::chi_out, |w, i| w.chi_out[i]);
+    for (t, &b) in keccak::IOTA_BYTES.iter().enumerate() {
+        columns.push((
+            kec_circuit::iota_out(t),
+            Box::new(move |w| byte(w.chi_out[0], b) ^ rc_byte(w, b)),
+        ));
     }
+    out.extend(row_columns(frames.len(), h, columns, |r| {
+        keccak_row(frames, r)
+    })?);
     Ok(out)
+}
+
+/// One witness column of a delegation family, as [`row_columns`] fills it: its
+/// address, and how one row's intermediates give its value.
+type RowColumn<R> = (PolyAddress, Box<dyn Fn(&R) -> u32>);
+
+/// `columns` over a shard's `rows` invocations, filled a row at a time: each
+/// row's intermediates are computed once, by `row`, written into every column
+/// and dropped, so a shard's worth of them never exists beside the columns made
+/// from them. Each column is allocated once, at its height.
+fn row_columns<R>(
+    rows: usize,
+    h: usize,
+    columns: Vec<RowColumn<R>>,
+    row: impl Fn(usize) -> Result<R, String>,
+) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    let mut values: Vec<Vec<u32>> = columns.iter().map(|_| Vec::with_capacity(h)).collect();
+    for r in 0..rows {
+        let w = row(r)?;
+        for ((_, of), column) in columns.iter().zip(values.iter_mut()) {
+            column.push(of(&w));
+        }
+    }
+    Ok(columns
+        .into_iter()
+        .zip(values)
+        .map(|((address, _), v)| (address, u32_column(v, h)))
+        .collect())
 }
 
 /// The frame's columns for a family that range-checks through `RANGE16`.
@@ -387,68 +415,50 @@ fn delegation_frame_range16(
     chunk: fn(usize, usize) -> PolyAddress,
     base: [PolyAddress; 4],
 ) -> Vec<(PolyAddress, MultilinearPoly)> {
-    let rows = 0..frames.len();
-    let mut out: Vec<(PolyAddress, MultilinearPoly)> = Vec::new();
-    let cycles: Vec<Fr> = frames.cycles().iter().map(|c| Fr::from_u64(*c)).collect();
-    out.push((deleg::CYCLE, fr_column(cycles, h)));
-    out.push((
-        deleg::LIVE,
-        u32_column(rows.clone().map(|_| 1).collect(), h),
-    ));
-    out.push((deleg::BASE, u32_column(frames.bases().to_vec(), h)));
-    out.push((deleg::ANCHOR_VALUE, u32_column(Vec::new(), h)));
+    let len = frames.len();
+    let (cycles, bases) = (frames.cycles(), frames.bases());
+    let mut out: Vec<(PolyAddress, MultilinearPoly)> = vec![
+        (deleg::CYCLE, fr_rows(len, h, |r| Fr::from_u64(cycles[r]))),
+        (deleg::LIVE, u32_rows(len, h, |_| 1)),
+        (deleg::BASE, u32_rows(len, h, |r| bases[r])),
+        (deleg::ANCHOR_VALUE, u32_column(Vec::new(), h)),
+    ];
     for j in 0..words {
         let w = frames.word(j);
-        for (field, values) in [
-            (
-                deleg::WORD_ADDR,
-                rows.clone().map(|r| w.addr[r]).collect::<Vec<u32>>(),
-            ),
-            (
-                deleg::WORD_READ_VALUE,
-                rows.clone().map(|r| w.read_value[r]).collect(),
-            ),
-            (
-                deleg::WORD_WRITE_VALUE,
-                rows.clone().map(|r| w.write_value[r]).collect(),
-            ),
-        ] {
-            out.push((deleg::word(j, field), u32_column(values, h)));
-        }
-        let read_ts: Vec<Fr> = rows.clone().map(|r| Fr::from_u64(w.read_ts[r])).collect();
-        out.push((deleg::word(j, deleg::WORD_READ_TS), fr_column(read_ts, h)));
+        out.push((
+            deleg::word(j, deleg::WORD_ADDR),
+            u32_rows(len, h, |r| w.addr[r]),
+        ));
+        out.push((
+            deleg::word(j, deleg::WORD_READ_VALUE),
+            u32_rows(len, h, |r| w.read_value[r]),
+        ));
+        out.push((
+            deleg::word(j, deleg::WORD_WRITE_VALUE),
+            u32_rows(len, h, |r| w.write_value[r]),
+        ));
+        out.push((
+            deleg::word(j, deleg::WORD_READ_TS),
+            fr_rows(len, h, |r| Fr::from_u64(w.read_ts[r])),
+        ));
     }
     for j in 0..words {
+        let w = frames.word(j);
         for c in 0..2 {
-            let values: Vec<u32> = rows
-                .clone()
-                .map(|r| {
-                    let ts = memory::TS_STEP * frames.cycles()[r] + delegation::FRAME_DELTA;
-                    let gap = ts - frames.word(j).read_ts[r] - 1;
-                    ((gap >> (16 * (c as u32 + 1))) & 0xffff) as u32
-                })
-                .collect();
-            out.push((chunk(j, c), u32_column(values, h)));
+            let gap = u32_rows(len, h, |r| {
+                let ts = memory::TS_STEP * cycles[r] + delegation::FRAME_DELTA;
+                let gap = ts - w.read_ts[r] - 1;
+                ((gap >> (16 * (c as u32 + 1))) & 0xffff) as u32
+            });
+            out.push((chunk(j, c), gap));
         }
     }
-    let low: Vec<u32> = rows
-        .clone()
-        .map(|r| (frames.bases()[r] - guest_memory::RAM_ORIGIN) / 4)
-        .collect();
-    out.push((base[0], u32_column(low.clone(), h)));
-    out.push((
-        base[1],
-        u32_column(low.iter().map(|v| v >> 16).collect(), h),
-    ));
-    let room: Vec<u32> = rows
-        .clone()
-        .map(|r| ((1u64 << 31) - frame_bytes - frames.bases()[r] as u64) as u32)
-        .collect();
-    out.push((base[2], u32_column(room.clone(), h)));
-    out.push((
-        base[3],
-        u32_column(room.iter().map(|v| v >> 16).collect(), h),
-    ));
+    let low = |r: usize| (bases[r] - guest_memory::RAM_ORIGIN) / 4;
+    out.push((base[0], u32_rows(len, h, low)));
+    out.push((base[1], u32_rows(len, h, |r| low(r) >> 16)));
+    let room = |r: usize| ((1u64 << 31) - frame_bytes - bases[r] as u64) as u32;
+    out.push((base[2], u32_rows(len, h, room)));
+    out.push((base[3], u32_rows(len, h, |r| room(r) >> 16)));
     out
 }
 
@@ -628,39 +638,41 @@ fn sha256_comp(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>,
             sh_circuit::base_room_hi(),
         ],
     );
-    let witness: Vec<Sha256Row> = (0..frames.len())
-        .map(|r| sha256_row(frames, r))
-        .collect::<Result<Vec<_>, String>>()?;
-
     let byte = |v: u32, b: usize| (v >> (8 * b)) & 0xff;
-    let mut push = |address: PolyAddress, of: &dyn Fn(&Sha256Row) -> u32| {
-        let values: Vec<u32> = witness.iter().map(of).collect();
-        out.push((address, u32_column(values, h)));
+    let mut columns: Vec<RowColumn<Sha256Row>> = Vec::new();
+    let mut push = |address: PolyAddress, of: Box<dyn Fn(&Sha256Row) -> u32>| {
+        columns.push((address, of));
     };
 
     for g in 0..sh::GROUPS {
-        push(sh_circuit::group_sel(g), &|w| u32::from(w.group == g));
+        push(
+            sh_circuit::group_sel(g),
+            Box::new(move |w| u32::from(w.group == g)),
+        );
     }
     for j in -2..=3isize {
         for b in 0..4 {
-            push(sh_circuit::a_byte(j, b), &|w| {
-                byte(w.a[(j + 3) as usize], b)
-            });
-            push(sh_circuit::e_byte(j, b), &|w| {
-                byte(w.e[(j + 3) as usize], b)
-            });
+            push(
+                sh_circuit::a_byte(j, b),
+                Box::new(move |w| byte(w.a[(j + 3) as usize], b)),
+            );
+            push(
+                sh_circuit::e_byte(j, b),
+                Box::new(move |w| byte(w.e[(j + 3) as usize], b)),
+            );
         }
     }
     for i in [1usize, 2, 3, 4, 14, 15] {
         for b in 0..4 {
-            push(sh_circuit::w_byte(i, b), &|w| byte(w.x[i], b));
+            push(sh_circuit::w_byte(i, b), Box::new(move |w| byte(w.x[i], b)));
         }
     }
     for m in 0..2 {
         for b in 0..4 {
-            push(sh_circuit::n_byte(m, b), &|w| {
-                byte(w.x[sh::BLOCK_WORDS + m], b)
-            });
+            push(
+                sh_circuit::n_byte(m, b),
+                Box::new(move |w| byte(w.x[sh::BLOCK_WORDS + m], b)),
+            );
         }
     }
     let round_blocks = [
@@ -680,24 +692,29 @@ fn sha256_comp(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>,
     for k in 0..sh::ROUNDS_PER_CALL {
         for (slot, block) in round_blocks.iter().enumerate() {
             for b in 0..4 {
-                push(sh_circuit::round_col(k, *block, b), &|w| {
-                    byte(w.round[k][slot], b)
-                });
+                push(
+                    sh_circuit::round_col(k, *block, b),
+                    Box::new(move |w| byte(w.round[k][slot], b)),
+                );
             }
         }
         // `x_0 ^ (2^s − 1)`, the one byte each word rotation splits.
-        push(sh_circuit::round_col(k, Round::Bs0Mx, 0), &|w| {
-            byte(w.round[k][3], 0) ^ 0x03
-        });
-        push(sh_circuit::round_col(k, Round::Bs1Mx, 0), &|w| {
-            byte(w.round[k][7], 0) ^ 0x3f
-        });
-        push(sh_circuit::round_col(k, Round::CarryA, 0), &|w| {
-            w.carries[k][0]
-        });
-        push(sh_circuit::round_col(k, Round::CarryE, 0), &|w| {
-            w.carries[k][1]
-        });
+        push(
+            sh_circuit::round_col(k, Round::Bs0Mx, 0),
+            Box::new(move |w| byte(w.round[k][3], 0) ^ 0x03),
+        );
+        push(
+            sh_circuit::round_col(k, Round::Bs1Mx, 0),
+            Box::new(move |w| byte(w.round[k][7], 0) ^ 0x3f),
+        );
+        push(
+            sh_circuit::round_col(k, Round::CarryA, 0),
+            Box::new(move |w| w.carries[k][0]),
+        );
+        push(
+            sh_circuit::round_col(k, Round::CarryE, 0),
+            Box::new(move |w| w.carries[k][1]),
+        );
     }
     let sched_blocks = [
         (Sched::Ss0M3, 4),
@@ -714,25 +731,32 @@ fn sha256_comp(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>,
     for m in 0..sh::ROUNDS_PER_CALL {
         for (slot, (block, width)) in sched_blocks.iter().enumerate() {
             for b in 0..*width {
-                push(sh_circuit::sched_col(m, *block, b), &|w| {
-                    byte(w.sched[m][slot], b)
-                });
+                push(
+                    sh_circuit::sched_col(m, *block, b),
+                    Box::new(move |w| byte(w.sched[m][slot], b)),
+                );
             }
         }
-        push(sh_circuit::sched_col(m, Sched::CarryW, 0), &|w| {
-            w.carry_w[m]
-        });
+        push(
+            sh_circuit::sched_col(m, Sched::CarryW, 0),
+            Box::new(move |w| w.carry_w[m]),
+        );
     }
     // The four written words that carry a `RANGE16` pair: `A_4`, `E_4` and the
     // last two derived schedule words.
-    push(sh_circuit::written_hi(0), &|w| w.a[7] >> 16);
-    push(sh_circuit::written_hi(1), &|w| w.e[7] >> 16);
-    push(sh_circuit::written_hi(2), &|w| {
-        w.x[sh::BLOCK_WORDS + 2] >> 16
-    });
-    push(sh_circuit::written_hi(3), &|w| {
-        w.x[sh::BLOCK_WORDS + 3] >> 16
-    });
+    push(sh_circuit::written_hi(0), Box::new(move |w| w.a[7] >> 16));
+    push(sh_circuit::written_hi(1), Box::new(move |w| w.e[7] >> 16));
+    push(
+        sh_circuit::written_hi(2),
+        Box::new(move |w| w.x[sh::BLOCK_WORDS + 2] >> 16),
+    );
+    push(
+        sh_circuit::written_hi(3),
+        Box::new(move |w| w.x[sh::BLOCK_WORDS + 3] >> 16),
+    );
+    out.extend(row_columns(frames.len(), h, columns, |r| {
+        sha256_row(frames, r)
+    })?);
     Ok(out)
 }
 
@@ -784,14 +808,36 @@ fn advice(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Stri
     ))
 }
 
+/// `values` padded with 0 to `height` rows. Built in a vector [`columns`] made,
+/// so the padding never moves it.
 fn u32_column(mut values: Vec<u32>, height: usize) -> MultilinearPoly {
     values.resize(height, 0);
     MultilinearPoly::new(PolyBacking::U32(values))
 }
 
+/// [`u32_column`] for an `Fr` column.
 fn fr_column(mut values: Vec<Fr>, height: usize) -> MultilinearPoly {
     values.resize(height, Fr::ZERO);
     MultilinearPoly::new(PolyBacking::Fr(values))
+}
+
+/// `N` empty columns, each with room for all `h` rows of a shard, so neither
+/// pushing a shard's rows nor padding them moves one.
+fn columns<T, const N: usize>(h: usize) -> [Vec<T>; N] {
+    core::array::from_fn(|_| Vec::with_capacity(h))
+}
+
+/// A `u32` column of `h` rows: `value(r)` on each of the first `len` and 0 on
+/// the padding rows, read where it is and written once, at its height.
+fn u32_rows(len: usize, h: usize, value: impl Fn(usize) -> u32) -> MultilinearPoly {
+    let values = (0..h).map(|r| if r < len { value(r) } else { 0 });
+    MultilinearPoly::new(PolyBacking::U32(values.collect()))
+}
+
+/// [`u32_rows`] for an `Fr` column.
+fn fr_rows(len: usize, h: usize, value: impl Fn(usize) -> Fr) -> MultilinearPoly {
+    let values = (0..h).map(|r| if r < len { value(r) } else { Fr::ZERO });
+    MultilinearPoly::new(PolyBacking::Fr(values.collect()))
 }
 
 /// A signed integer as a field element. Every value a fill hands to an `Fr`
@@ -830,10 +876,9 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     let h = src.height;
     let width = frame_queries(fam).len();
 
-    let mut decoded: [Vec<u32>; 6] = Default::default();
-    let mut kinds: [Vec<u32>; 6] = Default::default();
-    let (mut is_ecall, mut is_fence, mut wrap) = (Vec::new(), Vec::new(), Vec::new());
-    let (mut sel, mut rd_hi, mut next_pc_hi) = (Vec::new(), Vec::new(), Vec::new());
+    let mut decoded: [Vec<u32>; 6] = columns(h);
+    let mut kinds: [Vec<u32>; 6] = columns(h);
+    let [mut is_ecall, mut is_fence, mut wrap, mut sel, mut rd_hi, mut next_pc_hi] = columns(h);
     for r in 0..rows.len() {
         let row = rows.row(r);
         let slot = row.pc as usize / 2;
@@ -957,12 +1002,12 @@ fn jump_branch_slt(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPol
     let h = src.height;
     let width = frame_queries(fam).len();
 
-    let mut decoded: [Vec<u32>; 6] = Default::default();
-    let mut kinds: [Vec<u32>; 12] = Default::default();
+    let mut decoded: [Vec<u32>; 6] = columns(h);
+    let mut kinds: [Vec<u32>; 12] = columns(h);
     // cmp_rhs rs1_hi rs1_sign cmp_rhs_hi cmp_rhs_sign lt cmp_gap cmp_gap_hi
     // eq taken jalr_drop pc_wrap next_pc_hi rd_hi, then rd_selected.
-    let mut cells: [Vec<u32>; 15] = Default::default();
-    let mut eq_inv = Vec::new();
+    let mut cells: [Vec<u32>; 15] = columns(h);
+    let mut eq_inv = Vec::with_capacity(h);
     for r in 0..rows.len() {
         let row = rows.row(r);
         let slot = row.pc as usize / 2;
@@ -1128,13 +1173,13 @@ fn shift_bitwise(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)
     let h = src.height;
     let width = frame_queries(fam).len();
 
-    let mut decoded: [Vec<u32>; 6] = Default::default();
-    let mut kinds: [Vec<u32>; 12] = Default::default();
+    let mut decoded: [Vec<u32>; 6] = columns(h);
+    let mut kinds: [Vec<u32>; 12] = columns(h);
     // f_shift f_bitwise rs1_hi rs1_sign src2_hi amount pow copow high high_hi
     // se ovf ovf_hi residue residue_hi scaled scaled_hi rd_hi, then rd_selected.
-    let mut cells: [Vec<u32>; 19] = Default::default();
-    let mut bytes: [Vec<u32>; 12] = Default::default();
-    let (mut shift_in, mut shift_prod) = (Vec::new(), Vec::new());
+    let mut cells: [Vec<u32>; 19] = columns(h);
+    let mut bytes: [Vec<u32>; 12] = columns(h);
+    let [mut shift_in, mut shift_prod] = columns(h);
     for r in 0..rows.len() {
         let row = rows.row(r);
         let slot = row.pc as usize / 2;
@@ -1339,14 +1384,13 @@ fn mul_div(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     let h = src.height;
     let width = frame_queries(fam).len();
 
-    let mut decoded: [Vec<u32>; 5] = Default::default();
-    let mut kinds: [Vec<u32>; 8] = Default::default();
+    let mut decoded: [Vec<u32>; 5] = columns(h);
+    let mut kinds: [Vec<u32>; 8] = columns(h);
     // f_div rs1_hi rs1_top rs2_hi rs2_top s1 s2 p_low p_low_hi p_high
     // p_high_hi p_sign q q_hi q_sign r r_hi r_sign rz d1 dz abs_r abs_d gap
     // gap_hi rd_hi, then rd_selected.
-    let mut cells: [Vec<u32>; 27] = Default::default();
-    let (mut mx_col, mut my_col) = (Vec::new(), Vec::new());
-    let (mut r_inv_col, mut d_inv_col) = (Vec::new(), Vec::new());
+    let mut cells: [Vec<u32>; 27] = columns(h);
+    let [mut mx_col, mut my_col, mut r_inv_col, mut d_inv_col] = columns(h);
     let word = 1i128 << 32;
     for row_index in 0..rows.len() {
         let row = rows.row(row_index);
@@ -1610,10 +1654,10 @@ fn mem_word(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
         .ok_or("the program has no MEM_WORD table")?;
     let h = src.height;
 
-    let mut decoded: [Vec<u32>; 6] = Default::default();
-    let mut kinds: [Vec<u32>; 2] = Default::default();
+    let mut decoded: [Vec<u32>; 6] = columns(h);
+    let mut kinds: [Vec<u32>; 2] = columns(h);
     // wrap word_index word_index_hi rd_hi, then rd_selected.
-    let mut cells: [Vec<u32>; 5] = Default::default();
+    let mut cells: [Vec<u32>; 5] = columns(h);
     for r in 0..rows.len() {
         let row = rows.row(r);
         let slot = row.pc as usize / 2;
@@ -1728,14 +1772,14 @@ fn mem_subword(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>,
         .ok_or("the program has no MEM_SUBWORD table")?;
     let h = src.height;
 
-    let mut decoded: [Vec<u32>; 6] = Default::default();
-    let mut kinds: [Vec<u32>; 6] = Default::default();
+    let mut decoded: [Vec<u32>; 6] = columns(h);
+    let mut kinds: [Vec<u32>; 6] = columns(h);
     // wrap word_index word_index_hi bit0 bit1 p pcopow wph p_ram word
     // high high_hi high_scaled high_scaled_hi sub sub_scaled sub_scaled_hi
     // low low_hi low_scaled low_scaled_hi
     // src_sub src_sub_scaled src_sub_scaled_hi src_high src_high_hi
     // sign_in sign se rd_hi, then rd_selected.
-    let mut cells: [Vec<u32>; 31] = Default::default();
+    let mut cells: [Vec<u32>; 31] = columns(h);
     for r in 0..rows.len() {
         let row = rows.row(r);
         let slot = row.pc as usize / 2;
@@ -1932,12 +1976,12 @@ fn atomics(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         .ok_or("the program has no ATOMICS table")?;
     let h = src.height;
 
-    let mut decoded: [Vec<u32>; 5] = Default::default();
-    let mut kinds: [Vec<u32>; 11] = Default::default();
+    let mut decoded: [Vec<u32>; 5] = columns(h);
+    let mut kinds: [Vec<u32>; 11] = columns(h);
     // word_index word_index_hi sum sum_hi add_wrap f_bitwise
     // old_hi old_sign src_hi src_sign lt cmp_gap cmp_gap_hi lo, then rd_selected.
-    let mut cells: [Vec<u32>; 15] = Default::default();
-    let mut bytes: [Vec<u32>; 12] = Default::default();
+    let mut cells: [Vec<u32>; 15] = columns(h);
+    let mut bytes: [Vec<u32>; 12] = columns(h);
     for r in 0..rows.len() {
         let row = rows.row(r);
         let slot = row.pc as usize / 2;
@@ -1969,9 +2013,7 @@ fn atomics(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         };
         let lo = if lt { old } else { b };
         let gap = old.wrapping_sub(b);
-        let and: Vec<u32> = (0..4)
-            .map(|j| (old >> (8 * j)) & 0xff & (b >> (8 * j)))
-            .collect();
+        let and: [u32; 4] = core::array::from_fn(|j| (old >> (8 * j)) & 0xff & (b >> (8 * j)));
         let accumulator: u32 = (0..4).map(|j| and[j] << (8 * j)).sum();
         let new = match bit {
             at::LR_W => old,
