@@ -12,7 +12,8 @@ reference vectors (§7), and a generator outside the workspace is a reference or
 cargo run --release -p bench [-- <routine>...]   every routine, or those named; --list lists them
 ```
 
-The routines time one component each, over their own data: `fr-arith` (`Fr` against `ark-ff`),
+The routines time one component each, over their own data: `field-arith` (`Fp` and `Fp2` against
+`ark-ff`),
 `poly-bind`, `zerocheck-prove`, `zerocheck-verify` and `gkr-prove`. Their numbers are
 machine-dependent and internal.
 
@@ -160,7 +161,7 @@ cargo run --release -p verifier -- block <verifying-key> <identity-hex> <public-
 ```
 
 The key is loaded by `verifier::load_verifying_key` ([proof.md](spec/proof.md) §7) and its
-identity must equal `<identity-hex>`, 64 lowercase hex digits of its canonical bytes from a
+identity must equal `<identity-hex>`, 128 lowercase hex digits of its 64 canonical bytes from a
 channel the prover does not control: never the key, the proof or an archive's `.identity`. The
 first form verifies each `ShardProof` file with `verify_shard` and requires the files to be the
 statement's shards, each once, in any order; the second verifies a `BlockProof` with
@@ -175,7 +176,8 @@ UNSOUND**: there is no commitment scheme ([architecture.md](architecture.md) §0
 
 | group | writes | from |
 | --- | --- | --- |
-| `field`, `poly` | `Fr` arithmetic and multilinear-polynomial vectors | arkworks' `ark-ff` and `ark-poly` |
+| `field` | `crates/field`'s BN254 `Fr` arithmetic vectors; that crate is obsolete and nothing links it | arkworks' `ark-ff` |
+| `poly` | multilinear-polynomial vectors over A64-C5's `Fp2` | `ark-poly` over arkworks' own A64-C5 field and extension |
 | `loader`, `isa` | synthetic ELFs, fib's public-I/O record; an RV32IMA corpus, words that must not decode | the pinned toolchain's `llvm-objdump` |
 | `program` | a mul-free program | hand-built |
 
@@ -230,5 +232,5 @@ only; an inverse is unique, so the output is the same. The output's `MAT_DIAG16_
 are `params.rs` value for value, without the partial rows' zero lanes, and its last vector is the
 permutation of `[0, 1, …, 15]` that `the_permutation_is_the_generators` asserts.
 
-`tools/transcript-ref` is `crates/transcript`'s oracle and goes with it (**UNFINISHED**,
-[transcript.md](spec/transcript.md)).
+`tools/transcript-ref` is the oracle of `crates/transcript`, the BN254 transcript nothing links any
+more, and goes with it.

@@ -94,7 +94,8 @@ io_digest ← t.digest()                           the rate of one more permutat
 ```
 
 The framing ([transcript.md](transcript.md) §3) parses back to exactly one ordered pair, and the
-sponge ends in `digest()`, as every digest's does. The guest never computes it. G6 absorbs it before
+sponge ends in `digest()`, as every digest's does. The guest never computes it. G6 absorbs its
+8 lanes before
 the memory challenges (G8) ([proof.md](proof.md) §2), so both strings are fixed before any
 challenge exists.
 
@@ -109,7 +110,7 @@ base claims, which share one point `u` and each name a column, the verifier take
 compares it with its own evaluation at `u` of the multilinear extension of `public_io_words(input)`
 or `public_io_words(output)`. A mismatch is `MemoryArgument`; the shard's opening is meant to
 hold the claim to the committed column. Column and string are meant to be fixed before `u` is
-drawn, so that a column other than the window passes with probability at most `12/p`.
+drawn, so that a column other than the window passes with probability at most `12/|Fp2|`.
 **UNFINISHED** ([proof.md](proof.md) §3): there is no opening and no commitment, so the claim is
 held to nothing and the column to nothing either.
 

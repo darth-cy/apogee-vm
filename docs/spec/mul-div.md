@@ -45,7 +45,7 @@ S[6..9]    the packed generic table (lookup.md §9)
 V          range19 range16
 ```
 
-The fill keeps `mx`, `my` (signed) and `r_inv`, `d_inv` (inverses) in `Fr`, every other column in
+The fill keeps `mx`, `my` (signed) and `r_inv`, `d_inv` (inverses) in `Fp`, every other column in
 `u32`.
 
 ## 3. The sign adjustments
@@ -118,10 +118,17 @@ operands as the kind reads them.
 
 On a multiply row `mx·my = rs1_adj·rs2_adj`; on a division row it is `rs2_adj·q_adj`, `q`'s pair
 and `q_sign`'s booleanity putting `q_adj` in `[−2^32, 2^32)`. Either way `|mx·my| < 2^64`, and two
-words and a boolean cover `[−2^64, 2^64)` once, so `product_rule` holds over the integers with one
+words and a boolean cover `[−2^64, 2^64)` once, so over the integers `product_rule` has one
 solution: `p_low`, `p_high` are the words of the 64-bit two's-complement product, RV32M's for each
 multiply. `product_rule` is ungated and the circuit's only product of two row values, which is what
 lets both readings share it at degree 2.
+
+**UNFINISHED: A64-C5 CHARACTERISTIC.** That interval is about `2p` wide at `p = 2^64 − 59`, so the
+field identity is not the integer one: `p_low + 2^32·p_high − 2^64·p_sign` is pinned only up to a
+multiple of `p`, and a multiply's result can be forged by one. `mul 2, 3` admits `p_low` =
+`0xFFFFFFCB`, `p_high` = `0xFFFFFFFF`, whose integer is `6 + p`. A later stage splits the product
+into limbs. The division is unaffected: §5.2's identity totals less than `2^64 − 2^32` in
+magnitude, below `p`, so it holds over the integers.
 
 ### 5.2 The division
 

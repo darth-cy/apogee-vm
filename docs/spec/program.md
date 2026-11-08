@@ -121,7 +121,7 @@ decoder lookup reads ([lookup.md](lookup.md) §10) and a commitment scheme is me
   fall-through, `pc + 2` or `pc + 4` by the slot's length, never a branch target. A register the
   form lacks is 0; `imm` is the two's complement of §4's value, 0 where the form has none, or a
   system code (§6).
-- **Every other row is padding, `Fr::MINUS_ONE` in every field** (`FamilyTable::column_poly`).
+- **Every other row is padding, `Fp::MINUS_ONE` in every field** (`FamilyTable::column_poly`).
   An all-zero row would be a claimable instruction at pc 0 with an empty mask; a live field is
   below `2^32`, so no live row is the padding row.
 - **Reach.** Derivation fails (`TableTooShort`) unless the family's own last instruction has
@@ -188,9 +188,9 @@ the second message of the identity (§8) and the first of a statement's descript
 
 ## 8. Program identity
 
-One `Fr`, `ProgramIdentity`, on the wire its canonical 32 bytes ([primitives.md](primitives.md)
-§1): the raw squeeze of a fresh transcript after these messages (`verifier_core::identity_digest`;
-tag values in [transcript.md](transcript.md) §4):
+A digest, `ProgramIdentity`, on the wire its 8 lanes' canonical bytes in order, 64 bytes
+([primitives.md](primitives.md) §1): `digest()` of a fresh transcript after these messages
+(`verifier_core::identity_digest`; tag values in [transcript.md](transcript.md) §4):
 
 | # | tag | message |
 | --- | --- | --- |

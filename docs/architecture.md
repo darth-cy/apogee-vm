@@ -47,15 +47,26 @@ $ grep -rn "UNFINISHED_" crates tools
 | `prover::streaming`, pass 1 and pass 2 | committing each shard's memory columns as it fills; opening them |
 | `checker::TamperHarness` | re-committing a tampered memory column |
 
-The field is BN254's scalar field `Fr` ([primitives.md](spec/primitives.md) §1), and stays it until a
-later stage moves it.
+The base field is A64-C5, `p = 2^64 − 59`, and every challenge is an element of its quadratic
+extension ([primitives.md](spec/primitives.md) §1).
+
+**UNFINISHED: A64-C5 CHARACTERISTIC.** Apart from the void above, three integer arguments held only
+because the field they were written for was 254 bits wide, and fail at 64: the memory argument's
+timestamps, which nothing bounds ([memory.md](spec/memory.md) §4.2), `MUL_DIV`'s product identity
+([mul-div.md](spec/mul-div.md) §5.1) and `SHIFT_BITWISE`'s left shift
+([shift-bitwise.md](spec/shift-bitwise.md) §5). A commitment scheme repairs none of them; a later
+stage reshapes those circuits. Each seam is marked:
+
+```console
+$ grep -rn "A64-C5 CHARACTERISTIC" crates
+```
 
 ## 1. What a proof states
 
 A verifier holds two things it does not take from the prover's word, one of them from a channel the
 prover does not control ([proof.md](spec/proof.md) §1, §3):
 
-- the **program identity**, one field element: a digest of the code version, the program's
+- the **program identity**, a digest of eight field elements: of the code version, the program's
   `VmConfig` — the circuit families it uses and their heights — and its entry pc
   ([program.md](spec/program.md) §8). **UNFINISHED** (§0): it is meant to commit the program's
   instruction tables and initial memory image too, and does not;
@@ -115,7 +126,8 @@ top of that, these arguments are meant to span the execution:
 | a value is in range, a sign, a byte-wise AND | LogUp channels over range tables and the generic table | [lookup.md](spec/lookup.md) |
 | the public input and the journal are the claimed bytes | the two public windows' initial and final columns, held to the bytes' multilinear extensions | [public-values.md](spec/public-values.md) §5 |
 
-Challenges come from a Poseidon2 duplex transcript ([transcript.md](spec/transcript.md)). The
+Challenges come from a Poseidon2 duplex transcript over A64-C5, each an element of its quadratic
+extension ([transcript.md](spec/transcript.md)). The
 global transcript absorbs the whole statement before the memory challenges exist, but none of a
 shard's columns (§0); each shard's transcript is seeded from its final state
 ([proof.md](spec/proof.md) §2, §4).
@@ -127,7 +139,8 @@ shard's columns (§0); each shard's transcript is seeded from its final state
 - **What a verifier must obtain itself.** The program identity. A key loads under whatever identity
   its own contents give, so a key for another program is refused only by comparing identities; the
   `verifier` CLI makes that comparison, and `host::verify` does not ([proof.md](spec/proof.md) §1).
-- **Trusted code.** Soundness is the verifier's alone: `constants`, `field`, `transcript`, `poly`,
+- **Trusted code.** Soundness is the verifier's alone: `constants`, `field-a64-c5`,
+  `transcript-a64-c5`, `poly`,
   `sumcheck`, `gkr-verify`, `verifier-core`, `verifier`, and `constraints` — the circuits are part of
   the statement, and a missing gate is a soundness bug. Computing an identity from an ELF trusts
   `loader`, `isa` and `program`. `prover`, `emulator`, `trace` and `host` are untrusted: the prover
@@ -139,7 +152,7 @@ shard's columns (§0); each shard's transcript is seeded from its final state
 
 | | |
 | --- | --- |
-| **unsound** | there is no commitment scheme (§0) |
+| **unsound** | there is no commitment scheme, and three arguments fail at A64-C5's characteristic (§0) |
 | not zero-knowledge | no blinding in GKR |
 | advice is unbound | a guest checks it against something a proof binds ([public-values.md](spec/public-values.md) §6) |
 | public values | at most 16,380 bytes each of input and journal ([public-values.md](spec/public-values.md) §9) |
@@ -157,8 +170,8 @@ own independent oracle.
 
 | layer | checked against |
 | --- | --- |
-| the field | known-answer vectors generated from arkworks' `ark-ff`, which the tests also run live |
-| multilinear polynomials | known-answer vectors generated from `ark-poly` |
+| the field and its extension | Rust's own `u128` arithmetic |
+| multilinear polynomials | `ark-poly` over arkworks' own A64-C5 field and its extension: known-answer vectors it generates, and live |
 | Poseidon2 and the transcript | the generator's own Poseidon2 in Sage ([tools.md](tools.md) §8); spongefish's duplex, transcribed |
 | the decoder | every 32-bit word of the instruction space against counts from the ISA; `llvm-objdump` over the guests, built from source |
 | circuits as data | `checker`: the circuit laws, the lookup rules and the padding contract re-implemented without `constraints`' code, sharing only the gate kernel ([circuits.md](spec/circuits.md) §3) |

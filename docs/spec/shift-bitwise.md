@@ -204,13 +204,17 @@ constrains it.
   `ShiftPowers` row it keys gives `pow = 2^amount`. Without `high`'s pair, `sll` by `rs2 = 4` can
   shift by 8, at `high = −1/8`.
 - **A left shift**: `shift_prod = rs1·2^s < 2^63`, and `sel + 2^32·ovf`, both words, is its unique
-  split, so `sel = (rs1·2^s) mod 2^32`.
+  split over the integers, so `sel = (rs1·2^s) mod 2^32`. **UNFINISHED: A64-C5 CHARACTERISTIC.**
+  Two words reach `2^64 > p = 2^64 − 59`, so in the field a product below 59 has a second split,
+  `sel + 2^32·ovf = shift_prod + p`: `slli` of 1 by 0 admits `sel = 0xFFFFFFC6`. A later stage
+  bounds `ovf` below `2^31`.
 - **A right shift**: `se` is `rs1`'s bit 31 on `sra` and `srai` and 0 otherwise, so `se_rule` alone
-  keeps an `srai` from carrying `srli`'s answer. Every term of the floor division is below `2^64` in
-  magnitude, so `residue` is the integer `(rs1 − 2^32·se) − (sel − 2^32·se)·2^s`, and `scaled`'s
-  pair puts it in `[0, 2^s)`: `sel − 2^32·se` is the floor of `(rs1 − 2^32·se)/2^s`. `residue`'s
-  own pair, which `check_copowers` requires, bounds it without appeal to `sel`'s, the scaled pair
-  alone saying nothing of a non-integer: `2^−28` passes it at `s = 3`.
+  keeps an `srai` from carrying `srli`'s answer. The floor division's terms total less than
+  `2^63 + 2^33` in magnitude, below `p`, so `residue` is the integer
+  `(rs1 − 2^32·se) − (sel − 2^32·se)·2^s`, and `scaled`'s pair puts it in `[0, 2^s)`:
+  `sel − 2^32·se` is the floor of `(rs1 − 2^32·se)/2^s`. `residue`'s own pair, which
+  `check_copowers` requires, bounds it without appeal to `sel`'s, the scaled pair alone saying
+  nothing of a non-integer: `2^−28` passes it at `s = 3`.
 - **A bitwise result**: each `byte_a<j>` is below 256, so its lookup matches an AND row (§3.2);
   with `rs1` and `src2` words, both decompositions are the unique byte splits and §4.4's identity
   holds.
