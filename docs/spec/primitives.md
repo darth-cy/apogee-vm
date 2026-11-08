@@ -25,14 +25,17 @@ Two types, never mixed implicitly:
   representative below `p`, so equal values are equal words. `from_u64` reduces the 59 words at
   and above `p`; since `2^64 ≡ 59`, `from_u128` reduces any `x < 2^128`, a product or a lane of a
   linear layer, by folding its high word down twice, which leaves less than `2^64 + 3481 < 2p`, and
-  subtracting `p` at most once. `Fp::inverse` is `x^(p−2)`, `None` at 0.
+  subtracting `p` at most once. `Fp::inverse` is `x^(p−2)` by a fixed addition chain, 63
+  squarings and 9 products, `None` at 0.
 - **`Fp2`**, `F_p[x]/(x^2 − 2)`, the **challenge field**: every transcript challenge and every
   value a challenge reaches — the GKR layers above the base, every claim, round and output, the
   memory roots. `p ≡ 5 (mod 8)` makes 2 a non-square, so `x^2 − 2` is irreducible and this is a
   field of `p^2 ≈ 2^128` elements. An element `c0 + c1·x` multiplies as
-  `(a0·b0 + 2·a1·b1) + (a0·b1 + a1·b0)·x`; `Fp2::inverse` is `(c0 − c1·x)/(c0^2 − 2·c1^2)`, the
-  norm lying in `Fp`. `From<Fp>` is the embedding, and `Fp2` with an `Fp` on either side is the
-  embedding's arithmetic in two base products where a full product takes four.
+  `(a0·b0 + 2·a1·b1) + (a0·b1 + a1·b0)·x`, each coordinate's products summed in 128 bits, a carry
+  folding back as `2^128 ≡ 3481`, and reduced once; `Fp2::inverse` is
+  `(c0 − c1·x)/(c0^2 − 2·c1^2)`, the norm lying in `Fp`. `From<Fp>` is the embedding, and `Fp2`
+  with an `Fp` on either side is the embedding's arithmetic in two base products where a full
+  product takes four.
 
 | byte form | | used in |
 | --- | --- | --- |

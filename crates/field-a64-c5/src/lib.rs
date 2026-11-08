@@ -32,13 +32,15 @@ impl Fp {
         Fp(if x >= A64_C5 { x - A64_C5 } else { x })
     }
 
-    /// `x mod p` for any `x < 2^128`. Two folds by `2^64 ≡ 59` leave
-    /// `x < 2^64 + 3481 < 2p`, so `p` is then subtracted at most once.
+    /// `x mod p` for any `x < 2^128`, folding the high word down by `2^64 ≡ 59`
+    /// twice. The first fold leaves `x < 60·2^64`; the second adds at most 3481
+    /// in 64 bits, so its carry, one more `2^64 ≡ 59`, lands on a sum below
+    /// 3481, and `p` is then subtracted at most once.
     #[inline]
     pub const fn from_u128(x: u128) -> Fp {
         let x = (x >> 64) * 59 + (x as u64 as u128);
-        let x = (x >> 64) * 59 + (x as u64 as u128);
-        Fp((if x >= P { x - P } else { x }) as u64)
+        let (r, carry) = (x as u64).overflowing_add((x >> 64) as u64 * 59);
+        Fp::from_u64(r + 59 * carry as u64)
     }
 
     /// `x`, if it is canonical.
@@ -66,20 +68,26 @@ impl Fp {
         Fp::from_canonical(u64::from_le_bytes(*bytes))
     }
 
-    /// `self^(p − 2)` by Fermat; `None` for zero.
+    /// `self^(p − 2)` by Fermat; `None` for zero. `p − 2 = (2^58 − 1)·2^6 + 3`,
+    /// and with `t_k = self^(2^k − 1)`, `t_(j+k) = t_j^(2^k)·t_k`: the shortest
+    /// chain to 58, through 1, 2, 3, 6, 7, 14, 28 and 29, reaches `t_58` in 57
+    /// squarings and 8 products, and 6 squarings and `t_2` finish, 63 and 9
+    /// where the bit-by-bit loop takes 64 and 60.
     pub fn inverse(self) -> Option<Fp> {
         if self == Fp::ZERO {
             return None;
         }
-        let (mut base, mut e, mut acc) = (self, A64_C5 - 2, Fp::ONE);
-        while e > 0 {
-            if e & 1 == 1 {
-                acc *= base;
-            }
-            base *= base;
-            e >>= 1;
-        }
-        Some(acc)
+        let sq = |x: Fp, n: u32| (0..n).fold(x, |x, _| x * x);
+        let x = self;
+        let t2 = sq(x, 1) * x;
+        let t3 = sq(t2, 1) * x;
+        let t6 = sq(t3, 3) * t3;
+        let t7 = sq(t6, 1) * x;
+        let t14 = sq(t7, 7) * t7;
+        let t28 = sq(t14, 14) * t14;
+        let t29 = sq(t28, 1) * x;
+        let t58 = sq(t29, 29) * t29;
+        Some(sq(t58, 6) * t2)
     }
 }
 
@@ -216,17 +224,30 @@ impl Neg for Fp2 {
 impl Mul for Fp2 {
     type Output = Fp2;
 
-    /// `(a0 + a1·x)(b0 + b1·x) = (a0·b0 + 2·a1·b1) + (a0·b1 + a1·b0)·x`. With
-    /// `a1·b1` reduced first, `a0·b0 + 2·(a1·b1 mod p) ≤ p^2 − 1 < 2^128`.
+    /// `(a0 + a1·x)(b0 + b1·x) = (a0·b0 + 2·a1·b1) + (a0·b1 + a1·b0)·x`, each
+    /// coordinate summed in 128 bits by [`wide_add`] and reduced once: two
+    /// reductions where reducing each product takes four. Karatsuba's three
+    /// products would be slower: on a one-word field a product is one
+    /// instruction pair, and the sums and differences Karatsuba trades the
+    /// fourth for are modular operations of their own.
     #[inline]
     fn mul(self, rhs: Fp2) -> Fp2 {
         let wide = |a: Fp, b: Fp| a.0 as u128 * b.0 as u128;
-        let t = Fp::from_u128(wide(self.c1, rhs.c1)).0 as u128;
+        let t = wide(self.c1, rhs.c1);
         Fp2 {
-            c0: Fp::from_u128(wide(self.c0, rhs.c0) + 2 * t),
-            c1: Fp::from_u128(wide(self.c0, rhs.c1)) + Fp::from_u128(wide(self.c1, rhs.c0)),
+            c0: Fp::from_u128(wide_add(wide_add(wide(self.c0, rhs.c0), t), t)),
+            c1: Fp::from_u128(wide_add(wide(self.c0, rhs.c1), wide(self.c1, rhs.c0))),
         }
     }
+}
+
+/// `x + y`, as a `u128` equal to it mod `p`: a carry out of 128 bits is
+/// `2^128 ≡ 59^2 = 3481`, and adding 3481 back cannot carry again while one of
+/// the two is a product of canonical elements, at most `(p − 1)^2`.
+#[inline]
+const fn wide_add(x: u128, y: u128) -> u128 {
+    let (s, carry) = x.overflowing_add(y);
+    s + 3481 * carry as u128
 }
 
 // A base element on the right, as the embedding would give it: two base
