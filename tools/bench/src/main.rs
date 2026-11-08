@@ -14,7 +14,7 @@
 //!
 //! Numbers are internal only. Machine-dependent; make no public claims.
 
-mod fr_arith;
+mod field_arith;
 mod gkr_prove;
 mod poly_bind;
 mod square;
@@ -26,9 +26,9 @@ mod zerocheck_verify;
 /// The order here is the order a bare `cargo run` runs them in.
 const ROUTINES: [(&str, &str, fn()); 5] = [
     (
-        "fr-arith",
-        "Fr mul, square, inverse and batch inverse against ark-ff",
-        fr_arith::run,
+        "field-arith",
+        "Fp mul, Fp2 mul, Fp2·Fp and Fp2 inverse against ark-ff",
+        field_arith::run,
     ),
     (
         "poly-bind",

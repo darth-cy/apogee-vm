@@ -28,7 +28,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use constants::{challenge_slot, guest_memory, lookup_channel, memory as mem};
-use field::Fr;
+use field_a64_c5::Fp;
 
 use crate::{Coeff, GateDef, LookupExpr, PolyAddress};
 
@@ -106,11 +106,11 @@ pub const BASE_ROOM_BITS: usize = 31;
 // ---------------------------------------------------------------------------
 
 pub(crate) fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 pub(crate) fn neg(v: u64) -> Coeff {
-    Coeff::Literal(-Fr::from_u64(v))
+    Coeff::Literal(-Fp::from_u64(v))
 }
 
 fn slot(s: u32) -> Coeff {
@@ -148,9 +148,9 @@ pub(crate) fn linear(terms: Vec<(Coeff, PolyAddress)>) -> GateDef {
 }
 
 /// `2^n` as a field element, for an `n` a `u64` literal cannot hold.
-pub(crate) fn pow2(n: u32) -> Fr {
-    let mut out = Fr::ONE;
-    let two = Fr::from_u64(2);
+pub(crate) fn pow2(n: u32) -> Fp {
+    let mut out = Fp::ONE;
+    let two = Fp::from_u64(2);
     for _ in 0..n {
         out *= two;
     }
@@ -342,7 +342,7 @@ pub(crate) fn bound32(
 /// which is `2^bits - 1` exactly.
 ///
 /// **The scaled obligation alone bounds nothing.** `2^{16-r}` is a unit in
-/// `Fr`, so an unbounded `x` sweeps a coset of which almost no member is a
+/// `Fp`, so an unbounded `x` sweeps a coset of which almost no member is a
 /// small integer, and the range check sees nothing wrong. It is the top
 /// chunk's own direct obligation that establishes the premise, which is why
 /// `lookup::check_copowers` requires the pair under the **same** selector, and
@@ -454,6 +454,9 @@ pub(crate) fn frame_gates_range16(
 /// is what exempts it. There is **no** `gap_w{j}` gate — the obligations are
 /// the bound and the decomposition at once, exactly as `memory::gap_lookups`
 /// has it for an execution family.
+///
+/// **UNFINISHED: A64-C5 CHARACTERISTIC**, as `memory::gap_lookups`: nothing
+/// bounds `cycle`, so the gap makes no timestamp an integer.
 pub(crate) fn gap_lookups_range16(
     words: usize,
     chunk: &dyn Fn(usize, usize) -> PolyAddress,
@@ -467,7 +470,7 @@ pub(crate) fn gap_lookups_range16(
             &chunks,
             mem::TS_BITS,
             LIVE,
-            Coeff::Literal(Fr::from_u64(constants::delegation::FRAME_DELTA) - Fr::from_u64(1)),
+            Coeff::Literal(Fp::from_u64(constants::delegation::FRAME_DELTA) - Fp::from_u64(1)),
         ));
     }
     out

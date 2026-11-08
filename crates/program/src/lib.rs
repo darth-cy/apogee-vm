@@ -18,7 +18,7 @@
 //! base to be read. A live row holds the instruction at that pc in the fields
 //! of the family's lookup tuple — a subset of [`ROW_FIELDS`], always starting
 //! with `pc` and `next_pc`. Every other row is padding, and padding is
-//! `Fr::MINUS_ONE` in every field: never zero, because pc 0 is a valid pc and
+//! `Fp::MINUS_ONE` in every field: never zero, because pc 0 is a valid pc and
 //! an all-zero row would be claimable. Storage is column-major, each column in
 //! the narrowest backing its live values fit beside a one-bit liveness column;
 //! `MINUS_ONE` appears only when a column is exported as a polynomial, the form
@@ -33,7 +33,7 @@ use constants::extra_mask::{
     shift_bitwise as sb, system_code,
 };
 use constants::{delegation, family, guest_memory};
-use field::Fr;
+use field_a64_c5::Fp;
 use isa::{decode, Instr};
 use loader::{ProgramImage, Slot};
 use poly::{MultilinearPoly, PolyBacking};
@@ -505,20 +505,20 @@ impl FamilyTable {
     }
 
     /// Column `column` as the polynomial a circuit reads: `height`
-    /// evaluations, the stored value on a live row and `Fr::MINUS_ONE` on
+    /// evaluations, the stored value on a live row and `Fp::MINUS_ONE` on
     /// every other.
     pub fn column_poly(&self, column: usize) -> MultilinearPoly {
         let values = &self.columns[column].1;
-        let table: Vec<Fr> = (0..self.height as usize)
+        let table: Vec<Fp> = (0..self.height as usize)
             .map(|row| {
                 if self.is_live(row) {
-                    Fr::from_u64(read(values, row) as u64)
+                    Fp::from_u64(read(values, row) as u64)
                 } else {
-                    Fr::MINUS_ONE
+                    Fp::MINUS_ONE
                 }
             })
             .collect();
-        MultilinearPoly::new(PolyBacking::Fr(table))
+        MultilinearPoly::new(PolyBacking::Fp(table))
     }
 }
 
@@ -529,7 +529,9 @@ fn read(backing: &PolyBacking, i: usize) -> u32 {
         PolyBacking::U8(v) => v[i] as u32,
         PolyBacking::U16(v) => v[i] as u32,
         PolyBacking::U32(v) => v[i],
-        PolyBacking::Fr(_) => unreachable!("a decoded-table column is never Fr-backed"),
+        PolyBacking::Fp(_) | PolyBacking::Fp2(_) => {
+            unreachable!("a decoded-table column is an integer column")
+        }
     }
 }
 

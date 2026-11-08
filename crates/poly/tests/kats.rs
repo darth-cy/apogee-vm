@@ -10,7 +10,7 @@
 mod common;
 
 use common::{corrupt, data_lines, field_element, index, read_vectors, vertex, Line};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use poly::{eq_eval, eq_table, MultilinearPoly, PolyBacking};
 
 const KATS_PATH: &str = "tests/vectors/poly_kats.txt";
@@ -23,25 +23,25 @@ struct Kats {
     num_vars: usize,
     /// The source table in its committed native width.
     source: Vec<u32>,
-    challenges: Vec<Fr>,
+    challenges: Vec<Fp2>,
     /// `bind[k - 1]` is the table after binding `challenges[..k]`.
-    bind: Vec<Vec<Fr>>,
-    points: Vec<Vec<Fr>>,
-    results: Vec<Fr>,
+    bind: Vec<Vec<Fp2>>,
+    points: Vec<Vec<Fp2>>,
+    results: Vec<Fp2>,
     /// `eq[k]` is `eq_table(challenges[..k])`.
-    eq: Vec<Vec<Fr>>,
+    eq: Vec<Vec<Fp2>>,
 }
 
 /// Start or continue the block `k` of `blocks`, where `first` is the block's
 /// lowest key. Blocks and the entries inside them must both arrive in order,
 /// so a dropped or reordered line is a parse error rather than silent thinning.
 fn block<'a>(
-    blocks: &'a mut Vec<Vec<Fr>>,
+    blocks: &'a mut Vec<Vec<Fp2>>,
     first: usize,
     k: usize,
     i: usize,
     line: &Line,
-) -> Result<&'a mut Vec<Fr>, String> {
+) -> Result<&'a mut Vec<Fp2>, String> {
     if k < first {
         return Err(format!("line {}: block {k} is below {first}", line.no));
     }
@@ -68,11 +68,11 @@ fn parse(text: &str) -> Result<Kats, String> {
     let mut backing = String::new();
     let mut num_vars = 0usize;
     let mut source: Vec<u32> = Vec::new();
-    let mut challenges: Vec<Fr> = Vec::new();
-    let mut bind: Vec<Vec<Fr>> = Vec::new();
-    let mut points: Vec<Vec<Fr>> = Vec::new();
-    let mut results: Vec<Fr> = Vec::new();
-    let mut eq: Vec<Vec<Fr>> = Vec::new();
+    let mut challenges: Vec<Fp2> = Vec::new();
+    let mut bind: Vec<Vec<Fp2>> = Vec::new();
+    let mut points: Vec<Vec<Fp2>> = Vec::new();
+    let mut results: Vec<Fp2> = Vec::new();
+    let mut eq: Vec<Vec<Fp2>> = Vec::new();
 
     for line in data_lines(text) {
         let n = line.no;
@@ -223,12 +223,12 @@ fn replay_bind_chain(k: &Kats) -> Result<(), String> {
             ));
         }
         match p.backing() {
-            PolyBacking::Fr(values) => {
+            PolyBacking::Fp2(values) => {
                 if values != expected {
                     return Err(format!("bind step {} disagrees with the fixture", step + 1));
                 }
             }
-            _ => return Err("bind must leave an Fr backing".to_string()),
+            _ => return Err("bind must leave an Fp2 backing".to_string()),
         }
     }
     Ok(())
@@ -275,6 +275,13 @@ fn the_committed_fixture_covers_what_it_claims() {
     assert!(
         k.source.iter().any(|v| *v > u32::MAX / 2),
         "a source table that fitted in a byte would not exercise u32"
+    );
+    assert!(
+        k.challenges
+            .iter()
+            .chain(k.points.iter().flatten())
+            .all(|x| x.c1 != Fp::ZERO),
+        "a challenge or point in the base field would not exercise Fp2"
     );
 }
 

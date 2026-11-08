@@ -24,7 +24,7 @@ use constraints::memory::{
     zero_window_artifact, CYCLE,
 };
 use constraints::CircuitArtifact;
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{
     boundary_factors, forward, reconciles, self_check, window_challenges, BaseLayer,
     ExternalChallenges, LayerValues,
@@ -56,14 +56,21 @@ fn forwarded(a: &CircuitArtifact, seed: u64) -> LayerValues {
     let rows = 1usize << a.trace_vars;
     let mut memory = ExternalChallenges::new();
     for slot in MEM_GAMMA..=MEM_ALPHA_VAL {
-        memory.insert(slot, Fr::from_u64(rng.next_u64()));
+        let c0 = Fp::from_u64(rng.next_u64());
+        memory.insert(
+            slot,
+            Fp2 {
+                c0,
+                c1: Fp::from_u64(rng.next_u64()),
+            },
+        );
     }
     let columns = a
         .committed()
         .into_iter()
         .map(|address| {
-            let column = (0..rows).map(|_| Fr::from_u64(rng.next_u64())).collect();
-            (address, MultilinearPoly::new(PolyBacking::Fr(column)))
+            let column = (0..rows).map(|_| Fp::from_u64(rng.next_u64())).collect();
+            (address, MultilinearPoly::new(PolyBacking::Fp(column)))
         })
         .collect();
     let challenges = window_challenges(&memory, 9, a.trace_vars);
@@ -103,7 +110,7 @@ fn memory_roots_agrees_with_a_forwarded_artifact() {
         let values = forwarded(&a, 0x5714_3201);
         let top = values.layers.last().expect("a top layer");
         let product =
-            |j: usize| (0..16).fold(Fr::ONE, |acc, y| acc * values.layers[k - 1][j].get(y));
+            |j: usize| (0..16).fold(Fp2::ONE, |acc, y| acc * values.layers[k - 1][j].get(y));
         assert_eq!(
             memory_roots(&a, &values),
             Ok((top[0].get(0), top[1].get(0))),
@@ -127,9 +134,9 @@ fn memory_roots_refuses_a_changed_row_under_a_root() {
         for j in 0..2 {
             let mut values = forwarded(&a, 0x5714_3202);
             let column = &values.layers[k - 1][j];
-            let mut rows: Vec<Fr> = (0..column.len()).map(|y| column.get(y)).collect();
-            rows[3] += Fr::ONE;
-            values.layers[k - 1][j] = MultilinearPoly::new(PolyBacking::Fr(rows));
+            let mut rows: Vec<Fp2> = (0..column.len()).map(|y| column.get(y)).collect();
+            rows[3] += Fp::ONE;
+            values.layers[k - 1][j] = MultilinearPoly::new(PolyBacking::Fp2(rows));
             let e = memory_roots(&a, &values).unwrap_err();
             assert!(
                 e.contains(&format!("layer {k}'s column {j}")),
@@ -147,7 +154,7 @@ fn memory_roots_refuses_a_changed_row_under_a_root() {
 fn memory_roots_refuses_a_layer_of_the_wrong_height_or_depth() {
     let a = zero_window_artifact(4);
     let mut values = forwarded(&a, 0x5714_3204);
-    let top: Vec<Fr> = values
+    let top: Vec<Fp2> = values
         .layers
         .last()
         .expect("a top")
@@ -156,7 +163,7 @@ fn memory_roots_refuses_a_layer_of_the_wrong_height_or_depth() {
         .collect();
     values.layers[0] = top
         .iter()
-        .map(|root| MultilinearPoly::new(PolyBacking::Fr(vec![*root])))
+        .map(|root| MultilinearPoly::new(PolyBacking::Fp2(vec![*root])))
         .collect();
     assert_eq!(
         memory_roots(&a, &values),
@@ -341,7 +348,7 @@ fn a_frame_per_family_in_any_order_reconciles() {
             let shard = frame_shard(&t.log, trace.family, &cycles, height, &memory);
             let column = shard.base.get(CYCLE).expect("the cycle column");
             for (i, &cycle) in cycles.iter().enumerate() {
-                assert_eq!(column.get(i), Fr::from_u64(cycle), "{name}: row {i}");
+                assert_eq!(column.get_base(i), Fp::from_u64(cycle), "{name}: row {i}");
             }
             shards.push(shard);
         }

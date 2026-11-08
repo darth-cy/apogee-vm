@@ -34,7 +34,7 @@ use alloc::vec::Vec;
 
 use constants::extra_mask::mem_subword as kind;
 use constants::{family, generic_table, lookup_channel};
-use field::Fr;
+use field_a64_c5::Fp;
 
 use crate::lookup::{check_copowers, ChannelSpec};
 use crate::memory::{
@@ -195,11 +195,11 @@ pub const LEGAL_MASKS: [u32; 6] = [
 ];
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn neg(v: u64) -> Coeff {
-    Coeff::Literal(-Fr::from_u64(v))
+    Coeff::Literal(-Fp::from_u64(v))
 }
 
 /// `Σ a·x + Σ b·y·z`, constant 0.
@@ -596,7 +596,7 @@ fn family_spec() -> FamilySpec {
     enforcing.push(("rs1_value_masked".into(), value_masked(SLOT_RS1)));
     enforcing.push(("rs2_value_masked".into(), value_masked(SLOT_RS2)));
 
-    // addr = 4·word_index + 2·bit1 + bit0, over ℤ and not over Fr: the range
+    // addr = 4·word_index + 2·bit1 + bit0, over ℤ and not over Fp: the range
     // check on `word_index` is what makes the split genuinely base-4
     // (`docs/spec/memory-ops.md` §2).
     enforcing.push((
@@ -604,7 +604,7 @@ fn family_spec() -> FamilySpec {
         linear(vec![
             (lit(1), v_rs1),
             (lit(1), IMM),
-            (Coeff::Literal(-Fr::from_u64(1 << 32)), WRAP),
+            (Coeff::Literal(-Fp::from_u64(1 << 32)), WRAP),
             (neg(4), WORD_INDEX),
             (neg(2), BIT1),
             (neg(1), BIT0),

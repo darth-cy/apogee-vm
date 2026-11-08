@@ -23,7 +23,7 @@ use constraints::{
     CachedEntry, CircuitArtifact, Coeff, GateDef, LayerSpec, PolyAddress, ProducingEntry, Relation,
     ScratchSlot,
 };
-use field::Fr;
+use field_a64_c5::Fp;
 
 type Law = fn(&CircuitArtifact) -> Result<(), String>;
 
@@ -118,7 +118,7 @@ fn halving_list_zero(a: &mut CircuitArtifact) {
         address: inner(2, 0),
     }];
     a.outputs = vec![inner(2, 0)];
-    a.padding.row = vec![Fr::ZERO];
+    a.padding.row = vec![Fp::ZERO];
 }
 
 /// Mutants valid for both compilations.

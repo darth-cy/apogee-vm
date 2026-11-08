@@ -23,7 +23,7 @@ use constraints::{
     ProducingEntry, Relation, ScratchSlot, VirtualKind, COEFFICIENT_ENCODING_CANONICAL_LE,
     FORMAT_VERSION,
 };
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{
     self_check, virtual_at_point, virtual_at_row, ExternalChallenges, GkrError, SelfCheckError,
 };
@@ -32,11 +32,12 @@ use test_support::Rng;
 
 const LIVE: VirtualKind = VirtualKind::RamLive;
 
-/// A pseudo-random field element below `2^252`.
-fn fr(rng: &mut Rng) -> Fr {
-    let mut b = rng.next_le32();
-    b[31] &= 0x0f;
-    Fr::from_bytes(&b).expect("below 2^252")
+/// A pseudo-random point coordinate, an `Fp2` element.
+fn fr(rng: &mut Rng) -> Fp2 {
+    Fp2 {
+        c0: Fp::from_u64(rng.next_u64()),
+        c1: Fp::from_u64(rng.next_u64()),
+    }
 }
 
 /// For `n` in {14, 15, 16, 18}: the table written from its definition — 1 at
@@ -48,30 +49,30 @@ fn fr(rng: &mut Rng) -> Fr {
 fn the_closed_form_is_the_extension_of_the_table() {
     let mut rng = Rng::new(0x5714_0001);
     for n in [14usize, 15, 16, 18] {
-        let table: Vec<Fr> = (0..1usize << n)
+        let table: Vec<Fp> = (0..1usize << n)
             .map(|y| {
                 if y >= 1 << RAM_LIVE_BIT {
-                    Fr::ONE
+                    Fp::ONE
                 } else {
-                    Fr::ZERO
+                    Fp::ZERO
                 }
             })
             .collect();
-        let mut bits = vec![Fr::ZERO; n];
+        let mut bits = vec![Fp2::ZERO; n];
         for (y, value) in table.iter().enumerate() {
             for (j, bit) in bits.iter_mut().enumerate() {
-                *bit = Fr::from_u64(((y >> j) & 1) as u64);
+                *bit = Fp::from_u64(((y >> j) & 1) as u64).into();
             }
             assert_eq!(virtual_at_row(LIVE, y), *value, "n = {n}, row {y}");
             assert_eq!(
                 virtual_at_point(LIVE, &bits),
-                *value,
+                (*value).into(),
                 "n = {n}, cube point {y}"
             );
         }
-        let extension = MultilinearPoly::new(PolyBacking::Fr(table));
+        let extension = MultilinearPoly::new(PolyBacking::Fp(table));
         for trial in 0..8 {
-            let point: Vec<Fr> = (0..n).map(|_| fr(&mut rng)).collect();
+            let point: Vec<Fp2> = (0..n).map(|_| fr(&mut rng)).collect();
             assert_eq!(
                 virtual_at_point(LIVE, &point),
                 extension.evaluate(&point),
@@ -96,9 +97,9 @@ fn ram_live_circuit() -> CircuitArtifact {
         mask: live,
     };
     let below_ram = GateDef::Quadratic {
-        constant: Coeff::Literal(Fr::ZERO),
-        linear: vec![(Coeff::Literal(Fr::ONE), a)],
-        products: vec![(Coeff::Literal(Fr::MINUS_ONE), a, live)],
+        constant: Coeff::Literal(Fp::ZERO),
+        linear: vec![(Coeff::Literal(Fp::ONE), a)],
+        products: vec![(Coeff::Literal(Fp::MINUS_ONE), a, live)],
     };
     let mut layers = vec![LayerSpec {
         halving: false,
@@ -170,7 +171,7 @@ fn ram_live_circuit() -> CircuitArtifact {
         scratch,
         outputs: vec![inner(VARS + 1, 0)],
         padding: Padding {
-            row: vec![Fr::ZERO],
+            row: vec![Fp::ZERO],
             zero_row_valid: true,
         },
     };
@@ -198,27 +199,31 @@ fn a_circuit_reading_ram_live_proves_and_rejects_a_violation_below_the_boundary(
     let artifact = ram_live_circuit();
     let boundary = 1usize << RAM_LIVE_BIT;
     let mut rng = Rng::new(0x5714_0002);
-    let mut a: Vec<Fr> = (0..1usize << VARS)
+    let mut a: Vec<Fp> = (0..1usize << VARS)
         .map(|y| {
             if y < boundary {
-                Fr::ZERO
+                Fp::ZERO
             } else {
-                Fr::from_u64(rng.next_u64() | 1)
+                Fp::from_u64(rng.next_u64() | 1)
             }
         })
         .collect();
-    a[boundary] = Fr::from_u64(7);
+    a[boundary] = Fp::from_u64(7);
     // The circuit names no challenge slot.
     let none = ExternalChallenges::new();
 
     let base = fr_base(&artifact, vec![a.clone()]);
     let (values, _, result) = honest(&artifact, &base);
     assert_eq!(self_check(&artifact, &values, &none), Ok(()));
-    let root = a[boundary..].iter().fold(Fr::ONE, |acc, v| acc * *v);
-    assert_eq!(values.layers[VARS as usize][0].get(0), root, "the root");
+    let root = a[boundary..].iter().fold(Fp::ONE, |acc, v| acc * *v);
+    assert_eq!(
+        values.layers[VARS as usize][0].get(0),
+        root.into(),
+        "the root"
+    );
     discharge(&base, &result.expect("the honest run verifies")).expect("and discharges");
 
-    a[boundary - 1] = Fr::ONE;
+    a[boundary - 1] = Fp::ONE;
     let base = fr_base(&artifact, vec![a]);
     let (values, _, result) = honest(&artifact, &base);
     assert_eq!(

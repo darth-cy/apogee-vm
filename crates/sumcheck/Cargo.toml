@@ -6,9 +6,9 @@ publish.workspace = true
 
 [dependencies]
 constants.workspace = true
-field.workspace = true
+field-a64-c5.workspace = true
 poly.workspace = true
-transcript.workspace = true
+transcript-a64-c5.workspace = true
 
 [dev-dependencies]
 test-support.workspace = true

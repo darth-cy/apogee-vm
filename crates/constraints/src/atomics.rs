@@ -35,7 +35,7 @@ use alloc::vec::Vec;
 
 use constants::extra_mask::atomics as kind;
 use constants::{family, generic_table, lookup_channel};
-use field::Fr;
+use field_a64_c5::Fp;
 
 use crate::gadgets::{comparison, Comparison};
 use crate::lookup::{check_copowers, ChannelSpec};
@@ -176,11 +176,11 @@ pub const LEGAL_MASKS: [u32; 11] = [
 ];
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn neg(v: u64) -> Coeff {
-    Coeff::Literal(-Fr::from_u64(v))
+    Coeff::Literal(-Fp::from_u64(v))
 }
 
 /// `Σ a·x + Σ b·y·z`, constant 0.
@@ -488,7 +488,7 @@ fn family_spec() -> FamilySpec {
             (lit(1), old),
             (lit(1), src),
             (neg(1), SUM),
-            (Coeff::Literal(-Fr::from_u64(1 << 32)), ADD_WRAP),
+            (Coeff::Literal(-Fp::from_u64(1 << 32)), ADD_WRAP),
         ]),
     ));
     // f_bitwise selects the four AND lookups, so it is a column with a

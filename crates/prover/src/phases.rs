@@ -8,7 +8,7 @@ use std::time::Instant;
 use gkr::BaseLayer;
 use rayon::prelude::*;
 use trace::{plan_shards, Phase, PhaseTiming, ShardPlan, TraceArchive};
-use transcript::{Transcript, TranscriptSnapshot};
+use transcript_a64_c5::{Transcript, TranscriptSnapshot};
 use verifier_core::wire::{Read, Reader, Writer};
 use verifier_core::{read_gkr, statement_shards, write_gkr, BlockProof, PublicInputs, ShardProof};
 
@@ -21,7 +21,7 @@ use crate::{
 
 /// A transcript snapshot's fixed size under `postcard`, its wire form
 /// (`docs/spec/transcript.md` §3).
-const SNAPSHOT_BYTES: usize = 226;
+const SNAPSHOT_BYTES: usize = 130;
 
 fn write_snapshot(w: &mut Writer, s: &TranscriptSnapshot) {
     let mut buf = [0u8; SNAPSHOT_BYTES];
@@ -51,9 +51,9 @@ pub(crate) fn encode_global(g: &GlobalCommitState) -> Vec<u8> {
     w.bytes(&g.statement.to_bytes());
     write_snapshot(&mut w, &g.transcript);
     for c in &g.memory_challenges {
-        w.fr(c);
+        w.fp2(*c);
     }
-    w.fr(&g.digest);
+    w.fp2(g.digest);
     w.bytes
 }
 
@@ -61,8 +61,8 @@ pub(crate) fn decode_global(bytes: &[u8]) -> Read<GlobalCommitState> {
     let mut r = Reader::new(bytes);
     let statement = PublicInputs::from_bytes(r.bytes()?)?;
     let transcript = read_snapshot(&mut r)?;
-    let memory_challenges = [r.fr()?, r.fr()?, r.fr()?, r.fr()?];
-    let digest = r.fr()?;
+    let memory_challenges = [r.fp2()?, r.fp2()?, r.fp2()?, r.fp2()?];
+    let digest = r.fp2()?;
     r.finish()?;
     Ok(GlobalCommitState {
         statement,
@@ -81,9 +81,9 @@ fn encode_gkrs(shards: &[ShardGkr]) -> Vec<u8> {
         w.u32(s.index);
         w.u64(s.ts_window[0]);
         w.u64(s.ts_window[1]);
-        w.frs(&s.outputs);
+        w.fp2s(&s.outputs);
         write_gkr(&mut w, &s.gkr);
-        w.frs(&s.point);
+        w.fp2s(&s.point);
         write_snapshot(&mut w, &s.transcript.snapshot());
     }
     w.bytes
@@ -97,9 +97,9 @@ fn decode_gkrs(bytes: &[u8]) -> Read<Vec<ShardGkr>> {
         let family = r.u32()?;
         let index = r.u32()?;
         let ts_window = [r.u64()?, r.u64()?];
-        let outputs = r.frs()?;
+        let outputs = r.fp2s()?;
         let gkr = read_gkr(&mut r)?;
-        let point = r.frs()?;
+        let point = r.fp2s()?;
         let transcript = Transcript::restore(&read_snapshot(&mut r)?);
         out.push(ShardGkr {
             family,
@@ -374,7 +374,7 @@ pub fn finish(archive: &TraceArchive) -> Result<(PublicInputs, Vec<ShardProof>),
 #[cfg(test)]
 mod tests {
     use super::*;
-    use field::Fr;
+    use field_a64_c5::{Fp, Fp2};
     use verifier_core::BoundaryFinals;
 
     fn global() -> GlobalCommitState {
@@ -392,12 +392,12 @@ mod tests {
             memory_roots: vec![],
         };
         let mut t = Transcript::new();
-        t.append_scalar(9, Fr::from_u64(3));
+        t.append_scalar(9, Fp::from_u64(3));
         GlobalCommitState {
             statement,
             transcript: t.snapshot(),
-            memory_challenges: [1, 2, 3, 4].map(Fr::from_u64),
-            digest: Fr::from_u64(5),
+            memory_challenges: [1, 2, 3, 4].map(|x| Fp2::from(Fp::from_u64(x))),
+            digest: Fp2::from(Fp::from_u64(5)),
         }
     }
 

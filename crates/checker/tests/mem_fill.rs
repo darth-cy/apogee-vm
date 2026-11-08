@@ -15,7 +15,7 @@ use constants::{challenge_slot, family, generic_table};
 use constraints::{
     atomics, family_circuit, mem_subword, mem_word, CircuitArtifact, Coeff, GateDef, PolyAddress,
 };
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallenges};
 use poly::MultilinearPoly;
 
@@ -33,9 +33,9 @@ fn challenges(a: &CircuitArtifact) -> ExternalChallenges {
         (challenge_slot::MEM_ALPHA_TS, 17),
         (challenge_slot::MEM_ALPHA_VAL, 19),
     ] {
-        ch.insert(slot, Fr::from_u64(v));
+        ch.insert(slot, Fp::from_u64(v).into());
     }
-    insert_lookup_challenges(&mut ch, Fr::from_u64(23), Fr::from_u64(29), a);
+    insert_lookup_challenges(&mut ch, Fp::from_u64(23).into(), Fp::from_u64(29).into(), a);
     ch
 }
 
@@ -120,19 +120,19 @@ fn assert_rows_hold(
         .map(|s| s.as_str())
         .collect();
     for &row in rows {
-        let committed: Vec<Fr> = ordered.iter().map(|c| c.get(row)).collect();
-        let virtuals: Vec<Fr> = a
+        let committed: Vec<Fp> = ordered.iter().map(|c| c.get_base(row)).collect();
+        let virtuals: Vec<Fp2> = a
             .virtuals
             .iter()
-            .map(|(k, _)| virtual_at_row(*k, row))
+            .map(|(k, _)| virtual_at_row(*k, row).into())
             .collect();
-        let mut scratch = vec![Fr::ZERO; a.scratch.len()];
-        let mut lower = committed.clone();
+        let mut scratch = vec![Fp2::ZERO; a.scratch.len()];
+        let mut lower: Vec<Fp2> = committed.iter().map(|v| (*v).into()).collect();
         for k in 0..a.depth() {
             if a.layers[k].halving {
                 break;
             }
-            let v: &[Fr] = if k == 0 { &virtuals } else { &[] };
+            let v: &[Fp2] = if k == 0 { &virtuals } else { &[] };
             let values = gate_values(a, k, &lower, &[], v, &ch);
             let produced = values[..a.layers[k].producing.len()].to_vec();
             for (j, value) in produced.iter().enumerate() {
@@ -153,7 +153,7 @@ fn assert_rows_hold(
         let broken = violated_relations(a, &w, &ch);
         let out_of_range = violated_lookups(a, &w);
         if !broken.is_empty() || !out_of_range.is_empty() {
-            let mut named: BTreeMap<&str, Fr> = BTreeMap::new();
+            let mut named: BTreeMap<&str, Fp> = BTreeMap::new();
             for (name, value) in names.iter().zip(&w.committed) {
                 named.insert(name, *value);
             }
@@ -183,7 +183,7 @@ fn assert_every_scaled_column_is_bounded(a: &CircuitArtifact, what: &str) {
             continue;
         }
         let (c, x) = terms[0];
-        if c != Coeff::Literal(Fr::ONE) {
+        if c != Coeff::Literal(Fp::ONE) {
             scaled.push((x, l.selector));
         }
     }
@@ -206,13 +206,13 @@ fn live(archive: &trace::TraceArchive, family: u32) -> usize {
 }
 
 /// The value `address` holds at `row` of a filled shard.
-fn at(columns: &[(PolyAddress, MultilinearPoly)], address: PolyAddress, row: usize) -> Fr {
+fn at(columns: &[(PolyAddress, MultilinearPoly)], address: PolyAddress, row: usize) -> Fp {
     columns
         .iter()
         .find(|(a, _)| *a == address)
         .unwrap_or_else(|| panic!("no {address}"))
         .1
-        .get(row)
+        .get_base(row)
 }
 
 /// `MEM_WORD`: the fill of the guest's shard satisfies every gate and every
@@ -239,7 +239,7 @@ fn the_mem_word_fill_satisfies_every_gate_and_every_table() {
     assert_rows_hold(&a, &columns, &rows, "MEM_WORD");
     assert_every_scaled_column_is_bounded(&a, "MEM_WORD");
     assert!(
-        (0..n).any(|r| at(&columns, mem_word::WRAP, r) == Fr::ONE),
+        (0..n).any(|r| at(&columns, mem_word::WRAP, r) == Fp::ONE),
         "no MEM_WORD row of guests/mem wraps: its negative displacement is gone"
     );
 }
@@ -261,7 +261,7 @@ fn the_mem_subword_fill_satisfies_every_gate_and_every_table() {
     assert_rows_hold(&a, &columns, &rows, "MEM_SUBWORD");
     assert_every_scaled_column_is_bounded(&a, "MEM_SUBWORD");
     assert!(
-        (0..n).any(|r| at(&columns, mem_subword::WRAP, r) == Fr::ONE),
+        (0..n).any(|r| at(&columns, mem_subword::WRAP, r) == Fp::ONE),
         "no MEM_SUBWORD row of guests/mem wraps"
     );
 }

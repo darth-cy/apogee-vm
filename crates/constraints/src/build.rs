@@ -18,7 +18,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use field::Fr;
+use field_a64_c5::Fp;
 
 use crate::{
     CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, LookupExpr, Padding, PolyAddress,
@@ -27,7 +27,7 @@ use crate::{
 };
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn inner(layer: u32, offset: u32) -> PolyAddress {
@@ -323,7 +323,7 @@ pub(crate) fn assemble(
         scratch,
         outputs: written[depth as usize - 1].clone(),
         padding: Padding {
-            row: vec![Fr::ZERO; committed],
+            row: vec![Fp::ZERO; committed],
             zero_row_valid,
         },
     };

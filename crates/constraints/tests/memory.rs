@@ -26,7 +26,7 @@ use constraints::{
     LookupExpr, Padding, PolyAddress, ProducingEntry, Relation, ScratchSlot, VirtualKind,
     COEFFICIENT_ENCODING_CANONICAL_LE, FORMAT_VERSION,
 };
-use field::Fr;
+use field_a64_c5::Fp;
 use std::collections::HashSet;
 
 /// The seven execution families, ascending: every family that runs cycles and
@@ -188,7 +188,7 @@ fn every_artifact_has_two_named_roots_and_an_all_zero_padding_row() {
         assert_eq!(names, ["read_root", "write_root"], "{label}");
         assert_eq!(
             a.padding.row,
-            vec![Fr::ZERO; a.committed().len()],
+            vec![Fp::ZERO; a.committed().len()],
             "{label}"
         );
         assert!(a.padding.zero_row_valid, "{label}");
@@ -221,7 +221,7 @@ fn the_read_tuples_parts_are_at_their_named_positions() {
         };
         assert_eq!(terms.len(), 4, "{q}");
         assert_eq!(constant, slot(challenge_slot::MEM_GAMMA), "{q}");
-        let space = Coeff::Literal(Fr::from_u64(*space as u64));
+        let space = Coeff::Literal(Fp::from_u64(*space as u64));
         let parts = [
             (memory::PART_AS, space, FIELD_MASK),
             (
@@ -389,7 +389,7 @@ fn the_frame_layout_is_the_documents() {
 fn the_pad_leaves_are_the_constant_one_and_read_nothing() {
     let one = GateDef::Linear {
         terms: vec![],
-        constant: Coeff::Literal(Fr::ONE),
+        constant: Coeff::Literal(Fp::ONE),
     };
     for (id, pads) in [(family::MEM_WORD, 2), (family::ATOMICS, 3)] {
         let w = frame_queries(id).len();
@@ -441,7 +441,7 @@ fn the_pad_leaves_are_the_constant_one_and_read_nothing() {
 #[test]
 fn a_query_at_a_slot_that_is_not_its_id_keeps_its_own_space_and_delta() {
     let alpha_ts = Coeff::Challenge(challenge_slot::MEM_ALPHA_TS);
-    let lit = |v: u64| Coeff::Literal(Fr::from_u64(v));
+    let lit = |v: u64| Coeff::Literal(Fp::from_u64(v));
     let mut displaced = 0;
     for &id in &EXECUTION_FAMILIES {
         let queries = frame_queries(id);
@@ -452,7 +452,7 @@ fn a_query_at_a_slot_that_is_not_its_id_keeps_its_own_space_and_delta() {
             // The `AS` term: a literal on the mask.
             let head = vec![
                 (Coeff::Challenge(challenge_slot::MEM_GAMMA), m),
-                (Coeff::Literal(Fr::MINUS_ONE), m),
+                (Coeff::Literal(Fp::MINUS_ONE), m),
                 (lit(FRAME_SPACE[q] as u64), m),
             ];
             let space: Vec<(Coeff, PolyAddress, PolyAddress)> = Vec::new();
@@ -527,8 +527,8 @@ fn a_query_at_a_slot_that_is_not_its_id_keeps_its_own_space_and_delta() {
 /// circuit carried other ones.
 #[test]
 fn the_frame_carries_two_gap_obligations_per_query() {
-    let minus = |v: u64| Coeff::Literal(-Fr::from_u64(v));
-    let lit = |v: u64| Coeff::Literal(Fr::from_u64(v));
+    let minus = |v: u64| Coeff::Literal(-Fp::from_u64(v));
+    let lit = |v: u64| Coeff::Literal(Fp::from_u64(v));
     for &id in &EXECUTION_FAMILIES {
         let queries = frame_queries(id);
         let a = family_frame_artifact(id, 12);
@@ -539,7 +539,7 @@ fn the_frame_carries_two_gap_obligations_per_query() {
             let selector = frame(at, FIELD_MASK);
             let constant = match q {
                 PC => minus(4),
-                _ => Coeff::Literal(Fr::from_u64(FRAME_DELTA[q]) - Fr::ONE),
+                _ => Coeff::Literal(Fp::from_u64(FRAME_DELTA[q]) - Fp::ONE),
             };
             let expected = [
                 LookupExpr {
@@ -599,18 +599,18 @@ fn the_frame_carries_two_gap_obligations_per_query() {
     assert_eq!(atomics.lookups[7].name, "gap_lo_ram");
     assert_eq!(
         *constant,
-        Coeff::Literal(Fr::from_u64(FRAME_DELTA[RAM]) - Fr::ONE)
+        Coeff::Literal(Fp::from_u64(FRAME_DELTA[RAM]) - Fp::ONE)
     );
     assert_ne!(
         *constant,
-        Coeff::Literal(Fr::from_u64(FRAME_DELTA[3]) - Fr::ONE)
+        Coeff::Literal(Fp::from_u64(FRAME_DELTA[3]) - Fp::ONE)
     );
 }
 
 /// Exhaustively at reduced width: §2.4's gap encoding with
 /// `w = 5`-bit chunks over a 10-bit clock. The two obligations say
 /// `hi ∈ [0, 2^w)` and `lo = gap − 2^w·hi ∈ [0, 2^w)`, `lo` a field element, so
-/// a pair is admitted exactly when `gap`, computed in `Fr`, is one of the
+/// a pair is admitted exactly when `gap`, computed in `Fp`, is one of the
 /// `2^{2w}` field elements `lo + 2^w·hi` — which are distinct. The gap is the
 /// library's: each slot's `gap_lo_<q>` from that family's frame, evaluated with
 /// its high chunk `W[s]` at 0, at `cycle` and `read_ts`. Over the four distinct
@@ -637,7 +637,7 @@ fn the_gap_encoding_is_strict_at_reduced_width() {
     let mut admitted_gaps = HashSet::new();
     for hi in 0..1u64 << W {
         for lo in 0..1u64 << W {
-            let gap = Fr::from_u64(lo) + Fr::from_u64(1 << W) * Fr::from_u64(hi);
+            let gap = Fp::from_u64(lo) + Fp::from_u64(1 << W) * Fp::from_u64(hi);
             admitted_gaps.insert(gap.to_bytes());
         }
     }
@@ -659,7 +659,7 @@ fn the_gap_encoding_is_strict_at_reduced_width() {
             let GateDef::Linear { terms, constant } = &a.lookups[2 * at + 1].tuple[0] else {
                 panic!("gap_lo_{} is Linear", FRAME_NAMES[q]);
             };
-            let (mut step, mut sign) = (Fr::ZERO, Fr::ZERO);
+            let (mut step, mut sign) = (Fp::ZERO, Fp::ZERO);
             for (c, address) in terms {
                 match *address {
                     CYCLE => step += literal(c),
@@ -676,7 +676,7 @@ fn the_gap_encoding_is_strict_at_reduced_width() {
             for cycle in 0..clock / 4 {
                 let ts = 4 * cycle + FRAME_DELTA[q];
                 for read_ts in 0..clock {
-                    let gap = step * Fr::from_u64(cycle) + sign * Fr::from_u64(read_ts) + constant;
+                    let gap = step * Fp::from_u64(cycle) + sign * Fp::from_u64(read_ts) + constant;
                     let ok = admitted_gaps.contains(&gap.to_bytes());
                     let ordered = match q {
                         PC => read_ts + 4 <= ts,
@@ -835,14 +835,14 @@ fn a_tuple_fed_from_a_witness_column_is_refused() {
 #[test]
 fn a_product_of_a_tuple_and_a_witness_copy_two_layers_up_is_refused() {
     let circuit = |copied: PolyAddress, enforced: bool| {
-        let (a, lit1) = (PolyAddress::Memory(0), Coeff::Literal(Fr::ONE));
+        let (a, lit1) = (PolyAddress::Memory(0), Coeff::Literal(Fp::ONE));
         let tuple = GateDef::Linear {
             terms: vec![(Coeff::Challenge(challenge_slot::MEM_ALPHA_ADDR), a)],
             constant: Coeff::Challenge(challenge_slot::MEM_GAMMA),
         };
         let copy = GateDef::Linear {
             terms: vec![(lit1, copied)],
-            constant: Coeff::Literal(Fr::ZERO),
+            constant: Coeff::Literal(Fp::ZERO),
         };
         let product = |left, right| GateDef::Product {
             coeff: lit1,
@@ -918,7 +918,7 @@ fn a_product_of_a_tuple_and_a_witness_copy_two_layers_up_is_refused() {
             scratch,
             outputs: vec![inner(2, 0)],
             padding: Padding {
-                row: vec![Fr::ZERO; 2],
+                row: vec![Fp::ZERO; 2],
                 zero_row_valid: true,
             },
         };
@@ -951,10 +951,10 @@ fn a_product_of_a_tuple_and_a_witness_copy_two_layers_up_is_refused() {
 fn a_root_read_from_a_witness_column_alone_is_refused() {
     let mut a = zero_window_artifact(4);
     a.witness.push("w".into());
-    a.padding.row.push(Fr::ZERO);
+    a.padding.row.push(Fp::ZERO);
     let w = GateDef::Linear {
-        terms: vec![(Coeff::Literal(Fr::ONE), PolyAddress::Witness(0))],
-        constant: Coeff::Literal(Fr::ZERO),
+        terms: vec![(Coeff::Literal(Fp::ONE), PolyAddress::Witness(0))],
+        constant: Coeff::Literal(Fp::ZERO),
     };
     let entry = &mut a.layers[0].producing[1];
     entry.gate = w.clone();
@@ -1019,7 +1019,7 @@ fn cached_circuit(cached: Vec<(&str, GateDef)>, gate: GateDef, flat: GateDef) ->
         }],
         outputs: vec![inner(1, 0)],
         padding: Padding {
-            row: vec![Fr::ZERO; 2],
+            row: vec![Fp::ZERO; 2],
             zero_row_valid: true,
         },
     };
@@ -1049,7 +1049,7 @@ fn cached_entries_are_held_to_the_memory_rules() {
         Coeff::Challenge(challenge_slot::MEM_GAMMA),
         Coeff::Challenge(challenge_slot::MEM_ALPHA_ADDR),
     );
-    let (one, zero) = (Coeff::Literal(Fr::ONE), Coeff::Literal(Fr::ZERO));
+    let (one, zero) = (Coeff::Literal(Fp::ONE), Coeff::Literal(Fp::ZERO));
     let linear = |terms, constant| GateDef::Linear { terms, constant };
 
     let through_the_cache = cached_circuit(

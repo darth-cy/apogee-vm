@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use test_support::Rng;
 
-use crate::timing::{ms, next_canonical, Best, REPS, SEED};
+use crate::timing::{ms, next_fp2, Best, REPS, SEED};
 
 /// The polynomial size, in variables.
 const VARS: usize = 20;
@@ -17,9 +17,7 @@ const VARS: usize = 20;
 pub fn run() {
     let mut rng = Rng::new(SEED ^ 0x5330_3300);
     let values: Vec<u32> = (0..1usize << VARS).map(|_| rng.next_u64() as u32).collect();
-    let point: Vec<field::Fr> = (0..VARS)
-        .map(|_| field::Fr::from_bytes(&next_canonical(&mut rng)).unwrap())
-        .collect();
+    let point: Vec<field_a64_c5::Fp2> = (0..VARS).map(|_| next_fp2(&mut rng)).collect();
 
     let mut best = Best::new();
     for _ in 0..REPS {

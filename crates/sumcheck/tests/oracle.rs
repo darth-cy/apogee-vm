@@ -16,7 +16,7 @@ mod common;
 use common::{
     bound_transcript, eq_randomizers, square_gate, square_witness, wide_gate, wide_witness,
 };
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use poly::{eq_eval, MultilinearPoly};
 use sumcheck::{prove_zerocheck, verify_zerocheck, witness_digest, Gate};
 
@@ -29,7 +29,7 @@ enum Formula {
 }
 
 impl Formula {
-    fn apply(&self, v: &[Fr]) -> Fr {
+    fn apply(&self, v: &[Fp2]) -> Fp2 {
         match self {
             Formula::SquareMinus => v[0] * v[0] - v[1],
             Formula::WideProduct => v[0] * (v[1] + v[2]) - v[3] * v[4],
@@ -43,28 +43,32 @@ impl Formula {
 fn naive_round_value(
     columns: &[MultilinearPoly],
     formula: &Formula,
-    r: &[Fr],
-    bound: &[Fr],
-    x: Fr,
-) -> Fr {
+    r: &[Fp2],
+    bound: &[Fp2],
+    x: Fp2,
+) -> Fp2 {
     let rest = r.len() - bound.len() - 1;
-    let mut acc = Fr::ZERO;
+    let mut acc = Fp2::ZERO;
     for y in 0..1usize << rest {
-        let mut point: Vec<Fr> = bound.to_vec();
+        let mut point: Vec<Fp2> = bound.to_vec();
         point.push(x);
         for j in 0..rest {
             // Variable `bound.len() + 1 + j` is bit `j` of `y`, matching the
             // index convention.
-            point.push(if (y >> j) & 1 == 1 { Fr::ONE } else { Fr::ZERO });
+            point.push(if (y >> j) & 1 == 1 {
+                Fp2::ONE
+            } else {
+                Fp2::ZERO
+            });
         }
-        let values: Vec<Fr> = columns.iter().map(|c| c.evaluate(&point)).collect();
+        let values: Vec<Fp2> = columns.iter().map(|c| c.evaluate(&point)).collect();
         acc += eq_eval(r, &point) * formula.apply(&values);
     }
     acc
 }
 
 /// Horner, written here so the oracle does not borrow the verifier's copy.
-fn cubic_at(g: &[Fr; 4], x: Fr) -> Fr {
+fn cubic_at(g: &[Fp2; 4], x: Fp2) -> Fp2 {
     g[0] + x * (g[1] + x * (g[2] + x * g[3]))
 }
 
@@ -74,21 +78,21 @@ fn check_every_round(gate: &Gate, formula: &Formula, columns: &[MultilinearPoly]
     let digest = witness_digest(columns);
 
     let mut working: Vec<MultilinearPoly> = columns.to_vec();
-    let mut prover = bound_transcript(digest);
+    let mut prover = bound_transcript(&digest);
     let proof = prove_zerocheck(gate, &mut working, &mut prover);
 
-    let mut verifier = bound_transcript(digest);
+    let mut verifier = bound_transcript(&digest);
     let claim = verify_zerocheck(gate, n, &proof, &mut verifier)
         .expect("the oracle only checks honest proofs");
 
     // `r` is replayed from the script; the challenges come from the
     // verifier's own output, not from the prover.
-    let r = eq_randomizers(digest, n);
+    let r = eq_randomizers(&digest, n);
 
     for round in 0..n {
         let bound = &claim.point[..round];
         for node in 0..4u64 {
-            let x = Fr::from_u64(node);
+            let x = Fp2::from(Fp::from_u64(node));
             assert_eq!(
                 cubic_at(&proof.rounds[round], x),
                 naive_round_value(columns, formula, &r, bound, x),
@@ -100,9 +104,9 @@ fn check_every_round(gate: &Gate, formula: &Formula, columns: &[MultilinearPoly]
     // The zerocheck's own claim, from the definition: an honest proof over a
     // satisfying witness sums to zero over the whole cube.
     assert_eq!(
-        naive_round_value(columns, formula, &r, &[], Fr::ZERO)
-            + naive_round_value(columns, formula, &r, &[], Fr::ONE),
-        Fr::ZERO
+        naive_round_value(columns, formula, &r, &[], Fp2::ZERO)
+            + naive_round_value(columns, formula, &r, &[], Fp2::ONE),
+        Fp2::ZERO
     );
 }
 
@@ -140,15 +144,15 @@ fn the_oracle_rejects_a_perturbed_round() {
     let digest = witness_digest(&columns);
 
     let mut working: Vec<MultilinearPoly> = columns.to_vec();
-    let mut t = bound_transcript(digest);
+    let mut t = bound_transcript(&digest);
     let proof = prove_zerocheck(&gate, &mut working, &mut t);
-    let r = eq_randomizers(digest, n);
+    let r = eq_randomizers(&digest, n);
 
     let mut broken = proof.rounds[0];
-    broken[2] += Fr::ONE;
+    broken[2] += Fp2::ONE;
     let mismatches = (0..4u64)
         .filter(|&node| {
-            let x = Fr::from_u64(node);
+            let x = Fp2::from(Fp::from_u64(node));
             cubic_at(&broken, x) != naive_round_value(&columns, &Formula::SquareMinus, &r, &[], x)
         })
         .count();

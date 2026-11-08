@@ -67,7 +67,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use constants::{address_space, keccak as k, lookup_channel};
-use field::Fr;
+use field_a64_c5::Fp;
 
 use crate::delegation as d;
 use crate::lookup::ChannelSpec;
@@ -373,9 +373,9 @@ fn out_byte(i: usize, b: usize) -> PolyAddress {
 // Byte arithmetic over the XOR8 table
 // ---------------------------------------------------------------------------
 
-/// `1/2` in `Fr`, the coefficient that turns an XOR into an AND.
-fn half() -> Fr {
-    Fr::from_u64(2)
+/// `1/2` in `Fp`, the coefficient that turns an XOR into an AND.
+fn half() -> Fp {
+    Fp::from_u64(2)
         .inverse()
         .expect("2 is invertible in a field of odd characteristic")
 }
@@ -386,7 +386,7 @@ fn top_mask(s: u32) -> u64 {
 }
 
 /// A `Linear` expression over `terms` with `constant`.
-fn expr(terms: Vec<(Coeff, PolyAddress)>, constant: Fr) -> GateDef {
+fn expr(terms: Vec<(Coeff, PolyAddress)>, constant: Fp) -> GateDef {
     GateDef::Linear {
         terms,
         constant: Coeff::Literal(constant),
@@ -411,15 +411,15 @@ fn xor8(name: String, e0: GateDef, b: PolyAddress, out: PolyAddress) -> LookupEx
         selector: LIVE,
         tuple: vec![
             e0,
-            expr(vec![(d::lit(1), b)], Fr::ZERO),
-            expr(vec![(d::lit(1), out)], Fr::ZERO),
+            expr(vec![(d::lit(1), b)], Fp::ZERO),
+            expr(vec![(d::lit(1), out)], Fp::ZERO),
         ],
     }
 }
 
 /// `a ^ b = out` with both operands single columns.
 fn xor8_cols(name: String, a: PolyAddress, b: PolyAddress, out: PolyAddress) -> LookupExpr {
-    xor8(name, expr(vec![(d::lit(1), a)], Fr::ZERO), b, out)
+    xor8(name, expr(vec![(d::lit(1), a)], Fp::ZERO), b, out)
 }
 
 /// `ROTL64(v, r)`'s byte `j`, as a linear form over `v`'s byte columns and the
@@ -435,7 +435,7 @@ fn xor8_cols(name: String, a: PolyAddress, b: PolyAddress, out: PolyAddress) -> 
 /// ```
 ///
 /// and the byte is `2^{s−1}·(v[u] + m[u]) + 2^{s−9}·(v[w] − m[w])` plus
-/// `mask·(2^{s−9} − 2^{s−1})`. Every weight is a literal `Fr`: `2^{s−9}` is the
+/// `mask·(2^{s−9} − 2^{s−1})`. Every weight is a literal `Fp`: `2^{s−9}` is the
 /// inverse of `2^{9−s}`, and it is exact rather than approximate because `m` is
 /// the true XOR, so `v & mask` is a genuine multiple of `2^{8−s}`.
 ///
@@ -445,11 +445,11 @@ fn rotl_byte(
     mask: &dyn Fn(usize) -> PolyAddress,
     r: u32,
     j: usize,
-) -> (Vec<(Coeff, PolyAddress)>, Fr) {
+) -> (Vec<(Coeff, PolyAddress)>, Fp) {
     let (q, s) = ((r / 8) as usize, r % 8);
     let u = (j + LANE_BYTES - q % LANE_BYTES) % LANE_BYTES;
     if s == 0 {
-        return (vec![(d::lit(1), byte(u))], Fr::ZERO);
+        return (vec![(d::lit(1), byte(u))], Fp::ZERO);
     }
     let v = (u + LANE_BYTES - 1) % LANE_BYTES;
     let low = d::pow2(s) * half();
@@ -463,7 +463,7 @@ fn rotl_byte(
             (Coeff::Literal(high), byte(v)),
             (Coeff::Literal(-high), mask(v)),
         ],
-        Fr::from_u64(top_mask(s)) * (high - low),
+        Fp::from_u64(top_mask(s)) * (high - low),
     )
 }
 
@@ -572,7 +572,7 @@ fn rho_pi_gates() -> Vec<(String, GateDef)> {
                     };
                     gate.push((Coeff::Literal(-v), x));
                 }
-                if constant != Fr::ZERO {
+                if constant != Fp::ZERO {
                     gate.push((Coeff::Literal(-constant), LIVE));
                 }
                 out.push((format!("rho_pi_l{target}_b{j}"), d::linear(gate)));
@@ -618,7 +618,7 @@ fn round_lookups() -> Vec<LookupExpr> {
         for b in 0..LANE_BYTES {
             out.push(xor8(
                 format!("c_mask_x{x}_b{b}_xor"),
-                expr(Vec::new(), Fr::from_u64(top_mask(1))),
+                expr(Vec::new(), Fp::from_u64(top_mask(1))),
                 theta_c(x, b),
                 c_mask(x, b),
             ));
@@ -664,7 +664,7 @@ fn round_lookups() -> Vec<LookupExpr> {
         for b in 0..LANE_BYTES {
             out.push(xor8(
                 format!("rho_mask_l{i}_b{b}_xor"),
-                expr(Vec::new(), Fr::from_u64(top_mask(s))),
+                expr(Vec::new(), Fp::from_u64(top_mask(s))),
                 theta_a(i, b),
                 rho_mask(i, b),
             ));
@@ -691,7 +691,7 @@ fn round_lookups() -> Vec<LookupExpr> {
                         (Coeff::Literal(-half()), rho_out(b1, b)),
                         (Coeff::Literal(half()), chi_and(i, b)),
                     ],
-                    Fr::ZERO,
+                    Fp::ZERO,
                 );
                 out.push(xor8(
                     format!("chi_out_l{i}_b{b}_xor"),

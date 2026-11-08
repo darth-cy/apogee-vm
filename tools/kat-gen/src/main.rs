@@ -27,6 +27,7 @@
 use std::fs;
 use std::path::PathBuf;
 
+mod ark_a64_c5;
 mod ark_fr;
 mod field;
 mod isa;

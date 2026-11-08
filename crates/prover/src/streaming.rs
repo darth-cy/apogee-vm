@@ -102,7 +102,7 @@ pub struct StreamingReport {
 /// most one shard at a time, and therefore what bounds the peak. It is an
 /// argument and not a constant because the caller is the only one that knows
 /// the machine — a `2^20` `SHIFT_BITWISE` shard's forward pass alone is
-/// 8.4 GiB (`docs/spec/streaming.md` §1). The work inside each shard runs on
+/// 4.2 GiB (`docs/spec/streaming.md` §1). The work inside each shard runs on
 /// rayon's pool, so
 /// `RAYON_NUM_THREADS` is the cores the shards share and `max_in_flight` is
 /// how many shards share them. It must be at least 1.

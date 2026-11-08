@@ -12,7 +12,7 @@
 #![allow(dead_code)]
 
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use test_support::Rng;
 
 #[path = "../../../constraints/tests/common/lookup_toy.rs"]
@@ -45,7 +45,7 @@ pub fn inner(layer: u32, offset: u32) -> PolyAddress {
 }
 
 pub fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 /// Both compilations, cached first, with a label for messages.
@@ -60,7 +60,7 @@ pub fn add_booleanity(a: &mut CircuitArtifact, x: PolyAddress, name: &str) {
     let gate = GateDef::Quadratic {
         constant: lit(0),
         linear: vec![(lit(1), x)],
-        products: vec![(Coeff::Literal(-field::Fr::ONE), x, x)],
+        products: vec![(Coeff::Literal(-field_a64_c5::Fp::ONE), x, x)],
     };
     a.layers[0].enforcing.push(constraints::EnforcingEntry {
         relation: a.relations.len() as u32,
@@ -105,11 +105,17 @@ pub fn slot(a: &CircuitArtifact, name: &str) -> usize {
         .unwrap_or_else(|| panic!("the toy has no scratch slot {name}"))
 }
 
-/// A pseudo-random field element below `2^252`.
-pub fn fr(rng: &mut Rng) -> Fr {
-    let mut b = rng.next_le32();
-    b[31] &= 0x0f;
-    Fr::from_bytes(&b).expect("below 2^252")
+/// A pseudo-random base element.
+pub fn fr(rng: &mut Rng) -> Fp {
+    Fp::from_u64(rng.next_u64())
+}
+
+/// A pseudo-random `Fp2` element, both coordinates drawn: a challenge.
+pub fn fr2(rng: &mut Rng) -> Fp2 {
+    Fp2 {
+        c0: fr(rng),
+        c1: fr(rng),
+    }
 }
 
 /// A `Linear` gate's terms and constant.
@@ -224,7 +230,7 @@ pub const FAMILY_NAMES: [&str; 7] = [
     "mem_subword",
     "atomics",
 ];
-use transcript::Transcript;
+use transcript_a64_c5::Transcript;
 
 /// Every family's height: the init families' `h`, and tall enough for every
 /// instruction table of every guest these suites trace.
@@ -307,10 +313,7 @@ pub fn memory_challenges() -> ExternalChallenges {
     let mut t = Transcript::new();
     let mut memory = ExternalChallenges::new();
     for slot in MEM_GAMMA..=MEM_ALPHA_VAL {
-        memory.insert(
-            slot,
-            t.challenge_scalar(transcript_tags::SUMCHECK_CHALLENGE),
-        );
+        memory.insert(slot, t.challenge(transcript_tags::SUMCHECK_CHALLENGE));
     }
     memory
 }
@@ -496,24 +499,27 @@ pub fn committed(shard: &Shard) -> Vec<MultilinearPoly> {
 }
 
 /// The value of `shard`'s column `address` at row `row`.
-pub fn cell(shard: &Shard, address: PolyAddress, row: usize) -> Fr {
+pub fn cell(shard: &Shard, address: PolyAddress, row: usize) -> Fp {
     shard
         .base
         .get(address)
         .expect("a committed column")
-        .get(row)
+        .get_base(row)
 }
 
 /// `shard` with each `(address, row, value)` of `cells` written into its base,
 /// every other cell as it was.
-pub fn with_cells(shard: &Shard, cells: &[(PolyAddress, usize, Fr)]) -> Shard {
-    let mut columns: Vec<(PolyAddress, Vec<Fr>)> = shard
+pub fn with_cells(shard: &Shard, cells: &[(PolyAddress, usize, Fp)]) -> Shard {
+    let mut columns: Vec<(PolyAddress, Vec<Fp>)> = shard
         .artifact
         .committed()
         .into_iter()
         .map(|address| {
             let column = shard.base.get(address).expect("a committed column");
-            (address, (0..column.len()).map(|y| column.get(y)).collect())
+            (
+                address,
+                (0..column.len()).map(|y| column.get_base(y)).collect(),
+            )
         })
         .collect();
     for &(address, row, value) in cells {
@@ -525,7 +531,7 @@ pub fn with_cells(shard: &Shard, cells: &[(PolyAddress, usize, Fr)]) -> Shard {
     }
     let columns = columns
         .into_iter()
-        .map(|(a, c)| (a, MultilinearPoly::new(PolyBacking::Fr(c))))
+        .map(|(a, c)| (a, MultilinearPoly::new(PolyBacking::Fp(c))))
         .collect();
     Shard {
         label: shard.label.clone(),
@@ -543,7 +549,7 @@ pub fn forwarded_shard(shard: &Shard) -> LayerValues {
 
 /// Every shard's `(read root, write root)`, forwarded and recomputed by
 /// `memory_roots`.
-pub fn roots(shards: &[Shard]) -> (Vec<Fr>, Vec<Fr>) {
+pub fn roots(shards: &[Shard]) -> (Vec<Fp2>, Vec<Fp2>) {
     let (mut reads, mut writes) = (Vec::new(), Vec::new());
     for shard in shards {
         let values = forwarded_shard(shard);
@@ -574,7 +580,7 @@ pub fn witness_row(a: &CircuitArtifact, values: &LayerValues, row: usize) -> Wit
     let committed = a
         .committed()
         .into_iter()
-        .map(|address| values.base.get(address).expect("a column").get(row))
+        .map(|address| values.base.get(address).expect("a column").get_base(row))
         .collect();
     let scratch = a
         .scratch
@@ -585,7 +591,7 @@ pub fn witness_row(a: &CircuitArtifact, values: &LayerValues, row: usize) -> Wit
             {
                 values.layers[layer as usize - 1][offset as usize].get(row)
             }
-            _ => Fr::ZERO,
+            _ => Fp2::ZERO,
         })
         .collect();
     WitnessRow {
@@ -602,13 +608,13 @@ pub fn prove_and_verify(shard: &Shard, values: &LayerValues) -> Result<(), GkrEr
     let digest = witness_digest(&committed(shard));
     let bound = || {
         let mut t = Transcript::new();
-        absorb_witness_digest(&mut t, digest);
+        absorb_witness_digest(&mut t, &digest);
         t
     };
     let a = &shard.artifact;
     let proof = prove(a, values, &shard.challenges, &mut bound());
     let top = values.layers.last().expect("a top layer");
-    let outputs: Vec<Fr> = a
+    let outputs: Vec<Fp2> = a
         .outputs
         .iter()
         .map(|out| match *out {

@@ -14,9 +14,9 @@ use core::fmt;
 
 use constants::transcript_tags;
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use poly::eq_eval;
-use transcript::Transcript;
+use transcript_a64_c5::Transcript;
 
 pub use sumcheck::SumcheckProof;
 
@@ -30,14 +30,14 @@ pub use memory::{boundary_factors, reconciles, window_challenges, BoundaryFinals
 // The containers
 // ---------------------------------------------------------------------------
 
-/// Named external challenge slots, `slot -> Fr`, with slots from
+/// Named external challenge slots, `slot -> Fp2`, with slots from
 /// `constants::challenge_slot`. The caller supplies them on both sides; a
 /// verifier takes its values from its own transcript replay or global phase,
 /// never from a proof. A new challenge is a new slot, not a new field.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExternalChallenges {
     /// Sorted by slot, one entry per slot.
-    slots: Vec<(u32, Fr)>,
+    slots: Vec<(u32, Fp2)>,
 }
 
 // A `Default` would be a second name for `new` with no caller.
@@ -48,14 +48,14 @@ impl ExternalChallenges {
     }
 
     /// Set `slot`. Panics if it is already set: a slot has one value.
-    pub fn insert(&mut self, slot: u32, value: Fr) {
+    pub fn insert(&mut self, slot: u32, value: Fp2) {
         match self.slots.binary_search_by_key(&slot, |(s, _)| *s) {
             Ok(_) => panic!("ExternalChallenges::insert: slot {slot} is already set"),
             Err(at) => self.slots.insert(at, (slot, value)),
         }
     }
 
-    pub fn get(&self, slot: u32) -> Option<Fr> {
+    pub fn get(&self, slot: u32) -> Option<Fp2> {
         self.slots
             .binary_search_by_key(&slot, |(s, _)| *s)
             .ok()
@@ -69,8 +69,8 @@ impl ExternalChallenges {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BaseClaim {
     pub address: PolyAddress,
-    pub point: Vec<Fr>,
-    pub value: Fr,
+    pub point: Vec<Fp2>,
+    pub value: Fp2,
 }
 
 /// One layer transition's sumcheck per gate list, indexed by gate list:
@@ -114,14 +114,27 @@ impl fmt::Display for GkrError {
 // The kernel
 // ---------------------------------------------------------------------------
 
-/// A coefficient's value. Panics on a slot `challenges` does not hold: `verify`
-/// checks every slot first, and the prover leaves a missing slot to panic here.
-fn coefficient(c: Coeff, challenges: &ExternalChallenges) -> Fr {
+/// A slot's value. Panics on a slot `challenges` does not hold: `verify` checks
+/// every slot first, and the prover leaves a missing slot to panic here.
+fn slot_value(slot: u32, challenges: &ExternalChallenges) -> Fp2 {
+    challenges
+        .get(slot)
+        .unwrap_or_else(|| panic!("external challenge slot {slot} has no value"))
+}
+
+/// A coefficient's value, a literal embedded.
+fn coefficient(c: Coeff, challenges: &ExternalChallenges) -> Fp2 {
     match c {
-        Coeff::Literal(v) => v,
-        Coeff::Challenge(slot) => challenges
-            .get(slot)
-            .unwrap_or_else(|| panic!("external challenge slot {slot} has no value")),
+        Coeff::Literal(v) => v.into(),
+        Coeff::Challenge(slot) => slot_value(slot, challenges),
+    }
+}
+
+/// `c·v`: a literal, which is base, by two base products rather than four.
+fn scale(c: Coeff, v: Fp2, challenges: &ExternalChallenges) -> Fp2 {
+    match c {
+        Coeff::Literal(x) => v * x,
+        Coeff::Challenge(slot) => v * slot_value(slot, challenges),
     }
 }
 
@@ -129,7 +142,7 @@ fn coefficient(c: Coeff, challenges: &ExternalChallenges) -> Fr {
 /// `GateDef::operands` order — two for `TreeProduct`, its input's children.
 /// Every pass evaluates gates through this function and no other, so it is the
 /// semantic authority: where a comment and this disagree, this wins.
-pub fn eval_gate(gate: &GateDef, values: &[Fr], challenges: &ExternalChallenges) -> Fr {
+pub fn eval_gate(gate: &GateDef, values: &[Fp2], challenges: &ExternalChallenges) -> Fp2 {
     // A debugging aid, not a runtime check: one value per operand. Every caller
     // gathers exactly `operands()`'s count — `ResolvedList` from the resolved
     // operands, the checker from `operands()` itself — so it cannot fail there,
@@ -153,17 +166,19 @@ pub fn eval_gate(gate: &GateDef, values: &[Fr], challenges: &ExternalChallenges)
     //     "eval_gate: {} values for a gate reading {arity}",
     //     values.len()
     // );
-    let c = |x: &Coeff| coefficient(*x, challenges);
-    let affine = |terms: &[(Coeff, PolyAddress)], constant: &Coeff, values: &[Fr]| {
+    let s = |k: &Coeff, v: Fp2| scale(*k, v, challenges);
+    let affine = |terms: &[(Coeff, PolyAddress)], constant: &Coeff, values: &[Fp2]| {
         terms
             .iter()
             .zip(values)
-            .fold(c(constant), |acc, ((k, _), v)| acc + c(k) * *v)
+            .fold(coefficient(*constant, challenges), |acc, ((k, _), v)| {
+                acc + s(k, *v)
+            })
     };
     match gate {
         GateDef::Linear { terms, constant } => affine(terms, constant, values),
-        GateDef::Product { coeff, .. } => c(coeff) * values[0] * values[1],
-        GateDef::MaskIntoIdentity { .. } => values[0] * values[1] + Fr::ONE - values[1],
+        GateDef::Product { coeff, .. } => s(coeff, values[0] * values[1]),
+        GateDef::MaskIntoIdentity { .. } => values[0] * values[1] + Fp::ONE - values[1],
         GateDef::AffineProduct {
             left,
             left_constant,
@@ -185,21 +200,21 @@ pub fn eval_gate(gate: &GateDef, values: &[Fr], challenges: &ExternalChallenges)
             let t = linear.len();
             products.iter().zip(values[t..].chunks_exact(2)).fold(
                 affine(linear, constant, &values[..t]),
-                |acc, ((b, _, _), yz)| acc + c(b) * yz[0] * yz[1],
+                |acc, ((b, _, _), yz)| acc + s(b, yz[0] * yz[1]),
             )
         }
     }
 }
 
-/// A virtual table's value at row `row`.
-pub fn virtual_at_row(kind: VirtualKind, row: usize) -> Fr {
+/// A virtual table's value at row `row`: an integer, so a base value.
+pub fn virtual_at_row(kind: VirtualKind, row: usize) -> Fp {
     match kind {
-        VirtualKind::RowIndex => Fr::from_u64(row as u64),
+        VirtualKind::RowIndex => Fp::from_u64(row as u64),
         VirtualKind::RamLive => {
             if row >= 1 << constants::memory::RAM_LIVE_BIT {
-                Fr::ONE
+                Fp::ONE
             } else {
-                Fr::ZERO
+                Fp::ZERO
             }
         }
         // The low `bits` bits of the row index: at a height of `2^bits` rows or
@@ -207,15 +222,15 @@ pub fn virtual_at_row(kind: VirtualKind, row: usize) -> Fr {
         // `2^bits` rows.
         VirtualKind::Range19 | VirtualKind::Range16 => {
             let bits = range_bits(kind);
-            Fr::from_u64((row as u64) & ((1u64 << bits) - 1))
+            Fp::from_u64((row as u64) & ((1u64 << bits) - 1))
         }
         // The `XOR8` table's three columns: the row index's low byte, its next
         // byte, and their XOR. At a height of `2^16` rows or more the table is
         // exactly the 65,536 triples `(a, b, a ^ b)`, each once per `2^16`
         // rows (`docs/spec/lookup.md` §3).
-        VirtualKind::Xor8A => Fr::from_u64((row as u64) & 0xff),
-        VirtualKind::Xor8B => Fr::from_u64(((row as u64) >> 8) & 0xff),
-        VirtualKind::Xor8Out => Fr::from_u64(((row as u64) & 0xff) ^ (((row as u64) >> 8) & 0xff)),
+        VirtualKind::Xor8A => Fp::from_u64((row as u64) & 0xff),
+        VirtualKind::Xor8B => Fp::from_u64(((row as u64) >> 8) & 0xff),
+        VirtualKind::Xor8Out => Fp::from_u64(((row as u64) & 0xff) ^ (((row as u64) >> 8) & 0xff)),
     }
 }
 
@@ -228,21 +243,21 @@ fn range_bits(kind: VirtualKind) -> u32 {
 }
 
 /// A virtual table's closed form — its multilinear extension — at `point`.
-pub fn virtual_at_point(kind: VirtualKind, point: &[Fr]) -> Fr {
+pub fn virtual_at_point(kind: VirtualKind, point: &[Fp2]) -> Fp2 {
     match kind {
         // Σ_j 2^j · y_j, by Horner from the highest variable.
-        VirtualKind::RowIndex => point.iter().rev().fold(Fr::ZERO, |acc, y| acc + acc + *y),
+        VirtualKind::RowIndex => point.iter().rev().fold(Fp2::ZERO, |acc, y| acc + acc + *y),
         // 1 − Π_{j >= RAM_LIVE_BIT} (1 − y_j): on the cube, 0 exactly when every
         // bit from RAM_LIVE_BIT up is clear; over RAM_LIVE_BIT variables or
         // fewer the product is empty and the table is 0.
         VirtualKind::RamLive => {
             let high = &point[point.len().min(constants::memory::RAM_LIVE_BIT as usize)..];
-            Fr::ONE - high.iter().fold(Fr::ONE, |acc, y| acc * (Fr::ONE - *y))
+            Fp2::ONE - high.iter().fold(Fp2::ONE, |acc, y| acc * (Fp2::ONE - *y))
         }
         // Σ_{j < bits} 2^j · y_j, the same Horner over the low variables alone.
         VirtualKind::Range19 | VirtualKind::Range16 => {
             let low = &point[..point.len().min(range_bits(kind) as usize)];
-            low.iter().rev().fold(Fr::ZERO, |acc, y| acc + acc + *y)
+            low.iter().rev().fold(Fp2::ZERO, |acc, y| acc + acc + *y)
         }
         // `Σ_j 2^j·y_j` over bits 0..8 and 8..16, and over bits 0..8 of their
         // XOR: `y ^ z = y + z − 2yz`, which is multilinear in each of `y` and
@@ -254,10 +269,10 @@ pub fn virtual_at_point(kind: VirtualKind, point: &[Fr]) -> Fr {
         VirtualKind::Xor8A => byte_at_point(point, 0),
         VirtualKind::Xor8B => byte_at_point(point, 8),
         VirtualKind::Xor8Out => {
-            let mut acc = Fr::ZERO;
+            let mut acc = Fp2::ZERO;
             for j in (0..8).rev() {
-                let y = point.get(j).copied().unwrap_or(Fr::ZERO);
-                let z = point.get(j + 8).copied().unwrap_or(Fr::ZERO);
+                let y = point.get(j).copied().unwrap_or(Fp2::ZERO);
+                let z = point.get(j + 8).copied().unwrap_or(Fp2::ZERO);
                 acc = acc + acc + y + z - (y * z + y * z);
             }
             acc
@@ -267,10 +282,10 @@ pub fn virtual_at_point(kind: VirtualKind, point: &[Fr]) -> Fr {
 
 /// `Σ_{j < 8} 2^j · point[first + j]`, the multilinear extension of one byte of
 /// the row index, over the variables `point` has.
-fn byte_at_point(point: &[Fr], first: usize) -> Fr {
-    let mut acc = Fr::ZERO;
+fn byte_at_point(point: &[Fp2], first: usize) -> Fp2 {
+    let mut acc = Fp2::ZERO;
     for j in (0..8).rev() {
-        acc = acc + acc + point.get(first + j).copied().unwrap_or(Fr::ZERO);
+        acc = acc + acc + point.get(first + j).copied().unwrap_or(Fp2::ZERO);
     }
     acc
 }
@@ -391,13 +406,13 @@ impl<'a> ResolvedList<'a> {
     }
 
     /// A scratch buffer of the length evaluation needs.
-    pub fn scratch(&self) -> Vec<Fr> {
-        vec![Fr::ZERO; self.scratch]
+    pub fn scratch(&self) -> Vec<Fp2> {
+        vec![Fp2::ZERO; self.scratch]
     }
 
     /// Evaluate every cached entry at the point into `scratch`, where
     /// [`ResolvedList::gate`] substitutes them.
-    pub fn cache(&self, lower: &[Fr], upper: &[Fr], virtuals: &[Fr], scratch: &mut [Fr]) {
+    pub fn cache(&self, lower: &[Fp2], upper: &[Fp2], virtuals: &[Fp2], scratch: &mut [Fp2]) {
         for i in 0..self.cached {
             let value = self.eval(i, lower, upper, virtuals, scratch);
             scratch[i] = value;
@@ -409,11 +424,11 @@ impl<'a> ResolvedList<'a> {
     pub fn gate(
         &self,
         j: usize,
-        lower: &[Fr],
-        upper: &[Fr],
-        virtuals: &[Fr],
-        scratch: &mut [Fr],
-    ) -> Fr {
+        lower: &[Fp2],
+        upper: &[Fp2],
+        virtuals: &[Fp2],
+        scratch: &mut [Fp2],
+    ) -> Fp2 {
         self.eval(self.cached + j, lower, upper, virtuals, scratch)
     }
 
@@ -421,12 +436,12 @@ impl<'a> ResolvedList<'a> {
     /// `weights`, as [`summand`] defines it.
     pub fn summand(
         &self,
-        weights: &[Fr],
-        lower: &[Fr],
-        upper: &[Fr],
-        virtuals: &[Fr],
-        scratch: &mut [Fr],
-    ) -> Fr {
+        weights: &[Fp2],
+        lower: &[Fp2],
+        upper: &[Fp2],
+        virtuals: &[Fp2],
+        scratch: &mut [Fp2],
+    ) -> Fp2 {
         // A debugging aid, not a runtime check: one weight per gate. Both callers
         // build `weights` with `powers` over exactly this count — `verify` two
         // lines before it calls — and the prover reaches this at every sumcheck
@@ -439,7 +454,7 @@ impl<'a> ResolvedList<'a> {
         //     weights.len()
         // );
         self.cache(lower, upper, virtuals, scratch);
-        weights.iter().enumerate().fold(Fr::ZERO, |acc, (j, w)| {
+        weights.iter().enumerate().fold(Fp2::ZERO, |acc, (j, w)| {
             acc + self.gate(j, lower, upper, virtuals, scratch) * *w
         })
     }
@@ -449,11 +464,11 @@ impl<'a> ResolvedList<'a> {
     fn eval(
         &self,
         i: usize,
-        lower: &[Fr],
-        upper: &[Fr],
-        virtuals: &[Fr],
-        scratch: &mut [Fr],
-    ) -> Fr {
+        lower: &[Fp2],
+        upper: &[Fp2],
+        virtuals: &[Fp2],
+        scratch: &mut [Fp2],
+    ) -> Fp2 {
         let (cached, operands) = scratch.split_at_mut(self.cached);
         let sources = &self.sources[self.bounds[i]..self.bounds[i + 1]];
         let operands = &mut operands[..sources.len()];
@@ -482,11 +497,11 @@ impl<'a> ResolvedList<'a> {
 pub fn gate_values(
     artifact: &CircuitArtifact,
     k: usize,
-    lower: &[Fr],
-    upper: &[Fr],
-    virtuals: &[Fr],
+    lower: &[Fp2],
+    upper: &[Fp2],
+    virtuals: &[Fp2],
     challenges: &ExternalChallenges,
-) -> Vec<Fr> {
+) -> Vec<Fp2> {
     check_children(artifact, k, lower, upper, "gate_values");
     let resolved = ResolvedList::new(artifact, k, challenges);
     let mut scratch = resolved.scratch();
@@ -502,12 +517,12 @@ pub fn gate_values(
 pub fn summand(
     artifact: &CircuitArtifact,
     k: usize,
-    weights: &[Fr],
-    lower: &[Fr],
-    upper: &[Fr],
-    virtuals: &[Fr],
+    weights: &[Fp2],
+    lower: &[Fp2],
+    upper: &[Fp2],
+    virtuals: &[Fp2],
     challenges: &ExternalChallenges,
-) -> Fr {
+) -> Fp2 {
     // The message `summand` has always panicked with, when it called
     // `gate_values`.
     check_children(artifact, k, lower, upper, "gate_values");
@@ -517,7 +532,7 @@ pub fn summand(
 }
 
 /// A halving list reads both children of every column.
-fn check_children(artifact: &CircuitArtifact, k: usize, lower: &[Fr], upper: &[Fr], what: &str) {
+fn check_children(artifact: &CircuitArtifact, k: usize, lower: &[Fp2], upper: &[Fp2], what: &str) {
     if artifact.layers[k].halving {
         assert_eq!(
             upper.len(),
@@ -540,9 +555,9 @@ fn column_index(artifact: &CircuitArtifact, k: usize, op: &PolyAddress) -> usize
 }
 
 /// `λ^0, λ^1, ..., λ^{n-1}`.
-pub fn powers(lambda: Fr, n: usize) -> Vec<Fr> {
+pub fn powers(lambda: Fp2, n: usize) -> Vec<Fp2> {
     let mut out = Vec::with_capacity(n);
-    let mut acc = Fr::ONE;
+    let mut acc = Fp2::ONE;
     for _ in 0..n {
         out.push(acc);
         acc *= lambda;
@@ -591,7 +606,7 @@ pub fn check_challenges(
 // ---------------------------------------------------------------------------
 
 /// Horner evaluation of an ascending-coefficient cubic.
-fn cubic(g: &[Fr; 4], x: Fr) -> Fr {
+fn cubic(g: &[Fp2; 4], x: Fp2) -> Fp2 {
     ((g[3] * x + g[2]) * x + g[1]) * x + g[0]
 }
 
@@ -600,15 +615,19 @@ fn cubic(g: &[Fr; 4], x: Fr) -> Fr {
 /// `SUMCHECK_CHALLENGE` binding the next variable. Returns the bound point and
 /// the last claim, which the caller holds to `eq(p, point) · S(values)` — or
 /// `None` at the first round that does not sum.
-pub fn verify_sumcheck(claim: Fr, rounds: &[[Fr; 4]], t: &mut Transcript) -> Option<(Vec<Fr>, Fr)> {
+pub fn verify_sumcheck(
+    claim: Fp2,
+    rounds: &[[Fp2; 4]],
+    t: &mut Transcript,
+) -> Option<(Vec<Fp2>, Fp2)> {
     let mut claim = claim;
     let mut point = Vec::with_capacity(rounds.len());
     for g in rounds {
-        if cubic(g, Fr::ZERO) + cubic(g, Fr::ONE) != claim {
+        if cubic(g, Fp2::ZERO) + cubic(g, Fp2::ONE) != claim {
             return None;
         }
-        t.append_scalars(transcript_tags::SUMCHECK_ROUND, g);
-        let r = t.challenge_scalar(transcript_tags::SUMCHECK_CHALLENGE);
+        t.append_ext(transcript_tags::SUMCHECK_ROUND, g);
+        let r = t.challenge(transcript_tags::SUMCHECK_CHALLENGE);
         claim = cubic(g, r);
         point.push(r);
     }
@@ -638,7 +657,7 @@ pub fn verify_sumcheck(claim: Fr, rounds: &[[Fr; 4]], t: &mut Transcript) -> Opt
 pub fn verify(
     artifact: &CircuitArtifact,
     proof: &GkrProof,
-    outputs: &[Fr],
+    outputs: &[Fp2],
     challenges: &ExternalChallenges,
     t: &mut Transcript,
 ) -> Result<Vec<BaseClaim>, GkrError> {
@@ -661,9 +680,9 @@ pub fn verify(
 
     // O1: the outputs. The top has no variables (Law 3), so each output is
     // its column's one value, claimed at the empty point.
-    t.append_scalars(transcript_tags::GKR_OUTPUTS, outputs);
-    let mut point: Vec<Fr> = Vec::new();
-    let mut values = vec![Fr::ZERO; artifact.outputs.len()];
+    t.append_ext(transcript_tags::GKR_OUTPUTS, outputs);
+    let mut point: Vec<Fp2> = Vec::new();
+    let mut values = vec![Fp2::ZERO; artifact.outputs.len()];
     for (value, out) in outputs.iter().zip(&artifact.outputs) {
         if let PolyAddress::Inner { offset, .. } = *out {
             values[offset as usize] = *value;
@@ -675,24 +694,24 @@ pub fn verify(
         let layer = &proof.layers[k];
 
         // L1: the batch, drawn after every claim it batches is absorbed.
-        let lambda = t.challenge_scalar(transcript_tags::GKR_BATCH);
+        let lambda = t.challenge(transcript_tags::GKR_BATCH);
         let weights = powers(lambda, list.producing.len() + list.enforcing.len());
         let claim = values
             .iter()
             .zip(&weights)
-            .fold(Fr::ZERO, |acc, (v, w)| acc + *v * *w);
+            .fold(Fp2::ZERO, |acc, (v, w)| acc + *v * *w);
 
         // L2, L3, and the final check.
         let (rho, last) = verify_sumcheck(claim, &layer.rounds, t)
             .ok_or(GkrError::LayerInconsistency { layer: k })?;
-        t.append_scalars(transcript_tags::GKR_LAYER_CLAIMS, &layer.final_evals);
+        t.append_ext(transcript_tags::GKR_LAYER_CLAIMS, &layer.final_evals);
         let evals = &layer.final_evals;
         let s = if list.halving {
-            let lower: Vec<Fr> = evals.iter().step_by(2).copied().collect();
-            let upper: Vec<Fr> = evals.iter().skip(1).step_by(2).copied().collect();
+            let lower: Vec<Fp2> = evals.iter().step_by(2).copied().collect();
+            let upper: Vec<Fp2> = evals.iter().skip(1).step_by(2).copied().collect();
             summand(artifact, k, &weights, &lower, &upper, &[], challenges)
         } else {
-            let virtuals: Vec<Fr> = artifact
+            let virtuals: Vec<Fp2> = artifact
                 .virtuals
                 .iter()
                 .map(|(kind, _)| virtual_at_point(*kind, &rho))
@@ -705,7 +724,7 @@ pub fn verify(
 
         // L4: a halving transition's children meet on one line.
         if list.halving {
-            let tau = t.challenge_scalar(transcript_tags::GKR_CHILD);
+            let tau = t.challenge(transcript_tags::GKR_CHILD);
             values = evals
                 .chunks(2)
                 .map(|pair| pair[0] + tau * (pair[1] - pair[0]))

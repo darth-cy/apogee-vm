@@ -82,7 +82,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use constants::{address_space, lookup_channel, sha256 as f};
-use field::Fr;
+use field_a64_c5::Fp;
 
 use crate::delegation as d;
 use crate::lookup::ChannelSpec;
@@ -581,17 +581,17 @@ fn sigma1_input(m: usize) -> [PolyAddress; BYTES] {
 /// or a sum of this circuit is before it becomes a gate or a tuple position.
 #[derive(Clone, Debug)]
 struct Form {
-    terms: Vec<(Fr, PolyAddress)>,
-    constant: Fr,
+    terms: Vec<(Fp, PolyAddress)>,
+    constant: Fp,
 }
 
 impl Form {
     /// The zero form.
     fn zero() -> Form {
-        Form::constant(Fr::ZERO)
+        Form::constant(Fp::ZERO)
     }
 
-    fn constant(c: Fr) -> Form {
+    fn constant(c: Fp) -> Form {
         Form {
             terms: Vec::new(),
             constant: c,
@@ -600,13 +600,13 @@ impl Form {
 
     fn col(x: PolyAddress) -> Form {
         Form {
-            terms: vec![(Fr::ONE, x)],
-            constant: Fr::ZERO,
+            terms: vec![(Fp::ONE, x)],
+            constant: Fp::ZERO,
         }
     }
 
     /// `self + c·x`, merging a column already present.
-    fn plus_col(mut self, c: Fr, x: PolyAddress) -> Form {
+    fn plus_col(mut self, c: Fp, x: PolyAddress) -> Form {
         match self.terms.iter_mut().find(|(_, y)| *y == x) {
             Some(t) => t.0 += c,
             None => self.terms.push((c, x)),
@@ -615,7 +615,7 @@ impl Form {
     }
 
     /// `c·self`.
-    fn times(mut self, c: Fr) -> Form {
+    fn times(mut self, c: Fp) -> Form {
         for t in self.terms.iter_mut() {
             t.0 *= c;
         }
@@ -624,7 +624,7 @@ impl Form {
     }
 
     /// `self + c·other`.
-    fn plus(mut self, c: Fr, other: &Form) -> Form {
+    fn plus(mut self, c: Fp, other: &Form) -> Form {
         for (k, x) in &other.terms {
             self = self.plus_col(c * *k, *x);
         }
@@ -639,7 +639,7 @@ impl Form {
             terms: self
                 .terms
                 .iter()
-                .filter(|(c, _)| *c != Fr::ZERO)
+                .filter(|(c, _)| *c != Fp::ZERO)
                 .map(|(c, x)| (Coeff::Literal(*c), *x))
                 .collect(),
             constant: Coeff::Literal(self.constant),
@@ -655,26 +655,26 @@ impl Form {
     fn gate(&self) -> GateDef {
         let lifted = Form {
             terms: self.terms.clone(),
-            constant: Fr::ZERO,
+            constant: Fp::ZERO,
         }
         .plus_col(self.constant, LIVE);
         d::linear(
             lifted
                 .terms
                 .iter()
-                .filter(|(c, _)| *c != Fr::ZERO)
+                .filter(|(c, _)| *c != Fp::ZERO)
                 .map(|(c, x)| (Coeff::Literal(*c), *x))
                 .collect(),
         )
     }
 }
 
-fn fr(v: u64) -> Fr {
-    Fr::from_u64(v)
+fn fr(v: u64) -> Fp {
+    Fp::from_u64(v)
 }
 
 /// `2^-n`.
-fn inv_pow2(n: u32) -> Fr {
+fn inv_pow2(n: u32) -> Fp {
     d::pow2(n).inverse().expect("a power of two is invertible")
 }
 
@@ -699,7 +699,7 @@ fn lo(v: PolyAddress, m: PolyAddress, s: u32) -> Form {
 
 /// `v >> s` for the same byte: `(v − lo) / 2^s`.
 fn hi(v: PolyAddress, m: PolyAddress, s: u32) -> Form {
-    Form::col(v).plus(-Fr::ONE, &lo(v, m, s)).times(inv_pow2(s))
+    Form::col(v).plus(-Fp::ONE, &lo(v, m, s)).times(inv_pow2(s))
 }
 
 /// Byte `j` of `ROTR_r(V)`, over `V`'s bytes and their masks at `r mod 8`.
@@ -722,7 +722,7 @@ fn shr_byte(v: &[PolyAddress; BYTES], m: &[PolyAddress; BYTES], r: u32, j: usize
     let u = j + q;
     let mut out = Form::zero();
     if u < BYTES {
-        out = out.plus(Fr::ONE, &hi(v[u], m[u], s));
+        out = out.plus(Fp::ONE, &hi(v[u], m[u], s));
     }
     if u + 1 < BYTES {
         out = out.plus(d::pow2(8 - s), &lo(v[u + 1], m[u + 1], s));
@@ -735,7 +735,7 @@ fn shr_byte(v: &[PolyAddress; BYTES], m: &[PolyAddress; BYTES], r: u32, j: usize
 fn rotr_word(v: &[PolyAddress; BYTES], m0: PolyAddress, s: u32) -> Form {
     let low = lo(v[0], m0, s);
     word_of(v)
-        .plus(-Fr::ONE, &low)
+        .plus(-Fp::ONE, &low)
         .times(inv_pow2(s))
         .plus(d::pow2(32 - s), &low)
 }
@@ -791,10 +791,10 @@ fn round_constant(k: usize) -> Form {
 /// `T1 = h + Σ1(e) + Ch(e, f, g) + K + W` for round `k`.
 fn t1(k: usize) -> Form {
     Form::col(e_word(k as isize - 3))
-        .plus(Fr::ONE, &big_sigma1(k))
-        .plus(Fr::ONE, &ch(k))
-        .plus(Fr::ONE, &round_constant(k))
-        .plus_col(Fr::ONE, window(k))
+        .plus(Fp::ONE, &big_sigma1(k))
+        .plus(Fp::ONE, &ch(k))
+        .plus(Fp::ONE, &round_constant(k))
+        .plus_col(Fp::ONE, window(k))
 }
 
 /// `sigma0` of derived word `m`'s input, as a word: `z`'s four bytes.
@@ -834,10 +834,10 @@ fn selector_gates() -> Vec<(String, GateDef)> {
         out.push((format!("group{r}_boolean"), d::booleanity(group_sel(r))));
     }
     let mut rule = Form::col(read(f::GROUP_WORD));
-    let mut live = Form::col(LIVE).times(-Fr::ONE);
+    let mut live = Form::col(LIVE).times(-Fp::ONE);
     for r in 0..f::GROUPS {
         rule = rule.plus_col(-fr(r as u64), group_sel(r));
-        live = live.plus_col(Fr::ONE, group_sel(r));
+        live = live.plus_col(Fp::ONE, group_sel(r));
     }
     out.push(("group_rule".to_string(), rule.gate()));
     out.push(("one_group_a_live_row".to_string(), live.gate()));
@@ -852,7 +852,7 @@ fn selector_gates() -> Vec<(String, GateDef)> {
 /// that read them.
 fn frame_value_gates() -> Vec<(String, GateDef)> {
     let equal = |name: String, x: PolyAddress, y: &Form| -> (String, GateDef) {
-        (name, Form::col(x).plus(-Fr::ONE, y).gate())
+        (name, Form::col(x).plus(-Fp::ONE, y).gate())
     };
     let mut out: Vec<(String, GateDef)> = vec![equal(
         format!("writes_back_w{}", f::GROUP_WORD),
@@ -909,25 +909,25 @@ fn sum_gates() -> Vec<(String, GateDef)> {
         // A_{k+1} = T1 + T2 − 2^32·carry_a, T2 = Σ0(a) + Maj(a, b, c).
         let a = Form::col(a_word(k as isize + 1))
             .plus_col(two32, round_col(k, Round::CarryA, 0))
-            .plus(-Fr::ONE, &t1)
-            .plus(-Fr::ONE, &big_sigma0(k))
-            .plus(-Fr::ONE, &maj(k));
+            .plus(-Fp::ONE, &t1)
+            .plus(-Fp::ONE, &big_sigma0(k))
+            .plus(-Fp::ONE, &maj(k));
         out.push((format!("r{k}_a"), a.gate()));
         // E_{k+1} = d + T1 − 2^32·carry_e.
         let e = Form::col(e_word(k as isize + 1))
             .plus_col(two32, round_col(k, Round::CarryE, 0))
-            .plus_col(-Fr::ONE, a_word(k as isize - 3))
-            .plus(-Fr::ONE, &t1);
+            .plus_col(-Fp::ONE, a_word(k as isize - 3))
+            .plus(-Fp::ONE, &t1);
         out.push((format!("r{k}_e"), e.gate()));
     }
     for m in 0..R {
         // W_t = sigma1(W_{t-2}) + W_{t-7} + sigma0(W_{t-15}) + W_{t-16}.
         let sum = Form::col(derived(m))
             .plus_col(two32, sched_col(m, Sched::CarryW, 0))
-            .plus(-Fr::ONE, &small_sigma1(m))
-            .plus_col(-Fr::ONE, window(9 + m))
-            .plus(-Fr::ONE, &small_sigma0(m))
-            .plus_col(-Fr::ONE, window(m));
+            .plus(-Fp::ONE, &small_sigma1(m))
+            .plus_col(-Fp::ONE, window(9 + m))
+            .plus(-Fp::ONE, &small_sigma0(m))
+            .plus_col(-Fp::ONE, window(m));
         out.push((format!("s{m}_sum"), sum.gate()));
     }
     out
@@ -944,14 +944,14 @@ fn shift_gates() -> Vec<(String, GateDef)> {
         let masks = sched_bytes(m, Sched::Ss0M3);
         for b in 0..BYTES {
             let form = Form::col(sched_col(m, Sched::Ss0Shr, b))
-                .plus(-Fr::ONE, &shr_byte(&x, &masks, 3, b));
+                .plus(-Fp::ONE, &shr_byte(&x, &masks, 3, b));
             out.push((format!("s{m}_shr3_b{b}"), form.gate()));
         }
         let x = sigma1_input(m);
         let masks = sched_bytes(m, Sched::Ss1M2);
         for b in 0..BYTES - 1 {
             let form = Form::col(sched_col(m, Sched::Ss1Shr, b))
-                .plus(-Fr::ONE, &shr_byte(&x, &masks, 10, b));
+                .plus(-Fp::ONE, &shr_byte(&x, &masks, 10, b));
             out.push((format!("s{m}_shr10_b{b}"), form.gate()));
         }
     }

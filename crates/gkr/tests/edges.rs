@@ -6,11 +6,11 @@
 mod common;
 
 use common::{bind, discharge, fr_base, honest, opposed_circuit, root_circuit};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{gate_values, self_check, GkrError, SelfCheckError};
 
-fn fr(v: u64) -> Fr {
-    Fr::from_u64(v)
+fn fr(v: u64) -> Fp {
+    Fp::from_u64(v)
 }
 
 /// `root_circuit`: `trace_vars` 1, a halving list down to a 0-variable layer,
@@ -42,7 +42,7 @@ fn a_transition_with_no_rounds_still_runs_its_final_check() {
 
     let base = fr_base(&artifact, vec![vec![fr(2), fr(2)]]);
     let (values, _, result) = honest(&artifact, &base);
-    assert_eq!(values.layers[1][0].get(0), fr(4), "the root");
+    assert_eq!(values.layers[1][0].get(0), fr(4).into(), "the root");
     let (_, challenges) = bind(&artifact, &base);
     assert_eq!(
         self_check(&artifact, &values, &challenges),
@@ -66,7 +66,7 @@ fn a_transition_with_no_rounds_still_runs_its_final_check() {
 #[test]
 fn opposed_enforcing_gates_do_not_cancel() {
     let artifact = opposed_circuit();
-    let a: Vec<Fr> = (0..4).map(|i| fr(10 + i)).collect();
+    let a: Vec<Fp> = (0..4).map(|i| fr(10 + i)).collect();
     let base = fr_base(&artifact, vec![a.clone(), a.clone()]);
     let (values, _, result) = honest(&artifact, &base);
     let (_, challenges) = bind(&artifact, &base);
@@ -74,19 +74,26 @@ fn opposed_enforcing_gates_do_not_cancel() {
     discharge(&base, &result.expect("a = b verifies")).expect("and discharges");
 
     let mut b = a.clone();
-    b[1] += Fr::ONE;
+    b[1] += Fp::ONE;
     let base = fr_base(&artifact, vec![a.clone(), b.clone()]);
     let (values, _, result) = honest(&artifact, &base);
     let (_, challenges) = bind(&artifact, &base);
     for (y, (av, bv)) in a.iter().zip(&b).enumerate() {
-        let gates = gate_values(&artifact, 0, &[*av, *bv], &[], &[], &challenges);
+        let gates = gate_values(
+            &artifact,
+            0,
+            &[(*av).into(), (*bv).into()],
+            &[],
+            &[],
+            &challenges,
+        );
         assert_eq!(
             gates[1] + gates[2],
-            Fr::ZERO,
+            Fp2::ZERO,
             "row {y}: the residuals cancel"
         );
         assert_eq!(
-            gates[1] != Fr::ZERO,
+            gates[1] != Fp2::ZERO,
             y == 1,
             "row {y}: violated only on row 1"
         );

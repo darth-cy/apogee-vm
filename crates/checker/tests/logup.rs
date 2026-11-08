@@ -9,7 +9,7 @@
 //! table of `2^n` rows holds at most `2^n` values, and the height menu's first
 //! entry above `2^19` is `2^20`, so the smallest circuit that carries a gap
 //! obligation is `2^20` rows (`docs/spec/lookup.md` §3). One forward pass over
-//! it holds 144,703,478 inner cells — 4.63 GB as `Fr` — and two at once would
+//! it holds 144,703,478 inner cells — 2.32 GB as `Fp2` — and two at once would
 //! not fit a CI runner.
 //!
 //! What the toy holds is `constraints/tests/common/lookup_toy.rs`'s header. Everything
@@ -32,14 +32,14 @@ use constraints::lookup::ChannelSpec;
 use constraints::{CircuitArtifact, PolyAddress};
 use emulator::trace_run;
 use emulator::GuestIo;
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{channel_holds, insert_lookup_challenges, BaseLayer, LayerValues};
 use loader::load_elf;
 use poly::{MultilinearPoly, PolyBacking};
 use program::lookup_tables::{generic_table, GENERIC_WIDTH};
 use program::{decode_program, lookup_tuple, ProgramParams};
 use trace::build_multiplicities;
-use transcript::Transcript;
+use transcript_a64_c5::Transcript;
 
 /// The toy's height, `common/lookup_toy.rs`' `TRACE_VARS`.
 const VARS: u32 = 20;
@@ -69,7 +69,7 @@ fn at(a: &CircuitArtifact, name: &str) -> PolyAddress {
 
 /// A field element's canonical integer as a `u32`. Every value read back here
 /// is one a `u32` column holds.
-fn small(v: Fr) -> u32 {
+fn small(v: Fp) -> u32 {
     let b = v.to_bytes();
     assert!(b[4..].iter().all(|x| *x == 0), "{v:?} is not a u32");
     u32::from_le_bytes([b[0], b[1], b[2], b[3]])
@@ -129,7 +129,7 @@ struct Toy {
     live: usize,
     /// The shard transcript after `g` and `β` are drawn: what a proof of this
     /// shard starts from.
-    seeded: transcript::TranscriptSnapshot,
+    seeded: transcript_a64_c5::TranscriptSnapshot,
 }
 
 fn toy() -> Toy {
@@ -186,12 +186,14 @@ fn toy() -> Toy {
             .unwrap_or_else(|| panic!("no column {name}"))
             .1
     };
-    let pc_mask: Vec<u32> = (0..ROWS).map(|y| small(read("pc_mask").get(y))).collect();
+    let pc_mask: Vec<u32> = (0..ROWS)
+        .map(|y| small(read("pc_mask").get_base(y)))
+        .collect();
     let pc_value: Vec<u32> = (0..ROWS)
-        .map(|y| small(read("pc_read_value").get(y)))
+        .map(|y| small(read("pc_read_value").get_base(y)))
         .collect();
     let rs1_value: Vec<u32> = (0..ROWS)
-        .map(|y| small(read("rs1_read_value").get(y)))
+        .map(|y| small(read("rs1_read_value").get_base(y)))
         .collect();
 
     // A 32-bit value under the range convention of `docs/spec/memory.md` §7,
@@ -216,7 +218,7 @@ fn toy() -> Toy {
         (0..ROWS)
             .map(|y| match pc_mask[y] {
                 0 => 0,
-                _ => small(decoded[j].get(pc_value[y] as usize / 2)),
+                _ => small(decoded[j].get_base(pc_value[y] as usize / 2)),
             })
             .collect()
     };
@@ -282,8 +284,8 @@ fn toy() -> Toy {
     let base = BaseLayer::new(columns);
     let mut t = Transcript::new();
     let mut challenges = common::memory_challenges();
-    let g = t.challenge_scalar(transcript_tags::LOOKUP_CHALLENGE);
-    let beta = t.challenge_scalar(transcript_tags::LOOKUP_CHALLENGE);
+    let g = t.challenge(transcript_tags::LOOKUP_CHALLENGE);
+    let beta = t.challenge(transcript_tags::LOOKUP_CHALLENGE);
     insert_lookup_challenges(&mut challenges, g, beta, &artifact);
 
     Toy {
@@ -302,8 +304,8 @@ fn toy() -> Toy {
 
 /// `shard` with each `(address, row, value)` written into its base. Only the
 /// touched columns are rewritten, so a 2^20-row base is not copied whole.
-fn with_cells(shard: &Shard, cells: &[(PolyAddress, usize, Fr)]) -> Shard {
-    let mut edits: BTreeMap<PolyAddress, Vec<(usize, Fr)>> = BTreeMap::new();
+fn with_cells(shard: &Shard, cells: &[(PolyAddress, usize, Fp)]) -> Shard {
+    let mut edits: BTreeMap<PolyAddress, Vec<(usize, Fp)>> = BTreeMap::new();
     for &(address, row, value) in cells {
         edits.entry(address).or_default().push((row, value));
     }
@@ -316,11 +318,12 @@ fn with_cells(shard: &Shard, cells: &[(PolyAddress, usize, Fr)]) -> Shard {
             match edits.get(&address) {
                 None => (address, column.clone()),
                 Some(rows) => {
-                    let mut values: Vec<Fr> = (0..column.len()).map(|y| column.get(y)).collect();
+                    let mut values: Vec<Fp> =
+                        (0..column.len()).map(|y| column.get_base(y)).collect();
                     for &(row, value) in rows {
                         values[row] = value;
                     }
-                    (address, MultilinearPoly::new(PolyBacking::Fr(values)))
+                    (address, MultilinearPoly::new(PolyBacking::Fp(values)))
                 }
             }
         })
@@ -335,7 +338,7 @@ fn with_cells(shard: &Shard, cells: &[(PolyAddress, usize, Fr)]) -> Shard {
 }
 
 /// Every channel's native sum, and its root pair read from the top layer.
-fn sums(toy: &Toy, values: &LayerValues) -> (Vec<ChannelSum>, Vec<(Fr, Fr)>) {
+fn sums(toy: &Toy, values: &LayerValues) -> (Vec<ChannelSum>, Vec<(Fp2, Fp2)>) {
     let a = &toy.shard.artifact;
     let sums = channel_sums(a, &toy.shard.base, &toy.specs, &toy.shard.challenges)
         .unwrap_or_else(|e| panic!("{e}"));
@@ -350,7 +353,7 @@ fn every_channel_holds(toy: &Toy, values: &LayerValues) -> bool {
     check_channel_roots(&roots, &sums).is_ok()
         && sums
             .iter()
-            .all(|s| s.num == Fr::ZERO && s.unmatched.is_empty())
+            .all(|s| s.num == Fp2::ZERO && s.unmatched.is_empty())
         && roots.iter().all(|r| channel_holds(*r))
 }
 
@@ -364,7 +367,7 @@ fn every_channel_holds(toy: &Toy, values: &LayerValues) -> bool {
 /// reproduced natively, holds, and is `(0, nonzero)`; the memory roots are
 /// still the products they were; and the whole circuit proves and verifies.
 #[test]
-#[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
+#[ignore = "2^20 rows: one forward pass holds 2.32 GB of inner cells"]
 fn the_combined_toy_proves_and_every_channel_holds() {
     let toy = toy();
     let a = &toy.shard.artifact;
@@ -381,9 +384,9 @@ fn the_combined_toy_proves_and_every_channel_holds() {
     for s in &sums {
         let name = lookup_channel::NAMES[s.channel as usize];
         assert_eq!(s.unmatched, Vec::new(), "{name}: unmatched rows");
-        assert_eq!(s.num, Fr::ZERO, "{name}: the fractional sum's numerator");
-        assert_ne!(s.den, Fr::ZERO, "{name}: its denominator");
-        assert_eq!(s.sum(), Some(Fr::ZERO), "{name}: the sum");
+        assert_eq!(s.num, Fp2::ZERO, "{name}: the fractional sum's numerator");
+        assert_ne!(s.den, Fp2::ZERO, "{name}: its denominator");
+        assert_eq!(s.sum(), Some(Fp2::ZERO), "{name}: the sum");
     }
     assert_eq!(check_channel_roots(&roots, &sums), Ok(()));
     for (s, root) in sums.iter().zip(&roots) {
@@ -417,13 +420,13 @@ fn the_combined_toy_proves_and_every_channel_holds() {
 /// Two forgeries, and the second is the interesting one. The prover first
 /// recounts its own multiplicities over the tampered witness, which cannot even
 /// be done: the table holds no `2^16`. Then it does what an unconstrained prover
-/// would — choose a multiplicity cell **after** `g`, solving
-/// `δ = (num/den)·(T_0 + g)` — and the channel balances, every check accepts it,
-/// and the proof verifies. What forbids that is the order of
+/// would — choose two multiplicity cells **after** `g`, solving
+/// `δ_0/(T_0 + g) + δ_1/(T_1 + g) = num/den` over `Fp` — and the channel
+/// balances, every check accepts it, and the proof verifies. What forbids that is the order of
 /// `docs/spec/lookup.md` §2 and nothing in the circuit, which is why that order
 /// is a test (`crates/verifier-core/tests/reduce.rs`) and not a remark.
 #[test]
-#[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
+#[ignore = "2^20 rows: one forward pass holds 2.32 GB of inner cells"]
 fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
     let toy = toy();
     let a = &toy.shard.artifact;
@@ -432,7 +435,7 @@ fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
     assert_eq!(prove_and_verify(&toy, &honest), Ok(()));
 
     let row = 3;
-    let out_of_range = Fr::from_u64(1 << 16);
+    let out_of_range = Fp::from_u64(1 << 16);
     let forged = with_cells(&toy.shard, &[(at(a, "word_hi"), row, out_of_range)]);
     // The native evaluator sees it on its own row.
     let values = forwarded_shard(&forged);
@@ -469,7 +472,7 @@ fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
         2,
         "both chunks are unmatched"
     );
-    assert_ne!(broken[range16].num, Fr::ZERO);
+    assert_ne!(broken[range16].num, Fp2::ZERO);
     assert!(!channel_holds(roots[range16]));
     // The GKR proof of the forged witness is honest — nothing below the root
     // notices — and the root check is what refuses it. A prover claiming the
@@ -479,7 +482,7 @@ fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
         verify_claiming(
             &forged_toy,
             &values,
-            &[(range16, Fr::ZERO, roots[range16].1)]
+            &[(range16, Fp2::ZERO, roots[range16].1)]
         ),
         Err(gkr::GkrError::LayerInconsistency {
             layer: a.depth() - 1
@@ -487,10 +490,13 @@ fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
         "a forged output claim, refused at the top transition"
     );
 
-    // The other half: a multiplicity chosen **after** `g` rebalances the
-    // channel outright. A multiplicity is a field vector, so a prover who knew
-    // `g` could add `δ = (num/den)·(T_0 + g)` at table row 0 and drive the
-    // channel's numerator to 0. Nothing in the circuit forbids it.
+    // The other half: multiplicities chosen **after** `g` rebalance the
+    // channel outright. A multiplicity is a base vector and `num/den` an `Fp2`
+    // value, so one cell cannot absorb it, but two can: a prover who knew `g`
+    // could add `δ_0, δ_1 ∈ Fp` at table rows 0 and 1, with
+    // `δ_0/(T_0 + g) + δ_1/(T_1 + g) = num/den` solved coordinate by
+    // coordinate, and drive the channel's numerator to 0. Nothing in the
+    // circuit forbids it.
     //
     // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. What is meant
     // to forbid it is the order of `docs/spec/lookup.md` §2 — every
@@ -503,23 +509,43 @@ fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
         .challenges
         .get(challenge_slot::LOOKUP_G)
         .expect("g was supplied");
-    let table_0 = gkr::virtual_at_row(constraints::VirtualKind::Range16, 0) + g;
-    let delta = broken[range16].num
+    let sum = broken[range16].num
         * broken[range16]
             .den
             .inverse()
-            .expect("a nonzero denominator")
-        * table_0;
+            .expect("a nonzero denominator");
+    let weight = |row: usize| {
+        (gkr::virtual_at_row(constraints::VirtualKind::Range16, row) + g)
+            .inverse()
+            .expect("T + g is nonzero")
+    };
+    let (u, v) = (weight(0), weight(1));
+    let det = (u.c0 * v.c1 - v.c0 * u.c1)
+        .inverse()
+        .expect("the two rows' weights are independent over Fp");
+    let delta_0 = (sum.c0 * v.c1 - v.c0 * sum.c1) * det;
+    let delta_1 = (u.c0 * sum.c1 - sum.c0 * u.c1) * det;
+    assert_eq!(
+        u * delta_0 + v * delta_1,
+        sum,
+        "the two cells absorb num/den"
+    );
     let mult = toy.specs[range16].multiplicity;
-    let was = forged_toy.shard.base.get(mult).expect("a column").get(0);
-    let rebalanced = with_cells(&forged_toy.shard, &[(mult, 0, was + delta)]);
+    let column = forged_toy.shard.base.get(mult).expect("a column");
+    let rebalanced = with_cells(
+        &forged_toy.shard,
+        &[
+            (mult, 0, column.get_base(0) + delta_0),
+            (mult, 1, column.get_base(1) + delta_1),
+        ],
+    );
     let values = forwarded_shard(&rebalanced);
     let rebalanced_toy = reshard(&toy, rebalanced);
     let (after, roots) = sums(&rebalanced_toy, &values);
     assert_eq!(
         after[range16].num,
-        Fr::ZERO,
-        "a multiplicity chosen after g rebalances the channel"
+        Fp2::ZERO,
+        "multiplicities chosen after g rebalance the channel"
     );
     assert!(channel_holds(roots[range16]), "and its root accepts it");
     assert_eq!(check_channel_roots(&roots, &after), Ok(()));
@@ -547,17 +573,23 @@ fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
 /// source register at all — so the pair is found by its property instead of by
 /// its register.
 #[test]
-#[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
+#[ignore = "2^20 rows: one forward pass holds 2.32 GB of inner cells"]
 fn s14s_future_read_now_fails_the_timestamp_channel() {
     let toy = toy();
     let a = &toy.shard.artifact;
-    let cell = |name: &str, row: usize| toy.shard.base.get(at(a, name)).expect("a column").get(row);
+    let cell = |name: &str, row: usize| {
+        toy.shard
+            .base
+            .get(at(a, name))
+            .expect("a column")
+            .get_base(row)
+    };
     let read_ts = at(a, "rs1_read_ts");
 
     // Two live `rs1` queries at one register reading one value, at different
     // timestamps: swapping those permutes the read tuples and nothing else.
     let live: Vec<usize> = (0..toy.live)
-        .filter(|y| cell("rs1_mask", *y) == Fr::ONE)
+        .filter(|y| cell("rs1_mask", *y) == Fp::ONE)
         .collect();
     let mut pair = None;
     for (i, &early) in live.iter().enumerate() {
@@ -604,7 +636,7 @@ fn s14s_future_read_now_fails_the_timestamp_channel() {
         !sums[timestamp].unmatched.is_empty(),
         "the negative gap is unmatched"
     );
-    assert_ne!(sums[timestamp].num, Fr::ZERO);
+    assert_ne!(sums[timestamp].num, Fp2::ZERO);
     assert!(!channel_holds(roots[timestamp]), "the root refuses it");
     assert_eq!(
         check_channel_roots(&roots, &sums),
@@ -617,7 +649,7 @@ fn s14s_future_read_now_fails_the_timestamp_channel() {
         verify_claiming(
             &forged_toy,
             &values,
-            &[(timestamp, Fr::ZERO, roots[timestamp].1)]
+            &[(timestamp, Fp2::ZERO, roots[timestamp].1)]
         ),
         Err(gkr::GkrError::LayerInconsistency {
             layer: a.depth() - 1
@@ -640,7 +672,7 @@ fn s14s_future_read_now_fails_the_timestamp_channel() {
 ///    which is the `+ 1` offset: a genuine lookup of `a = b = 0` credits the
 ///    AND table's own row, and a switched-off row credits row 0.
 #[test]
-#[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
+#[ignore = "2^20 rows: one forward pass holds 2.32 GB of inner cells"]
 fn the_gated_key_convention_holds_in_all_three_cases() {
     let toy = toy();
     let a = &toy.shard.artifact;
@@ -655,16 +687,16 @@ fn the_gated_key_convention_holds_in_all_three_cases() {
             .base
             .get(at(a, "and_on"))
             .expect("a column")
-            .get(off),
-        Fr::ZERO,
+            .get_base(off),
+        Fp::ZERO,
         "row {off} is a padding row, its flag off"
     );
     let garbage = with_cells(
         &toy.shard,
         &[
-            (at(a, "and_a"), off, Fr::from_u64(0xdead)),
-            (at(a, "and_b"), off, Fr::from_u64(0xbeef)),
-            (at(a, "and_c"), off, Fr::from_u64(0x1234)),
+            (at(a, "and_a"), off, Fp::from_u64(0xdead)),
+            (at(a, "and_b"), off, Fp::from_u64(0xbeef)),
+            (at(a, "and_c"), off, Fp::from_u64(0x1234)),
         ],
     );
     let values = forwarded_shard(&garbage);
@@ -676,7 +708,7 @@ fn the_gated_key_convention_holds_in_all_three_cases() {
 
     // 2. A flag = 1 row's key moved.
     let live = live_row(&toy, "and_on");
-    let forged = with_cells(&toy.shard, &[(at(a, "and_a"), live, Fr::from_u64(0x1ff))]);
+    let forged = with_cells(&toy.shard, &[(at(a, "and_a"), live, Fp::from_u64(0x1ff))]);
     let values = forwarded_shard(&forged);
     let forged_toy = reshard(&toy, forged);
     let (sums, roots) = sums(&forged_toy, &values);
@@ -693,22 +725,22 @@ fn the_gated_key_convention_holds_in_all_three_cases() {
     let zeroed = with_cells(
         &toy.shard,
         &[
-            (at(a, "and_a"), live, Fr::ZERO),
-            (at(a, "and_b"), live, Fr::ZERO),
-            (at(a, "and_c"), live, Fr::ZERO),
+            (at(a, "and_a"), live, Fp::ZERO),
+            (at(a, "and_b"), live, Fp::ZERO),
+            (at(a, "and_c"), live, Fp::ZERO),
         ],
     );
     let counts = build_multiplicities(a, &columns_of(&zeroed), &toy.specs)
         .expect("a genuine entry is countable");
     let (_, generic_counts) = &counts[channel_at_spec(&toy.specs, lookup_channel::GENERIC)];
     assert_ne!(
-        generic_counts.get(1),
-        Fr::ZERO,
+        generic_counts.get_base(1),
+        Fp::ZERO,
         "the AND entry (0, 0, 0) is the table's row 1, not its row 0"
     );
     assert_ne!(
-        generic_counts.get(0),
-        Fr::ZERO,
+        generic_counts.get_base(0),
+        Fp::ZERO,
         "and the ZeroEntry at row 0 answers every switched-off row"
     );
 }
@@ -727,19 +759,19 @@ fn the_gated_key_convention_holds_in_all_three_cases() {
 /// nothing else, which is exactly what the all-zero case shows: booleanity
 /// permits it, and the table does not hold it.
 #[test]
-#[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
+#[ignore = "2^20 rows: one forward pass holds 2.32 GB of inner cells"]
 fn a_moved_decoded_output_and_an_illegal_mask_each_fail_the_decoder_channel() {
     let toy = toy();
     let a = &toy.shard.artifact;
     let live = live_row(&toy, "pc_mask");
     let mask = at(a, "decoded_mask");
-    let held = toy.shard.base.get(mask).expect("a column").get(live);
-    assert_ne!(held, Fr::ZERO, "a live row's mask is one-hot, never 0");
+    let held = toy.shard.base.get(mask).expect("a column").get_base(live);
+    assert_ne!(held, Fp::ZERO, "a live row's mask is one-hot, never 0");
 
     // One decoded output moved: the claimed `rd` for this pc.
     let rd = at(a, "decoded_rd");
-    let was = toy.shard.base.get(rd).expect("a column").get(live);
-    let moved = with_cells(&toy.shard, &[(rd, live, was + Fr::ONE)]);
+    let was = toy.shard.base.get(rd).expect("a column").get_base(live);
+    let moved = with_cells(&toy.shard, &[(rd, live, was + Fp::ONE)]);
     assert_eq!(
         decoder_unmatched(&toy, moved),
         vec![(live, "decode_row".to_string())],
@@ -750,7 +782,7 @@ fn a_moved_decoded_output_and_an_illegal_mask_each_fail_the_decoder_channel() {
     // and the all-zero mask. Both are twelve-bit values whose bits recompose
     // them and are each boolean, so only the table's domain refuses them —
     // which is the whole point of one packed column.
-    for claimed in [Fr::from_u64(0b11), Fr::ZERO] {
+    for claimed in [Fp::from_u64(0b11), Fp::ZERO] {
         let mut cells = vec![(mask, live, claimed)];
         for k in 0..MASK_BITS {
             let bit = bit_of(claimed, k);
@@ -780,13 +812,13 @@ fn a_moved_decoded_output_and_an_illegal_mask_each_fail_the_decoder_channel() {
 /// every gate holds, the recount names the column and the row, and the
 /// channel's root is not `(0, nonzero)`.
 #[test]
-#[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
+#[ignore = "2^20 rows: one forward pass holds 2.32 GB of inner cells"]
 fn one_changed_multiplicity_cell_fails_its_channel() {
     let toy = toy();
     let a = &toy.shard.artifact;
     let column = at(a, "mult_generic");
-    let was = toy.shard.base.get(column).expect("a column").get(0);
-    let forged = with_cells(&toy.shard, &[(column, 0, was + Fr::ONE)]);
+    let was = toy.shard.base.get(column).expect("a column").get_base(0);
+    let forged = with_cells(&toy.shard, &[(column, 0, was + Fp::ONE)]);
     let values = forwarded_shard(&forged);
     assert_eq!(gkr::self_check(a, &values, &forged.challenges), Ok(()));
 
@@ -805,7 +837,7 @@ fn one_changed_multiplicity_cell_fails_its_channel() {
         sums[generic].unmatched.is_empty(),
         "every tuple is still in the table"
     );
-    assert_ne!(sums[generic].num, Fr::ZERO, "the counts no longer balance");
+    assert_ne!(sums[generic].num, Fp2::ZERO, "the counts no longer balance");
     assert!(!channel_holds(roots[generic]));
     assert_eq!(check_channel_roots(&roots, &sums), Ok(()));
 }
@@ -872,13 +904,13 @@ fn live_row(toy: &Toy, flag: &str) -> usize {
         .get(at(&toy.shard.artifact, flag))
         .expect("a column");
     (0..toy.live)
-        .find(|y| column.get(*y) == Fr::ONE)
+        .find(|y| column.get_base(*y) == Fp::ONE)
         .unwrap_or_else(|| panic!("no row has {flag} = 1"))
 }
 
 /// Bit `k` of a field element that is a small integer.
-fn bit_of(v: Fr, k: usize) -> Fr {
-    Fr::from_u64(u64::from((small(v) >> k) & 1))
+fn bit_of(v: Fp, k: usize) -> Fp {
+    Fp::from_u64(u64::from((small(v) >> k) & 1))
 }
 
 /// The decoder channel's unmatched rows on a forged shard.
@@ -903,14 +935,14 @@ fn prove_and_verify(toy: &Toy, values: &LayerValues) -> Result<(), gkr::GkrError
 fn verify_claiming(
     toy: &Toy,
     values: &LayerValues,
-    claimed: &[(usize, Fr, Fr)],
+    claimed: &[(usize, Fp2, Fp2)],
 ) -> Result<(), gkr::GkrError> {
     let shard = &toy.shard;
     let a = &shard.artifact;
     let bound = || Transcript::restore(&toy.seeded);
     let proof = gkr::prove(a, values, &shard.challenges, &mut bound());
     let top = values.layers.last().expect("a top layer");
-    let mut outputs: Vec<Fr> = a
+    let mut outputs: Vec<Fp2> = a
         .outputs
         .iter()
         .map(|out| match *out {

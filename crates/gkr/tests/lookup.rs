@@ -8,7 +8,7 @@ use constraints::{
     CircuitArtifact, Coeff, GateDef, LayerSpec, Padding, PolyAddress, ProducingEntry, Relation,
     ScratchSlot, VirtualKind, COEFFICIENT_ENCODING_CANONICAL_LE, FORMAT_VERSION,
 };
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{
     channel_holds, forward, insert_lookup_challenges, prove, self_check, verify, virtual_at_point,
     virtual_at_row, BaseLayer, ExternalChallenges, GkrError,
@@ -16,20 +16,27 @@ use gkr::{
 use poly::{MultilinearPoly, PolyBacking};
 use sumcheck::{absorb_witness_digest, witness_digest};
 use test_support::Rng;
-use transcript::Transcript;
+use transcript_a64_c5::Transcript;
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn inner(layer: u32, offset: u32) -> PolyAddress {
     PolyAddress::Inner { layer, offset }
 }
 
-fn fr(rng: &mut Rng) -> Fr {
-    let mut b = rng.next_le32();
-    b[31] &= 0x0f;
-    Fr::from_bytes(&b).expect("below 2^252")
+/// A pseudo-random base element: a column's value.
+fn fr(rng: &mut Rng) -> Fp {
+    Fp::from_u64(rng.next_u64())
+}
+
+/// A pseudo-random `Fp2` element: a challenge or a point's coordinate.
+fn fr2(rng: &mut Rng) -> Fp2 {
+    Fp2 {
+        c0: fr(rng),
+        c1: fr(rng),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -153,31 +160,31 @@ fn fraction_circuit(vars: u32) -> CircuitArtifact {
         outputs: vec![inner(top, 0), inner(top, 1)],
         // The circuit has no enforcing gate, so every row satisfies it.
         padding: Padding {
-            row: vec![Fr::ZERO, Fr::ONE],
+            row: vec![Fp::ZERO, Fp::ONE],
             zero_row_valid: false,
         },
     }
 }
 
 /// `(p, q)` over `2^vars` rows, `q` never 0.
-fn fractions(vars: u32, seed: u64) -> (Vec<Fr>, Vec<Fr>) {
+fn fractions(vars: u32, seed: u64) -> (Vec<Fp>, Vec<Fp>) {
     let mut rng = Rng::new(seed);
     let rows = 1usize << vars;
-    let p: Vec<Fr> = (0..rows).map(|_| fr(&mut rng)).collect();
-    let q: Vec<Fr> = (0..rows).map(|_| fr(&mut rng) + Fr::ONE).collect();
-    assert!(q.iter().all(|v| *v != Fr::ZERO));
+    let p: Vec<Fp> = (0..rows).map(|_| fr(&mut rng)).collect();
+    let q: Vec<Fp> = (0..rows).map(|_| fr(&mut rng) + Fp::ONE).collect();
+    assert!(q.iter().all(|v| *v != Fp::ZERO));
     (p, q)
 }
 
-fn base(p: &[Fr], q: &[Fr]) -> BaseLayer {
+fn base(p: &[Fp], q: &[Fp]) -> BaseLayer {
     BaseLayer::new(vec![
         (
             PolyAddress::Witness(0),
-            MultilinearPoly::new(PolyBacking::Fr(p.to_vec())),
+            MultilinearPoly::new(PolyBacking::Fp(p.to_vec())),
         ),
         (
             PolyAddress::Witness(1),
-            MultilinearPoly::new(PolyBacking::Fr(q.to_vec())),
+            MultilinearPoly::new(PolyBacking::Fp(q.to_vec())),
         ),
     ])
 }
@@ -197,13 +204,17 @@ fn a_fraction_tree_adds_every_rows_fraction() {
         let values = forward(&a, &base, &challenges);
         assert_eq!(self_check(&a, &values, &challenges), Ok(()));
 
-        let denominator = q.iter().fold(Fr::ONE, |acc, v| acc * *v);
-        let sum = p.iter().zip(&q).fold(Fr::ZERO, |acc, (n, d)| {
+        let denominator = q.iter().fold(Fp::ONE, |acc, v| acc * *v);
+        let sum = p.iter().zip(&q).fold(Fp::ZERO, |acc, (n, d)| {
             acc + *n * d.inverse().expect("q != 0")
         });
         let top = values.layers.last().expect("a top layer");
-        assert_eq!(top[1].get(0), denominator, "{vars}: the den root");
-        assert_eq!(top[0].get(0), sum * denominator, "{vars}: the num root");
+        assert_eq!(top[1].get(0), denominator.into(), "{vars}: the den root");
+        assert_eq!(
+            top[0].get(0),
+            (sum * denominator).into(),
+            "{vars}: the num root"
+        );
 
         assert_eq!(prove_and_verify(&a, &base, &values), Ok(()));
     }
@@ -233,19 +244,23 @@ fn a_zero_pair_annihilates_the_tree_and_only_the_den_check_refuses_it() {
     let values = forward(&a, &base(&p, &q), &challenges);
     let top = values.layers.last().expect("a top layer");
     let unbalanced = (top[0].get(0), top[1].get(0));
-    assert_ne!(unbalanced.0, Fr::ZERO, "an arbitrary sum is not zero");
-    assert_ne!(unbalanced.1, Fr::ZERO);
+    assert_ne!(unbalanced.0, Fp2::ZERO, "an arbitrary sum is not zero");
+    assert_ne!(unbalanced.1, Fp2::ZERO);
     assert!(!channel_holds(unbalanced));
 
     // The same rows with row 3's pair zeroed.
     let (mut forged_p, mut forged_q) = (p.clone(), q.clone());
-    forged_p[3] = Fr::ZERO;
-    forged_q[3] = Fr::ZERO;
+    forged_p[3] = Fp::ZERO;
+    forged_q[3] = Fp::ZERO;
     let values = forward(&a, &base(&forged_p, &forged_q), &challenges);
     let top = values.layers.last().expect("a top layer");
     let forged = (top[0].get(0), top[1].get(0));
-    assert_eq!(forged, (Fr::ZERO, Fr::ZERO), "a zero pair reaches the root");
-    assert_eq!(forged.0, Fr::ZERO, "num == 0 alone accepts it");
+    assert_eq!(
+        forged,
+        (Fp2::ZERO, Fp2::ZERO),
+        "a zero pair reaches the root"
+    );
+    assert_eq!(forged.0, Fp2::ZERO, "num == 0 alone accepts it");
     assert!(!channel_holds(forged), "both conditions refuse it");
 
     // And the GKR proof of it is honest: nothing below the root notices, so the
@@ -274,13 +289,13 @@ fn prove_and_verify(
     let digest = witness_digest(&columns);
     let bound = || {
         let mut t = Transcript::new();
-        absorb_witness_digest(&mut t, digest);
+        absorb_witness_digest(&mut t, &digest);
         t
     };
     let challenges = ExternalChallenges::new();
     let proof = prove(a, values, &challenges, &mut bound());
     let top = values.layers.last().expect("a top layer");
-    let outputs: Vec<Fr> = a
+    let outputs: Vec<Fp2> = a
         .outputs
         .iter()
         .map(|out| match *out {
@@ -307,10 +322,10 @@ fn each_range_tables_closed_form_is_its_multilinear_extension() {
     for (kind, bits) in [(VirtualKind::Range19, 19), (VirtualKind::Range16, 16)] {
         for n in [2u32, bits - 1, bits, bits + 1] {
             let rows = 1usize << n;
-            let table: Vec<Fr> = (0..rows).map(|y| virtual_at_row(kind, y)).collect();
-            let poly = MultilinearPoly::new(PolyBacking::Fr(table.clone()));
+            let table: Vec<Fp> = (0..rows).map(|y| virtual_at_row(kind, y)).collect();
+            let poly = MultilinearPoly::new(PolyBacking::Fp(table.clone()));
             for _ in 0..4 {
-                let point: Vec<Fr> = (0..n).map(|_| fr(&mut rng)).collect();
+                let point: Vec<Fp2> = (0..n).map(|_| fr2(&mut rng)).collect();
                 assert_eq!(
                     virtual_at_point(kind, &point),
                     poly.evaluate(&point),
@@ -320,7 +335,7 @@ fn each_range_tables_closed_form_is_its_multilinear_extension() {
             // On the cube it is the low `min(bits, n)` bits of the row index.
             let mask = (1u64 << bits.min(n)) - 1;
             for y in [0usize, 1, rows / 3, rows - 1] {
-                assert_eq!(table[y], Fr::from_u64(y as u64 & mask), "{kind:?} row {y}");
+                assert_eq!(table[y], Fp::from_u64(y as u64 & mask), "{kind:?} row {y}");
             }
         }
     }
@@ -333,18 +348,18 @@ fn a_perturbed_closed_form_disagrees_with_the_table() {
     let mut rng = Rng::new(0x5115_000a);
     let (kind, n) = (VirtualKind::Range16, 8u32);
     let rows = 1usize << n;
-    let table: Vec<Fr> = (0..rows).map(|y| virtual_at_row(kind, y)).collect();
-    let poly = MultilinearPoly::new(PolyBacking::Fr(table));
+    let table: Vec<Fp> = (0..rows).map(|y| virtual_at_row(kind, y)).collect();
+    let poly = MultilinearPoly::new(PolyBacking::Fp(table));
     // `Σ_{j < bits} 2^j·y_j` with the weight of variable 3 doubled.
-    let perturbed = |point: &[Fr]| -> Fr {
-        point.iter().enumerate().fold(Fr::ZERO, |acc, (j, y)| {
+    let perturbed = |point: &[Fp2]| -> Fp2 {
+        point.iter().enumerate().fold(Fp2::ZERO, |acc, (j, y)| {
             let weight = if j == 3 { 1u64 << (j + 1) } else { 1u64 << j };
-            acc + Fr::from_u64(weight) * *y
+            acc + Fp::from_u64(weight) * *y
         })
     };
     let mut disagreements = 0;
     for _ in 0..4 {
-        let point: Vec<Fr> = (0..n).map(|_| fr(&mut rng)).collect();
+        let point: Vec<Fp2> = (0..n).map(|_| fr2(&mut rng)).collect();
         assert_eq!(virtual_at_point(kind, &point), poly.evaluate(&point));
         if perturbed(&point) != poly.evaluate(&point) {
             disagreements += 1;
@@ -368,7 +383,7 @@ fn a_perturbed_closed_form_disagrees_with_the_table() {
 #[test]
 fn the_derived_lookup_slots_are_the_powers_and_the_neutral_denominator() {
     let mut rng = Rng::new(0x5115_000b);
-    let (g, beta) = (fr(&mut rng), fr(&mut rng));
+    let (g, beta) = (fr2(&mut rng), fr2(&mut rng));
     for width in 0..=lookup_channel::MAX_TUPLE {
         let mut a = fraction_circuit(3);
         // A decoder lookup of `width` columns over `W[0]`, or none at width 0.
@@ -400,8 +415,8 @@ fn the_derived_lookup_slots_are_the_powers_and_the_neutral_denominator() {
         match width {
             0 => assert_eq!(neutral, None, "no decoder channel, no neutral slot"),
             _ => {
-                let mut sum = Fr::ZERO;
-                let mut p = Fr::ONE;
+                let mut sum = Fp2::ZERO;
+                let mut p = Fp2::ONE;
                 for _ in 0..width {
                     sum += p;
                     p *= beta;
@@ -440,19 +455,19 @@ fn each_range_channels_bound_is_the_width_of_the_table_it_looks_into() {
             .expect("a nonempty table");
         assert_eq!(
             top,
-            Fr::from_u64((1u64 << bits) - 1),
+            Fp::from_u64((1u64 << bits) - 1),
             "{kind:?} tops out at 2^{bits} − 1, which is `BITS[{channel}]`"
         );
-        assert_eq!(virtual_at_row(kind, 1 << bits), Fr::ZERO, "and wraps there");
+        assert_eq!(virtual_at_row(kind, 1 << bits), Fp::ZERO, "and wraps there");
     }
 }
 
 /// The root check is `num == 0 AND den != 0`, and neither half alone.
 #[test]
 fn a_channel_holds_only_at_a_zero_numerator_over_a_nonzero_denominator() {
-    let one = Fr::ONE;
-    assert!(channel_holds((Fr::ZERO, one)));
+    let one = Fp2::ONE;
+    assert!(channel_holds((Fp2::ZERO, one)));
     assert!(!channel_holds((one, one)), "a nonzero numerator");
-    assert!(!channel_holds((Fr::ZERO, Fr::ZERO)), "a zero denominator");
-    assert!(!channel_holds((one, Fr::ZERO)));
+    assert!(!channel_holds((Fp2::ZERO, Fp2::ZERO)), "a zero denominator");
+    assert!(!channel_holds((one, Fp2::ZERO)));
 }

@@ -22,7 +22,7 @@ use constants::{challenge_slot, family, lookup_channel};
 use constraints::lookup::{check_discharge, ChannelSpec};
 use constraints::memory::check_memory;
 use constraints::{add_sub, family_circuit, CircuitArtifact, PolyAddress, VirtualKind};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallenges};
 
 const VARS: u32 = 20;
@@ -39,14 +39,14 @@ fn challenges(a: &CircuitArtifact) -> ExternalChallenges {
         (challenge_slot::MEM_ALPHA_TS, 17),
         (challenge_slot::MEM_ALPHA_VAL, 19),
     ] {
-        ch.insert(slot, Fr::from_u64(v));
+        ch.insert(slot, Fp::from_u64(v).into());
     }
-    insert_lookup_challenges(&mut ch, Fr::from_u64(23), Fr::from_u64(29), a);
+    insert_lookup_challenges(&mut ch, Fp::from_u64(23).into(), Fp::from_u64(29).into(), a);
     ch
 }
 
-fn f(v: u64) -> Fr {
-    Fr::from_u64(v)
+fn f(v: u64) -> Fp {
+    Fp::from_u64(v)
 }
 
 const TWO_32: u64 = 1 << 32;
@@ -57,22 +57,22 @@ const TWO_32: u64 = 1 << 32;
 
 /// A row by column name; a column not named is 0.
 #[derive(Clone, Debug, Default)]
-struct Row(BTreeMap<&'static str, Fr>);
+struct Row(BTreeMap<&'static str, Fp>);
 
 impl Row {
-    fn set(&mut self, name: &'static str, v: Fr) -> &mut Row {
+    fn set(&mut self, name: &'static str, v: Fp) -> &mut Row {
         self.0.insert(name, v);
         self
     }
 
-    fn get(&self, name: &str) -> Fr {
-        self.0.get(name).copied().unwrap_or(Fr::ZERO)
+    fn get(&self, name: &str) -> Fp {
+        self.0.get(name).copied().unwrap_or(Fp::ZERO)
     }
 
     /// Set the query `q`'s five columns and its gap chunk, reading a write
     /// made eight timestamps before its own.
     fn query(&mut self, q: &'static str, cycle: u64, delta: u64, addr: u64, read: u64, write: u64) {
-        self.set(name(q, "mask"), Fr::ONE)
+        self.set(name(q, "mask"), Fp::ONE)
             .set(name(q, "addr"), f(addr))
             .set(name(q, "read_ts"), f(4 * cycle + delta - 8))
             .set(name(q, "read_value"), f(read))
@@ -99,20 +99,20 @@ impl Row {
         for key in self.0.keys() {
             assert!(names.contains(key), "the circuit has no column `{key}`");
         }
-        let committed: Vec<Fr> = names.iter().map(|n| self.get(n)).collect();
-        let virtuals: Vec<Fr> = a
+        let committed: Vec<Fp> = names.iter().map(|n| self.get(n)).collect();
+        let virtuals: Vec<Fp2> = a
             .virtuals
             .iter()
-            .map(|(k, _)| virtual_at_row(*k, row))
+            .map(|(k, _)| virtual_at_row(*k, row).into())
             .collect();
         let ch = challenges(a);
-        let mut scratch = vec![Fr::ZERO; a.scratch.len()];
-        let mut lower = committed.clone();
+        let mut scratch = vec![Fp2::ZERO; a.scratch.len()];
+        let mut lower: Vec<Fp2> = committed.iter().map(|v| (*v).into()).collect();
         for k in 0..a.depth() {
             if a.layers[k].halving {
                 break;
             }
-            let v: &[Fr] = if k == 0 { &virtuals } else { &[] };
+            let v: &[Fp2] = if k == 0 { &virtuals } else { &[] };
             let values = gate_values(a, k, &lower, &[], v, &ch);
             let produced = values[..a.layers[k].producing.len()].to_vec();
             for (j, value) in produced.iter().enumerate() {
@@ -200,7 +200,7 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
 
     let mut r = Row::default();
     r.set("cycle", f(CYCLE));
-    r.set("pc_mask", Fr::ONE)
+    r.set("pc_mask", Fp::ONE)
         .set("pc_read_ts", f(4 * (CYCLE - 1)))
         .set("pc_read_value", f(i.pc as u64))
         .set("pc_write_value", f(next as u64));
@@ -214,7 +214,7 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
         let write = if rd_addr == 0 { 0 } else { sel };
         r.query("rd", CYCLE, 3, rd_addr as u64, rd_old as u64, write as u64);
         match rd_addr {
-            0 => r.set("rd_is_zero", Fr::ONE),
+            0 => r.set("rd_is_zero", Fp::ONE),
             a => r.set("rd_inv", f(a as u64).inverse().expect("nonzero")),
         };
     }
@@ -237,12 +237,12 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
         .set("table_extra_mask", f(1 << i.bit))
         .set("table_pc", f(i.pc as u64));
     let kinds = ["system", "addi", "auipc", "add", "sub", "lui"];
-    r.set(name("kind", kinds[i.bit as usize]), Fr::ONE);
+    r.set(name("kind", kinds[i.bit as usize]), Fp::ONE);
     if system_ecall {
-        r.set("is_ecall", Fr::ONE);
+        r.set("is_ecall", Fp::ONE);
     }
     if fence {
-        r.set("is_fence", Fr::ONE);
+        r.set("is_fence", Fp::ONE);
     }
     r
 }
@@ -326,7 +326,7 @@ fn violated(a: &CircuitArtifact, r: &Row) -> (Vec<String>, Vec<String>) {
 }
 
 /// A cell's value as an integer, where the row holds one below `2^64`.
-fn small_int(v: Fr) -> u64 {
+fn small_int(v: Fp) -> u64 {
     let b = v.to_bytes();
     assert!(
         b[8..].iter().all(|x| *x == 0),
@@ -601,13 +601,13 @@ fn every_row_kind_satisfies_every_gate_and_every_bound() {
     // The rows really are what their names say.
     let rows = honest_rows();
     let get = |what: &str, col: &str| rows.iter().find(|(w, _)| *w == what).unwrap().1.get(col);
-    assert_eq!(get("add, carrying", "wrap"), Fr::ONE);
-    assert_eq!(get("sub, borrowing", "wrap"), Fr::ONE);
-    assert_eq!(get("auipc, carrying", "wrap"), Fr::ONE);
-    assert_eq!(get("add to x0, carrying", "rd_write_value"), Fr::ZERO);
-    assert_ne!(get("add to x0, carrying", "rd_selected"), Fr::ZERO);
+    assert_eq!(get("add, carrying", "wrap"), Fp::ONE);
+    assert_eq!(get("sub, borrowing", "wrap"), Fp::ONE);
+    assert_eq!(get("auipc, carrying", "wrap"), Fp::ONE);
+    assert_eq!(get("add to x0, carrying", "rd_write_value"), Fp::ZERO);
+    assert_ne!(get("add to x0, carrying", "rd_selected"), Fp::ZERO);
     assert_eq!(get("c.add, two bytes", "decoded_next_pc"), f(0x1_0012));
-    assert_eq!(get("exit 42", "pc_write_value"), Fr::ONE);
+    assert_eq!(get("exit 42", "pc_write_value"), Fp::ONE);
 }
 
 // ---------------------------------------------------------------------------
@@ -624,7 +624,7 @@ fn row(what: &str) -> Row {
 
 /// Set `rd`'s computed value to `sel` on a row whose `rd` is not `x0`, moving
 /// its write and its high halfword with it, so only the semantic gate sees it.
-fn with_sel(mut r: Row, sel: Fr) -> Row {
+fn with_sel(mut r: Row, sel: Fp) -> Row {
     r.set("rd_selected", sel).set("rd_write_value", sel);
     r
 }
@@ -638,34 +638,34 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     let mut cases: Vec<(&str, Row, Vec<&str>)> = Vec::new();
 
     let mut r = row("add, carrying");
-    r.set("wrap", Fr::ZERO);
+    r.set("wrap", Fp::ZERO);
     cases.push(("an add's carry dropped", r, vec!["add_addi_auipc"]));
     let r = row("add, not carrying");
-    let sel = r.get("rd_selected") + Fr::ONE;
+    let sel = r.get("rd_selected") + Fp::ONE;
     cases.push((
         "an add's result moved",
         with_sel(r, sel),
         vec!["add_addi_auipc"],
     ));
     let r = row("addi of -1, carrying");
-    let sel = r.get("rd_selected") + Fr::ONE;
+    let sel = r.get("rd_selected") + Fp::ONE;
     cases.push((
         "an addi's result moved",
         with_sel(r, sel),
         vec!["add_addi_auipc"],
     ));
     let r = row("auipc, carrying");
-    let sel = r.get("rd_selected") - Fr::ONE;
+    let sel = r.get("rd_selected") - Fp::ONE;
     cases.push((
         "an auipc's result moved",
         with_sel(r, sel),
         vec!["add_addi_auipc"],
     ));
     let mut r = row("sub, borrowing");
-    r.set("wrap", Fr::ZERO);
+    r.set("wrap", Fp::ZERO);
     cases.push(("a sub's borrow dropped", r, vec!["sub"]));
     let r = row("lui");
-    let sel = r.get("rd_selected") + Fr::ONE;
+    let sel = r.get("rd_selected") + Fp::ONE;
     cases.push(("a lui's result moved", with_sel(r, sel), vec!["lui"]));
     let r = row("exit 42");
     cases.push((
@@ -681,10 +681,10 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     r.set("decoded_imm", f(1));
     cases.push(("an ecall row with ebreak's code", r, vec!["ecall_code"]));
     let mut r = row("fence");
-    r.set("decoded_imm", Fr::ZERO);
+    r.set("decoded_imm", Fp::ZERO);
     cases.push(("a fence row with ecall's code", r, vec!["fence_code"]));
     let mut r = row("fence");
-    r.set("is_fence", Fr::ZERO);
+    r.set("is_fence", Fp::ZERO);
     cases.push(("a system row that is neither", r, vec!["system_split"]));
 
     // A query the kind does not use, present: its mask rule and nothing else.
@@ -700,7 +700,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // expressed is a stronger refusal than a gate that refuses it.
     let mut r = row("fence");
     r.query("rd", CYCLE, 3, 0, 0, 0);
-    r.set("rd_is_zero", Fr::ONE);
+    r.set("rd_is_zero", Fp::ONE);
     cases.push(("a fence writing x0", r, vec!["rd_mask_rule"]));
     // A padding row's rd query rewriting x10.
     let mut r = Row::default();
@@ -716,7 +716,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // bits are no table's — which would make rs1 and rd present if a mask rule
     // forgot the row's liveness.
     let mut r = Row::default();
-    r.set("kind_addi", Fr::ONE)
+    r.set("kind_addi", Fp::ONE)
         .set("decoded_mask", f(2))
         .set("decoded_rd", f(10))
         .set("decoded_imm", f(43));
@@ -732,7 +732,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // A live row's rd write masked off.
     let mut r = row("add, not carrying");
     r.drop_query("rd");
-    r.set("rd_inv", Fr::ZERO).set("rd_selected", Fr::ZERO);
+    r.set("rd_inv", Fp::ZERO).set("rd_selected", Fp::ZERO);
     let sel_gone = r.clone();
     cases.push((
         "an add whose write is masked off",
@@ -743,7 +743,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // A present query at another address.
     for (q, rule) in [("rs1", "rs1_addr_rule"), ("rs2", "rs2_addr_rule")] {
         let mut r = row("add, carrying");
-        let addr = r.get(name(q, "addr")) + Fr::ONE;
+        let addr = r.get(name(q, "addr")) + Fp::ONE;
         r.set(name(q, "addr"), addr);
         cases.push(("a register query at the wrong register", r, vec![rule]));
     }
@@ -778,7 +778,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     cases.push(("an add jumping four ahead", r, vec!["next_pc_rule"]));
     // The truncation target: a row that is not the exit writing HALT_PC.
     let mut r = row("add, carrying");
-    r.set("pc_write_value", Fr::ONE).set("next_pc_hi", Fr::ZERO);
+    r.set("pc_write_value", Fp::ONE).set("next_pc_hi", Fp::ZERO);
     cases.push(("an add writing HALT_PC", r, vec!["next_pc_rule"]));
     let mut r = row("exit 42");
     r.set("pc_write_value", f(0x1_0014)).set("next_pc_hi", f(1));
@@ -788,7 +788,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // its immediate, and its absent operands read 0 — so what refuses it is the
     // recomposition, and the two operands an add reads and this row lacks.
     let mut r = row("lui");
-    r.set("kind_lui", Fr::ZERO).set("kind_add", Fr::ONE);
+    r.set("kind_lui", Fp::ZERO).set("kind_add", Fp::ONE);
     cases.push((
         "a lui whose bits say add",
         r,
@@ -855,7 +855,7 @@ fn the_negative_controls_break_what_they_say_they_break() {
     let (big, small) = (0xffff_efffu64, 0x1234_5678u64);
     let mut unreduced = r.clone();
     unreduced
-        .set("wrap", Fr::ZERO)
+        .set("wrap", Fp::ZERO)
         .set("rd_selected", f(big + small))
         .set("rd_hi", f((big + small) >> 16));
     assert_eq!(violated(&a, &unreduced), (vec![], names(&["rd_hi_range"])));
@@ -871,7 +871,7 @@ fn the_negative_controls_break_what_they_say_they_break() {
 
     let mut far = row("add, carrying");
     let next = far.get("decoded_next_pc") - f(TWO_32);
-    far.set("pc_wrap", Fr::ONE)
+    far.set("pc_wrap", Fp::ONE)
         .set("pc_write_value", next)
         .set("next_pc_hi", f(0));
     let (relations, lookups) = violated(&a, &far);
@@ -883,17 +883,17 @@ fn the_negative_controls_break_what_they_say_they_break() {
     let value = |r: &Row, column: &str| small_int(r.get(column));
     let mut addi = row("addi of -1, carrying");
     let sum = f(value(&addi, "rs1_read_value") + value(&addi, "decoded_imm"));
-    addi.set("wrap", Fr::ZERO)
+    addi.set("wrap", Fp::ZERO)
         .set("rd_selected", sum)
         .set("rd_write_value", sum)
         .set("rd_hi", f(0xffff));
     assert_eq!(violated(&a, &addi), (vec![], names(&["rd_lo_range"])));
     let mut sub = row("sub, borrowing");
     let difference = f(value(&sub, "rs1_read_value")) - f(value(&sub, "rs2_read_value"));
-    sub.set("wrap", Fr::ZERO)
+    sub.set("wrap", Fp::ZERO)
         .set("rd_selected", difference)
         .set("rd_write_value", difference)
-        .set("rd_hi", Fr::ZERO);
+        .set("rd_hi", Fp::ZERO);
     assert_eq!(violated(&a, &sub), (vec![], names(&["rd_lo_range"])));
 
     // A next_pc outside 32 bits whose high halfword is solved in the field so
@@ -904,7 +904,7 @@ fn the_negative_controls_break_what_they_say_they_break() {
     let low = f(value(&solved, "decoded_next_pc") & 0xffff);
     let high = (next - low) * f(1 << 16).inverse().unwrap();
     solved
-        .set("pc_wrap", Fr::ONE)
+        .set("pc_wrap", Fp::ONE)
         .set("pc_write_value", next)
         .set("next_pc_hi", high);
     assert_eq!(
@@ -913,11 +913,11 @@ fn the_negative_controls_break_what_they_say_they_break() {
     );
 
     let mut zero = row("lui");
-    zero.set("decoded_mask", Fr::ZERO)
-        .set("kind_lui", Fr::ZERO)
-        .set("rd_selected", Fr::ZERO)
-        .set("rd_hi", Fr::ZERO);
+    zero.set("decoded_mask", Fp::ZERO)
+        .set("kind_lui", Fp::ZERO)
+        .set("rd_selected", Fp::ZERO)
+        .set("rd_hi", Fp::ZERO);
     zero.drop_query("rd");
-    zero.set("rd_inv", Fr::ZERO);
+    zero.set("rd_inv", Fp::ZERO);
     assert_eq!(violated(&a, &zero), (vec![], vec![]));
 }

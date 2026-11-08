@@ -27,7 +27,7 @@ use alloc::vec::Vec;
 
 use constants::extra_mask::mem_word as kind;
 use constants::{family, lookup_channel};
-use field::Fr;
+use field_a64_c5::Fp;
 
 use crate::lookup::{check_copowers, ChannelSpec};
 use crate::memory::{
@@ -94,11 +94,11 @@ pub const TABLE_WIDTH: usize = 7;
 pub const LEGAL_MASKS: [u32; 2] = [1 << kind::LW, 1 << kind::SW];
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn neg(v: u64) -> Coeff {
-    Coeff::Literal(-Fr::from_u64(v))
+    Coeff::Literal(-Fp::from_u64(v))
 }
 
 /// `Σ a·x + Σ b·y·z`, constant 0.
@@ -312,7 +312,7 @@ fn family_spec() -> FamilySpec {
         linear(vec![
             (lit(1), v_rs1),
             (lit(1), IMM),
-            (Coeff::Literal(-Fr::from_u64(1 << 32)), WRAP),
+            (Coeff::Literal(-Fp::from_u64(1 << 32)), WRAP),
             (neg(4), WORD_INDEX),
         ]),
     ));

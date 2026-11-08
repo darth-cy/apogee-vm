@@ -16,7 +16,7 @@ use constraints::lookup::{
 };
 use constraints::memory::{frame_queries, frame_with_channels_artifact, FamilySpec};
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
-use field::Fr;
+use field_a64_c5::Fp;
 
 /// The toy's family, height and mask width, as `common/lookup_toy.rs` fixes them.
 const FAMILY: u32 = family::JUMP_BRANCH_SLT;
@@ -26,7 +26,7 @@ const MASK_BITS: usize = 12;
 const FRAME_WITNESS: u32 = 4 + 3;
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn w(i: u32) -> PolyAddress {
@@ -360,7 +360,7 @@ fn two_channels_table_fractions_swapped_between_their_trees_are_refused() {
         assert_eq!(
             swapped.layers[0].producing[found[0] - 1].gate,
             GateDef::Linear {
-                terms: vec![(Coeff::Literal(Fr::MINUS_ONE), spec.multiplicity)],
+                terms: vec![(Coeff::Literal(Fp::MINUS_ONE), spec.multiplicity)],
                 constant: lit(0),
             },
             "and its `−mult` numerator is still directly before it"
@@ -455,7 +455,7 @@ fn family_spec(edit: fn(&mut FamilySpec)) -> FamilySpec {
     let boolean = |x: PolyAddress| GateDef::Quadratic {
         constant: lit(0),
         linear: vec![(lit(1), x)],
-        products: vec![(Coeff::Literal(Fr::MINUS_ONE), x, x)],
+        products: vec![(Coeff::Literal(Fp::MINUS_ONE), x, x)],
     };
     let mut e = FamilySpec {
         witness: [
@@ -704,7 +704,7 @@ fn each_range_channel_names_its_virtual_table() {
 /// selector.
 ///
 /// Why the scaled half is not enough: a copower turns `x < p` into
-/// `x·p' < 2^32` with `p·p' = 2^32`, and `p'` is a unit in `Fr`, so
+/// `x·p' < 2^32` with `p·p' = 2^32`, and `p'` is a unit in `Fp`, so
 /// `x = s·p'^{-1}` sweeps a coset of `2^32` elements almost none of which are
 /// small integers. The range check on `s` sees nothing wrong.
 ///

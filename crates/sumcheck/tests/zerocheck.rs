@@ -10,12 +10,13 @@ use common::{
     square_witness_with_bumped_b, square_witness_with_row, wide_gate, wide_witness,
     wide_witness_with_bumped_e, wide_witness_with_row,
 };
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use poly::{eq_table, MultilinearPoly, PolyBacking};
 use sumcheck::{
     prove_zerocheck, verify_zerocheck, witness_digest, Gate, SumcheckClaim, SumcheckError,
     SumcheckProof,
 };
+use transcript_a64_c5::Digest;
 
 /// Prove over `columns` on a transcript bound to `digest`, and check the proof
 /// on a *fresh* transcript bound to the same digest. Returns the proof and the
@@ -23,7 +24,7 @@ use sumcheck::{
 fn prove_then_verify(
     gate: &Gate,
     columns: &[MultilinearPoly],
-    digest: Fr,
+    digest: &Digest,
 ) -> (SumcheckProof, Result<SumcheckClaim, SumcheckError>) {
     let n = columns[0].num_vars();
 
@@ -42,7 +43,7 @@ fn prove_then_verify(
 // ---------------------------------------------------------------------------
 
 /// The binding really is one-way and the lift really happened: after proving,
-/// the prover's working columns are fully bound `Fr` tables holding exactly the
+/// the prover's working columns are fully bound `Fp2` tables holding exactly the
 /// claimed evaluations.
 #[test]
 fn proving_binds_every_column_to_the_challenge_point() {
@@ -52,13 +53,13 @@ fn proving_binds_every_column_to_the_challenge_point() {
     let digest = witness_digest(&columns);
 
     let mut working: Vec<MultilinearPoly> = columns.to_vec();
-    let mut t = bound_transcript(digest);
+    let mut t = bound_transcript(&digest);
     let proof = prove_zerocheck(&gate, &mut working, &mut t);
 
     for (k, column) in working.iter().enumerate() {
         assert_eq!(column.num_vars(), 0, "column {k} is fully bound");
         assert!(
-            matches!(column.backing(), PolyBacking::Fr(_)),
+            matches!(column.backing(), PolyBacking::Fp2(_)),
             "column {k} lifted on its first bind and stayed lifted"
         );
         assert_eq!(column.get(0), proof.final_evals[k]);
@@ -94,7 +95,7 @@ fn a_witness_swapped_after_the_digest_fails_the_discharge() {
         "the swap must actually change the witness"
     );
 
-    let (_, outcome) = prove_then_verify(&gate, &swapped, digest);
+    let (_, outcome) = prove_then_verify(&gate, &swapped, &digest);
     let claim = outcome.expect("the swapped witness satisfies the gate, so the sumcheck passes");
 
     let failure = discharge(&bound, &claim)
@@ -121,15 +122,15 @@ fn a_tampered_round_coefficient_is_rejected() {
     let columns = square_witness(n, 0x524f_554e_4400_0001);
     let digest = witness_digest(&columns);
 
-    let (proof, outcome) = prove_then_verify(&gate, &columns, digest);
+    let (proof, outcome) = prove_then_verify(&gate, &columns, &digest);
     outcome.expect("the honest proof verifies before anything is tampered with");
 
     for round in [0usize, 1, 5, n - 1] {
         for coefficient in 0..4 {
             let mut tampered = proof.clone();
-            tampered.rounds[round][coefficient] += Fr::ONE;
+            tampered.rounds[round][coefficient] += Fp::ONE;
 
-            let mut t = bound_transcript(digest);
+            let mut t = bound_transcript(&digest);
             assert_eq!(
                 verify_zerocheck(&gate, n, &tampered, &mut t),
                 Err(SumcheckError::RoundSumMismatch { round }),
@@ -148,13 +149,13 @@ fn tampered_final_evals_are_rejected() {
     let columns = square_witness(n, 0x4649_4e41_4c00_0001);
     let digest = witness_digest(&columns);
 
-    let (proof, outcome) = prove_then_verify(&gate, &columns, digest);
+    let (proof, outcome) = prove_then_verify(&gate, &columns, &digest);
     outcome.expect("the honest proof verifies");
 
     for k in 0..proof.final_evals.len() {
         let mut tampered = proof.clone();
-        tampered.final_evals[k] += Fr::ONE;
-        let mut t = bound_transcript(digest);
+        tampered.final_evals[k] += Fp::ONE;
+        let mut t = bound_transcript(&digest);
         assert_eq!(
             verify_zerocheck(&gate, n, &tampered, &mut t),
             Err(SumcheckError::FinalEvalMismatch),
@@ -170,12 +171,12 @@ fn a_proof_of_the_wrong_shape_is_rejected() {
     let gate = square_gate();
     let columns = square_witness(n, 0x5348_4150_4500_0001);
     let digest = witness_digest(&columns);
-    let (proof, outcome) = prove_then_verify(&gate, &columns, digest);
+    let (proof, outcome) = prove_then_verify(&gate, &columns, &digest);
     outcome.expect("the honest proof verifies");
 
     let mut short = proof.clone();
     short.rounds.pop();
-    let mut t = bound_transcript(digest);
+    let mut t = bound_transcript(&digest);
     assert_eq!(
         verify_zerocheck(&gate, n, &short, &mut t),
         Err(SumcheckError::RoundCountMismatch {
@@ -185,8 +186,8 @@ fn a_proof_of_the_wrong_shape_is_rejected() {
     );
 
     let mut wide = proof.clone();
-    wide.final_evals.push(Fr::ONE);
-    let mut t = bound_transcript(digest);
+    wide.final_evals.push(Fp2::ONE);
+    let mut t = bound_transcript(&digest);
     assert_eq!(
         verify_zerocheck(&gate, n, &wide, &mut t),
         Err(SumcheckError::FinalEvalCountMismatch {
@@ -196,7 +197,7 @@ fn a_proof_of_the_wrong_shape_is_rejected() {
     );
 
     // And an honest proof checked against the wrong variable count.
-    let mut t = bound_transcript(digest);
+    let mut t = bound_transcript(&digest);
     assert_eq!(
         verify_zerocheck(&gate, n + 1, &proof, &mut t),
         Err(SumcheckError::RoundCountMismatch {
@@ -226,10 +227,10 @@ fn a_non_satisfying_witness_fails_round_zero() {
     // The digest matches the witness proved over: this is not a binding
     // failure.
     let mut working: Vec<MultilinearPoly> = columns.to_vec();
-    let mut prover = bound_transcript(digest);
+    let mut prover = bound_transcript(&digest);
     let proof = prove_zerocheck(&gate, &mut working, &mut prover);
 
-    let mut verifier = bound_transcript(digest);
+    let mut verifier = bound_transcript(&digest);
     assert_eq!(
         verify_zerocheck(&gate, n, &proof, &mut verifier),
         Err(SumcheckError::RoundSumMismatch { round: 0 }),
@@ -240,7 +241,7 @@ fn a_non_satisfying_witness_fails_round_zero() {
     // gate's defect exactly. `G` is zero on every row but `row`, where
     // `A^2 - B = -1`, so the whole sum is `-eq(r, row)` — computed here from the
     // eq-randomizers alone, sharing nothing with the prover.
-    let r = eq_randomizers(digest, n);
+    let r = eq_randomizers(&digest, n);
     let g = proof.rounds[0];
     assert_eq!(
         g[0] + g[0] + g[1] + g[2] + g[3],
@@ -264,7 +265,7 @@ fn the_wide_gate_proves_and_verifies() {
     let columns = wide_witness(n, seed);
 
     let digest = witness_digest(&columns);
-    let (proof, outcome) = prove_then_verify(&gate, &columns, digest);
+    let (proof, outcome) = prove_then_verify(&gate, &columns, &digest);
     let claim = outcome.expect("an honest proof over a satisfying witness verifies");
 
     assert_eq!(proof.rounds.len(), n);
@@ -290,7 +291,7 @@ fn the_wide_gate_catches_both_tampers() {
 
     let swapped = wide_witness_with_row(n, seed, row, 0x1357_9bdf);
     assert_ne!(swapped[0].get(row), bound[0].get(row));
-    let claim = prove_then_verify(&gate, &swapped, digest)
+    let claim = prove_then_verify(&gate, &swapped, &digest)
         .1
         .expect("the swapped witness still satisfies the gate");
     discharge(&bound, &claim).expect_err("the digest-bound witness must reject the swap");
@@ -299,7 +300,7 @@ fn the_wide_gate_catches_both_tampers() {
     let broken = wide_witness_with_bumped_e(n, seed, row);
     let broken_digest = witness_digest(&broken);
     assert_eq!(
-        prove_then_verify(&gate, &broken, broken_digest).1,
+        prove_then_verify(&gate, &broken, &broken_digest).1,
         Err(SumcheckError::RoundSumMismatch { round: 0 }),
         "a witness that does not satisfy the wide gate fails the zerocheck"
     );
@@ -320,11 +321,14 @@ fn a_constant_witness_is_a_zero_round_proof() {
     ];
     let digest = witness_digest(&columns);
 
-    let (proof, outcome) = prove_then_verify(&gate, &columns, digest);
+    let (proof, outcome) = prove_then_verify(&gate, &columns, &digest);
     assert!(proof.rounds.is_empty());
     let claim = outcome.expect("7 * 7 - 49 == 0");
     assert!(claim.point.is_empty());
-    assert_eq!(claim.final_evals, vec![Fr::from_u64(7), Fr::from_u64(49)]);
+    assert_eq!(
+        claim.final_evals,
+        [7, 49].map(|x| Fp2::from(Fp::from_u64(x))).to_vec()
+    );
 
     let broken = vec![
         MultilinearPoly::new(PolyBacking::U16(vec![7])),
@@ -332,7 +336,7 @@ fn a_constant_witness_is_a_zero_round_proof() {
     ];
     let broken_digest = witness_digest(&broken);
     assert_eq!(
-        prove_then_verify(&gate, &broken, broken_digest).1,
+        prove_then_verify(&gate, &broken, &broken_digest).1,
         Err(SumcheckError::FinalEvalMismatch),
         "with no rounds, the last-layer identity is the only place to catch it"
     );

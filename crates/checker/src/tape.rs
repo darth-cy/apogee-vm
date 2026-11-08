@@ -3,7 +3,7 @@
 //!
 //! [`tape`] turns a `Transcript`'s event log into one line per message. The log
 //! records a message's **tag and payload length**, never its values
-//! (`crates/transcript`), so a tape is a statement about the *script* a
+//! (`crates/transcript-a64-c5`), so a tape is a statement about the *script* a
 //! transcript ran, which is exactly what the order is about.
 //!
 //! [`expected_global_tape`] writes that order out from the statement's shape
@@ -24,7 +24,7 @@
 //! join the order between G6 and G7, and here.
 
 use constants::transcript_tags as tags;
-use transcript::TranscriptEvent;
+use transcript_a64_c5::TranscriptEvent;
 use verifier_core::{global_commit, PublicInputs, VerifyingKey};
 
 /// `tag`'s name, or `"?"` for a number no tag has. `constants` holds the
@@ -37,14 +37,14 @@ fn tag_name(tag: u64) -> &'static str {
 }
 
 /// One line per event, in order: `absorb <TAG> <n>` for a message of `n`
-/// payload field elements — the scalar count, or the 31-byte chunk count of a
-/// bytes message — and `squeeze <TAG>` for a challenge.
+/// payload lanes — the scalar count, two per `Fp2` element, or the 7-byte
+/// chunk count of a bytes message — and `squeeze <TAG>` for a challenge.
 pub fn tape(events: &[TranscriptEvent]) -> Vec<String> {
     events
         .iter()
         .map(|e| match e {
-            TranscriptEvent::Absorb { tag, n_scalars } => {
-                format!("absorb {} {n_scalars}", tag_name(*tag))
+            TranscriptEvent::Absorb { tag, n } => {
+                format!("absorb {} {n}", tag_name(*tag))
             }
             TranscriptEvent::Challenge { tag } => format!("squeeze {}", tag_name(*tag)),
         })
@@ -69,8 +69,8 @@ pub fn global_tape(vk: &VerifyingKey, statement: &PublicInputs) -> Vec<String> {
 /// | G2 | `absorb VM_CONFIG 2k+1` — `k` family ids, `k` heights, the bytecode ceiling |
 /// | G3 | `absorb SHARD_COUNTS k` — one per family, a detached-in-this-run family's 0 included |
 /// | G4 | `absorb MEMORY_WINDOWS w` — `ZERO_WINDOWS`' window ids |
-/// | G5 | `absorb PROGRAM_IDENTITY 1` |
-/// | G6 | `absorb PUBLIC_INPUTS 2` — the I/O digest's 32 bytes, two 31-byte chunks |
+/// | G5 | `absorb PROGRAM_IDENTITY 8` — the identity, a digest of 8 lanes |
+/// | G6 | `absorb PUBLIC_INPUTS 8` — the I/O digest's 8 lanes |
 /// | — | **UNFINISHED**: the shards' memory-column commitments, absent |
 /// | G7 | `absorb MEMORY_BOUNDARY 64` |
 /// | G8 | `squeeze MEMORY_CHALLENGE` ×4 |
@@ -84,9 +84,9 @@ pub fn expected_global_tape(vk: &VerifyingKey, statement: &PublicInputs) -> Vec<
     absorb(tags::VM_CONFIG, 2 * k + 1);
     absorb(tags::SHARD_COUNTS, k);
     absorb(tags::MEMORY_WINDOWS, statement.windows.len());
-    absorb(tags::PROGRAM_IDENTITY, 1);
-    // A bytes message of 32 bytes is two 31-byte chunks.
-    absorb(tags::PUBLIC_INPUTS, 32usize.div_ceil(31));
+    // A digest is the sponge's whole rate, 8 lanes.
+    absorb(tags::PROGRAM_IDENTITY, 8);
+    absorb(tags::PUBLIC_INPUTS, 8);
     // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The shards'
     // memory-column commitments belong here, and no line is expected for them
     // because none is absorbed (`docs/architecture.md` §0).

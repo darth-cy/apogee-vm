@@ -10,9 +10,9 @@ mod common;
 
 use common::{
     corpus_backing, corrupt, data_lines, field_element, index, read_vectors, table_digest, to_ark,
-    to_ark_mle, vertex,
+    to_ark_fp, to_ark_mle, vertex,
 };
-use field::Fr;
+use field_a64_c5::{Fp, Fp2, A64_C5};
 use poly::{eq_eval, MultilinearPoly};
 use test_support::Rng;
 
@@ -27,8 +27,8 @@ struct Case {
     backing: String,
     num_vars: usize,
     digest: String,
-    point: Vec<Fr>,
-    result: Option<Fr>,
+    point: Vec<Fp2>,
+    result: Option<Fp2>,
 }
 
 fn parse(text: &str) -> Result<Vec<Case>, String> {
@@ -114,13 +114,13 @@ fn rebuild(c: &Case) -> MultilinearPoly {
     MultilinearPoly::new(corpus_backing(&mut rng, &c.backing, 1usize << c.num_vars))
 }
 
-fn expected(c: &Case) -> Fr {
+fn expected(c: &Case) -> Fp2 {
     c.result.expect("load() rejects a case with no result")
 }
 
 /// `sum_x f(x) * eq(point, x)` over the cube, through `eq_eval` alone.
-fn naive_evaluate(p: &MultilinearPoly, point: &[Fr]) -> Fr {
-    let mut acc = Fr::ZERO;
+fn naive_evaluate(p: &MultilinearPoly, point: &[Fp2]) -> Fp2 {
+    let mut acc = Fp2::ZERO;
     for x in 0..p.len() {
         acc += p.get(x) * eq_eval(point, &vertex(x, p.num_vars()));
     }
@@ -135,7 +135,7 @@ fn naive_evaluate(p: &MultilinearPoly, point: &[Fr]) -> Fr {
 fn the_corpus_covers_what_it_claims() {
     let cases = load();
     assert_eq!(cases.len(), 100, "the corpus is 100 polys");
-    for name in ["u1", "u8", "u16", "u32", "fr"] {
+    for name in ["u1", "u8", "u16", "u32", "fp"] {
         assert!(
             cases.iter().any(|c| c.backing == name),
             "no {name}-backed case in the corpus"
@@ -150,6 +150,13 @@ fn the_corpus_covers_what_it_claims() {
     assert!(
         cases.iter().all(|c| c.num_vars <= 12),
         "the corpus caps n at 12"
+    );
+    assert!(
+        cases
+            .iter()
+            .flat_map(|c| &c.point)
+            .all(|x| x.c1 != Fp::ZERO),
+        "a point in the base field would not exercise Fp2"
     );
 }
 
@@ -198,7 +205,7 @@ fn evaluate_matches_arkworks_in_process() {
     for c in &load() {
         let p = rebuild(c);
         let mle = to_ark_mle(&p);
-        let point: Vec<common::ArkFr> = c.point.iter().map(to_ark).collect();
+        let point: Vec<common::ArkFp2> = c.point.iter().map(to_ark).collect();
         assert_eq!(
             to_ark(&p.evaluate(&c.point)),
             mle.evaluate(&point),
@@ -229,19 +236,23 @@ fn bind_matches_arkworks_fix_variables() {
     }
 }
 
-/// The corpus rebuild reads four `u64` draws as a 256-bit little-endian integer
-/// mod p through `Fr::from_u64`, because `crates/field` has no reducing
-/// constructor. The generator used arkworks' `from_le_bytes_mod_order` on the
-/// same draws, so the two have to agree — otherwise every digest above would be
-/// pinning the wrong table.
+/// The corpus rebuild reduces one `u64` draw mod p through `Fp::from_u64`. The
+/// generator reduced the same draw with arkworks' `from_le_bytes_mod_order`, so
+/// the two have to agree — otherwise every digest above would be pinning the
+/// wrong table. A draw lands at or above p with probability 59/2^64, so the
+/// reduction itself is checked at the top of the range as well.
 #[test]
 fn the_corpus_rebuild_rule_matches_the_arkworks_reduction() {
+    let reduce =
+        |x: u64| -> common::ArkFp { ark_ff::PrimeField::from_le_bytes_mod_order(&x.to_le_bytes()) };
     let mut ours = Rng::new(1);
     let mut theirs = Rng::new(1);
     for _ in 0..1000 {
-        let mine = common::next_fr(&mut ours);
-        let ark: common::ArkFr = ark_ff::PrimeField::from_le_bytes_mod_order(&theirs.next_le32());
-        assert_eq!(to_ark(&mine), ark);
+        let mine = common::next_fp(&mut ours);
+        assert_eq!(to_ark_fp(&mine), reduce(theirs.next_u64()));
+    }
+    for x in [0, 1, A64_C5 - 1, A64_C5, A64_C5 + 1, u64::MAX] {
+        assert_eq!(to_ark_fp(&Fp::from_u64(x)), reduce(x), "{x:#x}");
     }
 }
 
@@ -275,6 +286,9 @@ fn a_corrupted_corpus_is_rejected() {
 #[test]
 fn a_malformed_corpus_is_rejected() {
     let text = read_vectors(DIFF_PATH);
+    // A well-formed value, so the two appended lines below fail on their
+    // position and not on their hex.
+    let zero = "00".repeat(16);
     let cases: [(&str, String); 6] = [
         (
             "unknown record",
@@ -286,18 +300,16 @@ fn a_malformed_corpus_is_rejected() {
         ),
         (
             "a point after its result",
-            format!("{text}point 99 0 {}\n", "00".repeat(32)),
+            format!("{text}point 99 0 {zero}\n"),
         ),
         (
             "truncated case",
             text.replacen("\ncase 2 u16 2 ", "\ncase 2 u16 2\n#", 1),
         ),
         ("bad hex", text.replacen("\nresult 3 ", "\nresult 3 zz", 1)),
-        (
-            "a result with no case",
-            format!("result 0 {}\n", "00".repeat(32)),
-        ),
+        ("a result with no case", format!("result 0 {zero}\n")),
     ];
+    assert!(field_element(&zero).is_ok());
     for (what, bad) in cases {
         assert!(
             parse(&bad).is_err(),

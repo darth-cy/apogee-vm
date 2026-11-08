@@ -29,7 +29,7 @@ use alloc::vec::Vec;
 
 use constants::extra_mask::mul_div as kind;
 use constants::{family, generic_table, lookup_channel};
-use field::Fr;
+use field_a64_c5::Fp;
 
 use crate::gadgets::is_zero;
 use crate::lookup::ChannelSpec;
@@ -197,20 +197,20 @@ pub const LEGAL_MASKS: [u32; 8] = [
 ];
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn neg(v: u64) -> Coeff {
-    Coeff::Literal(-Fr::from_u64(v))
+    Coeff::Literal(-Fp::from_u64(v))
 }
 
 /// `2^bits`, for a `bits` below 64.
-fn two_to(bits: u32) -> Fr {
-    Fr::from_u64(1u64 << bits)
+fn two_to(bits: u32) -> Fp {
+    Fp::from_u64(1u64 << bits)
 }
 
 /// `2^(2·bits)`, the square of [`two_to`], which at 32 bits is `2^64`.
-fn two_to_double(bits: u32) -> Fr {
+fn two_to_double(bits: u32) -> Fp {
     two_to(bits) * two_to(bits)
 }
 
@@ -286,7 +286,7 @@ fn range32(name: &str, value: PolyAddress, hi: PolyAddress) -> [LookupExpr; 2] {
             &format!("{name}_lo_range"),
             linear(vec![
                 (lit(1), value),
-                (Coeff::Literal(-Fr::from_u64(1 << 16)), hi),
+                (Coeff::Literal(-Fp::from_u64(1 << 16)), hi),
             ]),
         ),
     ]
@@ -327,7 +327,7 @@ fn names(list: &[&str]) -> Vec<String> {
 /// lookup does.
 ///
 /// Panics unless `word_bits` is between 1 and 32: `2^word_bits` is a `u64`
-/// only up to 32, and `2^(2·word_bits)` is its square in `Fr`.
+/// only up to 32, and `2^(2·word_bits)` is its square in `Fp`.
 pub fn arithmetic_gates(word_bits: u32) -> Vec<(String, GateDef)> {
     assert!(
         (1..=32).contains(&word_bits),
@@ -392,8 +392,13 @@ pub fn arithmetic_gates(word_bits: u32) -> Vec<(String, GateDef)> {
 
     // ONE product identity, for all four multiplies and the division alike:
     // mx·my = p_low + 2^w·p_high − 2^(2w)·p_sign. Both halves are range
-    // checked and p_sign is boolean, so the decomposition is the unique one;
-    // the field identity is the integer identity because both sides are ≪ r.
+    // checked and p_sign is boolean, so the decomposition is the unique one
+    // over the integers.
+    //
+    // UNFINISHED: A64-C5 CHARACTERISTIC. At w = 32 the right side ranges over
+    // [−2^64, 2^64), about 2p, so the field identity is not the integer one: a
+    // multiply's p_low and p_high are pinned only up to a multiple of p
+    // (`docs/spec/mul-div.md` §5.1). The division's total stays below p.
     gates.push((
         "product_rule".into(),
         quadratic(
@@ -488,7 +493,7 @@ pub fn arithmetic_gates(word_bits: u32) -> Vec<(String, GateDef)> {
     gates.push((
         "zero_divisor_quotient".into(),
         quadratic(
-            vec![(Coeff::Literal(Fr::ONE - word), DZ)],
+            vec![(Coeff::Literal(Fp::ONE - word), DZ)],
             vec![(lit(1), DZ, Q)],
         ),
     ));

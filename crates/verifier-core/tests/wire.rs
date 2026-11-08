@@ -6,30 +6,36 @@ mod common;
 
 use common::{jbs_vk, shell, statement, vk, ADD, JBS};
 use constants::family;
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr_verify::{GkrProof, SumcheckProof};
 use verifier_core::{identity_digest, PublicInputs, ShardProof, VerifyingKey, VmConfig};
+
+/// An integer, embedded in `Fp2`.
+fn x(v: u64) -> Fp2 {
+    Fp::from_u64(v).into()
+}
+
+/// The largest `Fp2` value: both halves `p − 1`.
+const TOP: Fp2 = Fp2 {
+    c0: Fp::MINUS_ONE,
+    c1: Fp::MINUS_ONE,
+};
 
 fn round_trip_proof() -> ShardProof {
     let mut p = shell(&vk(), &statement());
     p.gkr = GkrProof {
         layers: vec![
             SumcheckProof {
-                rounds: vec![[
-                    Fr::from_u64(1),
-                    Fr::from_u64(2),
-                    Fr::from_u64(3),
-                    Fr::MINUS_ONE,
-                ]],
-                final_evals: vec![Fr::from_u64(5), Fr::from_u64(6)],
+                rounds: vec![[x(1), x(2), x(3), TOP]],
+                final_evals: vec![x(5), x(6)],
             },
             SumcheckProof {
                 rounds: vec![],
-                final_evals: vec![Fr::from_u64(7)],
+                final_evals: vec![x(7)],
             },
         ],
     };
-    p.outputs = vec![Fr::from_u64(8), Fr::MINUS_ONE];
+    p.outputs = vec![x(8), TOP];
     p
 }
 
@@ -64,30 +70,31 @@ fn the_layouts_are_the_specs() {
     assert_eq!(u32_at(0), ADD);
     assert_eq!(u32_at(4), 0);
     assert_eq!((u64_at(8), u64_at(16)), (0, 1 << 38));
-    assert_eq!(&b[24..56], &proof.global_digest.to_bytes());
+    assert_eq!(&b[24..40], &proof.global_digest.to_bytes());
     // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The shard's
     // witness commitments belong after the digest and its opening after the
     // GKR transitions; the proof carries neither (`docs/architecture.md` §0).
-    let outputs = 56;
+    let outputs = 40;
     assert_eq!(u32_at(outputs), 2);
-    let gkr = outputs + 4 + 2 * 32;
+    let gkr = outputs + 4 + 2 * 16;
     assert_eq!(u32_at(gkr), 2, "two transitions");
     assert_eq!(u32_at(gkr + 4), 1, "transition 0's one round");
-    assert_eq!(b.len(), gkr + 4 + (4 + 4 * 32 + 4 + 2 * 32) + (4 + 4 + 32));
+    assert_eq!(b.len(), gkr + 4 + (4 + 4 * 16 + 4 + 2 * 16) + (4 + 4 + 16));
 
     let public = statement();
     let b = public.to_bytes();
     // input (4 + 3), output (4), status, counts (4 + 24 — six families),
-    // windows (4), then the 64 boundary scalars: x10's value is scalar 33 + 9.
+    // windows (4), then the 64 boundary scalars of 8 bytes: x10's value is
+    // scalar 33 + 9.
     let boundary = 7 + 4 + 4 + (4 + 4 * 6) + 4;
     assert_eq!(u32::from_le_bytes(b[11..15].try_into().unwrap()), 42);
     assert_eq!(
-        &b[boundary + 32 * 42..boundary + 32 * 43],
-        &Fr::from_u64(42).to_bytes()
+        &b[boundary + 8 * 42..boundary + 8 * 43],
+        &Fp::from_u64(42).to_bytes()
     );
-    // Four shards' root pairs: the init window, add/sub, and the two public
-    // windows.
-    assert_eq!(b.len(), boundary + 64 * 32 + 4 + 4 * 64);
+    // Four shards' root pairs of two 16-byte `Fp2` values: the init window,
+    // add/sub, and the two public windows.
+    assert_eq!(b.len(), boundary + 64 * 8 + 4 + 4 * 32);
 
     // The key: the header up to the circuits, then the circuits.
     //
@@ -103,8 +110,8 @@ fn the_layouts_are_the_specs() {
     assert_eq!(&b[8..8 + config.len()], &config);
     let mut at = 8 + config.len();
     assert_eq!(u32_at(at), 0x1_0000, "the entry pc");
-    assert_eq!(&b[at + 4..at + 36], &key.identity.to_bytes());
-    at += 36;
+    assert_eq!(&b[at + 4..at + 68], &key.identity.to_bytes());
+    at += 68;
     assert_eq!(
         u32_at(at),
         key.config.families.len() as u32,
@@ -149,54 +156,55 @@ fn the_readers_refuse_rather_than_panic() {
 
     // A count far past the bytes: the outputs' count.
     let mut huge = proof.clone();
-    huge[56..60].copy_from_slice(&u32::MAX.to_le_bytes());
+    huge[40..44].copy_from_slice(&u32::MAX.to_le_bytes());
     assert_eq!(
         ShardProof::from_bytes(&huge),
         Err("a count is longer than the bytes left")
     );
-    // The digest at the modulus.
-    let mut modulus = proof.clone();
-    let p = Fr::MINUS_ONE.to_bytes();
-    let mut p_plus = p;
-    p_plus[0] += 1;
-    modulus[24..56].copy_from_slice(&p_plus);
-    assert_eq!(
-        ShardProof::from_bytes(&modulus),
-        Err("a field element is not canonical")
-    );
+    // The digest at the modulus, in either half.
+    for half in [24, 32] {
+        let mut modulus = proof.clone();
+        let mut p = Fp::MINUS_ONE.to_bytes();
+        p[0] += 1;
+        modulus[half..half + 8].copy_from_slice(&p);
+        assert_eq!(
+            ShardProof::from_bytes(&modulus),
+            Err("a field element is not canonical")
+        );
+    }
 
     // A boundary timestamp of 2^38 and a boundary value of 2^32.
     let boundary = 7 + 4 + 4 + (4 + 4 * 6) + 4;
     let mut ts = public.clone();
-    ts[boundary..boundary + 32].copy_from_slice(&Fr::from_u64(1 << 38).to_bytes());
+    ts[boundary..boundary + 8].copy_from_slice(&Fp::from_u64(1 << 38).to_bytes());
     assert_eq!(
         PublicInputs::from_bytes(&ts),
         Err("a boundary timestamp is not below 2^38")
     );
     let mut ts = public.clone();
-    ts[boundary..boundary + 32].copy_from_slice(&Fr::from_u64((1 << 38) - 1).to_bytes());
+    ts[boundary..boundary + 8].copy_from_slice(&Fp::from_u64((1 << 38) - 1).to_bytes());
     assert!(
         PublicInputs::from_bytes(&ts).is_ok(),
         "2^38 − 1 is a timestamp"
     );
-    // A timestamp and a value wider than 64 bits, whose low bytes are in
+    // A timestamp and a value with their top byte set, whose low bytes are in
     // range: refused, not truncated to the honest statement.
     for (at, reason) in [
-        (boundary + 10 * 32, "a boundary timestamp is not below 2^38"),
-        (boundary + 42 * 32, "a boundary value is not below 2^32"),
+        (boundary + 10 * 8, "a boundary timestamp is not below 2^38"),
+        (boundary + 42 * 8, "a boundary value is not below 2^32"),
     ] {
         let mut wide = public.clone();
-        wide[at + 20] ^= 1;
+        wide[at + 7] ^= 1;
         assert_eq!(
             PublicInputs::from_bytes(&wide),
             Err(reason),
             "byte {}",
-            at + 20
+            at + 7
         );
     }
     let mut v = public.clone();
-    let v1 = boundary + 33 * 32;
-    v[v1..v1 + 32].copy_from_slice(&Fr::from_u64(1 << 32).to_bytes());
+    let v1 = boundary + 33 * 8;
+    v[v1..v1 + 8].copy_from_slice(&Fp::from_u64(1 << 32).to_bytes());
     assert_eq!(
         PublicInputs::from_bytes(&v),
         Err("a boundary value is not below 2^32")
@@ -254,7 +262,7 @@ fn a_key_that_breaks_a_load_rule_is_refused() {
     k.code_version = 1;
     cases.push(("code version 1", k));
     let mut k = honest.clone();
-    k.identity.0 += Fr::ONE;
+    k.identity.0[0] += Fp::ONE;
     cases.push(("the identity is not the digest", k));
     let mut k = honest.clone();
     k.entry_pc += 4;

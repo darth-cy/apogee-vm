@@ -35,13 +35,13 @@ use constraints::{
     ProducingEntry, Relation, ScratchSlot, VirtualKind, COEFFICIENT_ENCODING_CANONICAL_LE,
     FORMAT_VERSION,
 };
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{forward, prove, self_check, verify, BaseLayer, ExternalChallenges, LayerValues};
 use poly::{MultilinearPoly, PolyBacking};
 use test_support::Rng;
-use transcript::Transcript;
+use transcript_a64_c5::Transcript;
 
-use crate::timing::{ms, next_canonical, Best, REPS, SEED};
+use crate::timing::{ms, next_fp2, Best, REPS, SEED};
 
 /// The trace height, in variables.
 const VARS: u32 = 18;
@@ -54,7 +54,7 @@ const WIDTH_1: u32 = 32;
 const WIDTH_2: u32 = 16;
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn inner(layer: u32, offset: u32) -> PolyAddress {
@@ -119,7 +119,7 @@ fn list0_gate(j: u32) -> (GateDef, GateDef) {
         _ => {
             let products = vec![
                 (lit(5), committed(j + 1), committed(j + 2)),
-                (Coeff::Literal(-Fr::ONE), committed(j + 3), bit),
+                (Coeff::Literal(-Fp::ONE), committed(j + 3), bit),
             ];
             (
                 GateDef::Quadratic {
@@ -167,14 +167,14 @@ fn circuit(vars: u32) -> CircuitArtifact {
         constant: lit(0),
         linear: vec![(lit(1), PolyAddress::Witness(23))],
         products: vec![(
-            Coeff::Literal(-Fr::ONE),
+            Coeff::Literal(-Fp::ONE),
             PolyAddress::Witness(22),
             PolyAddress::Setup(0),
         )],
     };
     let is_bit = GateDef::Quadratic {
         constant: lit(0),
-        linear: vec![(Coeff::Literal(-Fr::ONE), PolyAddress::Setup(1))],
+        linear: vec![(Coeff::Literal(-Fp::ONE), PolyAddress::Setup(1))],
         products: vec![(lit(1), PolyAddress::Setup(1), PolyAddress::Setup(1))],
     };
 
@@ -322,7 +322,7 @@ fn circuit(vars: u32) -> CircuitArtifact {
         outputs: (0..WIDTH_2).map(|j| inner(2 + vars, j)).collect(),
         // The all-zero row satisfies both enforcing gates.
         padding: Padding {
-            row: vec![Fr::ZERO; (MEMORY + WITNESS + SETUP) as usize],
+            row: vec![Fp::ZERO; (MEMORY + WITNESS + SETUP) as usize],
             zero_row_valid: true,
         },
     };
@@ -381,7 +381,8 @@ fn table_bytes(column: &MultilinearPoly) -> usize {
         PolyBacking::U8(v) => v.len(),
         PolyBacking::U16(v) => 2 * v.len(),
         PolyBacking::U32(v) => 4 * v.len(),
-        PolyBacking::Fr(v) => 32 * v.len(),
+        PolyBacking::Fp(v) => 8 * v.len(),
+        PolyBacking::Fp2(v) => 16 * v.len(),
     }
 }
 
@@ -394,10 +395,7 @@ pub fn run() {
     let artifact = circuit(VARS);
     let base = base(VARS, &mut rng);
     let mut challenges = ExternalChallenges::new();
-    challenges.insert(
-        challenge_slot::TOY,
-        Fr::from_bytes(&next_canonical(&mut rng)).unwrap(),
-    );
+    challenges.insert(challenge_slot::TOY, next_fp2(&mut rng));
 
     let mut best = Best::new();
     let mut values: Option<LayerValues> = None;
@@ -434,7 +432,7 @@ pub fn run() {
     let proof = proof.expect("REPS is at least one");
 
     let top = values.layers.last().expect("a circuit has a top layer");
-    let outputs: Vec<Fr> = artifact
+    let outputs: Vec<Fp2> = artifact
         .outputs
         .iter()
         .map(|out| match *out {

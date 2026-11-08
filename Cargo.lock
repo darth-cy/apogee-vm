@@ -133,12 +133,12 @@ dependencies = [
  "ark-ff",
  "constants",
  "constraints",
- "field",
+ "field-a64-c5",
  "gkr",
  "poly",
  "sumcheck",
  "test-support",
- "transcript",
+ "transcript-a64-c5",
 ]
 
 [[package]]
@@ -154,7 +154,7 @@ dependencies = [
  "constants",
  "constraints",
  "emulator",
- "field",
+ "field-a64-c5",
  "gkr",
  "gkr-verify",
  "isa",
@@ -165,7 +165,7 @@ dependencies = [
  "sumcheck",
  "test-support",
  "trace",
- "transcript",
+ "transcript-a64-c5",
  "verifier",
  "verifier-core",
 ]
@@ -188,7 +188,7 @@ name = "constraints"
 version = "0.1.0"
 dependencies = [
  "constants",
- "field",
+ "field-a64-c5",
  "postcard",
  "serde",
 ]
@@ -265,7 +265,7 @@ dependencies = [
  "program",
  "test-support",
  "trace",
- "transcript",
+ "transcript-a64-c5",
 ]
 
 [[package]]
@@ -293,7 +293,6 @@ name = "field"
 version = "0.1.0"
 dependencies = [
  "ark-ff",
- "constants",
  "postcard",
  "serde",
  "test-support",
@@ -303,6 +302,7 @@ dependencies = [
 name = "field-a64-c5"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "test-support",
 ]
 
@@ -328,13 +328,13 @@ version = "0.1.0"
 dependencies = [
  "constants",
  "constraints",
- "field",
+ "field-a64-c5",
  "gkr-verify",
  "poly",
  "rayon",
  "sumcheck",
  "test-support",
- "transcript",
+ "transcript-a64-c5",
 ]
 
 [[package]]
@@ -343,10 +343,10 @@ version = "0.1.0"
 dependencies = [
  "constants",
  "constraints",
- "field",
+ "field-a64-c5",
  "poly",
  "sumcheck",
- "transcript",
+ "transcript-a64-c5",
 ]
 
 [[package]]
@@ -399,11 +399,10 @@ name = "loader"
 version = "0.1.0"
 dependencies = [
  "constants",
- "field",
  "postcard",
  "serde",
  "test-support",
- "transcript",
+ "transcript-a64-c5",
 ]
 
 [[package]]
@@ -452,7 +451,7 @@ version = "0.1.0"
 dependencies = [
  "ark-ff",
  "ark-poly",
- "field",
+ "field-a64-c5",
  "test-support",
 ]
 
@@ -503,12 +502,12 @@ name = "program"
 version = "0.1.0"
 dependencies = [
  "constants",
- "field",
+ "field-a64-c5",
  "isa",
  "loader",
  "poly",
  "test-support",
- "transcript",
+ "transcript-a64-c5",
  "verifier-core",
 ]
 
@@ -520,7 +519,7 @@ dependencies = [
  "constants",
  "constraints",
  "emulator",
- "field",
+ "field-a64-c5",
  "gkr",
  "loader",
  "poly",
@@ -529,7 +528,7 @@ dependencies = [
  "rayon",
  "test-support",
  "trace",
- "transcript",
+ "transcript-a64-c5",
  "verifier",
  "verifier-core",
 ]
@@ -637,10 +636,10 @@ name = "sumcheck"
 version = "0.1.0"
 dependencies = [
  "constants",
- "field",
+ "field-a64-c5",
  "poly",
  "test-support",
- "transcript",
+ "transcript-a64-c5",
 ]
 
 [[package]]
@@ -695,7 +694,7 @@ version = "0.1.0"
 dependencies = [
  "constants",
  "constraints",
- "field",
+ "field-a64-c5",
  "gkr-verify",
  "isa",
  "loader",
@@ -747,7 +746,7 @@ dependencies = [
  "constants",
  "constraints",
  "emulator",
- "field",
+ "field-a64-c5",
  "loader",
  "program",
  "prover",
@@ -762,10 +761,10 @@ version = "0.1.0"
 dependencies = [
  "constants",
  "constraints",
- "field",
+ "field-a64-c5",
  "gkr-verify",
  "poly",
- "transcript",
+ "transcript-a64-c5",
 ]
 
 [[package]]

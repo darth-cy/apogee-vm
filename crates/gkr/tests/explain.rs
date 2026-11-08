@@ -18,11 +18,11 @@
 mod common;
 
 use common::{bind, fr_base, honest, opposed_circuit, root_circuit};
-use field::Fr;
+use field_a64_c5::Fp;
 use gkr::{explain_self_check, self_check, SelfCheckError};
 
-fn fr(v: u64) -> Fr {
-    Fr::from_u64(v)
+fn fr(v: u64) -> Fp {
+    Fp::from_u64(v)
 }
 
 /// Every line joined, for the `contains` assertions below: what a reader sees.
@@ -40,9 +40,9 @@ fn joined(lines: &[String]) -> String {
 #[test]
 fn a_committed_operand_is_named_and_valued() {
     let artifact = opposed_circuit();
-    let a: Vec<Fr> = (0..4).map(|i| fr(10 + i)).collect();
+    let a: Vec<Fp> = (0..4).map(|i| fr(10 + i)).collect();
     let mut b = a.clone();
-    b[1] += Fr::ONE;
+    b[1] += Fp::ONE;
     let base = fr_base(&artifact, vec![a, b]);
     let (values, _, _) = honest(&artifact, &base);
     let (_, challenges) = bind(&artifact, &base);
@@ -139,7 +139,7 @@ fn a_producing_gate_reports_what_the_layer_holds() {
     // Replace layer 1's single column with a wrong value. `sq` is
     // `a·(a − 1)`, which is 0 on both rows of the honest base, so 7 is wrong
     // on row 0 and the producing gate is what sees it.
-    values.layers[0][0] = poly::MultilinearPoly::new(poly::PolyBacking::Fr(vec![fr(7), Fr::ZERO]));
+    values.layers[0][0] = poly::MultilinearPoly::new(poly::PolyBacking::Fp(vec![fr(7), Fp::ZERO]));
     let failure = self_check(&artifact, &values, &challenges).expect_err("layer 1 row 0 is 7");
     assert_eq!(failure.layer, 0);
     assert_eq!(failure.row, 0);
@@ -162,7 +162,7 @@ fn a_producing_gate_reports_what_the_layer_holds() {
 #[test]
 fn an_explanation_of_a_row_that_agrees_is_empty() {
     let artifact = opposed_circuit();
-    let a: Vec<Fr> = (0..4).map(|i| fr(10 + i)).collect();
+    let a: Vec<Fp> = (0..4).map(|i| fr(10 + i)).collect();
     let base = fr_base(&artifact, vec![a.clone(), a]);
     let (values, _, _) = honest(&artifact, &base);
     let (_, challenges) = bind(&artifact, &base);
@@ -181,7 +181,7 @@ fn an_explanation_of_a_row_that_agrees_is_empty() {
 #[test]
 fn coordinates_outside_the_circuit_are_answered_not_panicked() {
     let artifact = opposed_circuit();
-    let a: Vec<Fr> = (0..4).map(|i| fr(10 + i)).collect();
+    let a: Vec<Fp> = (0..4).map(|i| fr(10 + i)).collect();
     let base = fr_base(&artifact, vec![a.clone(), a]);
     let (values, _, _) = honest(&artifact, &base);
     let (_, challenges) = bind(&artifact, &base);

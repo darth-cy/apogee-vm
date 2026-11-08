@@ -23,7 +23,7 @@ use checker::{check_laws, cross_check, ReferenceRun, VerifierConstants};
 use common::*;
 use constants::challenge_slot;
 use constraints::{CachedEntry, CircuitArtifact, Coeff, GateDef, PolyAddress};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::ExternalChallenges;
 
 /// What a verifier expects of the toy: 16 rows; list 0 row-wise, width 3, one
@@ -47,36 +47,37 @@ fn toy_constants(cached: usize) -> VerifierConstants {
 }
 
 /// The toy by hand. `base` is `m, a, b, c, e, s`, 16 rows each.
-fn reference(base: &[Vec<Fr>], challenges: &ExternalChallenges) -> ReferenceRun {
+fn reference(base: &[Vec<Fp>], challenges: &ExternalChallenges) -> ReferenceRun {
     let (m, a, b, c, e, s) = (&base[M], &base[A], &base[B], &base[C], &base[E], &base[S]);
     let gamma = challenges
         .get(challenge_slot::TOY)
         .expect("the toy's challenge");
     let rows = 16;
-    let abm: Vec<Fr> = (0..rows)
-        .map(|y| a[y] * b[y] * (m[y] * s[y] + Fr::ONE - s[y]))
+    let abm: Vec<Fp> = (0..rows)
+        .map(|y| a[y] * b[y] * (m[y] * s[y] + Fp::ONE - s[y]))
         .collect();
-    let fingerprint3: Vec<Fr> = (0..rows)
-        .map(|y| (gamma * a[y] + Fr::from_u64(y as u64)) * c[y] + Fr::from_u64(3))
+    let fingerprint3: Vec<Fp2> = (0..rows)
+        .map(|y| (gamma * a[y] + Fp::from_u64(y as u64)) * c[y] + Fp::from_u64(3))
         .collect();
+    let abm: Vec<Fp2> = abm.into_iter().map(Fp2::from).collect();
     // Halving down to the root multiplies every row in.
-    let product = |t: &[Fr]| t.iter().fold(Fr::ONE, |acc, x| acc * *x);
-    let gated_equality = (0..rows).map(|y| (e[y] - a[y]) * s[y]).collect();
+    let product = |t: &[Fp2]| t.iter().fold(Fp2::ONE, |acc, x| acc * *x);
+    let gated_equality = (0..rows).map(|y| Fp2::from((e[y] - a[y]) * s[y])).collect();
     ReferenceRun {
         outputs: vec![product(&fingerprint3), product(&abm)],
         enforcing: vec![("gated_equality".to_string(), gated_equality)],
     }
 }
 
-fn reference_one_root_off(base: &[Vec<Fr>], challenges: &ExternalChallenges) -> ReferenceRun {
+fn reference_one_root_off(base: &[Vec<Fp>], challenges: &ExternalChallenges) -> ReferenceRun {
     let mut run = reference(base, challenges);
-    run.outputs[1] += Fr::ONE;
+    run.outputs[1] += Fp::ONE;
     run
 }
 
-fn reference_without_the_gate(base: &[Vec<Fr>], challenges: &ExternalChallenges) -> ReferenceRun {
+fn reference_without_the_gate(base: &[Vec<Fp>], challenges: &ExternalChallenges) -> ReferenceRun {
     let mut run = reference(base, challenges);
-    run.enforcing[0].1 = vec![Fr::ZERO; 16];
+    run.enforcing[0].1 = vec![Fp2::ZERO; 16];
     run
 }
 

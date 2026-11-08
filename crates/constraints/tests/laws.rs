@@ -24,7 +24,7 @@ use constraints::{
     LookupExpr, Padding, PolyAddress, ProducingEntry, Relation, ScratchSlot, VirtualKind,
     COEFFICIENT_ENCODING_CANONICAL_LE, FORMAT_VERSION,
 };
-use field::Fr;
+use field_a64_c5::Fp;
 use std::time::{Duration, Instant};
 
 fn linear(terms: &[(Coeff, PolyAddress)], constant: Coeff) -> GateDef {
@@ -75,7 +75,7 @@ fn affine(
 
 /// The literal 0, as a coefficient.
 fn zero() -> Coeff {
-    Coeff::Literal(Fr::ZERO)
+    Coeff::Literal(Fp::ZERO)
 }
 
 #[track_caller]
@@ -678,7 +678,7 @@ fn cancelling_square(t: usize) -> CircuitArtifact {
         scratch: vec![],
         outputs: vec![],
         padding: Padding {
-            row: vec![Fr::ZERO],
+            row: vec![Fp::ZERO],
             zero_row_valid: true,
         },
     }
@@ -872,7 +872,7 @@ fn a_term_that_reads_nothing_hides_neither_a_column_nor_a_constraint() {
 
     let mut vacuous = toy();
     let emptied = affine(
-        &[(lit(1), E), (Coeff::Literal(Fr::MINUS_ONE), A)],
+        &[(lit(1), E), (Coeff::Literal(Fp::MINUS_ONE), A)],
         lit(0),
         &[],
         lit(0),
@@ -1511,12 +1511,12 @@ fn an_unknown_challenge_slot_is_refused() {
 #[test]
 fn a_padding_row_of_the_wrong_length_is_refused() {
     let mut ones = toy();
-    ones.padding.row = vec![Fr::ONE; 6];
+    ones.padding.row = vec![Fp::ONE; 6];
     assert_eq!(ones.validate(), Ok(()));
 
     for len in [5usize, 7] {
         let mut a = toy();
-        a.padding.row = vec![Fr::ZERO; len];
+        a.padding.row = vec![Fp::ZERO; len];
         assert_malformed(
             &a,
             &format!("the padding row has {len} values for 6 committed columns"),

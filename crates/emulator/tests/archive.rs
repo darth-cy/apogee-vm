@@ -8,7 +8,7 @@ mod common;
 use common::{traced, Traced};
 use test_support::{sha256, to_hex};
 use trace::{Phase, PhaseTiming, TraceArchive, PHASES};
-use transcript::io_digest;
+use transcript_a64_c5::io_digest;
 
 fn archive_of(t: &Traced, wall_nanos: u64) -> TraceArchive {
     TraceArchive::from_execution(

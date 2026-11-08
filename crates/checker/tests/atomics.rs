@@ -30,7 +30,7 @@ use constraints::memory::check_memory;
 use constraints::{
     atomics, family_circuit, CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind,
 };
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{eval_gate, gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallenges};
 use program::lookup_tables::generic_entries;
 
@@ -50,8 +50,8 @@ fn artifact() -> CircuitArtifact {
     atomics::artifact(VARS)
 }
 
-fn f(v: u64) -> Fr {
-    Fr::from_u64(v)
+fn f(v: u64) -> Fp {
+    Fp::from_u64(v)
 }
 
 fn challenges(a: &CircuitArtifact) -> ExternalChallenges {
@@ -62,9 +62,9 @@ fn challenges(a: &CircuitArtifact) -> ExternalChallenges {
         (challenge_slot::MEM_ALPHA_TS, 17),
         (challenge_slot::MEM_ALPHA_VAL, 19),
     ] {
-        ch.insert(slot, f(v));
+        ch.insert(slot, f(v).into());
     }
-    insert_lookup_challenges(&mut ch, f(23), f(29), a);
+    insert_lookup_challenges(&mut ch, f(23).into(), f(29).into(), a);
     ch
 }
 
@@ -74,7 +74,7 @@ fn challenges(a: &CircuitArtifact) -> ExternalChallenges {
 
 /// A row by column name; a column not named is 0.
 #[derive(Clone, Debug, Default)]
-struct Row(BTreeMap<&'static str, Fr>);
+struct Row(BTreeMap<&'static str, Fp>);
 
 /// `<q>_<field>`, a column name, leaked to `'static` for the map.
 fn name(q: &str, field: &str) -> &'static str {
@@ -82,19 +82,19 @@ fn name(q: &str, field: &str) -> &'static str {
 }
 
 impl Row {
-    fn set(&mut self, name: &'static str, v: Fr) -> &mut Row {
+    fn set(&mut self, name: &'static str, v: Fp) -> &mut Row {
         self.0.insert(name, v);
         self
     }
 
-    fn get(&self, name: &str) -> Fr {
-        self.0.get(name).copied().unwrap_or(Fr::ZERO)
+    fn get(&self, name: &str) -> Fp {
+        self.0.get(name).copied().unwrap_or(Fp::ZERO)
     }
 
     /// Set the query `q`'s five columns, reading a write made eight timestamps
     /// before its own.
     fn query(&mut self, q: &'static str, delta: u64, addr: u64, read: u64, write: u64) {
-        self.set(name(q, "mask"), Fr::ONE)
+        self.set(name(q, "mask"), Fp::ONE)
             .set(name(q, "addr"), f(addr))
             .set(name(q, "read_ts"), f(4 * CYCLE + delta - 8))
             .set(name(q, "read_value"), f(read))
@@ -109,7 +109,7 @@ impl Row {
     }
 
     /// The row's committed values in layout order.
-    fn committed(&self, a: &CircuitArtifact) -> Vec<Fr> {
+    fn committed(&self, a: &CircuitArtifact) -> Vec<Fp> {
         let names: Vec<&str> = a
             .memory
             .iter()
@@ -126,19 +126,19 @@ impl Row {
     /// The row as a witness row of `a`, its scratch computed row-locally.
     fn witness(&self, a: &CircuitArtifact, row: usize) -> WitnessRow {
         let committed = self.committed(a);
-        let virtuals: Vec<Fr> = a
+        let virtuals: Vec<Fp2> = a
             .virtuals
             .iter()
-            .map(|(k, _)| virtual_at_row(*k, row))
+            .map(|(k, _)| virtual_at_row(*k, row).into())
             .collect();
         let ch = challenges(a);
-        let mut scratch = vec![Fr::ZERO; a.scratch.len()];
-        let mut lower = committed.clone();
+        let mut scratch = vec![Fp2::ZERO; a.scratch.len()];
+        let mut lower: Vec<Fp2> = committed.iter().map(|v| (*v).into()).collect();
         for k in 0..a.depth() {
             if a.layers[k].halving {
                 break;
             }
-            let v: &[Fr] = if k == 0 { &virtuals } else { &[] };
+            let v: &[Fp2] = if k == 0 { &virtuals } else { &[] };
             let values = gate_values(a, k, &lower, &[], v, &ch);
             let produced = values[..a.layers[k].producing.len()].to_vec();
             for (j, value) in produced.iter().enumerate() {
@@ -241,7 +241,7 @@ fn honest(i: Instr, address: u32, old: u32, src: u32, rd_old: u32) -> Row {
 
     let mut r = Row::default();
     r.set("cycle", f(CYCLE));
-    r.set("pc_mask", Fr::ONE)
+    r.set("pc_mask", Fp::ONE)
         .set("pc_read_ts", f(4 * (CYCLE - 1)))
         .set("pc_read_value", f(i.pc as u64))
         .set("pc_write_value", f(seq as u64));
@@ -253,7 +253,7 @@ fn honest(i: Instr, address: u32, old: u32, src: u32, rd_old: u32) -> Row {
     let write = if i.rd == 0 { 0 } else { sel };
     r.query("rd", 3, i.rd as u64, rd_old as u64, write as u64);
     match i.rd {
-        0 => r.set("rd_is_zero", Fr::ONE),
+        0 => r.set("rd_is_zero", Fp::ONE),
         d => r.set("rd_inv", f(d as u64).inverse().expect("nonzero")),
     };
     r.set("rd_selected", f(sel as u64));
@@ -272,7 +272,7 @@ fn honest(i: Instr, address: u32, old: u32, src: u32, rd_old: u32) -> Row {
         r.set(witness, f(v as u64)).set(table, f(v as u64));
     }
     r.set("table_pc", f(i.pc as u64));
-    r.set(name("kind", mnemonic(i.bit)), Fr::ONE);
+    r.set(name("kind", mnemonic(i.bit)), Fp::ONE);
 
     for (column, v) in [
         ("word_index", (address / 4) as u64),
@@ -303,9 +303,9 @@ fn honest(i: Instr, address: u32, old: u32, src: u32, rd_old: u32) -> Row {
 }
 
 /// A lookup expression's value on the committed row.
-fn expression(a: &CircuitArtifact, committed: &[Fr], gate: &GateDef) -> Fr {
+fn expression(a: &CircuitArtifact, committed: &[Fp], gate: &GateDef) -> Fp {
     let layout = a.committed();
-    let values: Vec<Fr> = gate
+    let values: Vec<Fp2> = gate
         .operands()
         .iter()
         .map(|op| {
@@ -313,13 +313,20 @@ fn expression(a: &CircuitArtifact, committed: &[Fr], gate: &GateDef) -> Fr {
                 .iter()
                 .position(|x| x == op)
                 .expect("a committed operand")]
+            .into()
         })
         .collect();
-    eval_gate(gate, &values, &ExternalChallenges::new())
+    let v = eval_gate(gate, &values, &ExternalChallenges::new());
+    assert_eq!(
+        v.c1,
+        Fp::ZERO,
+        "a literal-only gate over base values is base"
+    );
+    v.c0
 }
 
 /// The canonical integer of a field element, if it is below `2^64`.
-fn small_int(v: Fr) -> Option<u64> {
+fn small_int(v: Fp) -> Option<u64> {
     let bytes = v.to_bytes();
     bytes[8..]
         .iter()
@@ -345,15 +352,15 @@ fn violated_tables(a: &CircuitArtifact, r: &Row) -> Vec<String> {
             .position(|x| *x == l.selector)
             .expect("a selector is a committed column");
         let s = committed[at];
-        let values: Vec<Fr> = l
+        let values: Vec<Fp> = l
             .tuple
             .iter()
             .map(|e| expression(a, &committed, e))
             .collect();
         let holds = match l.channel {
             lookup_channel::GENERIC => {
-                let gated = [s * (values[0] + Fr::ONE), s * values[1], s * values[2]];
-                gated.iter().all(|v| *v == Fr::ZERO)
+                let gated = [s * (values[0] + Fp::ONE), s * values[1], s * values[2]];
+                gated.iter().all(|v| *v == Fp::ZERO)
                     || gated
                         .iter()
                         .map(|v| small_int(*v))
@@ -361,14 +368,14 @@ fn violated_tables(a: &CircuitArtifact, r: &Row) -> Vec<String> {
                         .is_some_and(|t| entries.contains(&[t[0], t[1], t[2]]))
             }
             lookup_channel::DECODER => {
-                let table: Vec<Fr> = (0..atomics::TABLE_WIDTH)
+                let table: Vec<Fp> = (0..atomics::TABLE_WIDTH)
                     .map(|j| committed[a.memory.len() + a.witness.len() + j])
                     .collect();
-                let gated: Vec<Fr> = values
+                let gated: Vec<Fp> = values
                     .iter()
-                    .map(|v| s * (*v + Fr::ONE) - Fr::ONE)
+                    .map(|v| s * (*v + Fp::ONE) - Fp::ONE)
                     .collect();
-                gated == table || gated.iter().all(|v| *v == Fr::MINUS_ONE)
+                gated == table || gated.iter().all(|v| *v == Fp::MINUS_ONE)
             }
             _ => continue,
         };
@@ -1170,28 +1177,28 @@ fn every_row_kind_satisfies_every_gate_and_every_bound() {
     for bit in 0..11u32 {
         let column = name("kind", mnemonic(bit));
         assert!(
-            rows.iter().any(|(_, r)| r.get(column) == Fr::ONE),
+            rows.iter().any(|(_, r)| r.get(column) == Fp::ONE),
             "no honest row of kind `{}`",
             mnemonic(bit)
         );
     }
     // `lr.w` makes no rs2 query at all: its form has no rs2 register.
     let lr = row("lr.w");
-    assert_eq!(lr.get("rs2_mask"), Fr::ZERO);
-    assert_eq!(lr.get("rs2_read_value"), Fr::ZERO);
+    assert_eq!(lr.get("rs2_mask"), Fp::ZERO);
+    assert_eq!(lr.get("rs2_read_value"), Fp::ZERO);
     // `sc.w` writes 0 to rd, and stores rs2.
     let sc = row("sc.w");
-    assert_eq!(sc.get("rd_selected"), Fr::ZERO);
-    assert_eq!(sc.get("rd_write_value"), Fr::ZERO);
+    assert_eq!(sc.get("rd_selected"), Fp::ZERO);
+    assert_eq!(sc.get("rd_write_value"), Fp::ZERO);
     assert_eq!(sc.get("ram_write_value"), f(0xDEAD_BEEF));
     // The carry row really carries.
-    assert_eq!(row("amoadd past 2^32").get("add_wrap"), Fr::ONE);
+    assert_eq!(row("amoadd past 2^32").get("add_wrap"), Fp::ONE);
     assert_eq!(row("amoadd past 2^32").get("ram_write_value"), f(0x10));
     // The `x0` row computes the old word and writes nothing.
     let x0 = row("amoadd into x0");
     assert_eq!(x0.get("rd_selected"), f(0x1234_5678));
-    assert_eq!(x0.get("rd_write_value"), Fr::ZERO);
-    assert_eq!(x0.get("rd_is_zero"), Fr::ONE);
+    assert_eq!(x0.get("rd_write_value"), Fp::ZERO);
+    assert_eq!(x0.get("rd_is_zero"), Fp::ONE);
 }
 
 /// A row named by [`honest_rows`].
@@ -1239,13 +1246,13 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     cases.push(("an amoswap touching no RAM word", r, vec!["ram_mask_rule"]));
     let mut r = row("amoswap at word zero");
     r.drop_query("rd");
-    r.set("rd_inv", Fr::ZERO);
+    r.set("rd_inv", Fp::ZERO);
     cases.push(("an amoswap making no rd query", r, vec!["rd_mask_rule"]));
 
     // Addresses.
     for (q, rule) in [("rs1", "rs1_addr_rule"), ("rs2", "rs2_addr_rule")] {
         let mut r = row("amoswap");
-        let addr = r.get(name(q, "addr")) + Fr::ONE;
+        let addr = r.get(name(q, "addr")) + Fp::ONE;
         r.set(name(q, "addr"), addr);
         cases.push(("a register query at the wrong register", r, vec![rule]));
     }
@@ -1273,7 +1280,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     let mut r = Row::default();
     r.set("rs1_read_value", f(4))
         .set("rs1_write_value", f(4))
-        .set("word_index", Fr::ONE);
+        .set("word_index", Fp::ONE);
     cases.push((
         "a padding row whose absent rs1 reads 4",
         r,
@@ -1325,7 +1332,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // table's domain. On an `amoand` row the value rule reads the AND bytes,
     // not the flag, so the flag's own rule is the lone refusal.
     let mut r = row("amoand");
-    r.set("f_bitwise", Fr::ZERO);
+    r.set("f_bitwise", Fp::ZERO);
     cases.push((
         "an amoand switching its byte table off",
         r,
@@ -1335,7 +1342,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // The byte decompositions. Neither is read by the value rule, which reads
     // the AND bytes alone, so each is its own refusal.
     let mut r = row("amoand");
-    let byte = r.get("byte_a0") + Fr::ONE;
+    let byte = r.get("byte_a0") + Fp::ONE;
     r.set("byte_a0", byte);
     cases.push((
         "an amoand whose old bytes do not sum",
@@ -1343,7 +1350,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         vec!["old_bytes_rule"],
     ));
     let mut r = row("amoand");
-    let byte = r.get("byte_b0") + Fr::ONE;
+    let byte = r.get("byte_b0") + Fp::ONE;
     r.set("byte_b0", byte);
     cases.push((
         "an amoand whose rs2 bytes do not sum",
@@ -1355,7 +1362,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // ordering bit can be flipped there with `lo` moved to match, and the one
     // equation is what sees it.
     let mut r = row("amoadd");
-    r.set("lt", Fr::ONE).set("lo", f(0x1234_5678));
+    r.set("lt", Fp::ONE).set("lo", f(0x1234_5678));
     cases.push((
         "an amoadd claiming its old word is the smaller",
         r,
@@ -1419,7 +1426,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     r.query("rd", 3, 10, 42, 0);
     r.set("rd_inv", f(10).inverse().expect("nonzero"))
         .set("decoded_rd", f(10))
-        .set("decoded_mask", Fr::ZERO);
+        .set("decoded_mask", Fp::ZERO);
     cases.push((
         "a padding row naming x10 and zeroing it",
         r,
@@ -1525,10 +1532,10 @@ fn each_table_lookup_is_the_one_that_refuses_its_row() {
     );
     assert_eq!(base.get("ram_write_value"), f(NEG as u64));
     let mut r = base;
-    r.set("old_sign", Fr::ZERO)
-        .set("lt", Fr::ZERO)
-        .set("lo", Fr::ONE)
-        .set("ram_write_value", Fr::ONE);
+    r.set("old_sign", Fp::ZERO)
+        .set("lt", Fp::ZERO)
+        .set("lo", Fp::ONE)
+        .set("ram_write_value", Fp::ONE);
     assert_eq!(
         violated(&a, &r),
         (none(), none(), names(&["cmp_lhs_get_sign"])),
@@ -1544,10 +1551,10 @@ fn each_table_lookup_is_the_one_that_refuses_its_row() {
     );
     assert_eq!(base.get("ram_write_value"), f(NEG as u64));
     let mut r = base;
-    r.set("src_sign", Fr::ZERO)
-        .set("lt", Fr::ONE)
-        .set("lo", Fr::ONE)
-        .set("ram_write_value", Fr::ONE);
+    r.set("src_sign", Fp::ZERO)
+        .set("lt", Fp::ONE)
+        .set("lo", Fp::ONE)
+        .set("ram_write_value", Fp::ONE);
     assert_eq!(
         violated(&a, &r),
         (none(), none(), names(&["cmp_rhs_get_sign"])),
@@ -1562,7 +1569,7 @@ fn each_table_lookup_is_the_one_that_refuses_its_row() {
     for j in 0..4u32 {
         let mut r = row("amoand");
         let column = Box::leak(format!("byte_and{j}").into_boxed_str());
-        let byte = r.get(column) + Fr::ONE;
+        let byte = r.get(column) + Fp::ONE;
         r.set(column, byte)
             .set("ram_write_value", f(and as u64 + (1 << (8 * j))));
         assert_eq!(
@@ -1643,7 +1650,7 @@ fn the_min_and_max_kinds_disagree_across_the_sign_boundary() {
         ("amomax claiming 0x80000000", kind::AMOMAX_W, POS, NEG),
     ] {
         let mut r = honest(Instr::new(bit), ADDRESS, POS, NEG, 0);
-        r.set("lt", Fr::ONE)
+        r.set("lt", Fp::ONE)
             .set("lo", f(lo as u64))
             .set("ram_write_value", f(stored as u64))
             .set("cmp_gap", f(two_pow_33_minus_1))
@@ -1662,11 +1669,11 @@ fn the_min_and_max_kinds_disagree_across_the_sign_boundary() {
         ("amomaxu claiming 0x7fffffff", kind::AMOMAXU_W, NEG, POS),
     ] {
         let mut r = honest(Instr::new(bit), ADDRESS, POS, NEG, 0);
-        r.set("lt", Fr::ZERO)
+        r.set("lt", Fp::ZERO)
             .set("lo", f(lo as u64))
             .set("ram_write_value", f(stored as u64))
-            .set("cmp_gap", Fr::MINUS_ONE)
-            .set("cmp_gap_hi", Fr::ZERO);
+            .set("cmp_gap", Fp::MINUS_ONE)
+            .set("cmp_gap_hi", Fp::ZERO);
         assert_eq!(
             violated(&a, &r),
             (none(), names(&["cmp_gap_lo_range"]), none()),
@@ -1708,7 +1715,7 @@ fn a_byte_key_outside_the_and_table_is_refused() {
         "the honest amoand"
     );
     assert_eq!(old & src, 0);
-    assert_eq!(honest_row.get("ram_write_value"), Fr::ZERO);
+    assert_eq!(honest_row.get("ram_write_value"), Fp::ZERO);
 
     let mut r = honest_row;
     // `old` decomposed as `byte_a0 = 65_823` rather than
@@ -1717,12 +1724,12 @@ fn a_byte_key_outside_the_and_table_is_refused() {
     // then reads `ShiftPowers`' last row, and the other three read the AND
     // table's `(1, 0, 0)`.
     r.set("byte_a0", f(65_823))
-        .set("byte_a1", Fr::ZERO)
-        .set("byte_a2", Fr::ZERO)
+        .set("byte_a1", Fp::ZERO)
+        .set("byte_a2", Fp::ZERO)
         .set("byte_b0", f(1 << 31))
-        .set("byte_b3", Fr::ZERO)
-        .set("byte_and0", Fr::ONE)
-        .set("ram_write_value", Fr::ONE);
+        .set("byte_b3", Fp::ZERO)
+        .set("byte_and0", Fp::ONE)
+        .set("ram_write_value", Fp::ONE);
     assert_eq!(
         violated(&a, &r),
         (none(), names(&["byte_a0_range", "byte_a0_scaled"]), none()),
@@ -1821,7 +1828,7 @@ fn a_misaligned_atomic_is_unprovable() {
             "word_index",
             f(misaligned as u64) * f(4).inverse().expect("nonzero"),
         )
-        .set("word_index_hi", Fr::ZERO);
+        .set("word_index_hi", Fp::ZERO);
     assert_eq!(
         violated(&a, &r),
         (none(), names(&["word_index_lo_range"]), none()),
@@ -1864,13 +1871,13 @@ fn sc_w_always_succeeds() {
         "the honest sc.w"
     );
     // Success: rd takes 0, and the word takes rs2.
-    assert_eq!(base.get("rd_selected"), Fr::ZERO);
-    assert_eq!(base.get("rd_write_value"), Fr::ZERO);
+    assert_eq!(base.get("rd_selected"), Fp::ZERO);
+    assert_eq!(base.get("rd_write_value"), Fp::ZERO);
     assert_eq!(base.get("ram_write_value"), f(src as u64));
 
     // Failure, as the ISA allows and this family does not: a nonzero code.
     let mut r = base.clone();
-    r.set("rd_selected", Fr::ONE).set("rd_write_value", Fr::ONE);
+    r.set("rd_selected", Fp::ONE).set("rd_write_value", Fp::ONE);
     assert_eq!(
         violated(&a, &r),
         (names(&["rd_value_rule"]), none(), none()),

@@ -18,7 +18,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
-use field::Fr;
+use field_a64_c5::Fp;
 
 pub mod add_sub;
 pub mod atomics;
@@ -44,7 +44,7 @@ pub use laws::ConstraintError;
 /// every other version before it decodes anything after it.
 pub const FORMAT_VERSION: u32 = 1;
 
-/// The one coefficient encoding: every `Fr` is its canonical 32-byte
+/// The one coefficient encoding: every `Fp` is its canonical 8-byte
 /// little-endian integer. The second word of every artifact, which is how the
 /// file declares it.
 pub const COEFFICIENT_ENCODING_CANONICAL_LE: u32 = 0;
@@ -245,7 +245,7 @@ impl fmt::Display for PolyAddress {
 /// challenge is degree 0 in the layer below.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Coeff {
-    Literal(Fr),
+    Literal(Fp),
     Challenge(u32),
 }
 
@@ -544,7 +544,7 @@ pub struct ScratchSlot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Padding {
     /// The committed columns' values on an inactive row, in layout order.
-    pub row: Vec<Fr>,
+    pub row: Vec<Fp>,
     /// Whether the all-zero committed row satisfies every row-local relation.
     pub zero_row_valid: bool,
 }

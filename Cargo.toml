@@ -69,19 +69,19 @@ test-support = { path = "tools/test-support" }
 # async, no channels.
 rayon = "1"
 
-# `default-features = false` keeps serde `no_std`, which `constants` and `field`
-# must stay for the guest target. This is not a cargo feature of ours: the
+# `default-features = false` keeps serde `no_std`, which `constants` and
+# `field-a64-c5` must stay for the guest target. This is not a cargo feature of ours: the
 # workspace still has exactly one build configuration.
 serde = { version = "1", default-features = false }
 
 # Test / tool only. The reference field arithmetic and multilinear extensions
 # for the differential checks and the KAT fixtures; each user derives its own
-# `Fr` from `ark-ff`'s `MontConfig` over the modulus. Never linked by the
+# field from `ark-ff`'s `MontConfig` over the modulus. Never linked by the
 # prover, the verifier or a guest.
 ark-ff = "0.6"
 ark-poly = "0.6"
 
-# Test only. Exercises the `Fr` serde impls over a real wire format.
+# Test only. Exercises the `Fp` serde impls over a real wire format.
 postcard = { version = "1", default-features = false }
 
 # JSON: the reports `tools/bench` and `tools/profiler` write. Nothing here is

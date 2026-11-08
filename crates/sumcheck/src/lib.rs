@@ -23,7 +23,7 @@
 //! As a function of `r` that sum is multilinear, and it takes the value `G(y)`
 //! at each cube point `y`. So if `G` is nonzero anywhere on the cube the sum is
 //! not the zero polynomial, and by Schwartz–Zippel it vanishes on at most an
-//! `n / |Fr|` fraction of `Fr^n` — with `r` modelled as uniform, which is the
+//! `n / |Fp2|` fraction of `Fp2^n` — with `r` modelled as uniform, which is the
 //! Fiat–Shamir assumption the transcript carries.
 //!
 //! # The transcript script
@@ -32,7 +32,7 @@
 //! same order; no challenge is ever passed out of band.
 //!
 //! 1. The caller absorbs the witness digest — [`witness_digest`] on the prover
-//!    side, the scalar it was handed on the verifier side — through
+//!    side, the digest it was handed on the verifier side — through
 //!    [`absorb_witness_digest`]. Everything after this point is bound to the
 //!    columns.
 //! 2. `n` eq-randomizers `r`, each a `SUMCHECK_CHALLENGE`.
@@ -49,7 +49,7 @@
 //! caller discharges the openings.
 //!
 //! Be precise about what that leaves open. The last-layer check constrains one
-//! field element — `G(final_evals)` — so many different `final_evals` satisfy
+//! `Fp2` element — `G(final_evals)` — so many different `final_evals` satisfy
 //! it, and a prover is free to choose among them. What ties them to the actual
 //! columns is an opening, and without one the only binding on the witness is
 //! the digest, which is a hash and not a commitment.
@@ -59,9 +59,9 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use constants::transcript_tags;
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use poly::{eq_eval, eq_table, MultilinearPoly, PolyBacking};
-use transcript::Transcript;
+use transcript_a64_c5::{Digest, Transcript};
 
 // ---------------------------------------------------------------------------
 // Gates
@@ -86,7 +86,7 @@ pub struct PolyAddress(pub u32);
 /// enforced by construction rather than by an assertion that could be skipped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GateTerm {
-    pub coef: Fr,
+    pub coef: Fp,
     pub a: usize,
     pub b: Option<usize>,
 }
@@ -148,7 +148,7 @@ impl Gate {
     }
 
     /// The formula at one point. `input_values` is in declaration order.
-    pub fn evaluate(&self, input_values: &[Fr]) -> Fr {
+    pub fn evaluate(&self, input_values: &[Fp2]) -> Fp2 {
         assert_eq!(
             input_values.len(),
             self.inputs.len(),
@@ -156,9 +156,9 @@ impl Gate {
             input_values.len(),
             self.inputs.len()
         );
-        let mut acc = Fr::ZERO;
+        let mut acc = Fp2::ZERO;
         for term in &self.terms {
-            let mut v = term.coef * input_values[term.a];
+            let mut v = input_values[term.a] * term.coef;
             if let Some(b) = term.b {
                 v *= input_values[b];
             }
@@ -179,10 +179,10 @@ impl Gate {
 pub struct SumcheckProof {
     /// Round `i`'s cubic in **ascending** coefficient order:
     /// `g(X) = c[0] + c[1] X + c[2] X^2 + c[3] X^3`.
-    pub rounds: Vec<[Fr; 4]>,
+    pub rounds: Vec<[Fp2; 4]>,
     /// Each input polynomial's claimed value at the fully bound point,
     /// in gate-input declaration order.
-    pub final_evals: Vec<Fr>,
+    pub final_evals: Vec<Fp2>,
 }
 
 /// What a verified zerocheck leaves for the caller to discharge: the point the
@@ -190,8 +190,8 @@ pub struct SumcheckProof {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SumcheckClaim {
     /// `point[j]` is the challenge bound to variable `j`.
-    pub point: Vec<Fr>,
-    pub final_evals: Vec<Fr>,
+    pub point: Vec<Fp2>,
+    pub final_evals: Vec<Fp2>,
 }
 
 /// Why a zerocheck was rejected.
@@ -213,19 +213,20 @@ pub enum SumcheckError {
 // Witness digest
 // ---------------------------------------------------------------------------
 
-/// The binding digest of a witness's columns, squeezed from a sponge of its
-/// own so that the protocol transcript never sees the columns.
+/// The binding digest of a witness's columns, from a sponge of its own so that
+/// the protocol transcript never sees the columns.
 ///
 /// The sponge absorbs the column count and the variable count as one framed
 /// message, then one length-delimited message per column — columns in
-/// gate-input declaration order, cells in hypercube index order, each lifted to
-/// `Fr`. The header pins both counts, so the absorbed stream determines the
-/// witness. The squeeze is raw: the framing tag names scalar messages, and
-/// drawing a challenge under it would be the same tag in two kinds.
+/// gate-input declaration order, cells in hypercube index order, each a base
+/// value. The header pins both counts, so the absorbed stream determines the
+/// witness. It ends in `digest()`, never a challenge: the framing tag names
+/// scalar messages, and a challenge under it would be the same tag in two
+/// kinds.
 ///
-/// Panics unless there is at least one column and every column has the same
-/// number of variables.
-pub fn witness_digest(columns: &[MultilinearPoly]) -> Fr {
+/// Panics unless there is at least one column, every column is a base table
+/// and every column has the same number of variables.
+pub fn witness_digest(columns: &[MultilinearPoly]) -> Digest {
     assert!(
         !columns.is_empty(),
         "witness_digest: a witness has at least one column"
@@ -244,23 +245,23 @@ pub fn witness_digest(columns: &[MultilinearPoly]) -> Fr {
     sponge.append_scalars(
         transcript_tags::WITNESS_DIGEST,
         &[
-            Fr::from_u64(columns.len() as u64),
-            Fr::from_u64(n_vars as u64),
+            Fp::from_u64(columns.len() as u64),
+            Fp::from_u64(n_vars as u64),
         ],
     );
     for c in columns {
-        let cells: Vec<Fr> = (0..c.len()).map(|i| c.get(i)).collect();
+        let cells: Vec<Fp> = (0..c.len()).map(|i| c.get_base(i)).collect();
         sponge.append_scalars(transcript_tags::WITNESS_DIGEST, &cells);
     }
-    sponge.sample()
+    sponge.digest()
 }
 
 /// Bind a witness digest to the protocol transcript. Both sides call this —
 /// the prover with [`witness_digest`] of its columns, the verifier with the
-/// scalar it was handed — so the two cannot disagree about the tag or the
+/// digest it was handed — so the two cannot disagree about the tag or the
 /// framing.
-pub fn absorb_witness_digest(t: &mut Transcript, digest: Fr) {
-    t.append_scalar(transcript_tags::WITNESS_DIGEST, digest);
+pub fn absorb_witness_digest(t: &mut Transcript, digest: &Digest) {
+    t.append_scalars(transcript_tags::WITNESS_DIGEST, digest);
 }
 
 // ---------------------------------------------------------------------------
@@ -270,11 +271,11 @@ pub fn absorb_witness_digest(t: &mut Transcript, digest: Fr) {
 /// `[1/2, 1/3, 1/6]`: everything [`interpolate_cubic`] needs, derived once per
 /// proof rather than transcribed, so there is no literal to get wrong. Three
 /// inversions per proof is nothing beside the round loop.
-fn interpolation_constants() -> [Fr; 3] {
+fn interpolation_constants() -> [Fp; 3] {
     let inv = |k: u64| {
-        Fr::from_u64(k)
+        Fp::from_u64(k)
             .inverse()
-            .expect("2, 3 and 6 are invertible in Fr")
+            .expect("2, 3 and 6 are invertible in Fp")
     };
     [inv(2), inv(3), inv(6)]
 }
@@ -291,7 +292,7 @@ fn interpolation_constants() -> [Fr; 3] {
 /// expanded once — `X(X-1)/2 = (X^2 - X)/2` and
 /// `X(X-1)(X-2)/6 = (X^3 - 3X^2 + 2X)/6` — which gives
 /// `c0 = v0`, `c1 = d1 - d2/2 + d3/3`, `c2 = d2/2 - d3/2`, `c3 = d3/6`.
-fn interpolate_cubic(v: &[Fr; 4], c: &[Fr; 3]) -> [Fr; 4] {
+fn interpolate_cubic(v: &[Fp2; 4], c: &[Fp; 3]) -> [Fp2; 4] {
     let [inv2, inv3, inv6] = *c;
     let d1 = v[1] - v[0];
     let d2 = (v[2] - v[1]) - d1;
@@ -305,7 +306,7 @@ fn interpolate_cubic(v: &[Fr; 4], c: &[Fr; 3]) -> [Fr; 4] {
 }
 
 /// Horner evaluation of an ascending-coefficient cubic.
-fn eval_cubic(g: &[Fr; 4], x: Fr) -> Fr {
+fn eval_cubic(g: &[Fp2; 4], x: Fp2) -> Fp2 {
     ((g[3] * x + g[2]) * x + g[1]) * x + g[0]
 }
 
@@ -321,11 +322,11 @@ fn eval_cubic(g: &[Fr; 4], x: Fr) -> Fr {
 /// addition of the step per column, which is why no multiplication by the node
 /// appears below. The four point-evaluations accumulate across the hypercube in
 /// a single pass over `j`.
-fn round_evaluations(gate: &Gate, polys: &[MultilinearPoly], eq: &MultilinearPoly) -> [Fr; 4] {
+fn round_evaluations(gate: &Gate, polys: &[MultilinearPoly], eq: &MultilinearPoly) -> [Fp2; 4] {
     let half = eq.len() / 2;
-    let mut acc = [Fr::ZERO; 4];
-    let mut cur: Vec<Fr> = (0..polys.len()).map(|_| Fr::ZERO).collect();
-    let mut step: Vec<Fr> = cur.clone();
+    let mut acc = [Fp2::ZERO; 4];
+    let mut cur: Vec<Fp2> = (0..polys.len()).map(|_| Fp2::ZERO).collect();
+    let mut step: Vec<Fp2> = cur.clone();
 
     for j in 0..half {
         for (k, p) in polys.iter().enumerate() {
@@ -378,29 +379,29 @@ pub fn prove_zerocheck(
         );
     }
 
-    let r: Vec<Fr> = (0..n)
-        .map(|_| t.challenge_scalar(transcript_tags::SUMCHECK_CHALLENGE))
+    let r: Vec<Fp2> = (0..n)
+        .map(|_| t.challenge(transcript_tags::SUMCHECK_CHALLENGE))
         .collect();
     // Built once and bound each round alongside the witness, rather than
     // rebuilt per round.
-    let mut eq = MultilinearPoly::new(PolyBacking::Fr(eq_table(&r)));
+    let mut eq = MultilinearPoly::new(PolyBacking::Fp2(eq_table(&r)));
 
     let constants = interpolation_constants();
-    let mut rounds: Vec<[Fr; 4]> = Vec::new();
+    let mut rounds: Vec<[Fp2; 4]> = Vec::new();
     for _ in 0..n {
         let coefficients = interpolate_cubic(&round_evaluations(gate, polys, &eq), &constants);
-        t.append_scalars(transcript_tags::SUMCHECK_ROUND, &coefficients);
+        t.append_ext(transcript_tags::SUMCHECK_ROUND, &coefficients);
         rounds.push(coefficients);
 
-        let c = t.challenge_scalar(transcript_tags::SUMCHECK_CHALLENGE);
+        let c = t.challenge(transcript_tags::SUMCHECK_CHALLENGE);
         for p in polys.iter_mut() {
             p.bind(c);
         }
         eq.bind(c);
     }
 
-    let final_evals: Vec<Fr> = polys.iter().map(|p| p.get(0)).collect();
-    t.append_scalars(transcript_tags::SUMCHECK_FINAL_EVALS, &final_evals);
+    let final_evals: Vec<Fp2> = polys.iter().map(|p| p.get(0)).collect();
+    t.append_ext(transcript_tags::SUMCHECK_FINAL_EVALS, &final_evals);
     SumcheckProof {
         rounds,
         final_evals,
@@ -434,26 +435,26 @@ pub fn verify_zerocheck(
         });
     }
 
-    let r: Vec<Fr> = (0..n_vars)
-        .map(|_| t.challenge_scalar(transcript_tags::SUMCHECK_CHALLENGE))
+    let r: Vec<Fp2> = (0..n_vars)
+        .map(|_| t.challenge(transcript_tags::SUMCHECK_CHALLENGE))
         .collect();
 
     // The zerocheck itself: round 0 inherits the claim that the sum is zero.
-    let mut claim = Fr::ZERO;
-    let mut point: Vec<Fr> = Vec::new();
+    let mut claim = Fp2::ZERO;
+    let mut point: Vec<Fp2> = Vec::new();
     for (round, g) in proof.rounds.iter().enumerate() {
-        if eval_cubic(g, Fr::ZERO) + eval_cubic(g, Fr::ONE) != claim {
+        if eval_cubic(g, Fp2::ZERO) + eval_cubic(g, Fp2::ONE) != claim {
             return Err(SumcheckError::RoundSumMismatch { round });
         }
-        t.append_scalars(transcript_tags::SUMCHECK_ROUND, g);
-        let c = t.challenge_scalar(transcript_tags::SUMCHECK_CHALLENGE);
+        t.append_ext(transcript_tags::SUMCHECK_ROUND, g);
+        let c = t.challenge(transcript_tags::SUMCHECK_CHALLENGE);
         claim = eval_cubic(g, c);
         point.push(c);
     }
 
     // Absorbed before the check, and before any challenge drawn after it:
     // the values are never trusted silently.
-    t.append_scalars(transcript_tags::SUMCHECK_FINAL_EVALS, &proof.final_evals);
+    t.append_ext(transcript_tags::SUMCHECK_FINAL_EVALS, &proof.final_evals);
     if eq_eval(&r, &point) * gate.evaluate(&proof.final_evals) != claim {
         return Err(SumcheckError::FinalEvalMismatch);
     }

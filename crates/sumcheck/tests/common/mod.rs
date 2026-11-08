@@ -4,17 +4,17 @@
 #![allow(dead_code)]
 
 use constants::transcript_tags;
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use poly::{MultilinearPoly, PolyBacking};
 use sumcheck::{absorb_witness_digest, Gate, GateTerm, PolyAddress, SumcheckClaim};
 use test_support::Rng;
-use transcript::Transcript;
+use transcript_a64_c5::{Digest, Transcript};
 
 /// A fresh transcript with one witness digest bound to it. Both the prover and
 /// the verifier start here. The digest is a parameter rather than being taken
 /// from the columns, because the tamper tests bind one witness and prove
 /// another.
-pub fn bound_transcript(digest: Fr) -> Transcript {
+pub fn bound_transcript(digest: &Digest) -> Transcript {
     let mut t = Transcript::new();
     absorb_witness_digest(&mut t, digest);
     t
@@ -23,10 +23,10 @@ pub fn bound_transcript(digest: Fr) -> Transcript {
 /// The `n` eq-randomizers a proof over `digest` is built on, replayed from the
 /// transcript script. They are drawn before any round message exists, so
 /// no proof is needed to read them.
-pub fn eq_randomizers(digest: Fr, n: usize) -> Vec<Fr> {
+pub fn eq_randomizers(digest: &Digest, n: usize) -> Vec<Fp2> {
     let mut t = bound_transcript(digest);
     (0..n)
-        .map(|_| t.challenge_scalar(transcript_tags::SUMCHECK_CHALLENGE))
+        .map(|_| t.challenge(transcript_tags::SUMCHECK_CHALLENGE))
         .collect()
 }
 
@@ -42,12 +42,12 @@ pub fn square_gate() -> Gate {
         &[&a, &b],
         vec![
             GateTerm {
-                coef: Fr::ONE,
+                coef: Fp::ONE,
                 a: 0,
                 b: Some(0),
             },
             GateTerm {
-                coef: Fr::MINUS_ONE,
+                coef: Fp::MINUS_ONE,
                 a: 1,
                 b: None,
             },
@@ -121,17 +121,17 @@ pub fn wide_gate() -> Gate {
         &inputs,
         vec![
             GateTerm {
-                coef: Fr::ONE,
+                coef: Fp::ONE,
                 a: 0,
                 b: Some(1),
             },
             GateTerm {
-                coef: Fr::ONE,
+                coef: Fp::ONE,
                 a: 0,
                 b: Some(2),
             },
             GateTerm {
-                coef: Fr::MINUS_ONE,
+                coef: Fp::MINUS_ONE,
                 a: 3,
                 b: Some(4),
             },
@@ -142,7 +142,7 @@ pub fn wide_gate() -> Gate {
 
 /// A satisfying witness for [`wide_gate`]: `A`, `B`, `C` seeded random `U32`,
 /// `D` seeded random *odd* `U32` so it is invertible, and
-/// `E = A * (B + C) / D` in `Fr`. Four small backings and one `Fr` backing.
+/// `E = A * (B + C) / D` in `Fp`. Four small backings and one `Fp` backing.
 pub fn wide_witness(n: usize, seed: u64) -> Vec<MultilinearPoly> {
     wide_polys(wide_columns(n, seed))
 }
@@ -161,7 +161,7 @@ pub fn wide_witness_with_row(n: usize, seed: u64, row: usize, mask: u32) -> Vec<
 /// exactly that row.
 pub fn wide_witness_with_bumped_e(n: usize, seed: u64, row: usize) -> Vec<MultilinearPoly> {
     let mut cols = wide_columns(n, seed);
-    cols.e[row] += Fr::ONE;
+    cols.e[row] += Fp::ONE;
     wide_polys(cols)
 }
 
@@ -172,14 +172,14 @@ struct WideColumns {
     b: Vec<u32>,
     c: Vec<u32>,
     d: Vec<u32>,
-    e: Vec<Fr>,
+    e: Vec<Fp>,
 }
 
 /// `E = A * (B + C) / D`, the value that makes the gate vanish on a row.
-fn quotient(a: u32, b: u32, c: u32, d: u32) -> Fr {
-    Fr::from_u64(a as u64)
-        * (Fr::from_u64(b as u64) + Fr::from_u64(c as u64))
-        * Fr::from_u64(d as u64)
+fn quotient(a: u32, b: u32, c: u32, d: u32) -> Fp {
+    Fp::from_u64(a as u64)
+        * (Fp::from_u64(b as u64) + Fp::from_u64(c as u64))
+        * Fp::from_u64(d as u64)
             .inverse()
             .expect("D is odd, hence nonzero")
 }
@@ -191,7 +191,7 @@ fn wide_columns(n: usize, seed: u64) -> WideColumns {
     let b: Vec<u32> = (0..rows).map(|_| rng.next_u64() as u32).collect();
     let c: Vec<u32> = (0..rows).map(|_| rng.next_u64() as u32).collect();
     let d: Vec<u32> = (0..rows).map(|_| (rng.next_u64() as u32) | 1).collect();
-    let e: Vec<Fr> = (0..rows)
+    let e: Vec<Fp> = (0..rows)
         .map(|i| quotient(a[i], b[i], c[i], d[i]))
         .collect();
     WideColumns { a, b, c, d, e }
@@ -203,7 +203,7 @@ fn wide_polys(cols: WideColumns) -> Vec<MultilinearPoly> {
         MultilinearPoly::new(PolyBacking::U32(cols.b)),
         MultilinearPoly::new(PolyBacking::U32(cols.c)),
         MultilinearPoly::new(PolyBacking::U32(cols.d)),
-        MultilinearPoly::new(PolyBacking::Fr(cols.e)),
+        MultilinearPoly::new(PolyBacking::Fp(cols.e)),
     ]
 }
 

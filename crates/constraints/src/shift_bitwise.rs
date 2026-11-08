@@ -33,7 +33,7 @@ use alloc::vec::Vec;
 
 use constants::extra_mask::shift_bitwise as kind;
 use constants::{family, generic_table, lookup_channel};
-use field::Fr;
+use field_a64_c5::Fp;
 
 use crate::lookup::{check_copowers, ChannelSpec};
 use crate::memory::{
@@ -202,15 +202,15 @@ pub const LEGAL_MASKS: [u32; 12] = [
 ];
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn neg(v: u64) -> Coeff {
-    Coeff::Literal(-Fr::from_u64(v))
+    Coeff::Literal(-Fp::from_u64(v))
 }
 
-fn two_32() -> Fr {
-    Fr::from_u64(1 << 32)
+fn two_32() -> Fp {
+    Fp::from_u64(1 << 32)
 }
 
 /// `Σ a·x + Σ b·y·z`, constant 0.
@@ -289,7 +289,7 @@ fn range16(name: &str, expression: GateDef) -> LookupExpr {
 /// of `docs/spec/memory.md` §7.
 fn low_half(terms: Vec<(Coeff, PolyAddress)>, hi: PolyAddress) -> GateDef {
     let mut terms = terms;
-    terms.push((Coeff::Literal(-Fr::from_u64(1 << 16)), hi));
+    terms.push((Coeff::Literal(-Fp::from_u64(1 << 16)), hi));
     linear(terms)
 }
 
@@ -529,7 +529,7 @@ fn family_spec() -> FamilySpec {
         "copower_rule".into(),
         quadratic(
             vec![(
-                Coeff::Literal(-Fr::from_u64(1 << generic_table::SHIFT_COPOWER_BITS)),
+                Coeff::Literal(-Fp::from_u64(1 << generic_table::SHIFT_COPOWER_BITS)),
                 F_SHIFT,
             )],
             vec![(lit(1), POW, COPOW)],
@@ -578,6 +578,10 @@ fn family_spec() -> FamilySpec {
     // A left shift:  rs1·2^s = rd + 2^32·ovf.
     // A right shift: rs1 − 2^32·se = (rd − 2^32·se)·2^s + residue.
     // Both read the one shift_prod; both arms are zero on a bitwise row.
+    //
+    // UNFINISHED: A64-C5 CHARACTERISTIC. rd + 2^32·ovf spans [0, 2^64), past
+    // p, so a left shift whose product is below 59 has a second split
+    // (`docs/spec/shift-bitwise.md` §5). The right shift's terms stay below p.
     let mut out = Vec::new();
     for b in LEFT {
         out.push((lit(1), b, SHIFT_PROD));

@@ -7,7 +7,7 @@
 mod common;
 
 use common::{shell, statement, vk, ADD, INIT, JBS, ZERO};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use verifier_core::{
     check_ts_windows, BlockProof, BlockReconciliation, ShardRecord, TRIVIAL_TS_WINDOW,
 };
@@ -19,7 +19,7 @@ fn block() -> BlockProof {
     let public = statement();
     let mut init = shell(&vk, &public);
     init.family = INIT;
-    init.outputs = vec![Fr::ZERO; 2];
+    init.outputs = vec![Fp2::ZERO; 2];
     let mut add = shell(&vk, &public);
     add.ts_window = [4, 400];
     // The two public value shards, which every statement has
@@ -27,7 +27,7 @@ fn block() -> BlockProof {
     // carries the trivial window like the init family's.
     let mut input = shell(&vk, &public);
     input.family = common::PIN;
-    input.outputs = vec![Fr::ZERO; 2];
+    input.outputs = vec![Fp2::ZERO; 2];
     let mut journal = input.clone();
     journal.family = common::POUT;
     BlockProof {
@@ -175,7 +175,7 @@ fn the_reconciliation_round_trips_in_its_frozen_layout() {
             family: ADD,
             shard_index: 3,
             ts_window: [4, 0x1_0000_0000],
-            roots: [Fr::from_u64(11), Fr::from_u64(12)],
+            roots: [Fp2::from(Fp::from_u64(11)), Fp2::from(Fp::from_u64(12))],
         }],
     };
     let b = one.to_bytes();
@@ -184,9 +184,9 @@ fn the_reconciliation_round_trips_in_its_frozen_layout() {
     assert_eq!(&b[8..12], &3u32.to_le_bytes());
     assert_eq!(&b[12..20], &4u64.to_le_bytes());
     assert_eq!(&b[20..28], &0x1_0000_0000u64.to_le_bytes());
-    assert_eq!(&b[28..60], &Fr::from_u64(11).to_bytes());
-    assert_eq!(&b[60..92], &Fr::from_u64(12).to_bytes());
-    assert_eq!(b.len(), 92);
+    assert_eq!(&b[28..44], &Fp2::from(Fp::from_u64(11)).to_bytes());
+    assert_eq!(&b[44..60], &Fp2::from(Fp::from_u64(12)).to_bytes());
+    assert_eq!(b.len(), 60);
 
     let mut long = b.clone();
     long.push(0);

@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 use constants::memory::{READ_ROOT, TS_BITS, WRITE_ROOT};
 use constants::{family, guest_memory};
 use constraints::PolyAddress;
-use field::Fr;
+use field_a64_c5::Fp2;
 use gkr_verify::{
     boundary_factors, channel_holds, reconciles, verify, ExternalChallenges, GkrError,
 };
@@ -44,8 +44,8 @@ const EXIT_STATUS_REGISTER: usize = 10 - 1;
 /// key does not describe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GlobalChallenges {
-    pub memory: [Fr; 4],
-    pub digest: Fr,
+    pub memory: [Fp2; 4],
+    pub digest: Fp2,
 }
 
 /// The statement's checks and the global transcript, `docs/spec/proof.md`
@@ -293,7 +293,7 @@ pub fn verify_shard_local(
     //     checked by NOTHING, so the values are whatever the prover said
     //     (`docs/architecture.md` §0).
     let columns = artifact.committed();
-    let values: Vec<Fr> = claims.iter().map(|c| c.value).collect();
+    let values: Vec<Fp2> = claims.iter().map(|c| c.value).collect();
     Ok(ColumnClaims {
         columns,
         point,
@@ -338,8 +338,8 @@ pub fn verify_global_memory(
         return Err(memory("x10's final value is not the exit status"));
     }
     let drawn = crate::statement::memory_slots(&global.memory);
-    let reads: Vec<Fr> = public.memory_roots.iter().map(|r| r[READ_ROOT]).collect();
-    let writes: Vec<Fr> = public.memory_roots.iter().map(|r| r[WRITE_ROOT]).collect();
+    let reads: Vec<Fp2> = public.memory_roots.iter().map(|r| r[READ_ROOT]).collect();
+    let writes: Vec<Fp2> = public.memory_roots.iter().map(|r| r[WRITE_ROOT]).collect();
     let factors = boundary_factors(&drawn, vk.entry_pc, b);
     if !reconciles(&reads, &writes, factors) {
         return Err(memory("the statement's roots do not reconcile"));

@@ -1,4 +1,4 @@
-//! The reference field the `field` and `poly` groups answer with: arkworks'
+//! The reference field the `field` group answers with: arkworks'
 //! Montgomery field over `Fr`'s modulus, derived here from the decimal modulus
 //! with `ark-ff`'s own `MontConfig`, so it shares no code and no constant with
 //! `crates/field`.

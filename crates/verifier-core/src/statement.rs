@@ -13,9 +13,9 @@ use alloc::vec::Vec;
 
 use constants::memory::TS_BITS;
 use constants::{challenge_slot, family, guest_memory, transcript_tags as tags, PROTOCOL_VERSION};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr_verify::{window_challenges, BoundaryFinals, ExternalChallenges};
-use transcript::{io_digest, Transcript};
+use transcript_a64_c5::{io_digest, Digest, Transcript};
 
 use crate::{PublicInputs, VerifyingKey};
 
@@ -188,13 +188,13 @@ pub fn public_io_words(bytes: &[u8]) -> Vec<u32> {
 /// their heights in the same order, then `bytecode_size_words`. Its length,
 /// `2k + 1`, is what fixes `k`.
 fn absorb_vm_config(tr: &mut Transcript, config: &VmConfig) {
-    let mut message: Vec<Fr> = config
+    let mut message: Vec<Fp> = config
         .families
         .iter()
-        .map(|(f, _)| Fr::from_u64(*f as u64))
+        .map(|(f, _)| Fp::from_u64(*f as u64))
         .collect();
-    message.extend(config.families.iter().map(|(_, h)| Fr::from_u64(*h as u64)));
-    message.push(Fr::from_u64(config.bytecode_size_words as u64));
+    message.extend(config.families.iter().map(|(_, h)| Fp::from_u64(*h as u64)));
+    message.push(Fp::from_u64(config.bytecode_size_words as u64));
     tr.append_scalars(tags::VM_CONFIG, &message);
 }
 
@@ -223,12 +223,12 @@ pub fn absorb_statement_descriptor(
         "the statement descriptor carries one shard count per family in the VmConfig"
     );
     absorb_vm_config(tr, config);
-    let counts: Vec<Fr> = shard_counts
+    let counts: Vec<Fp> = shard_counts
         .iter()
-        .map(|c| Fr::from_u64(*c as u64))
+        .map(|c| Fp::from_u64(*c as u64))
         .collect();
     tr.append_scalars(tags::SHARD_COUNTS, &counts);
-    let ids: Vec<Fr> = windows.iter().map(|w| Fr::from_u64(*w as u64)).collect();
+    let ids: Vec<Fp> = windows.iter().map(|w| Fp::from_u64(*w as u64)).collect();
     tr.append_scalars(tags::MEMORY_WINDOWS, &ids);
 }
 
@@ -298,20 +298,27 @@ pub fn check_memory_windows(
 // The digests
 // ---------------------------------------------------------------------------
 
-/// A program's identity: one `Fr`, squeezed from the recipe in
-/// [`identity_digest`]. Its wire form is that element's canonical 32-byte
-/// little-endian encoding.
+/// A program's identity: the digest of the recipe in [`identity_digest`]. Its
+/// wire form is its 8 lanes' canonical encodings in order, 64 bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ProgramIdentity(pub Fr);
+pub struct ProgramIdentity(pub Digest);
 
 impl ProgramIdentity {
-    pub fn to_bytes(&self) -> [u8; 32] {
-        self.0.to_bytes()
+    pub fn to_bytes(&self) -> [u8; 64] {
+        let mut out = [0u8; 64];
+        for (chunk, lane) in out.chunks_exact_mut(8).zip(&self.0) {
+            chunk.copy_from_slice(&lane.to_bytes());
+        }
+        out
     }
 
-    /// `None` for a non-canonical encoding; never reduces.
-    pub fn from_bytes(bytes: &[u8; 32]) -> Option<ProgramIdentity> {
-        Fr::from_bytes(bytes).map(ProgramIdentity)
+    /// `None` for a non-canonical lane; never reduces.
+    pub fn from_bytes(bytes: &[u8; 64]) -> Option<ProgramIdentity> {
+        let mut lanes = [Fp::ZERO; 8];
+        for (lane, chunk) in lanes.iter_mut().zip(bytes.chunks_exact(8)) {
+            *lane = Fp::from_bytes(chunk.try_into().expect("8 bytes"))?;
+        }
+        Some(ProgramIdentity(lanes))
     }
 }
 
@@ -321,7 +328,7 @@ impl ProgramIdentity {
 /// 1. `PROGRAM_IDENTITY`: `code_version`, one scalar;
 /// 2. `VM_CONFIG`: the family ids, their heights, `bytecode_size_words`;
 /// 3. `PROGRAM_ENTRY`: `entry_pc`, one scalar;
-/// 4. one raw squeeze, which is the identity.
+/// 4. `digest()`, which is the identity.
 ///
 /// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** Between steps
 /// 3 and 4 belongs one commitment list per family of `config`: the setup
@@ -333,13 +340,13 @@ impl ProgramIdentity {
 /// and absorb them here (`docs/architecture.md` §0).
 pub fn identity_digest(code_version: u32, config: &VmConfig, entry_pc: u32) -> ProgramIdentity {
     let mut tr = Transcript::new();
-    tr.append_scalar(tags::PROGRAM_IDENTITY, Fr::from_u64(code_version as u64));
+    tr.append_scalar(tags::PROGRAM_IDENTITY, Fp::from_u64(code_version as u64));
     absorb_vm_config(&mut tr, config);
-    tr.append_scalar(tags::PROGRAM_ENTRY, Fr::from_u64(entry_pc as u64));
+    tr.append_scalar(tags::PROGRAM_ENTRY, Fp::from_u64(entry_pc as u64));
     // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The setup
     // columns' commitments, one list per family, are absorbed here once a
     // commitment scheme exists. Until then the identity binds no code.
-    ProgramIdentity(tr.sample())
+    ProgramIdentity(tr.digest())
 }
 
 // ---------------------------------------------------------------------------
@@ -386,11 +393,11 @@ pub(crate) fn groups(config: &VmConfig, shard_counts: &[u32]) -> Vec<(u32, u32)>
 
 /// The 64 boundary scalars in `MEMORY_BOUNDARY`'s order,
 /// `docs/spec/memory.md` §4.1: `t_0 … t_31`, `t_pc`, `v_1 … v_31`.
-pub fn boundary_scalars(finals: &BoundaryFinals) -> Vec<Fr> {
+pub fn boundary_scalars(finals: &BoundaryFinals) -> Vec<Fp> {
     let mut out = Vec::with_capacity(64);
-    out.extend(finals.reg_ts.iter().map(|t| Fr::from_u64(*t)));
-    out.push(Fr::from_u64(finals.pc_ts));
-    out.extend(finals.reg_values.iter().map(|v| Fr::from_u64(*v as u64)));
+    out.extend(finals.reg_ts.iter().map(|t| Fp::from_u64(*t)));
+    out.push(Fp::from_u64(finals.pc_ts));
+    out.extend(finals.reg_values.iter().map(|v| Fp::from_u64(*v as u64)));
     out
 }
 
@@ -399,8 +406,8 @@ pub fn boundary_scalars(finals: &BoundaryFinals) -> Vec<Fr> {
 /// digest.
 pub struct GlobalTranscript {
     pub transcript: Transcript,
-    pub memory: [Fr; 4],
-    pub digest: Fr,
+    pub memory: [Fp2; 4],
+    pub digest: Fp2,
 }
 
 /// The global transcript, `docs/spec/proof.md` §2: run identically by the
@@ -432,11 +439,13 @@ pub(crate) fn global_transcript(
     statement: &PublicInputs,
 ) -> GlobalTranscript {
     let mut t = Transcript::new();
-    t.append_scalar(tags::PROTOCOL_SUITE, Fr::from_u64(PROTOCOL_VERSION as u64));
+    t.append_scalar(tags::PROTOCOL_SUITE, Fp::from_u64(PROTOCOL_VERSION as u64));
     absorb_statement_descriptor(&mut t, config, &statement.shard_counts, &statement.windows);
-    t.append_scalar(tags::PROGRAM_IDENTITY, identity.0);
-    let io = io_digest(&statement.input, &statement.output);
-    t.append_bytes(tags::PUBLIC_INPUTS, &io.to_bytes());
+    t.append_scalars(tags::PROGRAM_IDENTITY, &identity.0);
+    t.append_scalars(
+        tags::PUBLIC_INPUTS,
+        &io_digest(&statement.input, &statement.output),
+    );
     // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. Every statement
     // shard's `M` commitments are absorbed HERE, in statement order, before the
     // boundary and the memory challenges. Nothing is: the memory columns are
@@ -447,11 +456,11 @@ pub(crate) fn global_transcript(
         &boundary_scalars(&statement.boundary),
     );
 
-    let mut memory = [Fr::ZERO; 4];
+    let mut memory = [Fp2::ZERO; 4];
     for slot in memory.iter_mut() {
-        *slot = t.challenge_scalar(tags::MEMORY_CHALLENGE);
+        *slot = t.challenge(tags::MEMORY_CHALLENGE);
     }
-    let digest = t.challenge_scalar(tags::GLOBAL_STATE_DIGEST);
+    let digest = t.challenge(tags::GLOBAL_STATE_DIGEST);
     GlobalTranscript {
         transcript: t,
         memory,
@@ -469,36 +478,37 @@ pub(crate) fn global_transcript(
 /// lookup arguments are **UNSOUND** until a commitment scheme fills the gap
 /// marked below (`docs/architecture.md` §0).
 pub fn shard_transcript(
-    digest: Fr,
+    digest: Fp2,
     family: u32,
     index: u32,
     ts_window: [u64; 2],
-) -> (Transcript, Fr, Fr) {
+) -> (Transcript, Fp2, Fp2) {
     let mut t = Transcript::new();
     t.append_scalars(
         tags::SHARD_SEED,
         &[
-            digest,
-            Fr::from_u64(family as u64),
-            Fr::from_u64(index as u64),
+            digest.c0,
+            digest.c1,
+            Fp::from_u64(family as u64),
+            Fp::from_u64(index as u64),
         ],
     );
     t.append_scalars(
         tags::SHARD_TS_WINDOW,
-        &[Fr::from_u64(ts_window[0]), Fr::from_u64(ts_window[1])],
+        &[Fp::from_u64(ts_window[0]), Fp::from_u64(ts_window[1])],
     );
     // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The shard's `W`
     // commitments are absorbed HERE, before `g` and `β`. Nothing is: the
     // witness and multiplicity columns are bound to nothing until a commitment
     // scheme fills this void (`docs/architecture.md` §0).
-    let g = t.challenge_scalar(tags::LOOKUP_CHALLENGE);
-    let beta = t.challenge_scalar(tags::LOOKUP_CHALLENGE);
+    let g = t.challenge(tags::LOOKUP_CHALLENGE);
+    let beta = t.challenge(tags::LOOKUP_CHALLENGE);
     (t, g, beta)
 }
 
 /// Slots 1 to 4, `γ_M, α_addr, α_ts, α_val`, from the global transcript's four
 /// memory challenges.
-pub fn memory_slots(memory: &[Fr; 4]) -> ExternalChallenges {
+pub fn memory_slots(memory: &[Fp2; 4]) -> ExternalChallenges {
     let mut drawn = ExternalChallenges::new();
     let slots = [
         challenge_slot::MEM_GAMMA,
@@ -540,9 +550,9 @@ pub fn shard_challenges(
     circuit: &constraints::FamilyCircuit,
     index: u32,
     windows: &[u32],
-    memory: &[Fr; 4],
-    g: Fr,
-    beta: Fr,
+    memory: &[Fp2; 4],
+    g: Fp2,
+    beta: Fp2,
 ) -> ExternalChallenges {
     let drawn = memory_slots(memory);
     let trace_vars = circuit.artifact.trace_vars;
@@ -656,9 +666,9 @@ mod tests {
         f.reg_values[0] = 7;
         let s = boundary_scalars(&f);
         assert_eq!(s.len(), 64);
-        assert_eq!(s[31], Fr::from_u64(5));
-        assert_eq!(s[32], Fr::from_u64(6));
-        assert_eq!(s[33], Fr::from_u64(7));
+        assert_eq!(s[31], Fp::from_u64(5));
+        assert_eq!(s[32], Fp::from_u64(6));
+        assert_eq!(s[33], Fp::from_u64(7));
     }
 
     /// The trivial window is the 38-bit clock.

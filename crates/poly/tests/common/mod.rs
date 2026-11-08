@@ -7,9 +7,9 @@
 // does not have.
 #![allow(unexpected_cfgs)]
 
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use poly::{MultilinearPoly, PolyBacking};
-use test_support::{hex_to_32, sha256, to_hex, Rng};
+use test_support::{hex_to_bytes, sha256, to_hex, Rng};
 
 // ---------------------------------------------------------------------------
 // Vector files
@@ -37,10 +37,13 @@ pub fn data_lines(text: &str) -> Vec<Line> {
         .collect()
 }
 
-/// Parse a committed field element, refusing anything the wire form rejects.
-pub fn field_element(s: &str) -> Result<Fr, String> {
-    let bytes = hex_to_32(s)?;
-    Fr::from_bytes(&bytes).ok_or_else(|| format!("vector value {s} is not canonical"))
+/// Parse a committed `Fp2` element, the 16 bytes `Fp2::to_bytes` writes,
+/// refusing anything the wire form rejects.
+pub fn field_element(s: &str) -> Result<Fp2, String> {
+    let bytes: [u8; 16] = hex_to_bytes(s)?
+        .try_into()
+        .map_err(|b: Vec<u8>| format!("vector value {s} is {} bytes, not 16", b.len()))?;
+    Fp2::from_bytes(&bytes).ok_or_else(|| format!("vector value {s} is not canonical"))
 }
 
 /// `expect` a token that is meant to be a decimal index, loudly.
@@ -56,20 +59,22 @@ pub fn index(line: &Line, field: usize) -> Result<usize, String> {
 // Sampling
 // ---------------------------------------------------------------------------
 
-/// Four `u64` draws read as one 256-bit little-endian integer mod p.
+/// One `u64` draw, reduced mod p.
 ///
-/// This is the generator's `Fr::from_le_bytes_mod_order(&rng.next_le32())`,
-/// rebuilt through `Fr::from_u64` because `crates/field` deliberately has no
-/// reducing constructor — `from_bytes` rejects rather than reduces. The two
-/// are checked against each other in `differential.rs`, so the corpus rebuild
-/// rule is verified rather than assumed.
-pub fn next_fr(rng: &mut Rng) -> Fr {
-    let two64 = Fr::from_u64(1 << 63) + Fr::from_u64(1 << 63);
-    let mut acc = Fr::ZERO;
-    for limb in rng.next_exp().iter().rev() {
-        acc = acc * two64 + Fr::from_u64(*limb);
-    }
-    acc
+/// This is the generator's arkworks `from_le_bytes_mod_order` on the draw's
+/// eight little-endian bytes, rebuilt through `Fp::from_u64`, which reduces.
+/// The two are checked against each other in `differential.rs`, so the corpus
+/// rebuild rule is verified rather than assumed.
+pub fn next_fp(rng: &mut Rng) -> Fp {
+    Fp::from_u64(rng.next_u64())
+}
+
+/// Two base draws as one `Fp2` element, `c0` first: the generator's draw of a
+/// challenge or a point coordinate.
+pub fn next_fp2(rng: &mut Rng) -> Fp2 {
+    let c0 = next_fp(rng);
+    let c1 = next_fp(rng);
+    Fp2 { c0, c1 }
 }
 
 /// The `U1` bitset for `bits`, with the tail of the final limb zeroed.
@@ -94,16 +99,16 @@ pub fn corpus_backing(rng: &mut Rng, backing: &str, entries: usize) -> PolyBacki
         "u8" => PolyBacking::U8((0..entries).map(|_| rng.next_u64() as u8).collect()),
         "u16" => PolyBacking::U16((0..entries).map(|_| rng.next_u64() as u16).collect()),
         "u32" => PolyBacking::U32((0..entries).map(|_| rng.next_u64() as u32).collect()),
-        "fr" => PolyBacking::Fr((0..entries).map(|_| next_fr(rng)).collect()),
+        "fp" => PolyBacking::Fp((0..entries).map(|_| next_fp(rng)).collect()),
         other => panic!("unknown backing {other}"),
     }
 }
 
-/// SHA-256 over the lifted table, 32 canonical little-endian bytes per entry.
-/// The generator computes the same digest from arkworks values, so this pins
-/// both the draw rule and the lift.
+/// SHA-256 over the table lifted into `Fp2`, 16 bytes per entry as
+/// `Fp2::to_bytes` writes them. The generator computes the same digest from
+/// arkworks values, so this pins both the draw rule and the lift.
 pub fn table_digest(p: &MultilinearPoly) -> String {
-    let mut bytes = Vec::with_capacity(32 * p.len());
+    let mut bytes = Vec::with_capacity(16 * p.len());
     for i in 0..p.len() {
         bytes.extend_from_slice(&p.get(i).to_bytes());
     }
@@ -111,9 +116,15 @@ pub fn table_digest(p: &MultilinearPoly) -> String {
 }
 
 /// The cube vertex `y` as a point, for feeding `eq_eval`.
-pub fn vertex(y: usize, num_vars: usize) -> Vec<Fr> {
+pub fn vertex(y: usize, num_vars: usize) -> Vec<Fp2> {
     (0..num_vars)
-        .map(|j| if (y >> j) & 1 == 1 { Fr::ONE } else { Fr::ZERO })
+        .map(|j| {
+            if (y >> j) & 1 == 1 {
+                Fp2::ONE
+            } else {
+                Fp2::ZERO
+            }
+        })
         .collect()
 }
 
@@ -141,25 +152,44 @@ pub fn corrupt(text: &str, prefix: &str) -> String {
 // arkworks bridge
 // ---------------------------------------------------------------------------
 
-use ark_ff::fields::{Fp256, MontBackend, MontConfig};
+use ark_ff::{BigInt, Fp2Config, Fp64, MontBackend, MontConfig, MontFp, PrimeField};
 
-/// arkworks' Montgomery field over `Fr`'s modulus, derived from the decimal
-/// modulus with `ark-ff`'s own `MontConfig`.
+/// arkworks' Montgomery field over the A64-C5 prime, derived from the decimal
+/// modulus with `ark-ff`'s own `MontConfig`. 2 is a primitive root mod p,
+/// hence a non-square.
 #[derive(MontConfig)]
-#[modulus = "21888242871839275222246405745257275088548364400416034343698204186575808495617"]
-#[generator = "5"]
-pub struct ArkFrConfig;
+#[modulus = "18446744073709551557"]
+#[generator = "2"]
+pub struct A64C5Config;
+
+pub type ArkFp = Fp64<MontBackend<A64C5Config, 1>>;
+
+/// arkworks' `F_p[x]/(x^2 − 2)`, from `ark-ff`'s own `Fp2Config`.
+pub struct Fp2Cfg;
+
+impl Fp2Config for Fp2Cfg {
+    type Fp = ArkFp;
+    const NONRESIDUE: ArkFp = MontFp!("2");
+    /// `x^p = x · 2^((p − 1)/2) = −x`, 2 being a non-square.
+    const FROBENIUS_COEFF_FP2_C1: &[ArkFp] = &[MontFp!("1"), MontFp!("-1")];
+}
 
 /// The reference field `ark-poly`'s polynomials are taken over.
-pub type ArkFr = Fp256<MontBackend<ArkFrConfig, 4>>;
+pub type ArkFp2 = ark_ff::Fp2<Fp2Cfg>;
 
-pub fn to_ark(x: &Fr) -> ArkFr {
-    ark_ff::PrimeField::from_le_bytes_mod_order(&x.to_bytes())
+/// Strict: an `Fp` that is not canonical is a bug to catch, not a value for
+/// arkworks to reduce out of sight.
+pub fn to_ark_fp(x: &Fp) -> ArkFp {
+    ArkFp::from_bigint(BigInt([x.to_u64()])).expect("an Fp holds its canonical representative")
+}
+
+pub fn to_ark(x: &Fp2) -> ArkFp2 {
+    ArkFp2::new(to_ark_fp(&x.c0), to_ark_fp(&x.c1))
 }
 
 /// The same table as an `ark-poly` polynomial, so the two can be compared at
 /// any point. Reads through `get`, which is where our lift lives.
-pub fn to_ark_mle(p: &MultilinearPoly) -> ark_poly::DenseMultilinearExtension<ArkFr> {
+pub fn to_ark_mle(p: &MultilinearPoly) -> ark_poly::DenseMultilinearExtension<ArkFp2> {
     ark_poly::DenseMultilinearExtension::from_evaluations_vec(
         p.num_vars(),
         (0..p.len()).map(|i| to_ark(&p.get(i))).collect(),

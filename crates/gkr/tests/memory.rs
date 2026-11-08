@@ -25,14 +25,14 @@ use constraints::memory::{
     family_frame_artifact, frame_artifact, image_window_artifact, zero_window_artifact,
 };
 use constraints::{CircuitArtifact, VirtualKind};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{
     boundary_factors, forward, gate_values, prove, reconciles, self_check, verify, virtual_at_row,
     window_challenges, BaseLayer, BoundaryFinals, ExternalChallenges, GkrError, SelfCheckError,
 };
 use sumcheck::{absorb_witness_digest, witness_digest};
 use test_support::Rng;
-use transcript::Transcript;
+use transcript_a64_c5::Transcript;
 
 /// The query table, by **global query id**: pc, rs1, rs2, load, ram, rd.
 /// No family holds all six.
@@ -101,19 +101,21 @@ fn committed(queries: &[usize]) -> usize {
     memory_columns(queries) + queries.len() + 3
 }
 
-/// A pseudo-random field element below `2^252`.
-fn fr(rng: &mut Rng) -> Fr {
-    let mut b = rng.next_le32();
-    b[31] &= 0x0f;
-    Fr::from_bytes(&b).expect("below 2^252")
+/// A pseudo-random `Fp2` element, both coordinates drawn.
+fn fr(rng: &mut Rng) -> Fp2 {
+    Fp2 {
+        c0: Fp::from_u64(rng.next_u64()),
+        c1: Fp::from_u64(rng.next_u64()),
+    }
 }
 
-fn int(v: u64) -> Fr {
-    Fr::from_u64(v)
+/// An integer, embedded in `Fp2`.
+fn int(v: u64) -> Fp2 {
+    Fp::from_u64(v).into()
 }
 
 /// Random `γ_M, α_addr, α_ts, α_val`, as values and as slots 1–4.
-fn random_memory(rng: &mut Rng) -> ([Fr; 4], ExternalChallenges) {
+fn random_memory(rng: &mut Rng) -> ([Fp2; 4], ExternalChallenges) {
     let c = [fr(rng), fr(rng), fr(rng), fr(rng)];
     let mut slots = ExternalChallenges::new();
     for (slot, value) in [MEM_GAMMA, MEM_ALPHA_ADDR, MEM_ALPHA_TS, MEM_ALPHA_VAL]
@@ -126,7 +128,7 @@ fn random_memory(rng: &mut Rng) -> ([Fr; 4], ExternalChallenges) {
 }
 
 /// `T(AS, ADDR, TS, VAL) = γ_M + AS + α_addr·ADDR + α_ts·TS + α_val·VAL`.
-fn t(c: &[Fr; 4], space: Fr, addr: Fr, ts: Fr, value: Fr) -> Fr {
+fn t(c: &[Fp2; 4], space: Fp2, addr: Fp2, ts: Fp2, value: Fp2) -> Fp2 {
     c[0] + space + c[1] * addr + c[2] * ts + c[3] * value
 }
 
@@ -166,9 +168,9 @@ fn frame_leaves_are_one_when_masked_and_the_tuple_when_live() {
         }
         for live in patterns {
             let (c, slots) = random_memory(&mut rng);
-            let mut row: Vec<Fr> = (0..committed(queries)).map(|_| fr(&mut rng)).collect();
+            let mut row: Vec<Fp2> = (0..committed(queries)).map(|_| fr(&mut rng)).collect();
             for (s, &m) in live.iter().enumerate() {
-                row[column(s, 0)] = if m { Fr::ONE } else { Fr::ZERO };
+                row[column(s, 0)] = if m { Fp2::ONE } else { Fp2::ZERO };
             }
             let values = gate_values(&a, 0, &row, &[], &[], &slots);
             let cycle = row[0];
@@ -183,7 +185,7 @@ fn frame_leaves_are_one_when_masked_and_the_tuple_when_live() {
                         t(&c, space, addr, write_ts, write_value),
                     )
                 } else {
-                    (Fr::ONE, Fr::ONE)
+                    (Fp2::ONE, Fp2::ONE)
                 };
                 let at = format!("family {id}, masks {live:?}, slot {s} (query {q})");
                 assert_eq!(values[s], read, "{at}: read leaf");
@@ -191,8 +193,8 @@ fn frame_leaves_are_one_when_masked_and_the_tuple_when_live() {
             }
             for i in width..side {
                 let at = format!("family {id}, masks {live:?}, pad leaf {i}");
-                assert_eq!(values[i], Fr::ONE, "{at}: read side");
-                assert_eq!(values[side + i], Fr::ONE, "{at}: write side");
+                assert_eq!(values[i], Fp2::ONE, "{at}: read side");
+                assert_eq!(values[side + i], Fp2::ONE, "{at}: write side");
             }
         }
     }
@@ -225,8 +227,8 @@ fn window_leaves_are_the_tuples_of_their_rows() {
         let random_row = (rng.next_u64() % h) as usize;
         for y in rows.into_iter().chain([random_row]) {
             let (ts, value, init) = (fr(&mut rng), fr(&mut rng), fr(&mut rng));
-            let row_index = virtual_at_row(VirtualKind::RowIndex, y);
-            let live = virtual_at_row(VirtualKind::RamLive, y);
+            let row_index = virtual_at_row(VirtualKind::RowIndex, y).into();
+            let live = virtual_at_row(VirtualKind::RamLive, y).into();
 
             let values = gate_values(
                 &image,
@@ -237,12 +239,12 @@ fn window_leaves_are_the_tuples_of_their_rows() {
                 &window_challenges(&slots, 0, vars),
             );
             let expected = if y < 1 << 14 {
-                vec![Fr::ONE, Fr::ONE]
+                vec![Fp2::ONE, Fp2::ONE]
             } else {
                 let addr = int(4 * y as u64);
                 vec![
                     t(&c, int(RAM_SPACE), addr, ts, value),
-                    t(&c, int(RAM_SPACE), addr, Fr::ZERO, init),
+                    t(&c, int(RAM_SPACE), addr, Fp2::ZERO, init),
                 ]
             };
             assert_eq!(values, expected, "trial {trial}, image window row {y}");
@@ -258,7 +260,7 @@ fn window_leaves_are_the_tuples_of_their_rows() {
             let addr = int(4 * h * window as u64 + 4 * y as u64);
             let expected = vec![
                 t(&c, int(RAM_SPACE), addr, ts, value),
-                t(&c, int(RAM_SPACE), addr, Fr::ZERO, Fr::ZERO),
+                t(&c, int(RAM_SPACE), addr, Fp2::ZERO, Fp2::ZERO),
             ];
             assert_eq!(values, expected, "trial {trial}, window {window} row {y}");
         }
@@ -303,7 +305,7 @@ fn the_window_constant_is_pinned() {
 fn the_window_constant_needs_every_drawn_slot() {
     let mut memory = ExternalChallenges::new();
     for slot in [MEM_GAMMA, MEM_ALPHA_ADDR, MEM_ALPHA_TS] {
-        memory.insert(slot, Fr::ONE);
+        memory.insert(slot, Fp2::ONE);
     }
     window_challenges(&memory, 1, 16);
 }
@@ -331,12 +333,12 @@ fn the_boundary_factors_are_the_documents_products() {
         }
         let entry_pc = rng.next_u64() as u32 & !1;
 
-        let mut w_b = t(&c, int(3), Fr::ZERO, Fr::ZERO, int(entry_pc as u64));
-        let mut r_b = t(&c, int(3), Fr::ZERO, int(finals.pc_ts), Fr::ONE);
-        w_b *= t(&c, int(1), Fr::ZERO, Fr::ZERO, Fr::ZERO);
-        r_b *= t(&c, int(1), Fr::ZERO, int(finals.reg_ts[0]), Fr::ZERO);
+        let mut w_b = t(&c, int(3), Fp2::ZERO, Fp2::ZERO, int(entry_pc as u64));
+        let mut r_b = t(&c, int(3), Fp2::ZERO, int(finals.pc_ts), Fp2::ONE);
+        w_b *= t(&c, int(1), Fp2::ZERO, Fp2::ZERO, Fp2::ZERO);
+        r_b *= t(&c, int(1), Fp2::ZERO, int(finals.reg_ts[0]), Fp2::ZERO);
         for r in 1..32 {
-            w_b *= t(&c, int(1), int(r as u64), Fr::ZERO, Fr::ZERO);
+            w_b *= t(&c, int(1), int(r as u64), Fp2::ZERO, Fp2::ZERO);
             let value = int(finals.reg_values[r - 1] as u64);
             r_b *= t(&c, int(1), int(r as u64), int(finals.reg_ts[r]), value);
         }
@@ -360,9 +362,9 @@ fn reconciles_is_the_product_equation_and_nonzero() {
     let w1 = r1 * r2 * r_b * w_b.inverse().expect("nonzero");
     assert!(reconciles(&[r1, r2], &[w1], (w_b, r_b)));
     assert!(!reconciles(&[r1, r2], &[w1], (r_b, w_b)), "swapped factors");
-    assert!(!reconciles(&[r1, r2 + Fr::ONE], &[w1], (w_b, r_b)));
+    assert!(!reconciles(&[r1, r2 + Fp2::ONE], &[w1], (w_b, r_b)));
     assert!(!reconciles(&[r1], &[w1], (w_b, r_b)));
-    assert!(!reconciles(&[r1, Fr::ZERO], &[w1, Fr::ZERO], (w_b, r_b)));
+    assert!(!reconciles(&[r1, Fp2::ZERO], &[w1, Fp2::ZERO], (w_b, r_b)));
 }
 
 /// Bind the base's digest, then draw slots 1–4 after it — and, for a window
@@ -373,13 +375,10 @@ fn bind(
     window: Option<u32>,
 ) -> (Transcript, ExternalChallenges) {
     let mut t = Transcript::new();
-    absorb_witness_digest(&mut t, witness_digest(&committed_columns(a, base)));
+    absorb_witness_digest(&mut t, &witness_digest(&committed_columns(a, base)));
     let mut memory = ExternalChallenges::new();
     for slot in MEM_GAMMA..=MEM_ALPHA_VAL {
-        memory.insert(
-            slot,
-            t.challenge_scalar(transcript_tags::SUMCHECK_CHALLENGE),
-        );
+        memory.insert(slot, t.challenge(transcript_tags::SUMCHECK_CHALLENGE));
     }
     let challenges = match window {
         Some(w) => window_challenges(&memory, w, a.trace_vars),
@@ -416,9 +415,13 @@ fn prove_and_verify(
 fn window_artifacts_prove_and_verify() {
     let mut rng = Rng::new(0x5714_3105);
     let rows = 1usize << 16;
-    let mut random = |n: usize| -> Vec<Vec<Fr>> {
+    let mut random = |n: usize| -> Vec<Vec<Fp>> {
         (0..n)
-            .map(|_| (0..rows).map(|_| int(rng.next_u64() >> 26)).collect())
+            .map(|_| {
+                (0..rows)
+                    .map(|_| Fp::from_u64(rng.next_u64() >> 26))
+                    .collect()
+            })
             .collect()
     };
     let image = image_window_artifact(16);
@@ -437,37 +440,40 @@ fn window_artifacts_prove_and_verify() {
 /// addressed by the query's **slot** in this family, its behaviour chosen by the
 /// query's id: `ram` falls through to the last arm and writes what it likes,
 /// the frame not constraining it.
-fn frame_columns(queries: &[usize], rng: &mut Rng) -> Vec<Vec<Fr>> {
+fn frame_columns(queries: &[usize], rng: &mut Rng) -> Vec<Vec<Fp>> {
     let n = committed(queries);
     let (inv, is_zero, selected) = (rd_inv(queries), rd_is_zero(queries), rd_selected(queries));
-    let mut cols: Vec<Vec<Fr>> = vec![Vec::new(); n];
+    let mut cols: Vec<Vec<Fp>> = vec![Vec::new(); n];
     for y in 0..16 {
-        let mut row = vec![Fr::ZERO; n];
-        row[0] = int(rng.next_u64() >> 32);
+        let mut row = vec![Fp::ZERO; n];
+        row[0] = Fp::from_u64(rng.next_u64() >> 32);
         for (s, &q) in queries.iter().enumerate() {
             if y > 1 && rng.next_u64() & 1 == 0 {
                 continue;
             }
-            row[column(s, 0)] = Fr::ONE;
-            let read_value = int(rng.next_u64() >> 32);
-            row[column(s, 2)] = int(rng.next_u64() >> 26);
+            row[column(s, 0)] = Fp::ONE;
+            let read_value = Fp::from_u64(rng.next_u64() >> 32);
+            row[column(s, 2)] = Fp::from_u64(rng.next_u64() >> 26);
             row[column(s, 3)] = read_value;
-            row[gap_hi(queries, s)] = int(rng.next_u64() >> 45);
+            row[gap_hi(queries, s)] = Fp::from_u64(rng.next_u64() >> 45);
             let (addr, write_value) = if READ_ONLY.contains(&q) {
-                (int(rng.next_u64() >> 59), read_value)
+                (Fp::from_u64(rng.next_u64() >> 59), read_value)
             } else if q == RD {
-                let sel = int(rng.next_u64() >> 32);
+                let sel = Fp::from_u64(rng.next_u64() >> 32);
                 row[selected] = sel;
                 if y == 0 || rng.next_u64() & 1 == 0 {
-                    row[is_zero] = Fr::ONE;
-                    (Fr::ZERO, Fr::ZERO)
+                    row[is_zero] = Fp::ONE;
+                    (Fp::ZERO, Fp::ZERO)
                 } else {
-                    let addr = int(1 + rng.next_u64() % 31);
+                    let addr = Fp::from_u64(1 + rng.next_u64() % 31);
                     row[inv] = addr.inverse().expect("nonzero");
                     (addr, sel)
                 }
             } else {
-                (int(rng.next_u64() >> 32), int(rng.next_u64() >> 32))
+                (
+                    Fp::from_u64(rng.next_u64() >> 32),
+                    Fp::from_u64(rng.next_u64() >> 32),
+                )
             };
             row[column(s, 1)] = addr;
             row[column(s, 4)] = write_value;
@@ -505,8 +511,8 @@ fn every_frame_proves_and_verifies_and_rejects_a_write_to_x0() {
         );
         assert_eq!(prove_and_verify(&a, &base, None), Ok(()), "family {id}");
 
-        assert_eq!(cols[column(rd, 1)][0], Fr::ZERO, "family {id}");
-        cols[column(rd, 4)][0] = int(5);
+        assert_eq!(cols[column(rd, 1)][0], Fp::ZERO, "family {id}");
+        cols[column(rd, 4)][0] = Fp::from_u64(5);
         let base = fr_base(&a, cols);
         let (_, challenges) = bind(&a, &base, None);
         assert_eq!(

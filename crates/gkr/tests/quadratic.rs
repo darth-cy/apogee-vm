@@ -26,14 +26,14 @@ use constraints::{
     CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, PolyAddress, ProducingEntry,
     Relation,
 };
-use field::Fr;
+use field_a64_c5::Fp;
 use gkr::{forward, self_check};
 use test_support::Rng;
 
 const ROWS: usize = 4;
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn w(i: u32) -> PolyAddress {
@@ -57,7 +57,7 @@ fn balance() -> GateDef {
         products: vec![
             (lit(1), w(0), w(1)),
             (lit(1), w(2), w(3)),
-            (Coeff::Literal(-Fr::ONE), w(4), w(5)),
+            (Coeff::Literal(-Fp::ONE), w(4), w(5)),
         ],
     }
 }
@@ -150,15 +150,15 @@ fn balance_circuit() -> CircuitArtifact {
 
 /// `a, b, c, d` random, `e` random and nonzero, `f = (a·b + c·d)/e`: the
 /// columns in layout order.
-fn satisfying(seed: u64) -> Vec<Vec<Fr>> {
+fn satisfying(seed: u64) -> Vec<Vec<Fp>> {
     let mut rng = Rng::new(seed);
-    let mut draw = || -> Vec<Fr> {
+    let mut draw = || -> Vec<Fp> {
         (0..ROWS)
-            .map(|_| Fr::from_u64(rng.next_u64() >> 1))
+            .map(|_| Fp::from_u64(rng.next_u64() >> 1))
             .collect()
     };
     let (a, b, c, d) = (draw(), draw(), draw(), draw());
-    let e: Vec<Fr> = draw().iter().map(|x| *x + Fr::ONE).collect();
+    let e: Vec<Fp> = draw().iter().map(|x| *x + Fp::ONE).collect();
     let f = (0..ROWS)
         .map(|y| (a[y] * b[y] + c[y] * d[y]) * e[y].inverse().expect("e is nonzero"))
         .collect();
@@ -189,7 +189,7 @@ fn an_honest_quadratic_circuit_proves_and_verifies() {
         for y in 0..ROWS {
             assert_eq!(
                 values.layers[0][0].get(y),
-                Fr::from_u64(7) + gamma * a[y] + Fr::from_u64(3) * b[y] * c[y],
+                Fp::from_u64(7) + gamma * a[y] + Fp::from_u64(3) * b[y] * c[y],
                 "mixed at row {y}"
             );
         }

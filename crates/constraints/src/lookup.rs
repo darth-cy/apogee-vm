@@ -21,13 +21,13 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use constants::{challenge_slot, lookup_channel};
-use field::Fr;
+use field_a64_c5::Fp;
 
 use crate::build::{Combine, Tree};
 use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 /// `β^j`'s coefficient: the literal 1 at `j = 0`, and the derived slot
@@ -127,7 +127,7 @@ fn neutral(channel: u32) -> Coeff {
 pub fn row_denominator(l: &LookupExpr) -> GateDef {
     let s = l.selector;
     let (mut linear, mut products) = (Vec::new(), Vec::new());
-    let mut offset_0 = Fr::ZERO;
+    let mut offset_0 = Fp::ZERO;
     for (j, e) in l.tuple.iter().enumerate() {
         let GateDef::Linear { terms, constant } = e else {
             panic!("lookup `{}`: expression {j} is not a Linear gate", l.name);
@@ -139,10 +139,10 @@ pub fn row_denominator(l: &LookupExpr) -> GateDef {
             );
         };
         let offset = match gating(l.channel) {
-            Gating::NoOffset => Fr::ZERO,
-            Gating::ZeroEntry if j == 0 => Fr::ONE,
-            Gating::ZeroEntry => Fr::ZERO,
-            Gating::MinusOne => Fr::ONE,
+            Gating::NoOffset => Fp::ZERO,
+            Gating::ZeroEntry if j == 0 => Fp::ONE,
+            Gating::ZeroEntry => Fp::ZERO,
+            Gating::MinusOne => Fp::ONE,
         };
         for (c, x) in terms {
             let Coeff::Literal(c) = *c else {
@@ -156,7 +156,7 @@ pub fn row_denominator(l: &LookupExpr) -> GateDef {
                 _ => {
                     assert_eq!(
                         c,
-                        Fr::ONE,
+                        Fp::ONE,
                         "lookup `{}`: expression {j} weights {x} by a coefficient other than 1, \
                          and β^{j}·c is not one Coeff",
                         l.name
@@ -173,18 +173,18 @@ pub fn row_denominator(l: &LookupExpr) -> GateDef {
             _ => {
                 let scale = k + offset;
                 assert!(
-                    scale == Fr::ZERO || scale == Fr::ONE,
+                    scale == Fp::ZERO || scale == Fp::ONE,
                     "lookup `{}`: expression {j} carries the constant {k:?}, and β^{j}·(k + o) \
                      is not one Coeff",
                     l.name
                 );
-                if scale == Fr::ONE {
+                if scale == Fp::ONE {
                     linear.push((beta_power(j), s));
                 }
             }
         }
     }
-    if offset_0 != Fr::ZERO {
+    if offset_0 != Fp::ZERO {
         linear.insert(0, (Coeff::Literal(offset_0), s));
     }
     GateDef::Quadratic {
@@ -234,7 +234,7 @@ fn channel_tree(spec: &ChannelSpec, lookups: &[&LookupExpr]) -> Tree {
         (
             format!("{channel}_table_num"),
             GateDef::Linear {
-                terms: vec![(Coeff::Literal(Fr::MINUS_ONE), spec.multiplicity)],
+                terms: vec![(Coeff::Literal(Fp::MINUS_ONE), spec.multiplicity)],
                 constant: lit(0),
             },
         ),
@@ -457,7 +457,7 @@ pub fn check_discharge(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<(),
             ));
         }
         let mult = crate::laws::normal_form(&GateDef::Linear {
-            terms: vec![(Coeff::Literal(Fr::MINUS_ONE), spec.multiplicity)],
+            terms: vec![(Coeff::Literal(Fp::MINUS_ONE), spec.multiplicity)],
             constant: lit(0),
         });
         let named = hits[0]
@@ -575,7 +575,7 @@ fn channel_cones(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<Vec<Vec<u
 /// Every column a copower scales also carries a direct range check of its own.
 ///
 /// A copower turns a row-varying bound `x < p` into the fixed `x·p' < 2^32`,
-/// where `p·p' = 2^32`. That half bounds nothing alone: `p'` is a unit in `Fr`,
+/// where `p·p' = 2^32`. That half bounds nothing alone: `p'` is a unit in `Fp`,
 /// so `x = s·p'^{-1}` sweeps a coset of `2^32` elements, almost none of them
 /// small integers, and the range check on `s` sees nothing wrong. The scaled
 /// bound says `x` is under this row's width **given** `x` is bounded; only the
@@ -622,8 +622,8 @@ pub fn check_copowers(
                 && terms.iter().all(|t| got.contains(t))
         })
     };
-    let one = Coeff::Literal(Fr::ONE);
-    let half = Coeff::Literal(-Fr::from_u64(1 << 16));
+    let one = Coeff::Literal(Fp::ONE);
+    let half = Coeff::Literal(-Fp::from_u64(1 << 16));
     for (x, selector) in scaled {
         // The halfword shape, then the 32-bit one over every column that could
         // be its high chunk.

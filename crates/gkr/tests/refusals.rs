@@ -7,7 +7,7 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::ExternalChallenges;
 
 /// Run `f`, which must panic, and return its message.
@@ -28,12 +28,13 @@ fn panic_message<R>(f: impl FnOnce() -> R) -> String {
 /// verifier's challenges live in the same type. Kills M37.
 #[test]
 fn a_challenge_slot_is_set_once() {
+    let v = |x: u64| Fp2::from(Fp::from_u64(x));
     let mut challenges = ExternalChallenges::new();
-    challenges.insert(0, Fr::from_u64(5));
-    challenges.insert(1, Fr::from_u64(6));
-    assert_eq!(challenges.get(0), Some(Fr::from_u64(5)));
+    challenges.insert(0, v(5));
+    challenges.insert(1, v(6));
+    assert_eq!(challenges.get(0), Some(v(5)));
     assert_eq!(
-        panic_message(|| challenges.insert(0, Fr::from_u64(7))),
+        panic_message(|| challenges.insert(0, v(7))),
         "ExternalChallenges::insert: slot 0 is already set"
     );
 }

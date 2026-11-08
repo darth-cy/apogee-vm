@@ -3,8 +3,8 @@
 mod common;
 
 use common::{ark_to_bytes, next_fr, to_ark};
-use constants::{FR_MODULUS, FR_R, FR_R2};
 use field::{batch_inverse, Fr};
+use field::{FR_MODULUS, FR_R, FR_R2};
 use test_support::Rng;
 
 const SEED: u64 = 0xed6e_ca5e_0000_0001;

@@ -16,13 +16,13 @@ use checker::{
 use common::*;
 use constants::{challenge_slot, lookup_channel, memory::RAM_LIVE_BIT};
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 
 const S0: PolyAddress = PolyAddress::Setup(0);
 const LIVE: PolyAddress = PolyAddress::Virtual(VirtualKind::RamLive);
 
 fn neg(v: u64) -> Coeff {
-    Coeff::Literal(-Fr::from_u64(v))
+    Coeff::Literal(-Fp::from_u64(v))
 }
 
 fn expression(terms: &[(Coeff, PolyAddress)], constant: Coeff) -> GateDef {
@@ -324,14 +324,14 @@ fn with_lookups(mut a: CircuitArtifact) -> CircuitArtifact {
 /// witness names, so the same cells break it at row 4 and keep it at row 5;
 /// `ram_live − 1` is `−1` below row `2^14` and 0 from it.
 #[allow(clippy::type_complexity)]
-fn cases() -> Vec<(&'static str, Vec<(usize, Fr)>, usize, Vec<&'static str>)> {
-    let (one, two, three, four) = (Fr::ONE, Fr::from_u64(2), Fr::from_u64(3), Fr::from_u64(4));
-    let bound = Fr::from_u64(1 << 19);
+fn cases() -> Vec<(&'static str, Vec<(usize, Fp)>, usize, Vec<&'static str>)> {
+    let (one, two, three, four) = (Fp::ONE, Fp::from_u64(2), Fp::from_u64(3), Fp::from_u64(4));
+    let bound = Fp::from_u64(1 << 19);
     let live = 1usize << RAM_LIVE_BIT;
     vec![
         (
             "every selector 0, every expression out of range",
-            vec![(M, bound), (A, Fr::from_u64(16))],
+            vec![(M, bound), (A, Fp::from_u64(16))],
             4,
             vec![],
         ),
@@ -400,14 +400,14 @@ fn run(evaluate: Evaluator) -> Result<(), String> {
     for (label, toy) in selectable_toys() {
         let a = with_lookups(toy);
         for (what, cells, row, want) in cases() {
-            let mut committed = vec![Fr::ZERO; a.committed().len()];
+            let mut committed = vec![Fp::ZERO; a.committed().len()];
             for (i, value) in cells {
                 committed[i] = value;
             }
             let w = WitnessRow {
                 committed,
                 row,
-                scratch: vec![Fr::ZERO; a.scratch.len()],
+                scratch: vec![Fp2::ZERO; a.scratch.len()],
             };
             let got = evaluate(&a, &w);
             if got != want {
@@ -430,12 +430,12 @@ fn a_range16_lookup_is_bound_below_2_16() {
         a.lookups.push(l);
         assert_eq!(check_laws(&a), Ok(()), "{label}");
         for (m, violated) in [((1 << 16) - 1, false), (1 << 16, true)] {
-            let mut committed = vec![Fr::ZERO; a.committed().len()];
-            (committed[S], committed[M]) = (Fr::ONE, Fr::from_u64(m));
+            let mut committed = vec![Fp::ZERO; a.committed().len()];
+            (committed[S], committed[M]) = (Fp::ONE, Fp::from_u64(m));
             let w = WitnessRow {
                 committed,
                 row: 0,
-                scratch: vec![Fr::ZERO; a.scratch.len()],
+                scratch: vec![Fp2::ZERO; a.scratch.len()],
             };
             let names = violated_lookups(&a, &w);
             assert_eq!(
@@ -544,17 +544,23 @@ fn the_discharge_cross_check_refuses_an_unconsumed_and_a_doubled_obligation() {
 fn the_channel_root_comparison_refuses_each_half_alone() {
     let sums = vec![ChannelSum {
         channel: lookup_channel::TIMESTAMP,
-        num: Fr::from_u64(7),
-        den: Fr::from_u64(11),
+        num: Fp2::from(Fp::from_u64(7)),
+        den: Fp2::from(Fp::from_u64(11)),
         unmatched: Vec::new(),
     }];
     assert_eq!(
-        check_channel_roots(&[(Fr::from_u64(7), Fr::from_u64(11))], &sums),
+        check_channel_roots(
+            &[(Fp2::from(Fp::from_u64(7)), Fp2::from(Fp::from_u64(11)))],
+            &sums
+        ),
         Ok(())
     );
     let moved = |num: u64, den: u64| {
-        check_channel_roots(&[(Fr::from_u64(num), Fr::from_u64(den))], &sums)
-            .expect_err("a root that is not the recomputation")
+        check_channel_roots(
+            &[(Fp2::from(Fp::from_u64(num)), Fp2::from(Fp::from_u64(den)))],
+            &sums,
+        )
+        .expect_err("a root that is not the recomputation")
     };
     assert!(moved(8, 11).contains("num root is not its fractional sum's numerator"));
     assert!(moved(7, 12).contains("den root is not the product of its leaf denominators"));
@@ -568,12 +574,12 @@ fn the_channel_root_comparison_refuses_each_half_alone() {
 fn a_channel_sum_is_its_numerator_over_its_denominator() {
     let of = |num: u64, den: u64| ChannelSum {
         channel: lookup_channel::TIMESTAMP,
-        num: Fr::from_u64(num),
-        den: Fr::from_u64(den),
+        num: Fp2::from(Fp::from_u64(num)),
+        den: Fp2::from(Fp::from_u64(den)),
         unmatched: Vec::new(),
     };
-    assert_eq!(of(6, 3).sum(), Some(Fr::from_u64(2)));
-    assert_eq!(of(0, 7).sum(), Some(Fr::ZERO), "a channel that holds");
+    assert_eq!(of(6, 3).sum(), Some(Fp2::from(Fp::from_u64(2))));
+    assert_eq!(of(0, 7).sum(), Some(Fp2::ZERO), "a channel that holds");
     assert_eq!(
         of(6, 0).sum(),
         None,
@@ -609,7 +615,7 @@ fn the_padding_identity_clause_survives_a_fraction_tree_in_the_same_list() {
         .position(|n| n == "pc_mask")
         .expect("the toy's frame has a pc mask");
     let mut live = a.clone();
-    live.padding.row[at] = Fr::ONE;
+    live.padding.row[at] = Fp::ONE;
     let e = check_padding_identity(&live).expect_err("a padding row whose pc query is live");
     assert!(
         e.contains("padding identity: halving gate list") && e.ends_with("not 1"),

@@ -16,13 +16,13 @@
 //!
 //! The sampled checks draw deterministic pseudo-random points (splitmix64,
 //! fixed seeds), so every verdict is reproducible; each trial wrongly accepts
-//! two different polynomials with probability about `degree / |Fr|`.
+//! two different polynomials with probability about `degree / p`.
 
 use constants::memory::{READ_ROOT, WRITE_ROOT};
 use constants::{challenge_slot, lookup_channel};
 use constraints::lookup::ChannelSpec;
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind, CATALOGUE};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{
     eval_gate, forward, gate_values, insert_lookup_challenges, virtual_at_row, BaseLayer,
     ExternalChallenges, LayerValues,
@@ -63,20 +63,22 @@ impl Rng {
         z ^ (z >> 31)
     }
 
-    /// A field element below `2^252 < p`.
-    fn fr(&mut self) -> Fr {
-        let mut b = [0u8; 32];
-        for i in 0..4 {
-            b[8 * i..8 * i + 8].copy_from_slice(&self.next().to_le_bytes());
+    /// A base element: a draw reduced mod `p`.
+    fn fp(&mut self) -> Fp {
+        Fp::from_u64(self.next())
+    }
+
+    fn fp2(&mut self) -> Fp2 {
+        Fp2 {
+            c0: self.fp(),
+            c1: self.fp(),
         }
-        b[31] &= 0x0f;
-        Fr::from_bytes(&b).expect("a value below 2^252 is canonical")
     }
 
     fn challenges(&mut self, slots: &[u32]) -> ExternalChallenges {
         let mut c = ExternalChallenges::new();
         for &slot in slots {
-            c.insert(slot, self.fr());
+            c.insert(slot, self.fp2());
         }
         c
     }
@@ -431,7 +433,7 @@ pub fn check_law4(a: &CircuitArtifact) -> Result<(), String> {
     let slots = challenge_slots(&all_gates(a));
     let index = slot_index(a);
     for trial in 0..TRIALS {
-        let mut triple = || [rng.fr(), rng.fr(), rng.fr()];
+        let mut triple = || [rng.fp2(), rng.fp2(), rng.fp2()];
         let committed = a.committed().iter().map(|_| triple()).collect();
         let virt = a.virtuals.iter().map(|_| triple()).collect();
         let scratch = (0..a.scratch.len()).map(|_| triple()).collect();
@@ -561,8 +563,8 @@ fn check_lookups(a: &CircuitArtifact) -> Result<(), String> {
             // Above position 0 an expression weights each column by 1 and
             // carries no constant: `β^0` is the literal 1, so position 0 takes
             // any literal, but `β^j·c` above it is one `Coeff` only at `c = 1`.
-            let unit = |c: &Coeff| matches!(c, Coeff::Literal(v) if *v == Fr::ONE);
-            let plain = terms.iter().all(|(c, _)| unit(c)) && *constant == Coeff::Literal(Fr::ZERO);
+            let unit = |c: &Coeff| matches!(c, Coeff::Literal(v) if *v == Fp::ONE);
+            let plain = terms.iter().all(|(c, _)| unit(c)) && *constant == Coeff::Literal(Fp::ZERO);
             if j > 0 && !plain {
                 return Err(format!(
                     "{what}: expression {j} is weighted or has a constant, which only \
@@ -596,9 +598,9 @@ fn check_lookups(a: &CircuitArtifact) -> Result<(), String> {
 /// space every reader of a virtual uses — and per scratch slot, and a value per
 /// challenge slot.
 struct Sample {
-    committed: Vec<[Fr; 3]>,
-    virt: Vec<[Fr; 3]>,
-    scratch: Vec<[Fr; 3]>,
+    committed: Vec<[Fp2; 3]>,
+    virt: Vec<[Fp2; 3]>,
+    scratch: Vec<[Fp2; 3]>,
     challenges: ExternalChallenges,
     /// The scratch bijection inverted, so an operand's slot is a lookup.
     index: BTreeMap<PolyAddress, usize>,
@@ -606,8 +608,8 @@ struct Sample {
 
 /// The kernel over sampled operands: a halving gate reads each of its operands
 /// at both children, every other gate its operands' values.
-fn evaluate(gate: &GateDef, operands: &[[Fr; 3]], challenges: &ExternalChallenges) -> Fr {
-    let values: Vec<Fr> = match gate {
+fn evaluate(gate: &GateDef, operands: &[[Fp2; 3]], challenges: &ExternalChallenges) -> Fp2 {
+    let values: Vec<Fp2> = match gate {
         GateDef::TreeProduct { .. } | GateDef::TreeCross { .. } => {
             operands.iter().flat_map(|v| [v[1], v[2]]).collect()
         }
@@ -619,7 +621,7 @@ fn evaluate(gate: &GateDef, operands: &[[Fr; 3]], challenges: &ExternalChallenge
 /// A committed column's, a virtual table's or a scratch slot's sample. A
 /// virtual is found by its position in `virtuals`, as every reader of one
 /// finds it, so a kind the artifact does not list has no sample.
-fn leaf(a: &CircuitArtifact, s: &Sample, op: PolyAddress) -> Option<[Fr; 3]> {
+fn leaf(a: &CircuitArtifact, s: &Sample, op: PolyAddress) -> Option<[Fp2; 3]> {
     match op {
         PolyAddress::Virtual(kind) => a
             .virtuals
@@ -635,7 +637,7 @@ fn relation_operands(
     a: &CircuitArtifact,
     s: &Sample,
     gate: &GateDef,
-) -> Result<Vec<[Fr; 3]>, String> {
+) -> Result<Vec<[Fp2; 3]>, String> {
     let mut out = Vec::new();
     for op in gate.operands() {
         out.push(leaf(a, s, op).ok_or(format!("a relation cannot read {op}"))?);
@@ -648,7 +650,7 @@ fn gate_operands(
     s: &Sample,
     gate: &GateDef,
     in_cached: bool,
-) -> Result<Vec<[Fr; 3]>, String> {
+) -> Result<Vec<[Fp2; 3]>, String> {
     let tree = matches!(
         gate,
         GateDef::TreeProduct { .. } | GateDef::TreeCross { .. }
@@ -724,17 +726,17 @@ fn row_local_order(a: &CircuitArtifact) -> Vec<usize> {
 fn row_value(
     a: &CircuitArtifact,
     gate: &GateDef,
-    committed: &[Fr],
+    committed: &[Fp],
     row: usize,
-    scratch: &[Fr],
+    scratch: &[Fp2],
     challenges: &ExternalChallenges,
-) -> Result<Fr, String> {
+) -> Result<Fp2, String> {
     let mut values = Vec::new();
     for op in gate.operands() {
         let value = match op {
-            PolyAddress::Virtual(kind) => Some(virtual_at_row(kind, row)),
+            PolyAddress::Virtual(kind) => Some(virtual_at_row(kind, row).into()),
             PolyAddress::Scratch(i) => scratch.get(i as usize).copied(),
-            _ => layout_index(a, op).and_then(|i| committed.get(i).copied()),
+            _ => layout_index(a, op).and_then(|i| committed.get(i).map(|v| (*v).into())),
         };
         values.push(value.ok_or(format!("{op} cannot be read on a row"))?);
     }
@@ -743,7 +745,7 @@ fn row_value(
 
 /// `None` if every row-local enforcing relation vanishes on `committed` at
 /// every trial, else the first that does not.
-fn padding_failure(a: &CircuitArtifact, committed: &[Fr]) -> Result<Option<String>, String> {
+fn padding_failure(a: &CircuitArtifact, committed: &[Fp]) -> Result<Option<String>, String> {
     let order = row_local_order(a);
     let slots = challenge_slots(&a.relations.iter().map(|r| &r.gate).collect::<Vec<_>>());
     let mask = if a.trace_vars >= 64 {
@@ -755,14 +757,14 @@ fn padding_failure(a: &CircuitArtifact, committed: &[Fr]) -> Result<Option<Strin
     for _ in 0..TRIALS {
         let challenges = rng.challenges(&slots);
         let row = (rng.next() & mask) as usize;
-        let mut scratch = vec![Fr::ZERO; a.scratch.len()];
+        let mut scratch = vec![Fp2::ZERO; a.scratch.len()];
         for &r in &order {
             let rel = &a.relations[r];
             let value = row_value(a, &rel.gate, committed, row, &scratch, &challenges)
                 .map_err(|e| format!("padding: relation {r} ({}): {e}", rel.name))?;
             match rel.output {
                 Some(i) if (i as usize) < scratch.len() => scratch[i as usize] = value,
-                None if value != Fr::ZERO => {
+                None if value != Fp2::ZERO => {
                     return Ok(Some(format!("{} is nonzero at row {row}", rel.name)));
                 }
                 _ => {}
@@ -793,7 +795,7 @@ pub fn check_padding(a: &CircuitArtifact) -> Result<(), String> {
     if let Some(why) = padding_failure(a, &a.padding.row)? {
         return Err(format!("padding: on padding.row, {why}"));
     }
-    let zero = padding_failure(a, &vec![Fr::ZERO; width])?;
+    let zero = padding_failure(a, &vec![Fp::ZERO; width])?;
     if zero.is_none() != a.padding.zero_row_valid {
         let verdict = zero.unwrap_or("every row-local enforcing relation vanishes".to_string());
         let claimed = a.padding.zero_row_valid;
@@ -840,7 +842,7 @@ pub fn check_padding_identity(a: &CircuitArtifact) -> Result<(), String> {
     for _ in 0..TRIALS {
         let challenges = rng.challenges(&slots);
         let row = (rng.next() & mask) as usize;
-        let mut scratch = vec![Fr::ZERO; a.scratch.len()];
+        let mut scratch = vec![Fp2::ZERO; a.scratch.len()];
         let mut known = vec![false; a.scratch.len()];
         for &r in &order {
             let rel = &a.relations[r];
@@ -875,8 +877,8 @@ pub fn check_padding_identity(a: &CircuitArtifact) -> Result<(), String> {
                          relation defines"
                     ));
                 };
-                if scratch[i] != Fr::ONE {
-                    let (name, value) = (&a.scratch[i].name, coeff(Coeff::Literal(scratch[i])));
+                if scratch[i] != Fp2::ONE {
+                    let (name, value) = (&a.scratch[i].name, element(scratch[i]));
                     return Err(format!(
                         "padding identity: halving gate list {k} reads {op} ({name}), which is \
                          {value} on padding.row at row {row}, not 1"
@@ -891,12 +893,12 @@ pub fn check_padding_identity(a: &CircuitArtifact) -> Result<(), String> {
 /// One row of a witness, as the flat constraint list reads it.
 pub struct WitnessRow {
     /// One value per committed column, in layout order: `M`, `W`, `S`.
-    pub committed: Vec<Fr>,
+    pub committed: Vec<Fp>,
     /// The row index, which `V[row]` reads.
     pub row: usize,
     /// One value per scratch slot. Slots only non-row-local relations define
     /// are never read.
-    pub scratch: Vec<Fr>,
+    pub scratch: Vec<Fp2>,
 }
 
 /// The names of the row-local relations `w` violates, in relation order: a
@@ -933,7 +935,7 @@ pub fn violated_relations(
             .unwrap_or_else(|e| panic!("violated_relations: relation {r} ({}): {e}", rel.name));
         let broken = match rel.output {
             Some(i) => w.scratch[i as usize] != value,
-            None => value != Fr::ZERO,
+            None => value != Fp2::ZERO,
         };
         if broken {
             violated.push(rel.name.clone());
@@ -942,11 +944,9 @@ pub fn violated_relations(
     violated
 }
 
-/// Whether `v`'s canonical integer is below `2^bits`: every bit from `bits`
-/// up is clear.
-fn below(v: Fr, bits: u32) -> bool {
-    let bytes = v.to_bytes();
-    (bits..256).all(|i| (bytes[(i / 8) as usize] >> (i % 8)) & 1 == 0)
+/// Whether `v` is a base value whose canonical integer is below `2^bits`.
+fn below(v: Fp2, bits: u32) -> bool {
+    v.c1 == Fp::ZERO && v.c0.to_u64().checked_shr(bits).unwrap_or(0) == 0
 }
 
 /// The native lookup evaluator, `docs/spec/circuits.md` §3: the names of the
@@ -988,7 +988,7 @@ pub fn violated_lookups(a: &CircuitArtifact, w: &WitnessRow) -> Vec<String> {
                 .unwrap_or_else(|e| fail(e));
             out_of_range |= !below(value, bits);
         }
-        if w.committed[i] != Fr::ZERO && out_of_range {
+        if w.committed[i] != Fp::ZERO && out_of_range {
             violated.push(l.name.clone());
         }
     }
@@ -1010,11 +1010,11 @@ fn holds_booleanity(a: &CircuitArtifact, x: PolyAddress) -> bool {
     };
     let width = a.committed().len();
     let slots = challenge_slots(&all_gates(a));
-    let scratch = vec![Fr::ZERO; a.scratch.len()];
+    let scratch = vec![Fp2::ZERO; a.scratch.len()];
     let mut rng = Rng(0x600_1ea4);
-    let points: Vec<(Vec<Fr>, usize, ExternalChallenges)> = (0..TRIALS)
+    let points: Vec<(Vec<Fp>, usize, ExternalChallenges)> = (0..TRIALS)
         .map(|_| {
-            let committed: Vec<Fr> = (0..width).map(|_| rng.fr()).collect();
+            let committed: Vec<Fp> = (0..width).map(|_| rng.fp()).collect();
             let row = rng.next() as usize;
             (committed, row, rng.challenges(&slots))
         })
@@ -1026,7 +1026,7 @@ fn holds_booleanity(a: &CircuitArtifact, x: PolyAddress) -> bool {
         points.iter().all(|(committed, row, challenges)| {
             let v = committed[at];
             match row_value(a, &rel.gate, committed, *row, &scratch, challenges) {
-                Ok(value) => value == v - v * v,
+                Ok(value) => value == Fp2::from(v - v * v),
                 Err(_) => false,
             }
         })
@@ -1041,10 +1041,10 @@ pub struct ChannelSum {
     /// The numerator of `Σ_rows Σ_l 1/(E_l + g) − Σ_rows mult/(T + g)` over the
     /// common denominator [`ChannelSum::den`]. A channel holds exactly when
     /// this is 0 and that one is not.
-    pub num: Fr,
+    pub num: Fp2,
     /// The product of every leaf denominator of the channel over every row,
     /// the neutral fractions' 1s included: the fraction tree's `den` root.
-    pub den: Fr,
+    pub den: Fp2,
     /// `(row, lookup name)` for each **distinct** gated tuple no table row
     /// answers, at the lowest row producing it, in row then lookup order: a
     /// tuple that several rows produce is listed once, so this names every
@@ -1054,7 +1054,7 @@ pub struct ChannelSum {
 
 impl ChannelSum {
     /// `num/den`, the sum itself, where the denominator is not 0.
-    pub fn sum(&self) -> Option<Fr> {
+    pub fn sum(&self) -> Option<Fp2> {
         self.den.inverse().map(|d| self.num * d)
     }
 }
@@ -1110,7 +1110,7 @@ pub fn channel_sums(
     };
     let read = |src: &Source, row: usize| match src {
         Source::Column(i) => layout[*i].get(row),
-        Source::Virtual(kind) => virtual_at_row(*kind, row),
+        Source::Virtual(kind) => virtual_at_row(*kind, row).into(),
     };
 
     let mut out = Vec::new();
@@ -1128,8 +1128,8 @@ pub fn channel_sums(
             return Err(format!("channel sums: channel `{name}` has no lookup"));
         }
         // β^0 .. β^{width-1}, the compression's weights.
-        let powers: Vec<Fr> = (0..width)
-            .scan(Fr::ONE, |p, _| {
+        let powers: Vec<Fp2> = (0..width)
+            .scan(Fp2::ONE, |p, _| {
                 let at = *p;
                 *p *= beta;
                 Some(at)
@@ -1185,18 +1185,18 @@ pub fn channel_sums(
         // `(n·e + d, d·e)` — rather than inverted per row: a channel of 2^20
         // rows would otherwise cost eleven million inversions, and the fold is
         // also a different algorithm from the balanced tree it is checking.
-        let mut num = Fr::ZERO;
-        let mut den = Fr::ONE;
+        let mut num = Fp2::ZERO;
+        let mut den = Fp2::ONE;
         let mut looked_up: BTreeMap<Key, usize> = BTreeMap::new();
         let mut first_seen: Vec<(usize, String, Key)> = Vec::new();
-        let mut tuple = vec![Fr::ZERO; width];
+        let mut tuple = vec![Fp2::ZERO; width];
         for row in 0..rows {
             for (l, (selector, expressions)) in mine.iter().zip(&resolved) {
                 let s = read(selector, row);
                 for (j, (terms, constant)) in expressions.iter().enumerate() {
-                    let raw = terms
-                        .iter()
-                        .fold(*constant, |acc, (c, src)| acc + *c * read(src, row));
+                    let raw = terms.iter().fold(Fp2::from(*constant), |acc, (c, src)| {
+                        acc + *c * read(src, row)
+                    });
                     tuple[j] = gate_tuple(spec.channel, j, s, raw);
                 }
                 let bytes = key(&tuple);
@@ -1207,7 +1207,7 @@ pub fn channel_sums(
                     first_seen.push((row, l.name.clone(), bytes));
                 }
                 let d = compress(&powers, &tuple) + g;
-                if d == Fr::ZERO {
+                if d == Fp2::ZERO {
                     return Err(format!(
                         "channel sums: lookup `{}` has denominator 0 at row {row}",
                         l.name
@@ -1220,7 +1220,7 @@ pub fn channel_sums(
                 tuple[j] = read(t, row);
             }
             let d = compress(&powers, &tuple) + g;
-            if d == Fr::ZERO {
+            if d == Fp2::ZERO {
                 return Err(format!(
                     "channel sums: channel `{name}`'s table has denominator 0 at row {row}"
                 ));
@@ -1260,10 +1260,10 @@ pub fn channel_sums(
 
 /// A tuple's map key: its columns' canonical bytes, `MAX_TUPLE` wide and zero
 /// past the tuple, so it is `Copy` and a row costs no allocation.
-type Key = [[u8; 32]; lookup_channel::MAX_TUPLE];
+type Key = [[u8; 16]; lookup_channel::MAX_TUPLE];
 
-fn key(tuple: &[Fr]) -> Key {
-    let mut out = [[0u8; 32]; lookup_channel::MAX_TUPLE];
+fn key(tuple: &[Fp2]) -> Key {
+    let mut out = [[0u8; 16]; lookup_channel::MAX_TUPLE];
     for (slot, v) in out.iter_mut().zip(tuple) {
         *slot = v.to_bytes();
     }
@@ -1272,7 +1272,7 @@ fn key(tuple: &[Fr]) -> Key {
 
 /// One lookup, resolved: its selector, and per tuple position the
 /// literal-weighted sources and the constant.
-type Resolved = (Source, Vec<(Vec<(Fr, Source)>, Fr)>);
+type Resolved = (Source, Vec<(Vec<(Fp, Source)>, Fp)>);
 
 /// Where one value of a channel's recomputation is read.
 #[derive(Clone, Copy, Debug)]
@@ -1284,21 +1284,21 @@ enum Source {
 }
 
 /// `Σ_j β^j·tuple_j`.
-fn compress(powers: &[Fr], tuple: &[Fr]) -> Fr {
+fn compress(powers: &[Fp2], tuple: &[Fp2]) -> Fp2 {
     powers
         .iter()
         .zip(tuple)
-        .fold(Fr::ZERO, |acc, (p, v)| acc + *p * *v)
+        .fold(Fp2::ZERO, |acc, (p, v)| acc + *p * *v)
 }
 
 /// The gated value of tuple position `j` at selector `s` and raw expression
 /// value `raw`, `docs/spec/lookup.md` §4: a range channel gates to 0,
 /// the generic channel to the all-zero `ZeroEntry` with its key offset by one,
 /// and the decoder channel to `MINUS_ONE` in every column.
-fn gate_tuple(channel: u32, j: usize, s: Fr, raw: Fr) -> Fr {
+fn gate_tuple(channel: u32, j: usize, s: Fp2, raw: Fp2) -> Fp2 {
     match channel {
-        lookup_channel::GENERIC if j == 0 => s * (raw + Fr::ONE),
-        lookup_channel::DECODER => s * (raw + Fr::ONE) - Fr::ONE,
+        lookup_channel::GENERIC if j == 0 => s * (raw + Fp2::ONE),
+        lookup_channel::DECODER => s * (raw + Fp2::ONE) - Fp2::ONE,
         _ => s * raw,
     }
 }
@@ -1312,7 +1312,7 @@ pub fn channel_roots(
     a: &CircuitArtifact,
     values: &LayerValues,
     specs: &[ChannelSpec],
-) -> Result<Vec<(Fr, Fr)>, String> {
+) -> Result<Vec<(Fp2, Fp2)>, String> {
     let top = values
         .layers
         .last()
@@ -1324,7 +1324,7 @@ pub fn channel_roots(
     ))?;
     let mut out = Vec::new();
     for i in 0..specs.len() {
-        let mut pair = [Fr::ZERO; 2];
+        let mut pair = [Fp2::ZERO; 2];
         for (at, value) in pair.iter_mut().enumerate() {
             let PolyAddress::Inner { offset, .. } = a.outputs[first + 2 * i + at] else {
                 return Err(format!(
@@ -1355,7 +1355,7 @@ pub fn channel_roots(
 /// `den != 0`, which the caller checks and a verifier repeats on the claimed
 /// outputs; the layers the fraction tree is built from, which
 /// `gkr::self_check` recomputes.
-pub fn check_channel_roots(roots: &[(Fr, Fr)], sums: &[ChannelSum]) -> Result<(), String> {
+pub fn check_channel_roots(roots: &[(Fp2, Fp2)], sums: &[ChannelSum]) -> Result<(), String> {
     if roots.len() != sums.len() {
         return Err(format!(
             "channel roots: {} root pairs for {} channels",
@@ -1400,13 +1400,13 @@ pub fn check_channel_roots(roots: &[(Fr, Fr)], sums: &[ChannelSum]) -> Result<()
 pub fn check_lookup_discharge(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<(), String> {
     let width = a.committed().len();
     let slots = challenge_slots(&all_gates(a));
-    let scratch = vec![Fr::ZERO; a.scratch.len()];
+    let scratch = vec![Fp2::ZERO; a.scratch.len()];
     // `beta`'s powers are derived slots, so a point where they are independent
     // random values is a point no gate's coefficients mean what they say.
     let mut rng = Rng(0x1009_0217);
-    let points: Vec<(Vec<Fr>, usize, ExternalChallenges)> = (0..TRIALS)
+    let points: Vec<(Vec<Fp>, usize, ExternalChallenges)> = (0..TRIALS)
         .map(|_| {
-            let committed: Vec<Fr> = (0..width).map(|_| rng.fr()).collect();
+            let committed: Vec<Fp> = (0..width).map(|_| rng.fp()).collect();
             let row = rng.next() as usize;
             let lookup: Vec<u32> = challenge_slot::LOOKUP_BETA_POWERS
                 .iter()
@@ -1422,7 +1422,7 @@ pub fn check_lookup_discharge(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Res
                 .filter(|slot| !lookup.contains(slot))
                 .collect();
             let mut challenges = rng.challenges(&others);
-            insert_lookup_challenges(&mut challenges, rng.fr(), rng.fr(), a);
+            insert_lookup_challenges(&mut challenges, rng.fp2(), rng.fp2(), a);
             (committed, row, challenges)
         })
         .collect();
@@ -1524,10 +1524,10 @@ fn channel_cones(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<Vec<Vec<u
 fn lookup_denominator(
     a: &CircuitArtifact,
     l: &constraints::LookupExpr,
-    committed: &[Fr],
+    committed: &[Fp],
     row: usize,
     challenges: &ExternalChallenges,
-) -> Result<Fr, String> {
+) -> Result<Fp2, String> {
     let g = challenges
         .get(challenge_slot::LOOKUP_G)
         .ok_or("lookup discharge: challenge slot lookup_g was not supplied".to_string())?;
@@ -1538,9 +1538,9 @@ fn lookup_denominator(
         "lookup discharge: lookup `{}` has selector {}, which is not a committed column",
         l.name, l.selector
     ))?;
-    let s = committed[at];
-    let mut value = Fr::ZERO;
-    let mut power = Fr::ONE;
+    let s = committed[at].into();
+    let mut value = Fp2::ZERO;
+    let mut power = Fp2::ONE;
     for (j, e) in l.tuple.iter().enumerate() {
         let raw = row_value(a, e, committed, row, &[], challenges)?;
         value += power * gate_tuple(l.channel, j, s, raw);
@@ -1571,7 +1571,7 @@ fn lookup_denominator(
 /// reconcile, which is `gkr::reconciles` over every shard; the laws and
 /// `check_memory`, which it assumes. Materializes nothing, but reads every row
 /// of two columns.
-pub fn memory_roots(a: &CircuitArtifact, values: &LayerValues) -> Result<(Fr, Fr), String> {
+pub fn memory_roots(a: &CircuitArtifact, values: &LayerValues) -> Result<(Fp2, Fp2), String> {
     let Some(k) = a.layers.iter().position(|list| list.halving) else {
         return Err("memory roots: the artifact has no halving list".to_string());
     };
@@ -1599,7 +1599,7 @@ pub fn memory_roots(a: &CircuitArtifact, values: &LayerValues) -> Result<(Fr, Fr
         .last()
         .ok_or("memory roots: no layer is materialized".to_string())?;
     let rows = 1usize << a.layer_vars(k);
-    let mut roots = [Fr::ZERO; 2];
+    let mut roots = [Fp2::ZERO; 2];
     for (root, j) in roots.iter_mut().zip([read, write]) {
         let (Some(column), Some(at_top)) = (layer.get(j), top.get(j)) else {
             return Err(format!(
@@ -1618,7 +1618,7 @@ pub fn memory_roots(a: &CircuitArtifact, values: &LayerValues) -> Result<(Fr, Fr
                 at_top.len()
             ));
         }
-        let product = (0..column.len()).fold(Fr::ONE, |acc, y| acc * column.get(y));
+        let product = (0..column.len()).fold(Fp2::ONE, |acc, y| acc * column.get(y));
         if product != at_top.get(0) {
             return Err(format!(
                 "memory roots: the product of layer {k}'s column {j} over its rows is not the \
@@ -1634,17 +1634,24 @@ pub fn memory_roots(a: &CircuitArtifact, values: &LayerValues) -> Result<(Fr, Fr
 // The dump
 // ---------------------------------------------------------------------------
 
-/// An `Fr` below `2^32`, as an integer.
-fn small(v: Fr) -> Option<u64> {
-    let b = v.to_bytes();
-    let mut low = [0u8; 8];
-    low.copy_from_slice(&b[..8]);
-    let x = u64::from_le_bytes(low);
-    (b[8..].iter().all(|byte| *byte == 0) && x <= u32::MAX as u64).then_some(x)
+/// An `Fp` below `2^32`, as an integer.
+fn small(v: Fp) -> Option<u64> {
+    let x = v.to_u64();
+    (x <= u32::MAX as u64).then_some(x)
+}
+
+/// An `Fp2` value as [`coeff`] prints a literal, with `c1·x` after a nonzero
+/// `c1`.
+fn element(v: Fp2) -> String {
+    let c0 = coeff(Coeff::Literal(v.c0));
+    match v.c1 == Fp::ZERO {
+        true => c0,
+        false => format!("{c0} + {}·x", coeff(Coeff::Literal(v.c1))),
+    }
 }
 
 /// A literal below `2^32` in decimal, `p − k` for such `k` as `-k`, anything
-/// else as `0x` and 64 big-endian hex digits; a challenge by its slot's name.
+/// else as `0x` and 16 hex digits; a challenge by its slot's name.
 fn coeff(c: Coeff) -> String {
     match c {
         Coeff::Challenge(slot) => match challenge_slot::NAMES.get(slot as usize) {
@@ -1747,7 +1754,7 @@ pub fn dump(a: &CircuitArtifact) -> String {
     };
     let (depth, n, code) = (a.depth(), a.trace_vars, a.coefficient_encoding);
     let meaning = match code {
-        0 => "every Fr canonical 32-byte little-endian",
+        0 => "every Fp canonical 8-byte little-endian",
         _ => "unknown",
     };
     line("circuit artifact".to_string());
@@ -1881,11 +1888,11 @@ pub struct VerifierConstants {
 /// residual table over the rows of the layer its list reads, in gate-list then
 /// entry order.
 pub struct ReferenceRun {
-    pub outputs: Vec<Fr>,
-    pub enforcing: Vec<(String, Vec<Fr>)>,
+    pub outputs: Vec<Fp2>,
+    pub enforcing: Vec<(String, Vec<Fp2>)>,
 }
 
-fn table(column: &MultilinearPoly) -> Vec<Fr> {
+fn table(column: &MultilinearPoly) -> Vec<Fp2> {
     (0..column.len()).map(|i| column.get(i)).collect()
 }
 
@@ -1908,7 +1915,7 @@ fn table(column: &MultilinearPoly) -> Vec<Fr> {
 pub fn cross_check(
     a: &CircuitArtifact,
     expected: &VerifierConstants,
-    reference: fn(&[Vec<Fr>], &ExternalChallenges) -> ReferenceRun,
+    reference: fn(&[Vec<Fp>], &ExternalChallenges) -> ReferenceRun,
 ) -> Result<(), String> {
     check_laws(a)?;
 
@@ -1961,19 +1968,19 @@ pub fn cross_check(
 
     let mut rng = Rng(0xc055_c4ec);
     let rows = 1usize << a.trace_vars;
-    let base: Vec<Vec<Fr>> = a
+    let base: Vec<Vec<Fp>> = a
         .committed()
         .iter()
-        .map(|_| (0..rows).map(|_| rng.fr()).collect())
+        .map(|_| (0..rows).map(|_| rng.fp()).collect())
         .collect();
     let challenges = rng.challenges(&e.challenge_slots);
     let columns = (a.committed().into_iter().zip(&base))
-        .map(|(address, t)| (address, MultilinearPoly::new(PolyBacking::Fr(t.clone()))))
+        .map(|(address, t)| (address, MultilinearPoly::new(PolyBacking::Fp(t.clone()))))
         .collect();
     let values = forward(a, &BaseLayer::new(columns), &challenges);
 
     let top = values.layers.last().expect("Law 3: there is a top layer");
-    let mut got_outputs: Vec<Fr> = Vec::new();
+    let mut got_outputs: Vec<Fp2> = Vec::new();
     for out in &a.outputs {
         let PolyAddress::Inner { offset, .. } = *out else {
             panic!("Law 3: output {out} is on the top layer");
@@ -1981,20 +1988,27 @@ pub fn cross_check(
         // Law 3: the top has no variables, so the column is one value.
         got_outputs.push(top[offset as usize].get(0));
     }
-    let mut got_enforcing: Vec<(String, Vec<Fr>)> = Vec::new();
+    let mut got_enforcing: Vec<(String, Vec<Fp2>)> = Vec::new();
     // A list with no enforcing gate has no residual; a halving list never has one.
     for (k, list) in a.layers.iter().enumerate() {
         if list.enforcing.is_empty() {
             continue;
         }
-        let lower: Vec<Vec<Fr>> = match k {
-            0 => base.clone(),
+        let lower: Vec<Vec<Fp2>> = match k {
+            0 => base
+                .iter()
+                .map(|t| t.iter().map(|v| (*v).into()).collect())
+                .collect(),
             _ => values.layers[k - 1].iter().map(table).collect(),
         };
         let mut residuals = vec![Vec::new(); list.enforcing.len()];
         for y in 0..1usize << a.layer_vars(k) {
-            let row: Vec<Fr> = lower.iter().map(|t| t[y]).collect();
-            let virtuals: Vec<Fr> = a.virtuals.iter().map(|v| virtual_at_row(v.0, y)).collect();
+            let row: Vec<Fp2> = lower.iter().map(|t| t[y]).collect();
+            let virtuals: Vec<Fp2> = a
+                .virtuals
+                .iter()
+                .map(|v| virtual_at_row(v.0, y).into())
+                .collect();
             let gates = gate_values(a, k, &row, &[], &virtuals, &challenges);
             for (j, residual) in residuals.iter_mut().enumerate() {
                 residual.push(gates[list.producing.len() + j]);

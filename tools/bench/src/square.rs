@@ -2,7 +2,7 @@
 //! `u16` column and `B = A^2` a `u32` one. Both routines run on it, so the
 //! prove number and the verify comparison are measured over the same claim.
 
-use field::Fr;
+use field_a64_c5::Fp;
 use poly::{MultilinearPoly, PolyBacking};
 use sumcheck::{Gate, GateTerm, PolyAddress};
 use test_support::Rng;
@@ -34,12 +34,12 @@ impl Square {
             &[&addr_a, &addr_b],
             vec![
                 GateTerm {
-                    coef: Fr::ONE,
+                    coef: Fp::ONE,
                     a: 0,
                     b: Some(0),
                 },
                 GateTerm {
-                    coef: Fr::MINUS_ONE,
+                    coef: Fp::MINUS_ONE,
                     a: 1,
                     b: None,
                 },
@@ -64,11 +64,11 @@ impl Square {
         ]
     }
 
-    /// Both columns lifted to `Fr`: the naive verifier's view of the witness.
-    pub fn lifted(&self) -> (Vec<Fr>, Vec<Fr>) {
+    /// Both columns lifted to `Fp`: the naive verifier's view of the witness.
+    pub fn lifted(&self) -> (Vec<Fp>, Vec<Fp>) {
         (
-            self.a.iter().map(|&x| Fr::from_u64(x as u64)).collect(),
-            self.b.iter().map(|&x| Fr::from_u64(x as u64)).collect(),
+            self.a.iter().map(|&x| Fp::from_u64(x as u64)).collect(),
+            self.b.iter().map(|&x| Fp::from_u64(x as u64)).collect(),
         )
     }
 }

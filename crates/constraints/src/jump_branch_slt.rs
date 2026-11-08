@@ -26,7 +26,7 @@ use alloc::vec::Vec;
 
 use constants::extra_mask::jump_branch_slt as kind;
 use constants::{family, generic_table, lookup_channel};
-use field::Fr;
+use field_a64_c5::Fp;
 
 use crate::gadgets::{comparison, is_zero, Comparison};
 use crate::lookup::{check_copowers, ChannelSpec};
@@ -174,15 +174,15 @@ pub const LEGAL_MASKS: [u32; 12] = [
 const SIGNED: [PolyAddress; 4] = [SLTI, SLT, BLT, BGE];
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn neg(v: u64) -> Coeff {
-    Coeff::Literal(-Fr::from_u64(v))
+    Coeff::Literal(-Fp::from_u64(v))
 }
 
-fn two_32() -> Fr {
-    Fr::from_u64(1 << 32)
+fn two_32() -> Fp {
+    Fp::from_u64(1 << 32)
 }
 
 /// `Σ a·x + Σ b·y·z`, constant 0.
@@ -254,17 +254,17 @@ fn range16(name: &str, expression: GateDef) -> LookupExpr {
 fn low_half(x: PolyAddress, hi: PolyAddress) -> GateDef {
     linear(vec![
         (lit(1), x),
-        (Coeff::Literal(-Fr::from_u64(1 << 16)), hi),
+        (Coeff::Literal(-Fp::from_u64(1 << 16)), hi),
     ])
 }
 
 /// `(x − 2^16·hi)/2`, the low halfword halved: in `[0, 2^16)` only when the
 /// low halfword is even, since an odd one halves to `(lo + p)/2`.
 fn low_half_halved(x: PolyAddress, hi: PolyAddress) -> GateDef {
-    let half = Fr::from_u64(2).inverse().expect("2 is a unit");
+    let half = Fp::from_u64(2).inverse().expect("2 is a unit");
     linear(vec![
         (Coeff::Literal(half), x),
-        (Coeff::Literal(-Fr::from_u64(1 << 15)), hi),
+        (Coeff::Literal(-Fp::from_u64(1 << 15)), hi),
     ])
 }
 
