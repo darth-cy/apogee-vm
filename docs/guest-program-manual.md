@@ -50,7 +50,7 @@ fn main() {
 and append it to the list in `guests/Cargo.toml`:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "public-io", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "public-io", "hello"]
 ```
 
 - `#![no_std]`: the target is bare metal. `extern crate alloc;` adds `Vec`, `Box` and `String`
@@ -67,7 +67,6 @@ The guests in the tree are worked examples:
 | `fib` | the smallest SDK guest: a `u32` in, a `u32` out |
 | `echo`, `heap` | the allocator: advice copied through heap buffers, `Vec` and `Box` churn |
 | `amm`, `orderbook` | 128- and 256-bit integers with no heap; `BTreeMap`, sorting, a sorted order from advice checked |
-| `vault` | `crates/field` and `crates/transcript` in a guest: Merkle paths over `Fr`, hashed with Poseidon2 in software |
 | `atomics`, `opcodes`, `rvc-dense` | the A extension from `core::sync::atomic`; every RV32IMAC instruction; RVC expansion |
 | `addsub`, `control`, `alu`, `mem`, `shards` | assembly with its own `_start` and no SDK, exiting with its result; `shards` fills two `2^20` shards |
 
@@ -117,7 +116,7 @@ fn main() {
   the prover chose ([public-values.md](spec/public-values.md) §6).
 
 `digest` is a collision-resistant hash the guest links — a Poseidon2 sponge over
-`crates/transcript`, say, as `guests/vault` uses for its tree. The SDK carries none, and the VM has
+`crates/transcript-a64-c5`, say. The SDK carries none, and the VM has
 no precompile: every operation is RV32IMAC code in the guest, proved row by row.
 [ecall-abi.md](spec/ecall-abi.md) §6 lists the SDK.
 
@@ -210,8 +209,8 @@ switch's default unreachable, rustc lowers an unreachable block to the trap `uni
 extension that is `c.unimp`, the all-zero halfword, RVC's defined-illegal encoding. It abbreviates
 no instruction, so the loader records a `NonInstruction` slot and resumes two bytes on
 ([program.md](spec/program.md) §2). No pc reaches it; one that did would stop the run with
-`NotAnInstruction`. It is ordinary compiler output: the committed dev images of `amm`, `vault` and
-`orderbook` carry 1, 2 and 16.
+`NotAnInstruction`. It is ordinary compiler output: the committed dev images of `amm` and
+`orderbook` carry 1 and 16.
 
 ## 7. Check it
 

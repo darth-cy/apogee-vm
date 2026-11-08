@@ -129,7 +129,6 @@ fn every_committed_guest_renders_and_the_listing_is_the_tables() {
         "rvc-dense",
         "amm",
         "orderbook",
-        "vault",
         "atomics",
         "opcodes",
         "heap",

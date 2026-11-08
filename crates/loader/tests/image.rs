@@ -9,15 +9,7 @@ use loader::{load_elf, LoaderError, ProgramImage, Segment, Slot};
 /// One list rather than three copies, so that a guest added to it reaches
 /// every structural check here without a second edit -- the checks below are
 /// about the shape of an image, and there is no image they are meant to skip.
-const GUESTS: [&str; 7] = [
-    "fib",
-    "echo",
-    "rvc-dense",
-    "amm",
-    "orderbook",
-    "vault",
-    "atomics",
-];
+const GUESTS: [&str; 6] = ["fib", "echo", "rvc-dense", "amm", "orderbook", "atomics"];
 
 /// The wire form reads back to the value it was written from.
 #[test]

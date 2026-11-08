@@ -12,13 +12,12 @@ use artifact_dump::{dump, wire_form};
 use loader::{load_elf, ProgramImage, Slot};
 
 /// The guests, built from `guests/`, plus the smallest committed synthetic ELF.
-const FIXTURES: [&str; 14] = [
+const FIXTURES: [&str; 13] = [
     "fib",
     "echo",
     "rvc-dense",
     "amm",
     "orderbook",
-    "vault",
     "atomics",
     "opcodes",
     "heap",
