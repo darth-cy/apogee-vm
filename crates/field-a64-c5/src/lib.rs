@@ -242,6 +242,47 @@ impl Mul for Fp2 {
     }
 }
 
+/// A sum of `Fp2` products reduced once, when it is read: each coordinate's
+/// 128-bit products are added as they come and the carries out of 128 bits
+/// counted, a carry being `2^128 ≡ 3481`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fp2Sum {
+    c0: (u128, u64),
+    c1: (u128, u64),
+}
+
+impl Fp2Sum {
+    /// `+= a·b`, by [`Fp2`]'s schoolbook products.
+    #[inline]
+    pub fn add_product(&mut self, a: Fp2, b: Fp2) {
+        let wide = |x: Fp, y: Fp| x.0 as u128 * y.0 as u128;
+        let t = wide(a.c1, b.c1);
+        for y in [wide(a.c0, b.c0), t, t] {
+            carry_add(&mut self.c0, y);
+        }
+        for y in [wide(a.c0, b.c1), wide(a.c1, b.c0)] {
+            carry_add(&mut self.c1, y);
+        }
+    }
+
+    /// The sum mod `p`. `3481` times the carries stays below `2^64` for fewer
+    /// than `2^50` products.
+    #[inline]
+    pub fn reduce(self) -> Fp2 {
+        let r = |(s, k): (u128, u64)| Fp::from_u128(s) + Fp::from_u64(3481 * k);
+        Fp2 {
+            c0: r(self.c0),
+            c1: r(self.c1),
+        }
+    }
+}
+
+#[inline]
+fn carry_add(acc: &mut (u128, u64), y: u128) {
+    let (s, carry) = acc.0.overflowing_add(y);
+    *acc = (s, acc.1 + carry as u64);
+}
+
 /// `x + y`, as a `u128` equal to it mod `p`: a carry out of 128 bits is
 /// `2^128 ≡ 59^2 = 3481`, and adding 3481 back cannot carry again while one of
 /// the two is a product of canonical elements, at most `(p − 1)^2`.

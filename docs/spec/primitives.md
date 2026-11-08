@@ -32,7 +32,8 @@ Two types, never mixed implicitly:
   memory roots. `p ≡ 5 (mod 8)` makes 2 a non-square, so `x^2 − 2` is irreducible and this is a
   field of `p^2 ≈ 2^128` elements. An element `c0 + c1·x` multiplies as
   `(a0·b0 + 2·a1·b1) + (a0·b1 + a1·b0)·x`, each coordinate's products summed in 128 bits, a carry
-  folding back as `2^128 ≡ 3481`, and reduced once; `Fp2::inverse` is
+  folding back as `2^128 ≡ 3481`, and reduced once; `Fp2Sum` adds many products the same way,
+  counting the carries, and reduces once when read. `Fp2::inverse` is
   `(c0 − c1·x)/(c0^2 − 2·c1^2)`, the norm lying in `Fp`. `From<Fp>` is the embedding, and `Fp2`
   with an `Fp` on either side is the embedding's arithmetic in two base products where a full
   product takes four.

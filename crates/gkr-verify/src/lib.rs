@@ -14,7 +14,7 @@ use core::fmt;
 
 use constants::transcript_tags;
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind};
-use field_a64_c5::{Fp, Fp2};
+use field_a64_c5::{Fp, Fp2, Fp2Sum};
 use poly::eq_eval;
 use transcript_a64_c5::Transcript;
 
@@ -454,9 +454,11 @@ impl<'a> ResolvedList<'a> {
         //     weights.len()
         // );
         self.cache(lower, upper, virtuals, scratch);
-        weights.iter().enumerate().fold(Fp2::ZERO, |acc, (j, w)| {
-            acc + self.gate(j, lower, upper, virtuals, scratch) * *w
-        })
+        let mut sum = Fp2Sum::default();
+        for (j, w) in weights.iter().enumerate() {
+            sum.add_product(self.gate(j, lower, upper, virtuals, scratch), *w);
+        }
+        sum.reduce()
     }
 
     /// Gate `i` of the whole list — cached entries included — through the

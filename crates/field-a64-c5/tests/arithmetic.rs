@@ -1,7 +1,7 @@
 //! The field against Rust's own `u128` remainder, which shares nothing with
 //! this crate.
 
-use field_a64_c5::{Fp, Fp2, A64_C5};
+use field_a64_c5::{Fp, Fp2, Fp2Sum, A64_C5};
 use test_support::Rng;
 
 /// The values a `2^64 − 59` reduction gets wrong first, then a seeded random
@@ -74,7 +74,8 @@ fn the_field_is_integer_arithmetic_mod_p() {
 }
 
 /// `F_{p^2}` against its definition over the integers: `x^2 = 2`, product and
-/// inverse by the schoolbook rule mod `p`, and 2 a non-square by Euler's
+/// inverse by the schoolbook rule mod `p`, a sum of products reduced once
+/// against the same products reduced each, and 2 a non-square by Euler's
 /// criterion, `2^((p−1)/2) = −1`, which is what makes it a field.
 #[test]
 fn the_extension_is_the_field_mod_x2_minus_2() {
@@ -104,6 +105,7 @@ fn the_extension_is_the_field_mod_x2_minus_2() {
         c0: Fp::from_u64(a0),
         c1: Fp::from_u64(a1),
     };
+    let (mut sum, mut each) = (Fp2Sum::default(), Fp2::ZERO);
     for &a in &elements {
         let x = fp2(a);
         assert_eq!(Fp2::from_bytes(&x.to_bytes()), Some(x));
@@ -117,6 +119,8 @@ fn the_extension_is_the_field_mod_x2_minus_2() {
             let c0 = (a0 * b0 % p + 2 * (a1 * b1 % p)) % p;
             let c1 = (a0 * b1 % p + a1 * b0 % p) % p;
             assert_eq!(x * y, fp2((c0 as u64, c1 as u64)));
+            sum.add_product(x, y);
+            each += x * y;
             assert_eq!(x * y.c0, x * Fp2::from(y.c0));
             assert_eq!(y.c0 * x, x * y.c0);
             assert_eq!(x + y - y, x);
@@ -126,4 +130,5 @@ fn the_extension_is_the_field_mod_x2_minus_2() {
             assert_eq!(y.c0 - x, Fp2::from(y.c0) - x);
         }
     }
+    assert_eq!(sum.reduce(), each);
 }
