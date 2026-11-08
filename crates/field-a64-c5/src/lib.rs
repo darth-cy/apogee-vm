@@ -14,8 +14,6 @@ use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 /// The A64-C5 prime, `2^64 − 59`.
 pub const A64_C5: u64 = 0xFFFF_FFFF_FFFF_FFC5;
 
-const P: u128 = A64_C5 as u128;
-
 /// An element of the A64-C5 field, held as its canonical representative.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Fp(u64);
@@ -94,10 +92,13 @@ impl Fp {
 impl Add for Fp {
     type Output = Fp;
 
+    /// `rhs + 59 < 2^64`, and `self + rhs + 59` carries out of 64 bits exactly
+    /// when `self + rhs ≥ p`, leaving `self + rhs − p`: one 64-bit add decides,
+    /// and two coordinates' adds vectorize.
     #[inline]
     fn add(self, rhs: Fp) -> Fp {
-        let s = self.0 as u128 + rhs.0 as u128;
-        Fp((if s >= P { s - P } else { s }) as u64)
+        let (t, carry) = self.0.overflowing_add(rhs.0 + 59);
+        Fp(if carry { t } else { t - 59 })
     }
 }
 
