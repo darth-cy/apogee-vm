@@ -1,8 +1,8 @@
 #![no_std]
-//! The Poseidon2 duplex transcript over the A64-C5 field, specified in
-//! `docs/spec/transcript.md`:
+//! The Poseidon2 duplex transcript over the A64-C5 field of `field-a64-c5`,
+//! specified in `docs/spec/transcript.md`:
 //!
-//! - the field `p = 2^64 − 59` and the Poseidon2-A64-C5 permutation (§1);
+//! - the Poseidon2-A64-C5 permutation (§1);
 //! - Chiesa–Orrù's overwrite duplex, rate 8 and capacity 8, keyed by
 //!   [`PROTOCOL_ID`] (§2);
 //! - the typed messages, challenges, digests, snapshots and event log (§3).
@@ -12,71 +12,9 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::ops::{Add, Mul};
+use field_a64_c5::Fp;
 
 mod params;
-
-// ---------------------------------------------------------------------------
-// The field (§1.1).
-// ---------------------------------------------------------------------------
-
-/// The A64-C5 prime, `2^64 − 59`.
-pub const A64_C5: u64 = 0xFFFF_FFFF_FFFF_FFC5;
-
-const P: u128 = A64_C5 as u128;
-
-/// An element of the A64-C5 field, held as its canonical representative.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct Fp(u64);
-
-impl Fp {
-    pub const ZERO: Fp = Fp(0);
-    pub const ONE: Fp = Fp(1);
-
-    /// `x mod p`. A `u64` is below `2p`, so `p` is subtracted at most once.
-    pub const fn from_u64(x: u64) -> Fp {
-        Fp(if x >= A64_C5 { x - A64_C5 } else { x })
-    }
-
-    /// `x`, if it is canonical.
-    pub const fn from_canonical(x: u64) -> Option<Fp> {
-        if x < A64_C5 {
-            Some(Fp(x))
-        } else {
-            None
-        }
-    }
-
-    /// The canonical representative, in `[0, p)`.
-    pub const fn to_u64(self) -> u64 {
-        self.0
-    }
-
-    /// `x mod p` for any `x < 2^128`. Two folds by `2^64 ≡ 59` leave
-    /// `x < 2^64 + 3481 < 2p`, so `p` is then subtracted at most once.
-    fn reduce(x: u128) -> Fp {
-        let x = (x >> 64) * 59 + (x as u64 as u128);
-        let x = (x >> 64) * 59 + (x as u64 as u128);
-        Fp((if x >= P { x - P } else { x }) as u64)
-    }
-}
-
-impl Add for Fp {
-    type Output = Fp;
-
-    fn add(self, rhs: Fp) -> Fp {
-        let s = self.0 as u128 + rhs.0 as u128;
-        Fp((if s >= P { s - P } else { s }) as u64)
-    }
-}
-
-impl Mul for Fp {
-    type Output = Fp;
-
-    fn mul(self, rhs: Fp) -> Fp {
-        Fp::reduce(self.0 as u128 * rhs.0 as u128)
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Poseidon2-A64-C5 (§1.2): width 16, `x^3`, 6 full rounds, 42 partial rounds,
@@ -103,28 +41,55 @@ fn sbox(x: Fp) -> Fp {
 /// `M4·s_b + Σ_j M4·s_j`. An entry of `y` is below `16p` and one of `sum` below
 /// `64p`, so each lane is reduced once.
 fn external(s: &mut [Fp; WIDTH]) {
+    let v = s.map(Fp::to_u64);
     let y: [[u128; 4]; 4] = core::array::from_fn(|b| {
-        core::array::from_fn(|r| (0..4).map(|c| M4[r][c] * s[4 * b + c].0 as u128).sum())
+        core::array::from_fn(|r| (0..4).map(|c| M4[r][c] * v[4 * b + c] as u128).sum())
     });
     let sum: [u128; 4] = core::array::from_fn(|r| y.iter().map(|block| block[r]).sum());
     for (i, x) in s.iter_mut().enumerate() {
-        *x = Fp::reduce(y[i / 4][i % 4] + sum[i % 4]);
+        *x = Fp::from_u128(y[i / 4][i % 4] + sum[i % 4]);
     }
 }
 
 /// The internal layer `M_I = J + diag(μ − 1)`: lane `i` becomes
 /// `(μ_i − 1)·s_i + Σ_j s_j`, below `p² + 16p < 2^128`.
 fn internal(s: &mut [Fp; WIDTH]) {
-    let sum: u128 = s.iter().map(|x| x.0 as u128).sum();
+    let sum: u128 = s.iter().map(|x| x.to_u64() as u128).sum();
     for (x, &d) in s.iter_mut().zip(&params::INTERNAL_DIAG_M_1) {
-        *x = Fp::reduce(d as u128 * x.0 as u128 + sum);
+        *x = Fp::from_u128(d as u128 * x.to_u64() as u128 + sum);
     }
 }
 
+// The round constants of `params` as field elements, converted at compile time
+// so that no round pays for the conversion.
+const RC_INITIAL: [[Fp; WIDTH]; 6] = rows(params::RC_INITIAL);
+const RC_PARTIAL: [Fp; 42] = lanes(params::RC_PARTIAL);
+const RC_TERMINAL: [[Fp; WIDTH]; 6] = rows(params::RC_TERMINAL);
+
+const fn lanes<const N: usize>(xs: [u64; N]) -> [Fp; N] {
+    let mut out = [Fp::ZERO; N];
+    let mut i = 0;
+    while i < N {
+        out[i] = Fp::from_u64(xs[i]);
+        i += 1;
+    }
+    out
+}
+
+const fn rows<const R: usize>(xs: [[u64; WIDTH]; R]) -> [[Fp; WIDTH]; R] {
+    let mut out = [[Fp::ZERO; WIDTH]; R];
+    let mut i = 0;
+    while i < R {
+        out[i] = lanes(xs[i]);
+        i += 1;
+    }
+    out
+}
+
 /// A round constant into every lane, the S-box on every lane, then `M_E`.
-fn full_round(s: &mut [Fp; WIDTH], rc: &[u64; WIDTH]) {
+fn full_round(s: &mut [Fp; WIDTH], rc: &[Fp; WIDTH]) {
     for (x, &c) in s.iter_mut().zip(rc) {
-        *x = sbox(*x + Fp(c));
+        *x = sbox(*x + c);
     }
     external(s);
 }
@@ -132,14 +97,14 @@ fn full_round(s: &mut [Fp; WIDTH], rc: &[u64; WIDTH]) {
 /// The Poseidon2-A64-C5 permutation, in place.
 pub fn poseidon2_permute(state: &mut [Fp; WIDTH]) {
     external(state);
-    for rc in &params::RC_INITIAL {
+    for rc in &RC_INITIAL {
         full_round(state, rc);
     }
-    for &rc in &params::RC_PARTIAL {
-        state[0] = sbox(state[0] + Fp(rc));
+    for &rc in &RC_PARTIAL {
+        state[0] = sbox(state[0] + rc);
         internal(state);
     }
-    for rc in &params::RC_TERMINAL {
+    for rc in &RC_TERMINAL {
         full_round(state, rc);
     }
 }
@@ -169,7 +134,7 @@ fn lane(bytes: &[u8]) -> Fp {
     debug_assert!(bytes.len() <= 7);
     let mut le = [0u8; 8];
     le[..bytes.len()].copy_from_slice(bytes);
-    Fp(u64::from_le_bytes(le))
+    Fp::from_u64(u64::from_le_bytes(le))
 }
 
 /// A record of one typed operation. Metadata only: the log never feeds the

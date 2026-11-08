@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 constants.workspace = true
+field-a64-c5.workspace = true
 serde.workspace = true
 
 [dev-dependencies]

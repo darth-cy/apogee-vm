@@ -6,10 +6,11 @@
 use constants::transcript_tags::{
     PUBLIC_INPUTS, SUMCHECK_CHALLENGE, SUMCHECK_FINAL_EVALS, SUMCHECK_ROUND,
 };
+use field_a64_c5::{Fp, A64_C5};
 use test_support::Rng;
 use transcript_a64_c5::{
-    io_digest, poseidon2_permute, Challenge, Fp, Transcript, TranscriptEvent, TranscriptSnapshot,
-    A64_C5, PROTOCOL_ID, RATE, WIDTH,
+    io_digest, poseidon2_permute, Challenge, Transcript, TranscriptEvent, TranscriptSnapshot,
+    PROTOCOL_ID, RATE, WIDTH,
 };
 
 /// Chiesa–Orrù's duplex as spongefish writes it (`DuplexSponge`: slice absorb

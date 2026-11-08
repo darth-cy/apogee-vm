@@ -1,8 +1,8 @@
-//! The permutation and its field, each against an implementation that shares
-//! nothing with this crate.
+//! The permutation, against an implementation that shares nothing with this
+//! crate.
 
-use test_support::Rng;
-use transcript_a64_c5::{poseidon2_permute, Fp, A64_C5, WIDTH};
+use field_a64_c5::Fp;
+use transcript_a64_c5::{poseidon2_permute, WIDTH};
 
 /// The generator's own Poseidon2 at `[0, 1, …, 15]`: `poseidon2()` in
 /// `poseidon2_rust_params.sage`, explicit matrices over Sage's `GF(p)`, printed
@@ -22,43 +22,4 @@ fn the_permutation_is_the_generators() {
     let mut state: [Fp; WIDTH] = core::array::from_fn(|i| Fp::from_u64(i as u64));
     poseidon2_permute(&mut state);
     assert_eq!(state.map(Fp::to_u64), GENERATOR_KAT);
-}
-
-/// `+` and `×` against Rust's own `u128` remainder, in every pairing of the
-/// values a `2^64 − 59` reduction gets wrong first and a seeded random set.
-#[test]
-fn the_field_is_integer_arithmetic_mod_p() {
-    let p = A64_C5 as u128;
-    let edges = [
-        0,
-        1,
-        2,
-        58,
-        59,
-        60,
-        1 << 32,
-        (1 << 63) - 1,
-        1 << 63,
-        A64_C5 - 59,
-        A64_C5 - 2,
-        A64_C5 - 1,
-    ];
-    let mut rng = Rng::new(0xa64c5);
-    let values: Vec<u64> = edges
-        .into_iter()
-        .chain((0..100).map(|_| rng.next_u64() % A64_C5))
-        .collect();
-    for &a in &values {
-        for &b in &values {
-            let (x, y) = (Fp::from_u64(a), Fp::from_u64(b));
-            assert_eq!((x + y).to_u64() as u128, (a as u128 + b as u128) % p);
-            assert_eq!((x * y).to_u64() as u128, a as u128 * b as u128 % p);
-        }
-    }
-
-    // The 59 words at and above `p` are not canonical; `from_u64` reduces them.
-    for w in [A64_C5, A64_C5 + 1, u64::MAX] {
-        assert_eq!(Fp::from_canonical(w), None);
-        assert_eq!(Fp::from_u64(w).to_u64() as u128, w as u128 % p);
-    }
 }
