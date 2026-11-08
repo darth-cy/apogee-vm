@@ -84,18 +84,19 @@ every 4-aligned address below `2^32` ([memory-ops.md](memory-ops.md) §2).
 ## 5. The binding
 
 **`io_digest`** absorbs the statement's two strings in a transcript of its own
-(`transcript::io_digest`):
+(`transcript_a64_c5::io_digest`):
 
 ```text
 t ← Transcript::new()
-t.append_bytes(PUBLIC_INPUT_STREAM,  input)      tag, byte length, 31-byte limbs
+t.append_bytes(PUBLIC_INPUT_STREAM,  input)      tag, byte length, 7-byte limbs
 t.append_bytes(PUBLIC_OUTPUT_STREAM, output)
-io_digest ← t.sample()                           one raw squeeze
+io_digest ← t.digest()                           the rate of one more permutation, 8 lanes
 ```
 
 The framing ([transcript.md](transcript.md) §3) parses back to exactly one ordered pair, and the
-squeeze is raw, as every digest's is. The guest never computes it. G6 absorbs it before the memory
-challenges (G8) ([proof.md](proof.md) §2), so both strings are fixed before any challenge exists.
+sponge ends in `digest()`, as every digest's does. The guest never computes it. G6 absorbs it before
+the memory challenges (G8) ([proof.md](proof.md) §2), so both strings are fixed before any
+challenge exists.
 
 **The multiset.** At a window address the init leaf is the only write at timestamp 0, every access
 consumes a write and produces a strictly later one, and the teardown balances only against the

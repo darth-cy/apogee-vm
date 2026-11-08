@@ -159,7 +159,7 @@ own independent oracle.
 | --- | --- |
 | the field | known-answer vectors generated from arkworks' `ark-ff`, which the tests also run live |
 | multilinear polynomials | known-answer vectors generated from `ark-poly` |
-| Poseidon2 and the transcript | `tools/transcript-ref`: Plonky3 and zkhash |
+| Poseidon2 and the transcript | the generator's own Poseidon2 in Sage ([tools.md](tools.md) §8); spongefish's duplex, transcribed |
 | the decoder | every 32-bit word of the instruction space against counts from the ISA; `llvm-objdump` over the guests, built from source |
 | circuits as data | `checker`: the circuit laws, the lookup rules and the padding contract re-implemented without `constraints`' code, sharing only the gate kernel ([circuits.md](spec/circuits.md) §3) |
 | each family's gates | row suites that build rows with Rust's own integer arithmetic and evaluate them through the checker; the arithmetic cores exhaustively at reduced word widths; **tamper twins**, a forged witness proved as an honest prover would and refused in the expected class |

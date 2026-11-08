@@ -126,8 +126,9 @@ product-tree clause; `dump` prints any decodable artifact.
 and `.public`, refuses a statement the key does not describe
 (`verifier_core::derive_global_phase`), and runs `checker::check_global_tape`. That renders the
 global commit phase's event log a line a message, `absorb <TAG> <n>` (`n` scalars, or a bytes
-message's 31-byte chunks) or `squeeze <TAG>`, and holds it to `expected_global_tape`: G1–G9
-([proof.md](spec/proof.md) §2) written from the statement's shape, sharing nothing with
+message's chunks, [transcript.md](spec/transcript.md) §3) or `squeeze <TAG>`, and holds it to
+`expected_global_tape`: G1–G9 ([proof.md](spec/proof.md) §2) written from the statement's shape,
+sharing nothing with
 `verifier_core::global_commit`. It prints the tape or the first line out
 of order, and checks the script, not the values, which the log does not carry. `checker` exits 0
 when a check holds or a listing prints, 1 naming the failure, 2 on a usage error.
@@ -193,16 +194,41 @@ every guest's bytes. So `guests/` is source only: a suite that runs a guest buil
 `llvm-objdump` and `llvm-nm` as it runs. Two clean builds on one machine agree
 (`crates/loader/tests/reproducible.rs`).
 
-## 8. The reference oracle
+## 8. The transcript's generator
 
-```text
-cargo run --manifest-path tools/transcript-ref/Cargo.toml
+`crates/transcript-a64-c5/src/params.rs` and the known answer in its `tests/permutation.rs` are one
+run of HorizenLabs' generator, edited at three lines ([transcript.md](spec/transcript.md) §1.2):
+
+```console
+$ git clone https://github.com/HorizenLabs/poseidon2 && cd poseidon2
+$ git checkout 055bde3f4782731ba5f5ce5888a440a94327eaf3
+$ git apply --unidiff-zero <<'EOF'
+--- a/poseidon2_rust_params.sage
++++ b/poseidon2_rust_params.sage
+@@ -9 +9 @@
+-p = 52435875175126190479447740508185965837690552500527637822603658699938581184513 # BLS12-381
++p = 2^64 - 59 # A64-C5
+@@ -17 +17 @@
+-t = 3 # BN254/BN256, BLS12-381, Pallas, Vesta (t = 3 for sponge, t = 2 for compression)
++t = 16 # A64-C5: rate 8, capacity 8
+@@ -109,0 +110 @@
++R_F_FIXED += 4 # A64-C5: t/4 full rounds against round skipping (ePrint 2026/306)
+EOF
+$ cat > run.sage <<'EOF'
+import sys
+import sage.rings.polynomial.polynomial_singular_interface as psi
+_can = psi.can_convert_to_singular
+psi.can_convert_to_singular = lambda R: _can(R) and R.characteristic() < 2**31
+load(sys.argv[1])
+EOF
+$ sage run.sage poseidon2_rust_params.sage
 ```
 
-`tools/transcript-ref` implements [transcript.md](spec/transcript.md) from its text over Plonky3's
-Poseidon2 and HorizenLabs `zkhash`'s round constants, pinned by revision, and writes
-`crates/transcript/tests/vectors/`: permutation vectors, transcript scripts and `io_digest`
-cases. It is its own workspace root because its dependencies enable features, `serde/std` among
-them, that cargo's feature unification would carry into the workspace's `no_std` crates; the one
-repository crate it links is `tools/test-support`, a seeded RNG, SHA-256 and hex with no
-dependencies.
+The wrapper is for Sage 10.8, which hands `Polynomial.inverse_mod` to Singular, and Singular crashes
+in `algorithm_1` at a characteristic of `2^31` or more. It turns that route off for such rings
+only; an inverse is unique, so the output is the same. The output's `MAT_DIAG16_M_1` and `RC16`
+are `params.rs` value for value, without the partial rows' zero lanes, and its last vector is the
+permutation of `[0, 1, …, 15]` that `the_permutation_is_the_generators` asserts.
+
+`tools/transcript-ref` is `crates/transcript`'s oracle and goes with it (**UNFINISHED**,
+[transcript.md](spec/transcript.md)).
