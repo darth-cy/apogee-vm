@@ -711,6 +711,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "transcript-a64-c5"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "postcard",
+ "serde",
+ "test-support",
+]
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
