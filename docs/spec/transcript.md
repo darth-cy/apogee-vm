@@ -1,13 +1,14 @@
 # The transcript
 
-**UNFINISHED: not linked yet.** This page specifies `crates/transcript-a64-c5`, the transcript over
-the A64-C5 field. The protocol still runs on `crates/transcript`, the construction it replaces,
-until the re-fielding stage moves every caller here.
+**UNFINISHED: not linked yet.** This page specifies `crates/transcript-a64-c5`, the transcript, and
+`crates/field-a64-c5`, the A64-C5 field it runs over. The protocol still runs on
+`crates/transcript` and `crates/field`, the crates they replace, until the re-fielding stage moves
+every caller to them.
 
 Every challenge in the protocol is drawn from a Poseidon2 duplex sponge over the A64-C5 field
-through a typed message layer. This page specifies the permutation and where its parameters come
-from, the sponge, the framing and every tag, and §5 states what the construction claims.
-Implementation: `crates/transcript-a64-c5`, `#![no_std]`.
+through a typed message layer. This page specifies the field, the permutation and where its
+parameters come from, the sponge, the framing and every tag, and §5 states what the construction
+claims. Implementation: `crates/transcript-a64-c5` over `crates/field-a64-c5`, both `#![no_std]`.
 
 ## 1. Poseidon2-A64-C5
 
@@ -15,10 +16,11 @@ Implementation: `crates/transcript-a64-c5`, `#![no_std]`.
 
 `p = 2^64 − 59 = 0xFFFFFFFFFFFFFFC5 = 18446744073709551557`, the A64-C5 prime, and
 `p − 1 = 2^2 · 11 · 137 · 547 · 5594472617641`: `3 ∤ p − 1`, so `x ↦ x^3` permutes the field, and
-the 2-adicity is 2. An element is held as its canonical representative below `p`;
-`Fp::from_u64` reduces the 59 words at and above it. Since `2^64 ≡ 59`, a product below `2^128`
-reduces by folding its high word down twice, which leaves less than `2^64 + 3481 < 2p`, and
-subtracting `p` at most once.
+the 2-adicity is 2. `field_a64_c5::Fp` holds an element as its canonical representative below `p`;
+`from_u64` reduces the 59 words at and above it. Since `2^64 ≡ 59`, `from_u128` reduces any
+`x < 2^128`, a product or a lane of a linear layer, by folding its high word down twice, which
+leaves less than `2^64 + 3481 < 2p`, and subtracting `p` at most once. `field-a64-c5`'s
+`tests/arithmetic.rs` holds `+`, `×` and both reductions to Rust's own `u128` remainder.
 
 ### 1.2 The permutation
 
