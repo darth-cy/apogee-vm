@@ -8,8 +8,8 @@ encoding of a field element (§1) and the polynomial index convention (§2) are 
   target.
 - The field is tested against Rust's own `u128` arithmetic; `poly` against arkworks over the same
   two fields, live and through vectors `tools/kat-gen` generates. arkworks is a test oracle only.
-- Nothing is constant-time: reductions and exponentiations branch on their operands. No proof is
-  zero-knowledge, so no witness is secret.
+- Nothing is constant-time: reductions branch on their operands, and an inverse takes as many
+  Euclidean steps as its operand needs. No proof is zero-knowledge, so no witness is secret.
 
 ## 1. The field and its extension
 
@@ -25,8 +25,8 @@ Two types, never mixed implicitly:
   representative below `p`, so equal values are equal words. `from_u64` reduces the 59 words at
   and above `p`; since `2^64 ≡ 59`, `from_u128` reduces any `x < 2^128`, a product or a lane of a
   linear layer, by folding its high word down twice, which leaves less than `2^64 + 3481 < 2p`, and
-  subtracting `p` at most once. `Fp::inverse` is `x^(p−2)` by a fixed addition chain, 63
-  squarings and 9 products, `None` at 0.
+  subtracting `p` at most once. `Fp::inverse` is the extended Euclidean algorithm on `(p, x)`,
+  `None` at 0.
 - **`Fp2`**, `F_p[x]/(x^2 − 2)`, the **challenge field**: every transcript challenge and every
   value a challenge reaches — the GKR layers above the base, every claim, round and output, the
   memory roots. `p ≡ 5 (mod 8)` makes 2 a non-square, so `x^2 − 2` is irreducible and this is a

@@ -68,26 +68,26 @@ impl Fp {
         Fp::from_canonical(u64::from_le_bytes(*bytes))
     }
 
-    /// `self^(p − 2)` by Fermat; `None` for zero. `p − 2 = (2^58 − 1)·2^6 + 3`,
-    /// and with `t_k = self^(2^k − 1)`, `t_(j+k) = t_j^(2^k)·t_k`: the shortest
-    /// chain to 58, through 1, 2, 3, 6, 7, 14, 28 and 29, reaches `t_58` in 57
-    /// squarings and 8 products, and 6 squarings and `t_2` finish, 63 and 9
-    /// where the bit-by-bit loop takes 64 and 60.
+    /// The inverse, `None` for zero, by the extended Euclidean algorithm on
+    /// `(p, self)`: about 39 division steps for a random element, where
+    /// `self^(p − 2)` takes 63 squarings and some products in series. Row by
+    /// row `t·self ≡ r (mod p)`, and `t` alternates in sign, so its magnitude is
+    /// kept, growing to `p` and no further, and the step count's parity signs
+    /// it. The loop ends on `r = 1`, whose `|t|` is at most `p/2`: the next
+    /// row's is `p`, at least twice it.
     pub fn inverse(self) -> Option<Fp> {
         if self == Fp::ZERO {
             return None;
         }
-        let sq = |x: Fp, n: u32| (0..n).fold(x, |x, _| x * x);
-        let x = self;
-        let t2 = sq(x, 1) * x;
-        let t3 = sq(t2, 1) * x;
-        let t6 = sq(t3, 3) * t3;
-        let t7 = sq(t6, 1) * x;
-        let t14 = sq(t7, 7) * t7;
-        let t28 = sq(t14, 14) * t14;
-        let t29 = sq(t28, 1) * x;
-        let t58 = sq(t29, 29) * t29;
-        Some(sq(t58, 6) * t2)
+        let (mut r0, mut r1) = (A64_C5, self.0);
+        let (mut t0, mut t1, mut odd) = (0u64, 1u64, false);
+        while r1 != 0 {
+            let q = r0 / r1;
+            (r0, r1) = (r1, r0 - q * r1);
+            (t0, t1) = (t1, t0 + q * t1);
+            odd = !odd;
+        }
+        Some(Fp(if odd { t0 } else { A64_C5 - t0 }))
     }
 }
 
