@@ -300,6 +300,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "field-a64-c5"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -705,6 +712,17 @@ version = "0.1.0"
 dependencies = [
  "constants",
  "field",
+ "postcard",
+ "serde",
+ "test-support",
+]
+
+[[package]]
+name = "transcript-a64-c5"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "field-a64-c5",
  "postcard",
  "serde",
  "test-support",

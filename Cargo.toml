@@ -3,7 +3,9 @@ resolver = "2"
 members = [
     "crates/constants",
     "crates/field",
+    "crates/field-a64-c5",
     "crates/transcript",
+    "crates/transcript-a64-c5",
     "crates/poly",
     "crates/sumcheck",
     "crates/loader",
@@ -38,7 +40,9 @@ publish = false
 [workspace.dependencies]
 constants = { path = "crates/constants" }
 field = { path = "crates/field" }
+field-a64-c5 = { path = "crates/field-a64-c5" }
 transcript = { path = "crates/transcript" }
+transcript-a64-c5 = { path = "crates/transcript-a64-c5" }
 poly = { path = "crates/poly" }
 sumcheck = { path = "crates/sumcheck" }
 loader = { path = "crates/loader" }

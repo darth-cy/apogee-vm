@@ -165,7 +165,7 @@ encodings, each refusing a byte too many or too few:
 
 | section | content |
 | --- | --- |
-| `PostCommit` | the statement's `PublicInputs` bytes, without roots; the global transcript after G9 as its 226-byte `postcard` snapshot ([transcript.md](transcript.md) §3); the four memory challenges; the digest |
+| `PostCommit` | the statement's `PublicInputs` bytes, without roots; the global transcript after G9 as its `postcard` snapshot ([transcript.md](transcript.md) §3); the four memory challenges; the digest |
 | `PostGkr` | per shard, in statement order: family `u32`, index `u32`, `ts_start` and `ts_end` `u64`, the outputs, the GKR proof, the base claims' point, the shard transcript's snapshot after the GKR proof |
 | `PostOpening` | each shard's `ShardProof` bytes: the section an opening is meant to fill, and with none (**UNFINISHED**, [proof.md](proof.md) §3) a proof is its GKR pass alone |
 | `Final` | the complete `PublicInputs` bytes, then the proofs |
