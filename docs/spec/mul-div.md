@@ -4,7 +4,7 @@ The M extension — `mul`, `mulh`, `mulhsu`, `mulhu`, `div`, `divu`, `rem`, `rem
 beside the memory frame every execution family carries ([memory.md](memory.md) §2). One product
 identity serves the four multiplies and the division; a sign rule and a range-checked gap make the
 division truncated, and one gate pins division by zero. `constraints::mul_div` builds it: 21 `M`,
-54 `W` and 9 `S` columns, 54 enforcing gates, 27 lookups.
+54 `W` and 9 `S` columns, 55 enforcing gates, 27 lookups.
 
 ## 1. What the circuit reads from the decoded table
 
@@ -60,13 +60,13 @@ q_adj   = q − 2^32·q_sign    r_adj = r − 2^32·r_sign
 halfword, so the key lies in that sub-table's range and the answer is bit 31
 ([lookup.md](lookup.md) §4); `rs2_top` likewise. An unsigned position forces its adjustment to 0
 whatever the top bit, which keeps the selection degree 2. `q_sign` and `r_sign` are not sign
-lookups (§5.3). `f_div`, `rs1_top`, `rs2_top`, `s1`, `s2`, `p_sign`, `q_sign` and `r_sign` carry
-booleanity gates; `rz` and `dz` are boolean by the is-zero gadget
-([jump-branch-slt.md](jump-branch-slt.md) §3), `d1` as a product of booleans.
+lookups (§5.3), and `q_sign` is 0 on an unsigned division (§5.1). `f_div`, `rs1_top`, `rs2_top`,
+`s1`, `s2`, `p_sign`, `q_sign` and `r_sign` carry booleanity gates; `rz` and `dz` are boolean by
+the is-zero gadget ([jump-branch-slt.md](jump-branch-slt.md) §3), `d1` as a product of booleans.
 
 ## 4. Gates
 
-The frame's ten enforcing gates ([memory.md](memory.md) §2.4) and the family's 44, all in gate
+The frame's ten enforcing gates ([memory.md](memory.md) §2.4) and the family's 45, all in gate
 list 0, each formula `= 0`. The plumbing:
 
 ```text
@@ -82,6 +82,7 @@ The arithmetic, `mul_div::arithmetic_gates(32)`, written with §3's abbreviation
 
 ```text
 f_div_rule, s1_rule, s2_rule   §1's and §3's forms, and eight booleanity gates (§3)
+q_sign_unsigned        q_sign·(b_divu + b_remu)       an unsigned quotient is not negative, §5.1
 mx_rule                mx − Σ_mul b·rs1_adj − f_div·rs2_adj
 my_rule                my − Σ_mul b·rs2_adj − f_div·q_adj
 product_rule           mx·my − p_low − 2^32·p_high + 2^64·p_sign
@@ -106,7 +107,8 @@ The lookups: the frame's eight `TIMESTAMP` gap chunks, each under its query's ma
 The width is a parameter of `arithmetic_gates` so the encoding can be checked whole:
 `crates/checker/tests/mul_div.rs` evaluates `arithmetic_gates(4)` through `gkr::eval_gate` over
 every `(dividend, divisor)` pair of a 4-bit word and each division kind, and exactly one `(q, r)`
-survives, RV32M's.
+survives, RV32M's. A reduced width cannot show a total that wraps past `p`, which only the 32-bit
+word reaches, so §5.1's forgery is a full-width row test of its own.
 
 ## 5. Why it is sound
 
@@ -127,8 +129,15 @@ lets both readings share it at degree 2.
 field identity is not the integer one: `p_low + 2^32·p_high − 2^64·p_sign` is pinned only up to a
 multiple of `p`, and a multiply's result can be forged by one. `mul 2, 3` admits `p_low` =
 `0xFFFFFFCB`, `p_high` = `0xFFFFFFFF`, whose integer is `6 + p`. A later stage splits the product
-into limbs. The division is unaffected: §5.2's identity totals less than `2^64 − 2^32` in
-magnitude, below `p`, so it holds over the integers.
+into limbs.
+
+The division's identity holds over the integers only while its total stays below `p`, and that
+takes `q_sign_unsigned`. A signed row's `|rs2_adj| ≤ 2^31` keeps `|rs2_adj·q_adj| ≤ 2^63`. An
+unsigned row's `rs2_adj` reaches `2^32 − 1`, so a negative `q_adj` carries the total to `−2^64`:
+without the gate, `divu` and `remu` of `0xFFFFFFFF` by `0xFFFFFFFF` admit `q = 0`, `q_sign = 1`,
+`r = 58`, with `p_low = 0`, `p_high = 1`, `p_sign = 1` and `gap = 0xFFFFFFC4`, writing 0 for 1 and
+58 for 0. Its residual, `(2^32 − 1)·(−2^32) + 58 − (2^32 − 1) = −2^64 + 59`, is `−p`, zero in the
+field. With `q_sign = 0` there, `q_adj = q`, and the total lies in `(−2^32, 2^64 − 2^32]`.
 
 ### 5.2 The division
 
@@ -146,25 +155,26 @@ dividend's sign, and two gates state exactly that:
   when `|r_adj| < |rs2_adj|`.
   The comparison gadget would repeat bounds that hold and has no place for the zero divisor's term.
 
-So `q_adj` and `r_adj` are RV32M's, and `q_sign` is pinned only by `q`'s range: one value puts
-`q_adj + 2^32·q_sign` in `[0, 2^32)`.
+So `q_adj` and `r_adj` are RV32M's. On a signed row `q_sign` is pinned only by `q`'s range: one
+value puts `q_adj + 2^32·q_sign` in `[0, 2^32)`. On an unsigned row it is 0.
 
 **A zero divisor** makes `dz = 1` and `rs2_adj = 0`: the identity leaves `r_adj = rs1_adj`, so `r`
 is the dividend's word; `zero_divisor_quotient`, the one pin, makes `q` all ones; the `2^32·dz` term
-lifts `gap` to `2^32 − 1 − abs_r`, so the divisor imposes no bound. `q_sign` is free and harmless:
-`mx = 0`, and `rd` reads the word `q`.
+lifts `gap` to `2^32 − 1 − abs_r`, so the divisor imposes no bound. A signed row's `q_sign` is free
+and harmless: `mx = 0`, and `rd` reads the word `q`.
 
 **The identity is gated.** On a multiply row `r_sign = 0` and `r` is a word, so an ungated identity
 would demand `rs1_adj − rs1_adj·rs2_adj ∈ [0, 2^32)`, false for nearly every multiply: `7 × 3`, a
 negative `rs1` times `x0`.
 
-### 5.3 The signed overflow, and why `q_sign` is free
+### 5.3 The signed overflow, and why a signed `q_sign` is free
 
 `DIV(−2^31, −1)` needs no pin: `|r_adj| < 1` forces `r = 0`, the identity `q_adj = 2^31`, and `q`'s
-range `q_sign = 0`, `q = 0x80000000`, RV32M's answer; `REM` gives 0. This row is why `q_sign` is a
-free boolean: tied to bit 31 of `q`, as `s1` and `s2` are to their operands', it would force
-`q_adj = −2^31` and make the row unprovable. `r_sign` likewise follows the dividend's sign, not
-the remainder's word.
+range `q_sign = 0`, `q = 0x80000000`, RV32M's answer; `REM` gives 0. This row is why a signed
+division's `q_sign` is a free boolean: tied to bit 31 of `q`, as `s1` and `s2` are to their
+operands', it would force `q_adj = −2^31` and make the row unprovable. An unsigned quotient is
+never negative, and §5.1's gate sets its `q_sign` to 0. `r_sign` likewise follows the dividend's
+sign, not the remainder's word.
 
 `rd_selected`'s pair is implied by its four sources' and kept, every family bounding what it writes
 to `rd` ([memory-ops.md](memory-ops.md) §5). Every gate is zero on the all-zero padding row, which

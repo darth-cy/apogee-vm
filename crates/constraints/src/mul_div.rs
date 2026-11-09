@@ -130,10 +130,11 @@ pub const P_HIGH_HI: PolyAddress = w(25);
 pub const P_SIGN: PolyAddress = w(26);
 /// `W[34..37]`: the quotient word, its high halfword, and its sign adjustment.
 ///
-/// `q_sign` is a **free** boolean, pinned only by `q`'s own range: tying it to
-/// bit `WORD_BITS − 1` of `q` would make `−2^31 ÷ −1` unprovable, that case
-/// being exactly the one whose quotient is `+2^31` with the word's top bit
-/// set (`docs/spec/mul-div.md` §5.3).
+/// On a signed division `q_sign` is a **free** boolean, pinned only by `q`'s
+/// own range: tying it to bit `WORD_BITS − 1` of `q` would make `−2^31 ÷ −1`
+/// unprovable, that case being exactly the one whose quotient is `+2^31` with
+/// the word's top bit set (`docs/spec/mul-div.md` §5.3). On an unsigned one it
+/// is 0, by `q_sign_unsigned` (§5.1).
 pub const Q: PolyAddress = w(27);
 pub const Q_HI: PolyAddress = w(28);
 pub const Q_SIGN: PolyAddress = w(29);
@@ -372,6 +373,15 @@ pub fn arithmetic_gates(word_bits: u32) -> Vec<(String, GateDef)> {
     ] {
         gates.push((name.into(), booleanity(x)));
     }
+    // An unsigned quotient is not negative. Its divisor reaches 2^w − 1, so a
+    // q_adj of −2^w would carry the division identity's total to −2^(2w),
+    // which at w = 32 is past p: divu and remu of 0xffffffff by 0xffffffff
+    // would admit q = 0, q_sign = 1, r = 58, a residual of exactly −p
+    // (`docs/spec/mul-div.md` §5.1).
+    gates.push((
+        "q_sign_unsigned".into(),
+        quadratic(vec![], vec![(lit(1), Q_SIGN, DIVU), (lit(1), Q_SIGN, REMU)]),
+    ));
 
     // The one product's multiplicands: the two sign-adjusted operands on a
     // multiply row, the sign-adjusted divisor and quotient on a division one.
@@ -398,7 +408,9 @@ pub fn arithmetic_gates(word_bits: u32) -> Vec<(String, GateDef)> {
     // UNFINISHED: A64-C5 CHARACTERISTIC. At w = 32 the right side ranges over
     // [−2^64, 2^64), about 2p, so the field identity is not the integer one: a
     // multiply's p_low and p_high are pinned only up to a multiple of p
-    // (`docs/spec/mul-div.md` §5.1). The division's total stays below p.
+    // (`docs/spec/mul-div.md` §5.1). The division's total stays below p, a
+    // signed divisor's magnitude being at most 2^31 and q_sign_unsigned keeping
+    // an unsigned quotient non-negative.
     gates.push((
         "product_rule".into(),
         quadratic(

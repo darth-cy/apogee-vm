@@ -586,7 +586,7 @@ fn the_registry_holds_the_family() {
 
 /// The layout is `docs/spec/mul-div.md` §2's, the gates and the lookups §4's,
 /// by name and in order: 21 memory columns, 54 witness, 9 setup, two
-/// range tables, 54 enforcing gates, 27 obligations over four channels, and a
+/// range tables, 55 enforcing gates, 27 obligations over four channels, and a
 /// circuit 26 transitions deep at `2^20`.
 #[test]
 fn the_layout_and_the_gates_are_the_spec() {
@@ -703,7 +703,7 @@ fn the_layout_and_the_gates_are_the_spec() {
         (21, 54, 9)
     );
 
-    // The enforcing gates: the frame's ten, then the family's forty-four,
+    // The enforcing gates: the frame's ten, then the family's forty-five,
     // which are `family_spec`'s plumbing and `arithmetic_gates`' arithmetic.
     let enforcing: Vec<String> = a.layers[0]
         .enforcing
@@ -752,6 +752,7 @@ fn the_layout_and_the_gates_are_the_spec() {
             "p_sign_boolean",
             "q_sign_boolean",
             "r_sign_boolean",
+            "q_sign_unsigned",
             "mx_rule",
             "my_rule",
             "product_rule",
@@ -769,14 +770,14 @@ fn the_layout_and_the_gates_are_the_spec() {
             "rd_value_rule",
         ])
     );
-    assert_eq!(enforcing.len(), 54);
+    assert_eq!(enforcing.len(), 55);
     // The width seam carries the arithmetic half and nothing else: the tail of
     // the enforcing list, in order, is exactly what it returns.
     let arithmetic: Vec<String> = mul_div::arithmetic_gates(mul_div::WORD_BITS)
         .into_iter()
         .map(|(name, _)| name)
         .collect();
-    assert_eq!(enforcing[54 - arithmetic.len()..], arithmetic[..]);
+    assert_eq!(enforcing[55 - arithmetic.len()..], arithmetic[..]);
 
     // The obligations: eight timestamp gaps under their own queries' masks,
     // then sixteen halfword pairs, two sign lookups and one decoder row, each
@@ -1298,6 +1299,24 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         vec!["zero_divisor_quotient"],
     ));
 
+    // An unsigned quotient's sign: adjusted below zero, it wraps the identity
+    // by exactly p at the full width, and its own gate alone refuses it.
+    cases.push((
+        "a divu whose quotient adjusts below zero, wrapping the identity by p",
+        forged_division(
+            Instr::new(kind::DIVU),
+            0xFFFF_FFFF,
+            0xFFFF_FFFF,
+            Witness {
+                q: 0,
+                q_sign: 1,
+                r: 58,
+                r_sign: 0,
+            },
+        ),
+        vec!["q_sign_unsigned"],
+    ));
+
     // The selection.
     let mut r = row("mul 0x7 0x3");
     r.set("rd_selected", f(22)).set("rd_write_value", f(22));
@@ -1336,7 +1355,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         .map(|e| a.relations[e.relation as usize].name.as_str())
         .filter(|n| !frame.contains(n) && !n.ends_with("_boolean"))
         .collect();
-    assert_eq!(owed.len(), 28);
+    assert_eq!(owed.len(), 29);
     for gate in owed {
         assert!(named.contains(gate), "no row above is refused by `{gate}`");
     }
@@ -1469,10 +1488,16 @@ fn truncated(signed_op: bool, a: i128, b: i128, bits: u32) -> (i128, i128) {
 /// toward zero, all ones with the dividend back on a zero divisor, and
 /// `−2^3 ÷ −1` giving `−2^3` with no remainder. Where the divisor is nonzero
 /// the whole witness is unique — one `q_sign` and one of everything else.
-/// Where the divisor is zero **both** values of `q_sign` satisfy and nothing
-/// else varies: the identity's product is zero either way and `rd` reads the
-/// word `q`, never `q_adj`, so that freedom is harmless and is why `q_sign`
-/// may not be tied to a sign lookup (`docs/spec/mul-div.md` §5.3).
+/// Where a signed division's divisor is zero **both** values of `q_sign`
+/// satisfy and nothing else varies: the identity's product is zero either way
+/// and `rd` reads the word `q`, never `q_adj`, so that freedom is harmless and
+/// is why `q_sign` may not be tied to a sign lookup (`docs/spec/mul-div.md`
+/// §5.3). An unsigned division's `q_sign` is 0 there too, by its own gate.
+///
+/// What this cannot show: at four bits the identity's total stays far below
+/// `p`, so a witness that satisfies it only modulo `p` never arises. The one
+/// such wrap a 32-bit word reaches is
+/// `an_unsigned_quotient_cannot_wrap_the_identity_past_p`'s row.
 #[test]
 fn the_division_encoding_admits_exactly_one_witness_at_a_reduced_width() {
     let gates = mul_div::arithmetic_gates(REDUCED_BITS);
@@ -1680,10 +1705,11 @@ fn the_division_encoding_admits_exactly_one_witness_at_a_reduced_width() {
                     .collect();
                 assert_eq!(rest.len(), 1, "{what}: more than one witness but q_sign");
                 let q_signs: BTreeSet<i128> = solutions.iter().map(|s| s[2]).collect();
-                match divisor {
+                match (divisor, signed_op) {
                     // The identity's product is zero either way and `rd` reads
-                    // the word, so both flags satisfy and nothing else moves.
-                    0 => {
+                    // the word, so both flags satisfy and nothing else moves;
+                    // an unsigned division's flag is 0 by `q_sign_unsigned`.
+                    (0, true) => {
                         assert_eq!(q_signs, BTreeSet::from([0, 1]), "{what}: q_sign is free");
                         assert_eq!(solutions.len(), 2, "{what}");
                     }
@@ -1846,6 +1872,68 @@ fn the_signed_overflow_has_exactly_the_pinned_answer() {
         (none(), names(&["gap_lo_range"]), none()),
         "and the magnitude bound is what refuses it"
     );
+}
+
+/// An unsigned division whose quotient claims a negative adjusted value, a
+/// wrap only a 32-bit word reaches. For `divu` and `remu` of `0xffffffff` by
+/// `0xffffffff`, the quotient 0 with `q_sign = 1` adjusts to `−2^32`, and with
+/// the remainder 58 the identity's residual is
+/// `(2^32 − 1)·(−2^32) + 58 − (2^32 − 1) = 59 − 2^64 = −p`, zero in the field.
+/// The product's halves `0, 1` with `p_sign = 1` are its integer decomposition
+/// and the gap `0xffffffc4` is a word, so every other gate, range and table
+/// holds, and `q_sign_unsigned` alone refuses the row, which would write 0 for
+/// `divu`'s 1 and 58 for `remu`'s 0 (`docs/spec/mul-div.md` §5.1). No reduced
+/// width can show it: there the identity's total stays far below `p`.
+#[test]
+fn an_unsigned_quotient_cannot_wrap_the_identity_past_p() {
+    let a = artifact();
+    let ones = 0xFFFF_FFFF;
+    for (bit, answer, forged_answer) in [(kind::DIVU, 1, 0), (kind::REMU, 0, 58)] {
+        let i = Instr::new(bit);
+        let what = mnemonic(bit);
+        let honest_row = honest(i, ones, ones, 0x3333_3333);
+        assert_eq!(
+            violated(&a, &honest_row),
+            (none(), none(), none()),
+            "{what}"
+        );
+        assert_eq!(
+            small_int(honest_row.get("rd_selected")),
+            Some(answer),
+            "{what}"
+        );
+
+        let forged = forged_division(
+            i,
+            ones,
+            ones,
+            Witness {
+                q: 0,
+                q_sign: 1,
+                r: 58,
+                r_sign: 0,
+            },
+        );
+        for (column, v) in [
+            ("p_low", 0),
+            ("p_high", 1),
+            ("p_sign", 1),
+            ("gap", 0xFFFF_FFC4),
+            ("rd_selected", forged_answer),
+        ] {
+            assert_eq!(small_int(forged.get(column)), Some(v), "{what}: {column}");
+        }
+        assert_eq!(
+            relation_at(&a, &forged, "division_rule"),
+            Fp::ZERO,
+            "{what}: the residual is −p"
+        );
+        assert_eq!(
+            violated(&a, &forged),
+            (names(&["q_sign_unsigned"]), none(), none()),
+            "{what}: a negative unsigned quotient is refused by its own gate alone"
+        );
+    }
 }
 
 /// The sign readings, which no gate can check. `rs1_top` and `rs2_top` are
