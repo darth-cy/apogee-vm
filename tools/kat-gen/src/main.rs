@@ -3,7 +3,7 @@
 //! toolchain's LLVM tools, and hand-built ELFs.
 //!
 //!     cargo run -p kat-gen              # every group
-//!     cargo run -p kat-gen -- field     # just crates/field's Fr vectors
+//!     cargo run -p kat-gen -- poly      # just crates/poly's vectors
 //!
 //! Deterministic: same toolchain and same arkworks version produce
 //! byte-identical output. It links nothing of the repository's but
@@ -14,7 +14,6 @@
 //!
 //! | Subcommand | Files |
 //! | --- | --- |
-//! | `field`   | `crates/field/tests/vectors/fr_kats.txt` |
 //! | `poly`    | `crates/poly/tests/vectors/*` |
 //! | `loader`  | `crates/loader/tests/vectors/*` (the synthetic ELFs and fib's public-I/O record) |
 //! | `isa`     | `crates/isa/tests/vectors/*` (the hand-encoded corpus, via llvm-objdump) |
@@ -28,16 +27,13 @@ use std::fs;
 use std::path::PathBuf;
 
 mod ark_a64_c5;
-mod ark_fr;
-mod field;
 mod isa;
 mod loader;
 mod poly;
 mod program;
 
 /// Every group, in the order a reader of the stack would meet them.
-const GROUPS: [(&str, fn()); 5] = [
-    ("field", field::generate),
+const GROUPS: [(&str, fn()); 4] = [
     ("poly", poly::generate),
     ("loader", loader::generate),
     ("isa", isa::generate),

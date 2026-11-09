@@ -2,9 +2,7 @@
 resolver = "2"
 members = [
     "crates/constants",
-    "crates/field",
     "crates/field-a64-c5",
-    "crates/transcript",
     "crates/transcript-a64-c5",
     "crates/poly",
     "crates/sumcheck",
@@ -28,9 +26,9 @@ members = [
     "tools/test-support",
 ]
 
-# Excluded, each for its own reason: `tools/transcript-ref` and `crates/guest-sdk`
-# say why in their manifests, and `guests/` is the guest workspace.
-exclude = ["tools/transcript-ref", "crates/guest-sdk", "guests"]
+# Excluded: `crates/guest-sdk` says why in its manifest, and `guests/` is the
+# guest workspace.
+exclude = ["crates/guest-sdk", "guests"]
 
 [workspace.package]
 version = "0.1.0"
@@ -39,9 +37,7 @@ publish = false
 
 [workspace.dependencies]
 constants = { path = "crates/constants" }
-field = { path = "crates/field" }
 field-a64-c5 = { path = "crates/field-a64-c5" }
-transcript = { path = "crates/transcript" }
 transcript-a64-c5 = { path = "crates/transcript-a64-c5" }
 poly = { path = "crates/poly" }
 sumcheck = { path = "crates/sumcheck" }

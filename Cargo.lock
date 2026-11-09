@@ -289,16 +289,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "field"
-version = "0.1.0"
-dependencies = [
- "ark-ff",
- "postcard",
- "serde",
- "test-support",
-]
-
-[[package]]
 name = "field-a64-c5"
 version = "0.1.0"
 dependencies = [
@@ -701,17 +691,6 @@ dependencies = [
  "poly",
  "postcard",
  "program",
- "serde",
- "test-support",
-]
-
-[[package]]
-name = "transcript"
-version = "0.1.0"
-dependencies = [
- "constants",
- "field",
- "postcard",
  "serde",
  "test-support",
 ]

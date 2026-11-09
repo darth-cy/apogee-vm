@@ -18,22 +18,20 @@ jobs:
       - name: toolchain
         run: rustup show && cargo --version
 
-      # Four workspaces, all gated: the root, the transcript reference oracle,
-      # `crates/guest-sdk` and `guests/`. The last two compile only for the
-      # guest target, and guest-sdk holds nearly all of the repository's
-      # `unsafe`, so it is the one that most needs the lints. Neither takes
-      # `--all-targets`: there is no `test` crate for a no_std target.
+      # Three workspaces, all gated: the root, `crates/guest-sdk` and `guests/`.
+      # The last two compile only for the guest target, and guest-sdk holds
+      # nearly all of the repository's `unsafe`, so it is the one that most
+      # needs the lints. Neither takes `--all-targets`: there is no `test` crate
+      # for a no_std target.
       - name: fmt
         run: |
           cargo fmt --all -- --check
-          cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
           cargo fmt --manifest-path crates/guest-sdk/Cargo.toml --all -- --check
           cargo fmt --manifest-path guests/Cargo.toml --all -- --check
 
       - name: clippy
         run: |
           cargo clippy --workspace --all-targets -- -D warnings
-          cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
           (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
           (cd guests && cargo clippy --bins -- -D warnings)
           # `debug-info` is the workspace's one cargo feature. A configuration

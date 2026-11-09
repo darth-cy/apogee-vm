@@ -176,7 +176,6 @@ UNSOUND**: there is no commitment scheme ([architecture.md](architecture.md) §0
 
 | group | writes | from |
 | --- | --- | --- |
-| `field` | `crates/field`'s BN254 `Fr` arithmetic vectors; that crate is obsolete and nothing links it | arkworks' `ark-ff` |
 | `poly` | multilinear-polynomial vectors over A64-C5's `Fp2` | `ark-poly` over arkworks' own A64-C5 field and extension |
 | `loader`, `isa` | synthetic ELFs, fib's public-I/O record; an RV32IMA corpus, words that must not decode | the pinned toolchain's `llvm-objdump` |
 | `program` | a mul-free program | hand-built |
@@ -231,6 +230,3 @@ in `algorithm_1` at a characteristic of `2^31` or more. It turns that route off 
 only; an inverse is unique, so the output is the same. The output's `MAT_DIAG16_M_1` and `RC16`
 are `params.rs` value for value, without the partial rows' zero lanes, and its last vector is the
 permutation of `[0, 1, …, 15]` that `the_permutation_is_the_generators` asserts.
-
-`tools/transcript-ref` is the oracle of `crates/transcript`, the BN254 transcript nothing links any
-more, and goes with it.

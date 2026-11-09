@@ -7,11 +7,9 @@
 //! anything else an implementation change could move, so a committed vector is
 //! never pinned by hash.
 //!
-//! **It has no dependencies.** That is what lets the reference oracle,
-//! `tools/transcript-ref` — deliberately outside the workspace so its dependency
-//! graph cannot unify a feature into its crates — link it without linking
-//! anything of ours that it is supposed to be checking. `no_dependencies` below
-//! holds it to that.
+//! **It has no dependencies.** That is what lets `tools/kat-gen` link it
+//! without linking anything of ours that its vectors are supposed to check.
+//! `no_dependencies` below holds it to that.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -466,8 +464,8 @@ mod tests {
     }
 
     /// The load-bearing property of this crate, per the module docs: nothing in
-    /// `[dependencies]`. `tools/transcript-ref` links it, and anything added
-    /// here would reach the reference oracle.
+    /// `[dependencies]`. `tools/kat-gen` links it, and anything added here would
+    /// reach the vector generator.
     #[test]
     fn no_dependencies() {
         assert_eq!(
