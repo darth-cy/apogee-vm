@@ -40,10 +40,10 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
     let transitions: usize = (0..a.depth())
         .map(|k| {
             let claims = a.layer_width(k) as usize * if a.layers[k].halving { 2 } else { 1 };
-            4 + 128 * a.layer_vars(k + 1) as usize + 4 + 32 * claims
+            4 + 64 * a.layer_vars(k + 1) as usize + 4 + 16 * claims
         })
         .sum();
-    4 + 4 + 16 + 32 + (4 + 32 * a.outputs.len()) + 4 + transitions
+    4 + 4 + 16 + 16 + (4 + 16 * a.outputs.len()) + 4 + transitions
 }
 
 /// The guest decodes into four execution families — add/sub, jump/branch/slt,
