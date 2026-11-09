@@ -106,15 +106,15 @@ pub fn slot(a: &CircuitArtifact, name: &str) -> usize {
 }
 
 /// A pseudo-random base element.
-pub fn fr(rng: &mut Rng) -> Fp {
+pub fn fp(rng: &mut Rng) -> Fp {
     Fp::from_u64(rng.next_u64())
 }
 
 /// A pseudo-random `Fp2` element, both coordinates drawn: a challenge.
 pub fn fr2(rng: &mut Rng) -> Fp2 {
     Fp2 {
-        c0: fr(rng),
-        c1: fr(rng),
+        c0: fp(rng),
+        c1: fp(rng),
     }
 }
 

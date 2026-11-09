@@ -15,7 +15,7 @@
 
 mod common;
 
-use common::{committed_columns, discharge, fr_base, output_claims};
+use common::{base_layer, committed_columns, discharge, output_claims};
 use constants::challenge_slot::{
     MEM_ALPHA_ADDR, MEM_ALPHA_TS, MEM_ALPHA_VAL, MEM_GAMMA, MEM_WINDOW_CONSTANT,
 };
@@ -102,7 +102,7 @@ fn committed(queries: &[usize]) -> usize {
 }
 
 /// A pseudo-random `Fp2` element, both coordinates drawn.
-fn fr(rng: &mut Rng) -> Fp2 {
+fn fp2(rng: &mut Rng) -> Fp2 {
     Fp2 {
         c0: Fp::from_u64(rng.next_u64()),
         c1: Fp::from_u64(rng.next_u64()),
@@ -116,7 +116,7 @@ fn int(v: u64) -> Fp2 {
 
 /// Random `γ_M, α_addr, α_ts, α_val`, as values and as slots 1–4.
 fn random_memory(rng: &mut Rng) -> ([Fp2; 4], ExternalChallenges) {
-    let c = [fr(rng), fr(rng), fr(rng), fr(rng)];
+    let c = [fp2(rng), fp2(rng), fp2(rng), fp2(rng)];
     let mut slots = ExternalChallenges::new();
     for (slot, value) in [MEM_GAMMA, MEM_ALPHA_ADDR, MEM_ALPHA_TS, MEM_ALPHA_VAL]
         .into_iter()
@@ -168,7 +168,7 @@ fn frame_leaves_are_one_when_masked_and_the_tuple_when_live() {
         }
         for live in patterns {
             let (c, slots) = random_memory(&mut rng);
-            let mut row: Vec<Fp2> = (0..committed(queries)).map(|_| fr(&mut rng)).collect();
+            let mut row: Vec<Fp2> = (0..committed(queries)).map(|_| fp2(&mut rng)).collect();
             for (s, &m) in live.iter().enumerate() {
                 row[column(s, 0)] = if m { Fp2::ONE } else { Fp2::ZERO };
             }
@@ -226,7 +226,7 @@ fn window_leaves_are_the_tuples_of_their_rows() {
         let window = 1 + (rng.next_u64() % ((1 << 29) / h - 1)) as u32;
         let random_row = (rng.next_u64() % h) as usize;
         for y in rows.into_iter().chain([random_row]) {
-            let (ts, value, init) = (fr(&mut rng), fr(&mut rng), fr(&mut rng));
+            let (ts, value, init) = (fp2(&mut rng), fp2(&mut rng), fp2(&mut rng));
             let row_index = virtual_at_row(VirtualKind::RowIndex, y).into();
             let live = virtual_at_row(VirtualKind::RamLive, y).into();
 
@@ -358,7 +358,7 @@ fn the_boundary_factors_are_the_documents_products() {
 #[test]
 fn reconciles_is_the_product_equation_and_nonzero() {
     let mut rng = Rng::new(0x5714_3104);
-    let (r1, r2, w_b, r_b) = (fr(&mut rng), fr(&mut rng), fr(&mut rng), fr(&mut rng));
+    let (r1, r2, w_b, r_b) = (fp2(&mut rng), fp2(&mut rng), fp2(&mut rng), fp2(&mut rng));
     let w1 = r1 * r2 * r_b * w_b.inverse().expect("nonzero");
     assert!(reconciles(&[r1, r2], &[w1], (w_b, r_b)));
     assert!(!reconciles(&[r1, r2], &[w1], (r_b, w_b)), "swapped factors");
@@ -425,11 +425,11 @@ fn window_artifacts_prove_and_verify() {
             .collect()
     };
     let image = image_window_artifact(16);
-    let base = fr_base(&image, random(3));
+    let base = base_layer(&image, random(3));
     assert_eq!(prove_and_verify(&image, &base, Some(0)), Ok(()));
 
     let zero = zero_window_artifact(16);
-    let base = fr_base(&zero, random(2));
+    let base = base_layer(&zero, random(2));
     assert_eq!(prove_and_verify(&zero, &base, Some(5000)), Ok(()));
 }
 
@@ -502,7 +502,7 @@ fn every_frame_proves_and_verifies_and_rejects_a_write_to_x0() {
             .unwrap_or_else(|| panic!("family {id}: every execution family writes rd"));
 
         let mut cols = frame_columns(queries, &mut rng);
-        let base = fr_base(&a, cols.clone());
+        let base = base_layer(&a, cols.clone());
         let (_, challenges) = bind(&a, &base, None);
         assert_eq!(
             self_check(&a, &forward(&a, &base, &challenges), &challenges),
@@ -513,7 +513,7 @@ fn every_frame_proves_and_verifies_and_rejects_a_write_to_x0() {
 
         assert_eq!(cols[column(rd, 1)][0], Fp::ZERO, "family {id}");
         cols[column(rd, 4)][0] = Fp::from_u64(5);
-        let base = fr_base(&a, cols);
+        let base = base_layer(&a, cols);
         let (_, challenges) = bind(&a, &base, None);
         assert_eq!(
             self_check(&a, &forward(&a, &base, &challenges), &challenges),

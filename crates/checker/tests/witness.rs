@@ -28,7 +28,7 @@ fn satisfying(
 ) -> (WitnessRow, ExternalChallenges) {
     let gamma = fr2(rng);
     let row = (rng.next_u64() % 15) as usize; // so that row + 1 is still a row
-    let mut committed: Vec<Fp> = (0..6).map(|_| fr(rng)).collect();
+    let mut committed: Vec<Fp> = (0..6).map(|_| fp(rng)).collect();
     committed[S] = if active { Fp::ONE } else { Fp::ZERO };
     if active {
         committed[E] = committed[A];

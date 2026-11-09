@@ -5,11 +5,11 @@
 
 mod common;
 
-use common::{bind, discharge, fr_base, honest, opposed_circuit, root_circuit};
+use common::{base_layer, bind, discharge, honest, opposed_circuit, root_circuit};
 use field::{Fp, Fp2};
 use gkr::{gate_values, self_check, GkrError, SelfCheckError};
 
-fn fr(v: u64) -> Fp {
+fn fp(v: u64) -> Fp {
     Fp::from_u64(v)
 }
 
@@ -26,7 +26,7 @@ fn fr(v: u64) -> Fp {
 #[test]
 fn a_transition_with_no_rounds_still_runs_its_final_check() {
     let artifact = root_circuit();
-    let base = fr_base(&artifact, vec![vec![fr(0), fr(1)]]);
+    let base = base_layer(&artifact, vec![vec![fp(0), fp(1)]]);
     let (values, proof, result) = honest(&artifact, &base);
     let (_, challenges) = bind(&artifact, &base);
     assert_eq!(self_check(&artifact, &values, &challenges), Ok(()));
@@ -40,9 +40,9 @@ fn a_transition_with_no_rounds_still_runs_its_final_check() {
     assert_eq!(base_claims[0].point.len(), 1);
     discharge(&base, &base_claims).expect("its base claim discharges");
 
-    let base = fr_base(&artifact, vec![vec![fr(2), fr(2)]]);
+    let base = base_layer(&artifact, vec![vec![fp(2), fp(2)]]);
     let (values, _, result) = honest(&artifact, &base);
-    assert_eq!(values.layers[1][0].get(0), fr(4).into(), "the root");
+    assert_eq!(values.layers[1][0].get(0), fp(4).into(), "the root");
     let (_, challenges) = bind(&artifact, &base);
     assert_eq!(
         self_check(&artifact, &values, &challenges),
@@ -66,8 +66,8 @@ fn a_transition_with_no_rounds_still_runs_its_final_check() {
 #[test]
 fn opposed_enforcing_gates_do_not_cancel() {
     let artifact = opposed_circuit();
-    let a: Vec<Fp> = (0..4).map(|i| fr(10 + i)).collect();
-    let base = fr_base(&artifact, vec![a.clone(), a.clone()]);
+    let a: Vec<Fp> = (0..4).map(|i| fp(10 + i)).collect();
+    let base = base_layer(&artifact, vec![a.clone(), a.clone()]);
     let (values, _, result) = honest(&artifact, &base);
     let (_, challenges) = bind(&artifact, &base);
     assert_eq!(self_check(&artifact, &values, &challenges), Ok(()));
@@ -75,7 +75,7 @@ fn opposed_enforcing_gates_do_not_cancel() {
 
     let mut b = a.clone();
     b[1] += Fp::ONE;
-    let base = fr_base(&artifact, vec![a.clone(), b.clone()]);
+    let base = base_layer(&artifact, vec![a.clone(), b.clone()]);
     let (values, _, result) = honest(&artifact, &base);
     let (_, challenges) = bind(&artifact, &base);
     for (y, (av, bv)) in a.iter().zip(&b).enumerate() {
