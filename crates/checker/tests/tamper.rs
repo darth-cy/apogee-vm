@@ -31,7 +31,7 @@ use constraints::memory::{
     FIELD_READ_VALUE, FIELD_WRITE_VALUE,
 };
 use constraints::PolyAddress;
-use field::Fr;
+use field_a64_c5::Fp;
 use prover::{shard_columns, ProverSetup};
 use trace::{Role, TraceArchive};
 use verifier::VerifyError;
@@ -89,11 +89,11 @@ fn lookup(channel: u32) -> VerifyError {
     VerifyError::Lookup { channel }
 }
 
-fn f(v: u64) -> Fr {
-    Fr::from_u64(v)
+fn f(v: u64) -> Fp {
+    Fp::from_u64(v)
 }
 
-fn cell(family: u32, address: PolyAddress, row: usize, value: Fr) -> Cell {
+fn cell(family: u32, address: PolyAddress, row: usize, value: Fp) -> Cell {
     Cell {
         family,
         shard: 0,
@@ -126,15 +126,15 @@ fn a2_a3_a4_a_semantics_a_memory_and_a_multiplicity_cell_fail_in_three_classes()
 
     // A semantics cell: the carrying add's wrap bit, cleared; and the
     // non-carrying add's computed value moved.
-    assert_eq!(h.cell(ADD, 0, WRAP, 4), Fr::ONE);
+    assert_eq!(h.cell(ADD, 0, WRAP, 4), Fp::ONE);
     h.assert_rejects(
-        &tamper(vec![cell(ADD, WRAP, 4, Fr::ZERO)]),
+        &tamper(vec![cell(ADD, WRAP, 4, Fp::ZERO)]),
         (ADD, 0),
         CONSTRAINT,
     );
     let sel = h.cell(ADD, 0, rd_selected(WIDTH), 5);
     h.assert_rejects(
-        &tamper(vec![cell(ADD, rd_selected(WIDTH), 5, sel + Fr::ONE)]),
+        &tamper(vec![cell(ADD, rd_selected(WIDTH), 5, sel + Fp::ONE)]),
         (ADD, 0),
         CONSTRAINT,
     );
@@ -148,7 +148,7 @@ fn a2_a3_a4_a_semantics_a_memory_and_a_multiplicity_cell_fail_in_three_classes()
             INIT,
             PolyAddress::Memory(1),
             IMAGE_ROW,
-            word + Fr::ONE,
+            word + Fp::ONE,
         )]),
         (INIT, 0),
         MEMORY,
@@ -164,15 +164,15 @@ fn a2_a3_a4_a_semantics_a_memory_and_a_multiplicity_cell_fail_in_three_classes()
     // A multiplicity: one cell, in the range channel and in the decoder's.
     let m = h.cell(ADD, 0, MULTIPLICITIES[1], 0);
     h.assert_rejects(
-        &tamper(vec![cell(ADD, MULTIPLICITIES[1], 0, m + Fr::ONE)]),
+        &tamper(vec![cell(ADD, MULTIPLICITIES[1], 0, m + Fp::ONE)]),
         (ADD, 0),
         lookup(lookup_channel::RANGE16),
     );
     let first = 0x1_0000 / 2;
     let m = h.cell(ADD, 0, MULTIPLICITIES[2], first);
-    assert_eq!(m, Fr::ONE, "the first instruction runs once");
+    assert_eq!(m, Fp::ONE, "the first instruction runs once");
     h.assert_rejects(
-        &tamper(vec![cell(ADD, MULTIPLICITIES[2], first, Fr::ZERO)]),
+        &tamper(vec![cell(ADD, MULTIPLICITIES[2], first, Fp::ZERO)]),
         (ADD, 0),
         lookup(lookup_channel::DECODER),
     );
@@ -195,11 +195,11 @@ fn a7_the_soundness_floor_refuses_each_of_its_controls() {
     let a = h.cell(ADD, 0, frame(RS1, FIELD_READ_VALUE), 8);
     let b = h.cell(ADD, 0, frame(RS2, FIELD_READ_VALUE), 8);
     let (a, b) = (small(a), small(b));
-    assert_eq!(h.cell(ADD, 0, frame(RD, FIELD_ADDR), 8), Fr::ZERO);
+    assert_eq!(h.cell(ADD, 0, frame(RD, FIELD_ADDR), 8), Fp::ZERO);
     assert!(a + b >= 1 << 32, "the sum carries");
     h.assert_rejects(
         &tamper(vec![
-            cell(ADD, WRAP, 8, Fr::ZERO),
+            cell(ADD, WRAP, 8, Fp::ZERO),
             cell(ADD, sel, 8, f(a + b)),
             cell(ADD, RD_HI, 8, f((a + b) >> 16)),
         ]),
@@ -210,7 +210,7 @@ fn a7_the_soundness_floor_refuses_each_of_its_controls() {
         &tamper(vec![
             cell(ADD, WRAP, 8, f(2)),
             cell(ADD, sel, 8, f(a + b) - f(1 << 33)),
-            cell(ADD, RD_HI, 8, Fr::ZERO),
+            cell(ADD, RD_HI, 8, Fp::ZERO),
         ]),
         (ADD, 0),
         CONSTRAINT,
@@ -219,13 +219,13 @@ fn a7_the_soundness_floor_refuses_each_of_its_controls() {
     // Row 0, `lui t0`: its mask and its one bit cleared, and its rd query
     // dropped to match, so every gate still holds.
     let mut zero = vec![
-        cell(ADD, DECODED[5], 0, Fr::ZERO),
-        cell(ADD, KINDS[5], 0, Fr::ZERO),
-        cell(ADD, rd_inv(WIDTH), 0, Fr::ZERO),
-        cell(ADD, rd_is_zero(WIDTH), 0, Fr::ZERO),
-        cell(ADD, sel, 0, Fr::ZERO),
-        cell(ADD, RD_HI, 0, Fr::ZERO),
-        cell(ADD, gap_hi(RD), 0, Fr::ZERO),
+        cell(ADD, DECODED[5], 0, Fp::ZERO),
+        cell(ADD, KINDS[5], 0, Fp::ZERO),
+        cell(ADD, rd_inv(WIDTH), 0, Fp::ZERO),
+        cell(ADD, rd_is_zero(WIDTH), 0, Fp::ZERO),
+        cell(ADD, sel, 0, Fp::ZERO),
+        cell(ADD, RD_HI, 0, Fp::ZERO),
+        cell(ADD, gap_hi(RD), 0, Fp::ZERO),
     ];
     for field in [
         FIELD_MASK,
@@ -234,7 +234,7 @@ fn a7_the_soundness_floor_refuses_each_of_its_controls() {
         FIELD_READ_VALUE,
         FIELD_WRITE_VALUE,
     ] {
-        zero.push(cell(ADD, frame(RD, field), 0, Fr::ZERO));
+        zero.push(cell(ADD, frame(RD, field), 0, Fp::ZERO));
     }
     h.assert_rejects(&tamper(zero), (ADD, 0), lookup(lookup_channel::DECODER));
 
@@ -242,9 +242,9 @@ fn a7_the_soundness_floor_refuses_each_of_its_controls() {
     let next = h.cell(ADD, 0, DECODED[0], 4);
     h.assert_rejects(
         &tamper(vec![
-            cell(ADD, PC_WRAP, 4, Fr::ONE),
+            cell(ADD, PC_WRAP, 4, Fp::ONE),
             cell(ADD, frame(PC, FIELD_WRITE_VALUE), 4, next - f(1 << 32)),
-            cell(ADD, NEXT_PC_HI, 4, Fr::ZERO),
+            cell(ADD, NEXT_PC_HI, 4, Fp::ZERO),
         ]),
         (ADD, 0),
         lookup(lookup_channel::RANGE16),
@@ -286,7 +286,7 @@ fn a13_the_teardown_binds_the_final_values() {
         INIT,
         PolyAddress::Memory(1),
         row,
-        value + Fr::ONE,
+        value + Fp::ONE,
     )]);
     h.assert_rejects(&moved, (INIT, 0), MEMORY);
     h.assert_rejects(&moved, (ADD, 0), MEMORY);
@@ -382,7 +382,7 @@ fn the_targets_s14_left_to_s16_are_refused() {
     let x10_ts = public.boundary.reg_ts[10];
     let mut forgery = vec![
         cell(ADD, CYCLE, 100, f(30)),
-        cell(ADD, frame(RD, FIELD_MASK), 100, Fr::ONE),
+        cell(ADD, frame(RD, FIELD_MASK), 100, Fp::ONE),
         cell(ADD, frame(RD, FIELD_ADDR), 100, f(10)),
         cell(ADD, frame(RD, FIELD_READ_TS), 100, f(x10_ts)),
         cell(ADD, frame(RD, FIELD_READ_VALUE), 100, f(42)),
@@ -408,10 +408,10 @@ fn the_targets_s14_left_to_s16_are_refused() {
         FIELD_READ_VALUE,
         FIELD_WRITE_VALUE,
     ] {
-        forgery.push(cell(ADD, frame(RD, field), 5, Fr::ZERO));
+        forgery.push(cell(ADD, frame(RD, field), 5, Fp::ZERO));
     }
-    forgery.push(cell(ADD, rd_inv(WIDTH), 5, Fr::ZERO));
-    forgery.push(cell(ADD, gap_hi(RD), 5, Fr::ZERO));
+    forgery.push(cell(ADD, rd_inv(WIDTH), 5, Fp::ZERO));
+    forgery.push(cell(ADD, gap_hi(RD), 5, Fp::ZERO));
     h.assert_rejects(&tamper(forgery), (ADD, 0), CONSTRAINT);
 
     // The exit row storing 7 into the top stack word, never written before, is
@@ -432,8 +432,8 @@ fn the_targets_s14_left_to_s16_are_refused() {
     // Row 27, `addi a7, x0, 93`, writing HALT_PC.
     h.assert_rejects(
         &tamper(vec![
-            cell(ADD, frame(PC, FIELD_WRITE_VALUE), 27, Fr::ONE),
-            cell(ADD, NEXT_PC_HI, 27, Fr::ZERO),
+            cell(ADD, frame(PC, FIELD_WRITE_VALUE), 27, Fp::ONE),
+            cell(ADD, NEXT_PC_HI, 27, Fp::ZERO),
         ]),
         (ADD, 0),
         CONSTRAINT,
@@ -458,15 +458,15 @@ fn UNFINISHED_the_image_column_moved_with_its_teardown_is_refused() {
     let word = h.cell(INIT, 0, PolyAddress::Setup(0), row);
     assert_eq!(word, h.cell(INIT, 0, PolyAddress::Memory(1), row));
     let twin = tamper(vec![
-        cell(INIT, PolyAddress::Setup(0), row, word + Fr::ONE),
-        cell(INIT, PolyAddress::Memory(1), row, word + Fr::ONE),
+        cell(INIT, PolyAddress::Setup(0), row, word + Fp::ONE),
+        cell(INIT, PolyAddress::Memory(1), row, word + Fp::ONE),
     ]);
     unfinished_refusal(&h, &twin, (INIT, 0));
 }
 
 /// A field element's canonical integer, which the tests only read where it is
 /// a `u32`.
-fn small(v: Fr) -> u64 {
+fn small(v: Fp) -> u64 {
     let b = v.to_bytes();
     assert!(b[4..].iter().all(|x| *x == 0), "{v:?} is not a u32");
     u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as u64
@@ -503,7 +503,7 @@ fn jbs_row(
         .expect("control runs the row the test names")
 }
 
-fn jbs_cell(address: PolyAddress, row: usize, value: Fr) -> Cell {
+fn jbs_cell(address: PolyAddress, row: usize, value: Fp) -> Cell {
     cell(JBS, address, row, value)
 }
 
@@ -539,7 +539,7 @@ fn s17_a7_the_comparison_and_the_pc_are_pinned() {
             .find(|(a, _)| *a == address)
             .unwrap_or_else(|| panic!("no {address}"))
             .1
-            .get(row)
+            .get_base(row)
     };
 
     // BLT(1, 0x80000000): not taken.
@@ -548,10 +548,10 @@ fn s17_a7_the_comparison_and_the_pc_are_pinned() {
             && row.query(Role::Rs1).map(|q| q.read_value) == Some(1)
             && row.query(Role::Rs2).map(|q| q.read_value) == Some(0x8000_0000)
     });
-    assert_eq!(at(jbs::LT, r), Fr::ZERO);
-    assert_eq!(at(jbs::TAKEN, r), Fr::ZERO);
+    assert_eq!(at(jbs::LT, r), Fp::ZERO);
+    assert_eq!(at(jbs::TAKEN, r), Fp::ZERO);
     h.assert_rejects(
-        &tamper(vec![jbs_cell(jbs::LT, r, Fr::ONE)]),
+        &tamper(vec![jbs_cell(jbs::LT, r, Fp::ONE)]),
         (JBS, 0),
         CONSTRAINT,
     );
@@ -564,10 +564,10 @@ fn s17_a7_the_comparison_and_the_pc_are_pinned() {
     let gap_hi = at(jbs::CMP_GAP_HI, r) + f(1 << 16);
     h.assert_rejects(
         &tamper(vec![
-            jbs_cell(jbs::LT, r, Fr::ONE),
+            jbs_cell(jbs::LT, r, Fp::ONE),
             jbs_cell(jbs::CMP_GAP, r, gap),
             jbs_cell(jbs::CMP_GAP_HI, r, gap_hi),
-            jbs_cell(jbs::TAKEN, r, Fr::ONE),
+            jbs_cell(jbs::TAKEN, r, Fp::ONE),
             jbs_cell(frame(PC, FIELD_WRITE_VALUE), r, f(target)),
             jbs_cell(jbs::NEXT_PC_HI, r, f(target >> 16)),
         ]),
@@ -579,7 +579,7 @@ fn s17_a7_the_comparison_and_the_pc_are_pinned() {
     let r = jalr_row(&setup, &archive);
     let v = small(at(frame(JBS_RS1, FIELD_READ_VALUE), r));
     let next = small(at(frame(PC, FIELD_WRITE_VALUE), r));
-    assert_eq!(at(jbs::JALR_DROP, r), Fr::ONE);
+    assert_eq!(at(jbs::JALR_DROP, r), Fp::ONE);
     assert_eq!(next, (v - 2) & !1);
     h.assert_rejects(&tamper(jalr_moved(r, v, next)), (JBS, 0), MEMORY);
     // `addi t2, t2, 3`, the add/sub row just before the jalr, wrote `v`. Its
@@ -602,7 +602,7 @@ fn s17_a7_the_comparison_and_the_pc_are_pinned() {
     // The generic channel's count of the ZeroEntry.
     let m = at(jbs::MULTIPLICITIES[2], 0);
     h.assert_rejects(
-        &tamper(vec![jbs_cell(jbs::MULTIPLICITIES[2], 0, m + Fr::ONE)]),
+        &tamper(vec![jbs_cell(jbs::MULTIPLICITIES[2], 0, m + Fp::ONE)]),
         (JBS, 0),
         lookup(lookup_channel::GENERIC),
     );
@@ -610,10 +610,10 @@ fn s17_a7_the_comparison_and_the_pc_are_pinned() {
     // A padding row's dropped bit and its equality inverse: nothing reads
     // either where every mask and kind bit is 0.
     let padding = 1000;
-    assert_eq!(at(frame(PC, FIELD_MASK), padding), Fr::ZERO);
+    assert_eq!(at(frame(PC, FIELD_MASK), padding), Fp::ZERO);
     h.assert_verifies(
         &tamper(vec![
-            jbs_cell(jbs::JALR_DROP, padding, Fr::ONE),
+            jbs_cell(jbs::JALR_DROP, padding, Fp::ONE),
             jbs_cell(jbs::EQ_INV, padding, f(7)),
         ]),
         (JBS, 0),
@@ -662,7 +662,7 @@ fn UNFINISHED_a_poisoned_generic_table_row_is_refused() {
     let and_row = 1 + 37 * 256 + 45;
     assert_eq!(h.cell(JBS, 0, jbs::GENERIC_TABLE[0], and_row), f(37 + 1));
     assert_eq!(h.cell(JBS, 0, jbs::GENERIC_TABLE[2], and_row), f(37 & 45));
-    assert_eq!(h.cell(JBS, 0, jbs::MULTIPLICITIES[2], and_row), Fr::ZERO);
-    let twin = tamper(vec![jbs_cell(jbs::GENERIC_TABLE[2], and_row, Fr::ZERO)]);
+    assert_eq!(h.cell(JBS, 0, jbs::MULTIPLICITIES[2], and_row), Fp::ZERO);
+    let twin = tamper(vec![jbs_cell(jbs::GENERIC_TABLE[2], and_row, Fp::ZERO)]);
     unfinished_refusal(&h, &twin, (JBS, 0));
 }

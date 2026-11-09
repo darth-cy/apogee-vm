@@ -9,12 +9,17 @@
 mod common;
 
 use common::{square_gate, wide_gate};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use sumcheck::{Gate, GateError, GateTerm, PolyAddress};
+
+/// An integer as a gate input, which is an `Fp2` value.
+fn x(v: u64) -> Fp2 {
+    Fp::from_u64(v).into()
+}
 
 fn term(coef: u64, a: usize, b: Option<usize>) -> GateTerm {
     GateTerm {
-        coef: Fr::from_u64(coef),
+        coef: Fp::from_u64(coef),
         a,
         b,
     }
@@ -59,15 +64,15 @@ fn a_term_may_not_name_an_undeclared_input() {
 fn the_empty_formula_is_the_zero_gate() {
     let a = PolyAddress(0);
     let gate = Gate::new(&[&a], Vec::new()).expect("a gate with no terms is legal");
-    assert_eq!(gate.evaluate(&[Fr::from_u64(11)]), Fr::ZERO);
+    assert_eq!(gate.evaluate(&[x(11)]), Fp2::ZERO);
 }
 
 #[test]
 fn the_square_gate_evaluates_its_formula() {
     let gate = square_gate();
     for (a, b) in [(0u64, 0u64), (1, 1), (3, 9), (5, 24), (7, 50)] {
-        let want = Fr::from_u64(a) * Fr::from_u64(a) - Fr::from_u64(b);
-        assert_eq!(gate.evaluate(&[Fr::from_u64(a), Fr::from_u64(b)]), want);
+        let want = x(a) * x(a) - x(b);
+        assert_eq!(gate.evaluate(&[x(a), x(b)]), want);
     }
 }
 
@@ -77,7 +82,7 @@ fn the_square_gate_evaluates_its_formula() {
 fn the_wide_gate_evaluates_its_formula() {
     let gate = wide_gate();
     for k in 0..16u64 {
-        let v: Vec<Fr> = (0..5).map(|i| Fr::from_u64(1 + k * 7 + i * 13)).collect();
+        let v: Vec<Fp2> = (0..5).map(|i| x(1 + k * 7 + i * 13)).collect();
         let want = v[0] * (v[1] + v[2]) - v[3] * v[4];
         assert_eq!(gate.evaluate(&v), want);
     }
@@ -86,7 +91,7 @@ fn the_wide_gate_evaluates_its_formula() {
 #[test]
 #[should_panic(expected = "Gate::evaluate: 1 values for a gate with 2 inputs")]
 fn evaluating_with_the_wrong_number_of_values_panics() {
-    square_gate().evaluate(&[Fr::ONE]);
+    square_gate().evaluate(&[Fp2::ONE]);
 }
 
 // ---------------------------------------------------------------------------
@@ -99,7 +104,7 @@ fn evaluating_with_the_wrong_number_of_values_panics() {
 fn proving_with_the_wrong_column_count_panics() {
     let mut columns = common::square_witness(3, 1);
     columns.pop();
-    let mut t = common::bound_transcript(Fr::ONE);
+    let mut t = common::bound_transcript(&[Fp::ONE; 8]);
     sumcheck::prove_zerocheck(&square_gate(), &mut columns, &mut t);
 }
 
@@ -108,7 +113,7 @@ fn proving_with_the_wrong_column_count_panics() {
 fn proving_with_ragged_columns_panics() {
     let mut columns = common::square_witness(3, 1);
     columns[1] = poly::MultilinearPoly::new(poly::PolyBacking::U32(vec![0, 1, 4, 9]));
-    let mut t = common::bound_transcript(Fr::ONE);
+    let mut t = common::bound_transcript(&[Fp::ONE; 8]);
     sumcheck::prove_zerocheck(&square_gate(), &mut columns, &mut t);
 }
 

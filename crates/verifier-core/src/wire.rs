@@ -1,5 +1,5 @@
 //! The byte layouts of `docs/spec/proof.md` §9: little-endian integers,
-//! canonical `Fr`s, `u32`-length-prefixed byte strings and lists.
+//! canonical `Fp`s and `Fp2`s, `u32`-length-prefixed byte strings and lists.
 //!
 //! Public because the prover's phase snapshots (`docs/spec/streaming.md`
 //! §6) are written in the same primitives, and one set of them is enough.
@@ -10,7 +10,7 @@
 
 use alloc::vec::Vec;
 
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 
 /// An encoder: bytes appended in order.
 pub struct Writer {
@@ -36,7 +36,11 @@ impl Writer {
         self.bytes.extend_from_slice(&v.to_le_bytes());
     }
 
-    pub fn fr(&mut self, v: &Fr) {
+    pub fn fp(&mut self, v: Fp) {
+        self.bytes.extend_from_slice(&v.to_bytes());
+    }
+
+    pub fn fp2(&mut self, v: Fp2) {
         self.bytes.extend_from_slice(&v.to_bytes());
     }
 
@@ -98,12 +102,17 @@ impl<'a> Reader<'a> {
         Ok(u64::from_le_bytes(b))
     }
 
-    /// A canonical field element; a value at or above the modulus is refused,
+    /// A canonical base element; a value at or above the modulus is refused,
     /// never reduced.
-    pub fn fr(&mut self) -> Read<Fr> {
-        let mut b = [0u8; 32];
-        b.copy_from_slice(self.take(32)?);
-        Fr::from_bytes(&b).ok_or("a field element is not canonical")
+    pub fn fp(&mut self) -> Read<Fp> {
+        let b = self.take(8)?.try_into().expect("8 bytes");
+        Fp::from_bytes(b).ok_or("a field element is not canonical")
+    }
+
+    /// A canonical `Fp2` element: two canonical base elements.
+    pub fn fp2(&mut self) -> Read<Fp2> {
+        let b = self.take(16)?.try_into().expect("16 bytes");
+        Fp2::from_bytes(b).ok_or("a field element is not canonical")
     }
 
     /// A count of items of at least `item_bytes` bytes each, refused unless
@@ -130,10 +139,10 @@ impl<'a> Reader<'a> {
         (0..n).map(|_| self.u32()).collect()
     }
 
-    /// A list of field elements.
-    pub fn frs(&mut self) -> Read<Vec<Fr>> {
-        let n = self.count(32)?;
-        (0..n).map(|_| self.fr()).collect()
+    /// A list of `Fp2` elements.
+    pub fn fp2s(&mut self) -> Read<Vec<Fp2>> {
+        let n = self.count(16)?;
+        (0..n).map(|_| self.fp2()).collect()
     }
 
     /// Refuse bytes after the value.
@@ -153,10 +162,10 @@ impl Writer {
         }
     }
 
-    pub fn frs(&mut self, xs: &[Fr]) {
+    pub fn fp2s(&mut self, xs: &[Fp2]) {
         self.count(xs.len());
         for x in xs {
-            self.fr(x);
+            self.fp2(*x);
         }
     }
 }

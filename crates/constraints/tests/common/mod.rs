@@ -27,7 +27,7 @@
 
 use constants::challenge_slot;
 use constraints::{Coeff, PolyAddress, VirtualKind};
-use field::Fr;
+use field_a64_c5::Fp;
 
 mod lookup_toy;
 mod toy;
@@ -61,11 +61,11 @@ pub const ROW: PolyAddress = PolyAddress::Virtual(VirtualKind::RowIndex);
 pub const GAMMA: Coeff = Coeff::Challenge(challenge_slot::TOY);
 
 pub fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 pub fn neg(v: u64) -> Coeff {
-    Coeff::Literal(-Fr::from_u64(v))
+    Coeff::Literal(-Fp::from_u64(v))
 }
 
 /// `L{layer}[offset]`.

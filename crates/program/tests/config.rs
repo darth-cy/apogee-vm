@@ -4,12 +4,12 @@
 mod common;
 
 use constants::{family, transcript_tags as tags};
-use field::Fr;
+use field_a64_c5::Fp;
 use program::{
     absorb_statement_descriptor, check_memory_windows, decode_program, decode_program_detaching,
     ProgramError, ProgramIdentity, ProgramParams, VmConfig,
 };
-use transcript::{Transcript, TranscriptEvent};
+use transcript_a64_c5::{Transcript, TranscriptEvent};
 
 fn fib_config() -> VmConfig {
     decode_program(&common::guest("fib"), &ProgramParams::defaults())
@@ -92,14 +92,19 @@ fn a_malformed_vm_config_is_refused() {
 }
 
 #[test]
-fn the_identity_wire_form_is_one_canonical_field_element() {
-    let identity = ProgramIdentity(Fr::from_u64(0x1234_5678));
+fn the_identity_wire_form_is_eight_canonical_lanes() {
+    let identity = ProgramIdentity(core::array::from_fn(|i| {
+        Fp::from_u64(0x1234_5678 + i as u64)
+    }));
     let bytes = identity.to_bytes();
     assert_eq!(&bytes[..4], &[0x78, 0x56, 0x34, 0x12], "little-endian");
+    assert_eq!(&bytes[56..60], &[0x7f, 0x56, 0x34, 0x12], "lane 7 last");
     assert_eq!(ProgramIdentity::from_bytes(&bytes), Some(identity));
-    // p itself is not canonical, and is refused rather than reduced.
-    let mut p = Fr::MINUS_ONE.to_bytes();
-    p[0] += 1;
+    // p itself is not canonical, in any lane, and is refused rather than
+    // reduced.
+    let mut p = bytes;
+    p[24..32].copy_from_slice(&Fp::MINUS_ONE.to_bytes());
+    p[24] += 1;
     assert_eq!(ProgramIdentity::from_bytes(&p), None);
 }
 
@@ -132,22 +137,22 @@ fn the_statement_descriptor_is_three_adjacent_messages() {
         &[
             TranscriptEvent::Absorb {
                 tag: tags::VM_CONFIG,
-                n_scalars: 2 * 11 + 1,
+                n: 2 * 11 + 1,
             },
             TranscriptEvent::Absorb {
                 tag: tags::SHARD_COUNTS,
-                n_scalars: 11,
+                n: 11,
             },
             TranscriptEvent::Absorb {
                 tag: tags::MEMORY_WINDOWS,
-                n_scalars: 1,
+                n: 1,
             },
         ]
     );
 
     // The same three messages, written out from the definition.
-    let fr = |x: u32| Fr::from_u64(x as u64);
-    let mut vm: Vec<Fr> = config.families.iter().map(|(f, _)| fr(*f)).collect();
+    let fr = |x: u32| Fp::from_u64(x as u64);
+    let mut vm: Vec<Fp> = config.families.iter().map(|(f, _)| fr(*f)).collect();
     vm.extend(config.families.iter().map(|(_, h)| fr(*h)));
     vm.push(fr(config.bytecode_size_words));
     let mut replay = Transcript::new();
@@ -178,7 +183,7 @@ fn the_statement_descriptor_is_three_adjacent_messages() {
         empty.event_log()[2],
         TranscriptEvent::Absorb {
             tag: tags::MEMORY_WINDOWS,
-            n_scalars: 0,
+            n: 0,
         }
     );
 }

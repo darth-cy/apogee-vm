@@ -17,7 +17,8 @@ fn table_bytes(backing: &poly::PolyBacking) -> usize {
         poly::PolyBacking::U8(v) => v.len(),
         poly::PolyBacking::U16(v) => 2 * v.len(),
         poly::PolyBacking::U32(v) => 4 * v.len(),
-        poly::PolyBacking::Fr(v) => 32 * v.len(),
+        poly::PolyBacking::Fp(v) => 8 * v.len(),
+        poly::PolyBacking::Fp2(v) => 16 * v.len(),
     }
 }
 
@@ -26,17 +27,17 @@ fn table_bytes(backing: &poly::PolyBacking) -> usize {
 /// RSS on every platform needs either a dependency or `unsafe`, and this
 /// workspace takes neither.
 ///
-/// The model: `eq` is a full `Fr` table for the whole proof; `bind` truncates a
+/// The model: `eq` is a full `Fp2` table for the whole proof; `bind` truncates a
 /// column's length without releasing its capacity, so from its first bind each
-/// column costs a full `Fr` table too. The peak is the instant some column `k`
-/// lifts, when its small backing and its fresh `Fr` table are both alive and
+/// column costs a full `Fp2` table too. The peak is the instant some column `k`
+/// lifts, when its small backing and its fresh `Fp2` table are both alive and
 /// the columns after it still hold theirs.
 fn peak_poly_bytes(small: &[usize], rows: usize) -> usize {
-    let fr = 32 * rows;
+    let ext = 16 * rows;
     (0..small.len())
-        .map(|k| fr + fr * (k + 1) + small[k] + small[k + 1..].iter().sum::<usize>())
+        .map(|k| ext + ext * (k + 1) + small[k] + small[k + 1..].iter().sum::<usize>())
         .max()
-        .unwrap_or(fr)
+        .unwrap_or(ext)
 }
 
 pub fn run() {
@@ -54,8 +55,8 @@ pub fn run() {
     let mut best = Best::new();
     for _ in 0..REPS {
         let mut working = inst.columns();
-        let mut t = transcript::Transcript::new();
-        sumcheck::absorb_witness_digest(&mut t, digest);
+        let mut t = transcript_a64_c5::Transcript::new();
+        sumcheck::absorb_witness_digest(&mut t, &digest);
         let start = Instant::now();
         let proof = sumcheck::prove_zerocheck(&inst.gate, &mut working, &mut t);
         best.record(start.elapsed());

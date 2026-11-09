@@ -1,17 +1,16 @@
 //! The public I/O digest over a real guest's recorded public values.
 //!
-//! `crates/transcript/tests/io_digest.rs` is where the digest is checked against
-//! its committed vectors and where its sensitivity properties are proven. This
-//! is the other half: the public input and the journal `guests/fib` actually
-//! has, digested, and digested again.
+//! `crates/transcript-a64-c5/tests/transcript.rs` is where the digest's
+//! sensitivity properties are proven. This is the other half: the public input
+//! and the journal `guests/fib` actually has, digested, and digested again.
 //!
 //! It lives here because the record does: `fib_io.txt` is a guest artifact, and
 //! `crates/loader` is the host-side crate that owns those.
 
 mod common;
 
-use test_support::{hex_to_bytes, to_hex};
-use transcript::io_digest;
+use test_support::hex_to_bytes;
+use transcript_a64_c5::io_digest;
 
 /// The two streams the committed record holds.
 fn fib_streams() -> (Vec<u8>, Vec<u8>) {
@@ -39,8 +38,7 @@ fn the_fib_record_digests_to_the_same_value_twice() {
     let first = io_digest(&input, &output);
     let second = io_digest(&input, &output);
     assert_eq!(
-        to_hex(&first.to_bytes()),
-        to_hex(&second.to_bytes()),
+        first, second,
         "io_digest is not a pure function of the two streams"
     );
 }

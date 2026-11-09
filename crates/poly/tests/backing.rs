@@ -1,15 +1,15 @@
-//! The five backings are one polynomial in five costumes,
-//! and the lift is lazy in the sense that is observable — bind-triggered, never
-//! read-triggered.
+//! The five base backings are one polynomial in five costumes,
+//! and the lift to `Fp2` is lazy in the sense that is observable —
+//! bind-triggered, never read-triggered.
 
 mod common;
 
-use common::{next_fr, pack_bits};
-use field::Fr;
+use common::{next_fp, next_fp2, pack_bits};
+use field_a64_c5::{Fp, Fp2};
 use poly::{MultilinearPoly, PolyBacking};
 use test_support::Rng;
 
-/// Every way of storing `values`, in every width they fit in. `fr` is always
+/// Every way of storing `values`, in every width they fit in. `fp` is always
 /// last, and is the reference the others are compared against.
 fn backings(values: &[u64]) -> Vec<(&'static str, PolyBacking)> {
     let mut out: Vec<(&'static str, PolyBacking)> = Vec::new();
@@ -36,30 +36,39 @@ fn backings(values: &[u64]) -> Vec<(&'static str, PolyBacking)> {
         ));
     }
     out.push((
-        "fr",
-        PolyBacking::Fr(values.iter().map(|v| Fr::from_u64(*v)).collect()),
+        "fp",
+        PolyBacking::Fp(values.iter().map(|v| Fp::from_u64(*v)).collect()),
     ));
     out
 }
 
-/// `get`, `evaluate`, and every table a full bind chain leaves behind, compared
-/// across all the widths `values` fits in.
-fn assert_backings_agree(values: &[u64], point: &[Fr]) {
+/// `get_base`, `get`, `evaluate`, and every table a full bind chain leaves
+/// behind, compared across all the widths `values` fits in.
+fn assert_backings_agree(values: &[u64], point: &[Fp2]) {
     let all = backings(values);
     assert!(
         all.len() >= 2,
         "a corpus stored only one way checks nothing"
     );
-    assert_eq!(all.last().expect("fr is always present").0, "fr");
+    assert_eq!(all.last().expect("fp is always present").0, "fp");
 
-    // The reference: the same values in the field, which needs no lift at all.
+    // The reference: the same values in the base field, which needs no lift
+    // into it at all.
     let reference = MultilinearPoly::new(all[all.len() - 1].1.clone());
-    let reference_gets: Vec<Fr> = (0..reference.len()).map(|i| reference.get(i)).collect();
+    let reference_bases: Vec<Fp> = (0..reference.len())
+        .map(|i| reference.get_base(i))
+        .collect();
+    let reference_gets: Vec<Fp2> = (0..reference.len()).map(|i| reference.get(i)).collect();
     for (i, v) in values.iter().enumerate() {
         assert_eq!(
-            reference_gets[i],
-            Fr::from_u64(*v),
+            reference_bases[i],
+            Fp::from_u64(*v),
             "the lift must be the canonical embedding"
+        );
+        assert_eq!(
+            reference_gets[i],
+            Fp2::from(Fp::from_u64(*v)),
+            "and so must its lift into Fp2"
         );
     }
     let reference_eval = reference.evaluate(point);
@@ -73,10 +82,12 @@ fn assert_backings_agree(values: &[u64], point: &[Fr]) {
     for (name, backing) in &all {
         let p = MultilinearPoly::new(backing.clone());
         assert_eq!(p.num_vars(), reference.num_vars(), "{name}: num_vars");
-        let gets: Vec<Fr> = (0..p.len()).map(|i| p.get(i)).collect();
+        let bases: Vec<Fp> = (0..p.len()).map(|i| p.get_base(i)).collect();
+        assert_eq!(bases, reference_bases, "{name}: get_base");
+        let gets: Vec<Fp2> = (0..p.len()).map(|i| p.get(i)).collect();
         assert_eq!(gets, reference_gets, "{name}: get");
         assert_eq!(p.evaluate(point), reference_eval, "{name}: evaluate");
-        // Neither read touched the backing.
+        // No read touched the backing.
         assert_eq!(p.backing(), backing, "{name}: a read mutated the backing");
 
         let mut q = p;
@@ -96,7 +107,7 @@ fn assert_backings_agree(values: &[u64], point: &[Fr]) {
 #[test]
 fn every_three_variable_bit_table_agrees_across_backings() {
     let mut rng = Rng::new(20260911);
-    let point: Vec<Fr> = (0..3).map(|_| next_fr(&mut rng)).collect();
+    let point: Vec<Fp2> = (0..3).map(|_| next_fp2(&mut rng)).collect();
     for table in 0u64..256 {
         let values: Vec<u64> = (0..8).map(|i| (table >> i) & 1).collect();
         // The bitset is the byte itself: entry i is bit i, little-endian.
@@ -124,7 +135,7 @@ fn wider_backings_agree_on_seeded_tables() {
             let values: Vec<u64> = (0..1usize << num_vars)
                 .map(|_| rng.next_u64() & ceiling)
                 .collect();
-            let point: Vec<Fr> = (0..num_vars).map(|_| next_fr(&mut rng)).collect();
+            let point: Vec<Fp2> = (0..num_vars).map(|_| next_fp2(&mut rng)).collect();
             assert_backings_agree(&values, &point);
         }
     }
@@ -134,7 +145,7 @@ fn wider_backings_agree_on_seeded_tables() {
 #[test]
 fn backings_agree_at_the_edges_of_their_width() {
     let mut rng = Rng::new(20260913);
-    let point: Vec<Fr> = (0..2).map(|_| next_fr(&mut rng)).collect();
+    let point: Vec<Fp2> = (0..2).map(|_| next_fp2(&mut rng)).collect();
     for values in [
         vec![0u64, 0, 0, 0],
         vec![1, 1, 1, 1],
@@ -156,13 +167,14 @@ fn backings_agree_at_the_edges_of_their_width() {
 fn the_lift_is_lazy_and_one_way() {
     let mut rng = Rng::new(20260914);
     let values: Vec<u16> = (0..16).map(|_| rng.next_u64() as u16).collect();
-    let point: Vec<Fr> = (0..4).map(|_| next_fr(&mut rng)).collect();
+    let point: Vec<Fp2> = (0..4).map(|_| next_fp2(&mut rng)).collect();
 
     let mut p = MultilinearPoly::new(PolyBacking::U16(values.clone()));
     assert!(matches!(p.backing(), PolyBacking::U16(_)));
 
     for i in 0..p.len() {
         let _ = p.get(i);
+        let _ = p.get_base(i);
     }
     let _ = p.evaluate(&point);
     assert_eq!(
@@ -173,36 +185,45 @@ fn the_lift_is_lazy_and_one_way() {
 
     p.bind(point[0]);
     assert!(
-        matches!(p.backing(), PolyBacking::Fr(_)),
+        matches!(p.backing(), PolyBacking::Fp2(_)),
         "the first bind lifts"
     );
     p.bind(point[1]);
     assert!(
-        matches!(p.backing(), PolyBacking::Fr(_)),
+        matches!(p.backing(), PolyBacking::Fp2(_)),
         "and it stays lifted"
     );
     let _ = p.get(0);
     let _ = p.evaluate(&point[2..]);
-    assert!(matches!(p.backing(), PolyBacking::Fr(_)));
+    assert!(matches!(p.backing(), PolyBacking::Fp2(_)));
 }
 
-/// The same, for the other three small widths: no read of any kind lifts.
+/// The same, for the other four base backings: no read of any kind lifts, and
+/// the first bind does.
 #[test]
 fn no_read_lifts_any_backing() {
     let mut rng = Rng::new(20260915);
-    let point: Vec<Fr> = (0..3).map(|_| next_fr(&mut rng)).collect();
+    let point: Vec<Fp2> = (0..3).map(|_| next_fp2(&mut rng)).collect();
     let bits: Vec<bool> = (0..8).map(|_| rng.next_u64() & 1 == 1).collect();
     for backing in [
         pack_bits(&bits),
         PolyBacking::U8((0..8).map(|_| rng.next_u64() as u8).collect()),
         PolyBacking::U32((0..8).map(|_| rng.next_u64() as u32).collect()),
+        PolyBacking::Fp((0..8).map(|_| next_fp(&mut rng)).collect()),
     ] {
-        let p = MultilinearPoly::new(backing.clone());
+        let mut p = MultilinearPoly::new(backing.clone());
         for i in 0..p.len() {
             let _ = p.get(i);
+            let _ = p.get_base(i);
         }
         let _ = p.evaluate(&point);
         let _ = p.clone().evaluate(&point);
         assert_eq!(p.backing(), &backing);
+
+        p.bind(point[0]);
+        assert!(
+            matches!(p.backing(), PolyBacking::Fp2(_)),
+            "the first bind lifts {backing:?}"
+        );
     }
 }

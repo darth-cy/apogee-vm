@@ -5,14 +5,16 @@ the literature fixes (GKR, LogUp, RISC-V) are not listed.
 
 | term | meaning | defined in |
 | --- | --- | --- |
+| A64-C5 | the prime `2^64 − 59`; `Fp`, the base field, is the integers modulo it | [primitives.md §1](spec/primitives.md) |
 | advice | memory whose initial values the prover chose, bound by nothing | [public-values.md §6](spec/public-values.md) |
 | archived path | proving from a held `TraceArchive`; only the tamper harness does | [streaming.md §6](spec/streaming.md) |
 | artifact | a circuit as data, `CircuitArtifact`; also an exported `ProgramImage` | [gkr.md §4](spec/gkr.md), [program.md §3](spec/program.md) |
 | base claims | each committed column's claimed value where the backward pass ends | [gkr.md §5](spec/gkr.md) |
+| base field, challenge field | `Fp`, every committed and statement value, and `Fp2 = F_p[x]/(x^2 − 2)`, every challenge and every value one reaches | [primitives.md §1](spec/primitives.md) |
 | block | `BlockProof`: config, statement and its shards' proofs | [proof.md §1](spec/proof.md) |
 | boundary | the registers' and pc's final timestamps and values; they have no rows | [memory.md §4](spec/memory.md) |
 | cached entry | a sub-expression inlined into its list's gates, not a column | [gkr.md §3](spec/gkr.md) |
-| canonical form | an element as its value, 32 bytes little-endian, below the modulus | [primitives.md §1](spec/primitives.md) |
+| canonical form | an element as its value below the modulus: an `Fp` in 8 bytes little-endian, an `Fp2` as its two coordinates' | [primitives.md §1](spec/primitives.md) |
 | challenge slot | a gate coefficient's challenge: drawn, or derived by the verifier | [gkr.md §3, §5](spec/gkr.md) |
 | channel | one LogUp identity over a shard's lookups into one table | [lookup.md §1](spec/lookup.md) |
 | column claims | `ColumnClaims`: every committed column's base claim at one point, which nothing opens | [proof.md §5](spec/proof.md) |
@@ -31,7 +33,7 @@ the literature fixes (GKR, LogUp, RISC-V) are not listed.
 | global transcript, global state digest | G1–G9: the statement, then the memory challenges; G9 seeds each shard | [proof.md §2](spec/proof.md) |
 | `HALT_PC` | 1: the exit row's `next_pc`, the pc's final value | [memory.md §5](spec/memory.md) |
 | height | a family's rows a shard: `2^12`, `2^16`, `2^18`, `2^20` or `2^22` | [program.md §7](spec/program.md) |
-| identity, image column | one `Fr` digest of the code version, `VmConfig` and entry pc; meant to commit the decoded tables and the image column too | [program.md §8](spec/program.md) |
+| identity, image column | a digest, 8 `Fp` lanes, of the code version, `VmConfig` and entry pc; meant to commit the decoded tables and the image column too | [program.md §8](spec/program.md) |
 | in flight | shards worked at once, at most `max_in_flight` | [streaming.md §5](spec/streaming.md) |
 | journal | the public output: what the guest leaves in the output window | [public-values.md §1](spec/public-values.md) |
 | laws | Laws 1–4: locality, derived width, top layer, single source of truth | [gkr.md §4](spec/gkr.md) |
@@ -53,7 +55,7 @@ the literature fixes (GKR, LogUp, RISC-V) are not listed.
 | tamper twin | a forgery proved as an honest prover would, refused in its class | [circuits.md §3](spec/circuits.md) |
 | tape | `checker tape`'s listing of the global transcript's messages | [tools.md §4](tools.md) |
 | time window | a shard's claimed `[ts_start, ts_end)`; it binds nothing | [proof.md §8](spec/proof.md) |
-| tuple | `T(AS, ADDR, TS, VAL)`: a memory access as one field element | [memory.md §1](spec/memory.md) |
+| tuple | `T(AS, ADDR, TS, VAL)`: a memory access as one `Fp2` element | [memory.md §1](spec/memory.md) |
 | `VmConfig` | a program's families, their heights, `bytecode_size_words` | [program.md §7](spec/program.md) |
 | window | `h` words from byte `4h·w`, initialized and torn down by one shard | [memory.md §3](spec/memory.md) |
 | write-side induction | an execution family writes only words, so operands need no bound | [memory-ops.md §5](spec/memory-ops.md) |

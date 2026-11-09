@@ -6,7 +6,7 @@ use constants::memory::{HALT_PC, PART_ADDR, PART_AS, PART_TS, PART_VAL};
 use constants::{address_space, challenge_slot};
 use constraints::memory::read_tuple;
 use constraints::MAX_TRACE_VARS;
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 
 use crate::{eval_gate, ExternalChallenges};
 
@@ -62,7 +62,7 @@ pub fn window_challenges(
         .expect("copied above");
     out.insert(
         challenge_slot::MEM_WINDOW_CONSTANT,
-        gamma + Fr::from_u64(address_space::RAM as u64) + alpha_addr * Fr::from_u64(first_address),
+        gamma + Fp::from_u64(address_space::RAM as u64) + alpha_addr * Fp::from_u64(first_address),
     );
     out
 }
@@ -84,14 +84,14 @@ pub fn boundary_factors(
     memory: &ExternalChallenges,
     entry_pc: u32,
     finals: &BoundaryFinals,
-) -> (Fr, Fr) {
+) -> (Fp2, Fp2) {
     let (pc, reg) = (read_tuple(0), read_tuple(1));
     let tuple = |gate, addr: u64, ts: u64, value: u64| {
-        let mut values = [Fr::ZERO; 4];
-        values[PART_AS] = Fr::ONE;
-        values[PART_ADDR] = Fr::from_u64(addr);
-        values[PART_TS] = Fr::from_u64(ts);
-        values[PART_VAL] = Fr::from_u64(value);
+        let mut values = [Fp2::ZERO; 4];
+        values[PART_AS] = Fp2::ONE;
+        values[PART_ADDR] = Fp::from_u64(addr).into();
+        values[PART_TS] = Fp::from_u64(ts).into();
+        values[PART_VAL] = Fp::from_u64(value).into();
         eval_gate(gate, &values, memory)
     };
     let mut write = tuple(&pc, 0, 0, entry_pc as u64);
@@ -108,9 +108,9 @@ pub fn boundary_factors(
 /// of every family in the statement,
 /// `Π read_roots · R_b = Π write_roots · W_b`, and that product is nonzero.
 /// `factors` is [`boundary_factors`]' `(W_b, R_b)`.
-pub fn reconciles(read_roots: &[Fr], write_roots: &[Fr], factors: (Fr, Fr)) -> bool {
+pub fn reconciles(read_roots: &[Fp2], write_roots: &[Fp2], factors: (Fp2, Fp2)) -> bool {
     let (w_b, r_b) = factors;
     let read = read_roots.iter().fold(r_b, |acc, root| acc * *root);
     let write = write_roots.iter().fold(w_b, |acc, root| acc * *root);
-    read == write && read != Fr::ZERO
+    read == write && read != Fp2::ZERO
 }

@@ -8,8 +8,8 @@
 use constants::family;
 use constants::transcript_tags as tags;
 use constraints::family_circuit;
-use field::Fr;
-use transcript::{io_digest, Transcript};
+use field_a64_c5::{Fp, Fp2};
+use transcript_a64_c5::{io_digest, Transcript};
 use verifier_core::{
     absorb_statement_descriptor, boundary_scalars, derive_global_phase, global_commit,
     identity_digest, reduce_shard, statement_shards, BoundaryFinals, GkrProof, PublicInputs,
@@ -52,7 +52,7 @@ fn key_and_statement() -> (VerifyingKey, PublicInputs) {
         shard_counts: vec![2, 1, 1, 0, 1, 1, 0],
         windows: Vec::new(),
         boundary,
-        memory_roots: vec![[Fr::ZERO; 2]; 6],
+        memory_roots: vec![[Fp2::ZERO; 2]; 6],
     };
     let vk = VerifyingKey {
         code_version: family::CODE_VERSION,
@@ -86,7 +86,7 @@ fn the_expected_tape_follows_the_statement_shape() {
 
     let mut three = base.clone();
     three.shard_counts[0] = 3;
-    three.memory_roots.push([Fr::ZERO; 2]);
+    three.memory_roots.push([Fp2::ZERO; 2]);
     let grown = checker::expected_global_tape(&vk, &three);
     assert_eq!(grown, baseline, "a count is a value, not a shape");
     assert_eq!(checker::global_tape(&vk, &three), grown);
@@ -94,7 +94,7 @@ fn the_expected_tape_follows_the_statement_shape() {
     let mut windowed = base.clone();
     windowed.shard_counts[3] = 1;
     windowed.windows = vec![7];
-    windowed.memory_roots.push([Fr::ZERO; 2]);
+    windowed.memory_roots.push([Fp2::ZERO; 2]);
     let with_window = checker::expected_global_tape(&vk, &windowed);
     assert!(with_window.contains(&"absorb MEMORY_WINDOWS 1".to_string()));
     assert_eq!(checker::global_tape(&vk, &windowed), with_window);
@@ -116,7 +116,7 @@ fn swapped_global_commit(vk: &VerifyingKey, statement: &PublicInputs) -> Transcr
     let mut t = Transcript::new();
     t.append_scalar(
         tags::PROTOCOL_SUITE,
-        Fr::from_u64(constants::PROTOCOL_VERSION as u64),
+        Fp::from_u64(constants::PROTOCOL_VERSION as u64),
     );
     absorb_statement_descriptor(
         &mut t,
@@ -126,8 +126,8 @@ fn swapped_global_commit(vk: &VerifyingKey, statement: &PublicInputs) -> Transcr
     );
     // The swap: G6 then G5, where the order is G5 then G6.
     let io = io_digest(&statement.input, &statement.output);
-    t.append_bytes(tags::PUBLIC_INPUTS, &io.to_bytes());
-    t.append_scalar(tags::PROGRAM_IDENTITY, vk.identity.0);
+    t.append_scalars(tags::PUBLIC_INPUTS, &io);
+    t.append_scalars(tags::PROGRAM_IDENTITY, &vk.identity.0);
     t.append_scalars(
         tags::MEMORY_BOUNDARY,
         &boundary_scalars(&statement.boundary),
@@ -141,11 +141,11 @@ fn swapping_two_absorptions_is_caught_and_changes_every_challenge() {
     let honest = global_commit(&vk, &statement);
 
     let mut forked = swapped_global_commit(&vk, &statement);
-    let mut memory = [Fr::ZERO; 4];
+    let mut memory = [Fp2::ZERO; 4];
     for slot in memory.iter_mut() {
-        *slot = forked.challenge_scalar(tags::MEMORY_CHALLENGE);
+        *slot = forked.challenge(tags::MEMORY_CHALLENGE);
     }
-    let digest = forked.challenge_scalar(tags::GLOBAL_STATE_DIGEST);
+    let digest = forked.challenge(tags::GLOBAL_STATE_DIGEST);
 
     // 1. The tape names the first line at which it left the order.
     let forked_tape = checker::tape(forked.event_log());
@@ -155,8 +155,8 @@ fn swapping_two_absorptions_is_caught_and_changes_every_challenge() {
         .zip(&expected)
         .position(|(a, b)| a != b)
         .expect("the swap shows in the tape");
-    assert_eq!(forked_tape[first], "absorb PUBLIC_INPUTS 2");
-    assert_eq!(expected[first], "absorb PROGRAM_IDENTITY 1");
+    assert_eq!(forked_tape[first], "absorb PUBLIC_INPUTS 8");
+    assert_eq!(expected[first], "absorb PROGRAM_IDENTITY 8");
     assert_eq!(forked_tape.len(), expected.len(), "only the order moved");
 
     // 2. Every challenge the statement fixes moves with it.

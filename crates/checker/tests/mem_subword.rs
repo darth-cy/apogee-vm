@@ -37,7 +37,7 @@ use constraints::memory::{
 use constraints::{
     family_circuit, mem_subword, CircuitArtifact, GateDef, PolyAddress, VirtualKind,
 };
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{eval_gate, gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallenges};
 use program::lookup_tables::generic_entries;
 
@@ -65,8 +65,8 @@ fn artifact() -> CircuitArtifact {
     mem_subword::artifact(VARS)
 }
 
-fn f(v: u64) -> Fr {
-    Fr::from_u64(v)
+fn f(v: u64) -> Fp {
+    Fp::from_u64(v)
 }
 
 fn leak(s: String) -> &'static str {
@@ -81,9 +81,9 @@ fn challenges(a: &CircuitArtifact) -> ExternalChallenges {
         (challenge_slot::MEM_ALPHA_TS, 17),
         (challenge_slot::MEM_ALPHA_VAL, 19),
     ] {
-        ch.insert(slot, f(v));
+        ch.insert(slot, f(v).into());
     }
-    insert_lookup_challenges(&mut ch, f(23), f(29), a);
+    insert_lookup_challenges(&mut ch, f(23).into(), f(29).into(), a);
     ch
 }
 
@@ -93,7 +93,7 @@ fn challenges(a: &CircuitArtifact) -> ExternalChallenges {
 
 /// A row by column name; a column not named is 0.
 #[derive(Clone, Debug, Default)]
-struct Row(BTreeMap<&'static str, Fr>);
+struct Row(BTreeMap<&'static str, Fp>);
 
 /// `<q>_<field>`, a column name, leaked to `'static` for the map.
 fn name(q: &str, field: &str) -> &'static str {
@@ -101,19 +101,19 @@ fn name(q: &str, field: &str) -> &'static str {
 }
 
 impl Row {
-    fn set(&mut self, name: &'static str, v: Fr) -> &mut Row {
+    fn set(&mut self, name: &'static str, v: Fp) -> &mut Row {
         self.0.insert(name, v);
         self
     }
 
-    fn get(&self, name: &str) -> Fr {
-        self.0.get(name).copied().unwrap_or(Fr::ZERO)
+    fn get(&self, name: &str) -> Fp {
+        self.0.get(name).copied().unwrap_or(Fp::ZERO)
     }
 
     /// Set the query `q`'s five columns, reading a write made eight timestamps
     /// before its own.
     fn query(&mut self, q: &'static str, delta: u64, addr: u64, read: u64, write: u64) {
-        self.set(name(q, "mask"), Fr::ONE)
+        self.set(name(q, "mask"), Fp::ONE)
             .set(name(q, "addr"), f(addr))
             .set(name(q, "read_ts"), f(4 * CYCLE + delta - 8))
             .set(name(q, "read_value"), f(read))
@@ -128,7 +128,7 @@ impl Row {
     }
 
     /// The row's committed values in layout order.
-    fn committed(&self, a: &CircuitArtifact) -> Vec<Fr> {
+    fn committed(&self, a: &CircuitArtifact) -> Vec<Fp> {
         let names: Vec<&str> = a
             .memory
             .iter()
@@ -145,19 +145,19 @@ impl Row {
     /// The row as a witness row of `a`, its scratch computed row-locally.
     fn witness(&self, a: &CircuitArtifact, row: usize) -> WitnessRow {
         let committed = self.committed(a);
-        let virtuals: Vec<Fr> = a
+        let virtuals: Vec<Fp2> = a
             .virtuals
             .iter()
-            .map(|(k, _)| virtual_at_row(*k, row))
+            .map(|(k, _)| virtual_at_row(*k, row).into())
             .collect();
         let ch = challenges(a);
-        let mut scratch = vec![Fr::ZERO; a.scratch.len()];
-        let mut lower = committed.clone();
+        let mut scratch = vec![Fp2::ZERO; a.scratch.len()];
+        let mut lower: Vec<Fp2> = committed.iter().map(|v| (*v).into()).collect();
         for k in 0..a.depth() {
             if a.layers[k].halving {
                 break;
             }
-            let v: &[Fr] = if k == 0 { &virtuals } else { &[] };
+            let v: &[Fp2] = if k == 0 { &virtuals } else { &[] };
             let values = gate_values(a, k, &lower, &[], v, &ch);
             let produced = values[..a.layers[k].producing.len()].to_vec();
             for (j, value) in produced.iter().enumerate() {
@@ -288,7 +288,7 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, mem: u32, rd_old: u32) -> Row {
 
     let mut r = Row::default();
     r.set("cycle", f(CYCLE));
-    r.set("pc_mask", Fr::ONE)
+    r.set("pc_mask", Fp::ONE)
         .set("pc_read_ts", f(4 * (CYCLE - 1)))
         .set("pc_read_value", f(i.pc as u64))
         .set("pc_write_value", f(seq as u64));
@@ -299,7 +299,7 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, mem: u32, rd_old: u32) -> Row {
             let write = if i.rd == 0 { 0 } else { sel };
             r.query("rd", 3, i.rd as u64, rd_old as u64, write);
             match i.rd {
-                0 => r.set("rd_is_zero", Fr::ONE),
+                0 => r.set("rd_is_zero", Fp::ONE),
                 d => r.set("rd_inv", f(d as u64).inverse().expect("nonzero")),
             };
         }
@@ -324,7 +324,7 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, mem: u32, rd_old: u32) -> Row {
         r.set(witness, f(v as u64)).set(table, f(v as u64));
     }
     r.set("table_pc", f(i.pc as u64));
-    r.set(name("kind", mnemonic(i.bit)), Fr::ONE);
+    r.set(name("kind", mnemonic(i.bit)), Fp::ONE);
 
     splice(&mut r, word, w, p);
     for (column, v) in [
@@ -350,9 +350,9 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, mem: u32, rd_old: u32) -> Row {
 }
 
 /// A lookup expression's value on the committed row.
-fn expression(a: &CircuitArtifact, committed: &[Fr], gate: &GateDef) -> Fr {
+fn expression(a: &CircuitArtifact, committed: &[Fp], gate: &GateDef) -> Fp {
     let layout = a.committed();
-    let values: Vec<Fr> = gate
+    let values: Vec<Fp2> = gate
         .operands()
         .iter()
         .map(|op| {
@@ -360,13 +360,20 @@ fn expression(a: &CircuitArtifact, committed: &[Fr], gate: &GateDef) -> Fr {
                 .iter()
                 .position(|x| x == op)
                 .expect("a committed operand")]
+            .into()
         })
         .collect();
-    eval_gate(gate, &values, &ExternalChallenges::new())
+    let v = eval_gate(gate, &values, &ExternalChallenges::new());
+    assert_eq!(
+        v.c1,
+        Fp::ZERO,
+        "a literal-only gate over base values is base"
+    );
+    v.c0
 }
 
 /// The canonical integer of a field element, if it is below `2^64`.
-fn small_int(v: Fr) -> Option<u64> {
+fn small_int(v: Fp) -> Option<u64> {
     let bytes = v.to_bytes();
     bytes[8..]
         .iter()
@@ -392,15 +399,15 @@ fn violated_tables(a: &CircuitArtifact, r: &Row) -> Vec<String> {
             .position(|x| *x == l.selector)
             .expect("a selector is a committed column");
         let s = committed[at];
-        let values: Vec<Fr> = l
+        let values: Vec<Fp> = l
             .tuple
             .iter()
             .map(|e| expression(a, &committed, e))
             .collect();
         let holds = match l.channel {
             lookup_channel::GENERIC => {
-                let gated = [s * (values[0] + Fr::ONE), s * values[1], s * values[2]];
-                gated.iter().all(|v| *v == Fr::ZERO)
+                let gated = [s * (values[0] + Fp::ONE), s * values[1], s * values[2]];
+                gated.iter().all(|v| *v == Fp::ZERO)
                     || gated
                         .iter()
                         .map(|v| small_int(*v))
@@ -408,14 +415,14 @@ fn violated_tables(a: &CircuitArtifact, r: &Row) -> Vec<String> {
                         .is_some_and(|t| entries.contains(&[t[0], t[1], t[2]]))
             }
             lookup_channel::DECODER => {
-                let table: Vec<Fr> = (0..mem_subword::TABLE_WIDTH)
+                let table: Vec<Fp> = (0..mem_subword::TABLE_WIDTH)
                     .map(|j| committed[a.memory.len() + a.witness.len() + j])
                     .collect();
-                let gated: Vec<Fr> = values
+                let gated: Vec<Fp> = values
                     .iter()
-                    .map(|v| s * (*v + Fr::ONE) - Fr::ONE)
+                    .map(|v| s * (*v + Fp::ONE) - Fp::ONE)
                     .collect();
-                gated == table || gated.iter().all(|v| *v == Fr::MINUS_ONE)
+                gated == table || gated.iter().all(|v| *v == Fp::MINUS_ONE)
             }
             _ => continue,
         };
@@ -932,7 +939,7 @@ fn every_row_kind_satisfies_every_gate_and_every_bound() {
     for (what, r) in &rows {
         assert_eq!(violated(&a, r), (none(), none(), none()), "{what}");
         // The padding row claims no kind and is covered by its own test.
-        let Some(bit) = (0..6u32).find(|b| r.get(name("kind", mnemonic(*b))) == Fr::ONE) else {
+        let Some(bit) = (0..6u32).find(|b| r.get(name("kind", mnemonic(*b))) == Fp::ONE) else {
             continue;
         };
         let offset = small_int(r.get("bit0") + f(2) * r.get("bit1")).expect("the offset bits");
@@ -1025,12 +1032,12 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     let addr = small_int(r.get("load_addr")).expect("a word address");
     let kept = MEM as u64 - (MEM as u64 & 0xFF);
     r.query("ram", 3, addr, 0, kept);
-    r.set("p_ram", Fr::ONE);
+    r.set("p_ram", Fp::ONE);
     cases.push(("an lbu making a ram query", r, vec!["ram_mask_rule"]));
 
     // Addresses.
     let mut r = row("lbu at 0");
-    let addr = r.get("rs1_addr") + Fr::ONE;
+    let addr = r.get("rs1_addr") + Fp::ONE;
     r.set("rs1_addr", addr);
     cases.push((
         "a load reading the wrong base register",
@@ -1038,7 +1045,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         vec!["rs1_addr_rule"],
     ));
     let mut r = row("sb at 0");
-    let addr = r.get("rs2_addr") + Fr::ONE;
+    let addr = r.get("rs2_addr") + Fp::ONE;
     r.set("rs2_addr", addr);
     cases.push((
         "a store reading the wrong source register",
@@ -1072,7 +1079,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     let mut r = Row::default();
     r.set("rs1_read_value", f(4))
         .set("rs1_write_value", f(4))
-        .set("word_index", Fr::ONE);
+        .set("word_index", Fp::ONE);
     cases.push((
         "a padding row whose absent rs1 reads 4",
         r,
@@ -1093,7 +1100,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // The address split, whose word index moved with the address it names, so
     // that the memory query is consistent and only the split is not.
     let mut r = row("lbu at 0");
-    let index = r.get("word_index") + Fr::ONE;
+    let index = r.get("word_index") + Fp::ONE;
     let addr = r.get("load_addr") + f(4);
     r.set("word_index", index).set("load_addr", addr);
     cases.push((
@@ -1127,7 +1134,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // already there the merge writes the word back unchanged, so switching
     // `p_ram` off leaves `store_rule` holding and its own rule alone.
     let mut r = row("sb storing the byte already there");
-    r.set("p_ram", Fr::ZERO);
+    r.set("p_ram", Fp::ZERO);
     cases.push((
         "an sb switching its splice power off",
         r,
@@ -1139,7 +1146,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // tying `se` to the two signed kinds refuses it.
     let mut r = row("lbu at 3");
     let extended = 0xFFFF_FF88u64;
-    r.set("se", Fr::ONE)
+    r.set("se", Fp::ONE)
         .set("rd_selected", f(extended))
         .set("rd_write_value", f(extended))
         .set("rd_hi", f(0xFFFF));
@@ -1184,11 +1191,11 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // A unit moved from the low bytes into the high ones, so the splice still
     // sums and only the high part's own scaling is wrong.
     let mut r = row("lbu at 1");
-    let scaled = r.get("high_scaled") + Fr::ONE;
+    let scaled = r.get("high_scaled") + Fp::ONE;
     r.set("high_scaled", scaled)
-        .set("low", Fr::ZERO)
-        .set("low_scaled", Fr::ZERO)
-        .set("low_scaled_hi", Fr::ZERO);
+        .set("low", Fp::ZERO)
+        .set("low_scaled", Fp::ZERO)
+        .set("low_scaled_hi", Fp::ZERO);
     cases.push((
         "an lbu shifting a unit from its low bytes into its high ones",
         r,
@@ -1198,7 +1205,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // The three scaled columns, each one too large: nothing but its own rule
     // reads any of them, the ranges being membership and not equations.
     let mut r = row("lbu at 0");
-    let scaled = r.get("sub_scaled") + Fr::ONE;
+    let scaled = r.get("sub_scaled") + Fp::ONE;
     r.set("sub_scaled", scaled);
     cases.push((
         "an lbu whose scaled sub-word is one too large",
@@ -1206,7 +1213,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         vec!["sub_scaled_rule"],
     ));
     let mut r = row("lbu at 1");
-    let scaled = r.get("low_scaled") + Fr::ONE;
+    let scaled = r.get("low_scaled") + Fp::ONE;
     r.set("low_scaled", scaled);
     cases.push((
         "an lbu whose scaled low bytes are one too large",
@@ -1214,7 +1221,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         vec!["low_scaled_rule"],
     ));
     let mut r = row("sb at 0");
-    let scaled = r.get("src_sub_scaled") + Fr::ONE;
+    let scaled = r.get("src_sub_scaled") + Fp::ONE;
     r.set("src_sub_scaled", scaled);
     cases.push((
         "an sb whose scaled source is one too large",
@@ -1252,7 +1259,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
 
     // The store's merge.
     let mut r = row("sb at 0");
-    let written = r.get("ram_write_value") + Fr::ONE;
+    let written = r.get("ram_write_value") + Fp::ONE;
     r.set("ram_write_value", written);
     cases.push((
         "an sb storing one more than it spliced",
@@ -1285,7 +1292,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // sub-word the splice carries, which on a row with no word and no power is
     // free. Only the `m_pc` factor of the mask rule is left.
     let mut r = Row::default();
-    r.set("kind_lbu", Fr::ONE)
+    r.set("kind_lbu", Fp::ONE)
         .set("decoded_mask", f(1 << kind::LBU))
         .set("decoded_rd", f(10))
         .set("sub", f(43))
@@ -1354,18 +1361,18 @@ fn spliced_at_offset_zero() -> Row {
     splice(&mut r, word, 1 << 8, 1);
     let sub = word % (1 << 8);
     r.set("sign_in", f(sub << 8))
-        .set("sign", Fr::ZERO)
-        .set("se", Fr::ZERO)
+        .set("sign", Fp::ZERO)
+        .set("se", Fp::ZERO)
         .set("rd_selected", f(sub))
         .set("rd_write_value", f(sub))
-        .set("rd_hi", Fr::ZERO);
+        .set("rd_hi", Fp::ZERO);
     r
 }
 
 /// The honest `sb at 0` storing `src_sub` out of a source register holding
 /// `SOURCE`, with `src_high` claimed as given and the merged word recomputed
 /// so that the store's own gate still holds.
-fn stored_byte(src_sub: Fr, src_high: Fr) -> Row {
+fn stored_byte(src_sub: Fp, src_high: Fp) -> Row {
     let mut r = row("sb at 0");
     let byte = small_int(src_sub).expect("a byte");
     let kept = MEM as u64 - (MEM as u64 & 0xFF);
@@ -1434,8 +1441,8 @@ fn each_table_lookup_is_the_one_that_refuses_its_row() {
 
     let mut r = row("lh at 0");
     let extended = 0xFFFF_0000u64 + 0x7F01;
-    r.set("sign", Fr::ONE)
-        .set("se", Fr::ONE)
+    r.set("sign", Fp::ONE)
+        .set("se", Fp::ONE)
         .set("rd_selected", f(extended))
         .set("rd_write_value", f(extended))
         .set("rd_hi", f(0xFFFF));
@@ -1446,7 +1453,7 @@ fn each_table_lookup_is_the_one_that_refuses_its_row() {
     );
 
     let mut r = honest(Instr::new(kind::LBU, 4), BASE, 0, MEM, 0x1111_1111);
-    r.set("table_imm", Fr::ZERO);
+    r.set("table_imm", Fp::ZERO);
     assert_eq!(
         violated(&a, &r),
         (none(), none(), names(&["decode_row"])),
@@ -1516,17 +1523,25 @@ fn the_generic_key_stays_inside_its_sub_table() {
 // ---------------------------------------------------------------------------
 
 /// A gate over a map of column values.
-fn eval(gate: &GateDef, values: &BTreeMap<PolyAddress, Fr>) -> Fr {
-    let operands: Vec<Fr> = gate
+fn eval(gate: &GateDef, values: &BTreeMap<PolyAddress, Fp>) -> Fp {
+    let operands: Vec<Fp2> = gate
         .operands()
         .iter()
         .map(|address| {
-            *values
-                .get(address)
-                .unwrap_or_else(|| panic!("the case gives {address} no value"))
+            Fp2::from(
+                *values
+                    .get(address)
+                    .unwrap_or_else(|| panic!("the case gives {address} no value")),
+            )
         })
         .collect();
-    eval_gate(gate, &operands, &ExternalChallenges::new())
+    let v = eval_gate(gate, &operands, &ExternalChallenges::new());
+    assert_eq!(
+        v.c1,
+        Fp::ZERO,
+        "a literal-only gate over base values is base"
+    );
+    v.c0
 }
 
 /// The one value below `window` that zeroes the gate named `name`, or `None`
@@ -1538,7 +1553,7 @@ fn solve(
     gates: &[(String, GateDef)],
     name: &str,
     address: PolyAddress,
-    values: &mut BTreeMap<PolyAddress, Fr>,
+    values: &mut BTreeMap<PolyAddress, Fp>,
     window: u64,
 ) -> Option<u64> {
     let gate = &gates
@@ -1549,7 +1564,7 @@ fn solve(
     let mut found = None;
     for candidate in 0..window {
         values.insert(address, f(candidate));
-        if eval(gate, values) == Fr::ZERO {
+        if eval(gate, values) == Fp::ZERO {
             assert!(found.is_none(), "`{name}` is solved twice below {window}");
             found = Some(candidate);
         }
@@ -1622,15 +1637,15 @@ fn the_splice_admits_exactly_one_witness_at_a_reduced_width() {
             let p = 1u64 << (B * offset as u32);
             for word in 0..full {
                 cases += 1;
-                let mut base: BTreeMap<PolyAddress, Fr> = BTreeMap::new();
-                base.insert(m_pc, Fr::ONE);
+                let mut base: BTreeMap<PolyAddress, Fp> = BTreeMap::new();
+                base.insert(m_pc, Fp::ONE);
                 for k in KINDS {
-                    base.insert(k, Fr::ZERO);
+                    base.insert(k, Fp::ZERO);
                 }
                 // A byte load and a halfword load: one kind bit each, which is
                 // what the BYTE and the LOAD forms read.
                 let bit = KINDS[if byte { kind::LB } else { kind::LH } as usize];
-                base.insert(bit, Fr::ONE);
+                base.insert(bit, Fp::ONE);
                 base.insert(BIT0, f(offset & 1));
                 base.insert(BIT1, f(offset >> 1));
                 base.insert(WORD, f(word));
@@ -1646,7 +1661,7 @@ fn the_splice_admits_exactly_one_witness_at_a_reduced_width() {
                     SRC_SUB_SCALED,
                     SE,
                 ] {
-                    base.insert(address, Fr::ZERO);
+                    base.insert(address, Fp::ZERO);
                 }
                 // The three constants the offset fixes, each solved from its
                 // own gate rather than written down here.
@@ -1702,7 +1717,7 @@ fn the_splice_admits_exactly_one_witness_at_a_reduced_width() {
                                     .unwrap_or_else(|| panic!("`{gate}` has no small solution"));
                                 v.insert(address, f(x));
                             }
-                            if gates.iter().all(|(_, g)| eval(g, &v) == Fr::ZERO) {
+                            if gates.iter().all(|(_, g)| eval(g, &v) == Fp::ZERO) {
                                 witnesses.push((high as u64, sub as u64, low as u64));
                             }
                         }
@@ -1816,7 +1831,7 @@ fn an_lbu_that_yields_more_than_a_byte_is_refused() {
 /// `high_scaled` to `word − 2` and the equation closes — and `high_scaled`'s
 /// own pair accepts that, `word − 2` being a perfectly ordinary word. But
 /// `high_scaled = 2·high·wph` then forces `high` to be `(word − 2)/256`, which
-/// is no integer at all over `Fr`, and the direct pair on `high` is what sees
+/// is no integer at all over `Fp`, and the direct pair on `high` is what sees
 /// it. Without that pair a load would return any byte-sized value it liked.
 #[test]
 fn a_free_high_is_refused() {
@@ -1831,7 +1846,7 @@ fn a_free_high_is_refused() {
         "high",
         (f(word) - f(claimed)) * f(256).inverse().expect("nonzero"),
     )
-    .set("high_hi", Fr::ZERO)
+    .set("high_hi", Fp::ZERO)
     .set("high_scaled", f(word - claimed))
     .set("high_scaled_hi", f((word - claimed) >> 16))
     .set("sub", f(claimed))
@@ -1878,7 +1893,7 @@ fn a_store_source_unrelated_to_rs2_is_refused() {
     let r = stored_byte(f(0x42), solved);
     assert_eq!(
         violated(&a, &r),
-        (none(), names(&["src_high_lo_range"]), none()),
+        (none(), names(&["src_high_hi_range"]), none()),
         "an sb solving its truncation for a fractional high"
     );
 }

@@ -9,8 +9,8 @@ constants.workspace = true
 # `constraints::memory`'s frame layout, which keys every memory column
 # `src/memory.rs` builds; `PolyAddress` is the key.
 constraints.workspace = true
-# `Fr`, for the x0 gadget's inverse column and a timestamp column past 32 bits.
-field.workspace = true
+# `Fp`, for the x0 gadget's inverse column and a timestamp column past 32 bits.
+field-a64-c5.workspace = true
 # `BoundaryFinals`, the register and PC finals the verifier's boundary reads.
 gkr-verify.workspace = true
 loader.workspace = true

@@ -30,7 +30,7 @@ use constraints::gadgets::{comparison_equation, Comparison};
 use constraints::lookup::{check_discharge, ChannelSpec};
 use constraints::memory::check_memory;
 use constraints::{family_circuit, jump_branch_slt, CircuitArtifact, PolyAddress, VirtualKind};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{eval_gate, gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallenges};
 use isa::Instr as Isa;
 use program::lookup_tables::generic_entries;
@@ -49,14 +49,14 @@ fn challenges(a: &CircuitArtifact) -> ExternalChallenges {
         (challenge_slot::MEM_ALPHA_TS, 17),
         (challenge_slot::MEM_ALPHA_VAL, 19),
     ] {
-        ch.insert(slot, Fr::from_u64(v));
+        ch.insert(slot, Fp::from_u64(v).into());
     }
-    insert_lookup_challenges(&mut ch, Fr::from_u64(23), Fr::from_u64(29), a);
+    insert_lookup_challenges(&mut ch, Fp::from_u64(23).into(), Fp::from_u64(29).into(), a);
     ch
 }
 
-fn f(v: u64) -> Fr {
-    Fr::from_u64(v)
+fn f(v: u64) -> Fp {
+    Fp::from_u64(v)
 }
 
 const TWO_32: u64 = 1 << 32;
@@ -68,22 +68,22 @@ const INT_MIN: u32 = 0x8000_0000;
 
 /// A row by column name; a column not named is 0.
 #[derive(Clone, Debug, Default)]
-struct Row(BTreeMap<&'static str, Fr>);
+struct Row(BTreeMap<&'static str, Fp>);
 
 impl Row {
-    fn set(&mut self, name: &'static str, v: Fr) -> &mut Row {
+    fn set(&mut self, name: &'static str, v: Fp) -> &mut Row {
         self.0.insert(name, v);
         self
     }
 
-    fn get(&self, name: &str) -> Fr {
-        self.0.get(name).copied().unwrap_or(Fr::ZERO)
+    fn get(&self, name: &str) -> Fp {
+        self.0.get(name).copied().unwrap_or(Fp::ZERO)
     }
 
     /// Set the query `q`'s five columns, reading a write made eight
     /// timestamps before its own.
     fn query(&mut self, q: &'static str, delta: u64, addr: u64, read: u64, write: u64) {
-        self.set(name(q, "mask"), Fr::ONE)
+        self.set(name(q, "mask"), Fp::ONE)
             .set(name(q, "addr"), f(addr))
             .set(name(q, "read_ts"), f(4 * CYCLE + delta - 8))
             .set(name(q, "read_value"), f(read))
@@ -91,7 +91,7 @@ impl Row {
     }
 
     /// The row's committed values in layout order.
-    fn committed(&self, a: &CircuitArtifact) -> Vec<Fr> {
+    fn committed(&self, a: &CircuitArtifact) -> Vec<Fp> {
         let names: Vec<&str> = a
             .memory
             .iter()
@@ -108,19 +108,19 @@ impl Row {
     /// The row as a witness row of `a`, its scratch computed row-locally.
     fn witness(&self, a: &CircuitArtifact, row: usize) -> WitnessRow {
         let committed = self.committed(a);
-        let virtuals: Vec<Fr> = a
+        let virtuals: Vec<Fp2> = a
             .virtuals
             .iter()
-            .map(|(k, _)| virtual_at_row(*k, row))
+            .map(|(k, _)| virtual_at_row(*k, row).into())
             .collect();
         let ch = challenges(a);
-        let mut scratch = vec![Fr::ZERO; a.scratch.len()];
-        let mut lower = committed.clone();
+        let mut scratch = vec![Fp2::ZERO; a.scratch.len()];
+        let mut lower: Vec<Fp2> = committed.iter().map(|v| (*v).into()).collect();
         for k in 0..a.depth() {
             if a.layers[k].halving {
                 break;
             }
-            let v: &[Fr] = if k == 0 { &virtuals } else { &[] };
+            let v: &[Fp2] = if k == 0 { &virtuals } else { &[] };
             let values = gate_values(a, k, &lower, &[], v, &ch);
             let produced = values[..a.layers[k].producing.len()].to_vec();
             for (j, value) in produced.iter().enumerate() {
@@ -244,7 +244,7 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
 
     let mut r = Row::default();
     r.set("cycle", f(CYCLE));
-    r.set("pc_mask", Fr::ONE)
+    r.set("pc_mask", Fp::ONE)
         .set("pc_read_ts", f(4 * (CYCLE - 1)))
         .set("pc_read_value", f(i.pc as u64))
         .set("pc_write_value", f(next as u64));
@@ -258,7 +258,7 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
         let write = if i.rd == 0 { 0 } else { sel };
         r.query("rd", 3, i.rd as u64, rd_old as u64, write as u64);
         match i.rd {
-            0 => r.set("rd_is_zero", Fr::ONE),
+            0 => r.set("rd_is_zero", Fp::ONE),
             d => r.set("rd_inv", f(d as u64).inverse().expect("nonzero")),
         };
     }
@@ -280,7 +280,7 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
         .set("table_rd", f(i.rd as u64))
         .set("table_imm", f(i.imm as u64))
         .set("table_extra_mask", f(1 << bit));
-    r.set(name("kind", KINDS[bit as usize]), Fr::ONE);
+    r.set(name("kind", KINDS[bit as usize]), Fp::ONE);
     r.set("cmp_rhs", f(rhs as u64))
         .set("rs1_hi", f(a as u64 >> 16))
         .set("rs1_sign", f(a as u64 >> 31))
@@ -292,7 +292,7 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
         .set("eq", f(eq as u64))
         .set(
             "eq_inv",
-            (f(a as u64) - f(rhs as u64)).inverse().unwrap_or(Fr::ZERO),
+            (f(a as u64) - f(rhs as u64)).inverse().unwrap_or(Fp::ZERO),
         )
         .set("taken", f(taken as u64))
         .set("jalr_drop", f(drop as u64))
@@ -462,9 +462,9 @@ fn row(what: &str) -> Row {
 
 /// A lookup expression's value on the committed row: `eval_gate` over the
 /// expression's operands, read from the layout.
-fn expression(a: &CircuitArtifact, committed: &[Fr], gate: &constraints::GateDef) -> Fr {
+fn expression(a: &CircuitArtifact, committed: &[Fp], gate: &constraints::GateDef) -> Fp {
     let layout = a.committed();
-    let values: Vec<Fr> = gate
+    let values: Vec<Fp2> = gate
         .operands()
         .iter()
         .map(|op| {
@@ -472,9 +472,16 @@ fn expression(a: &CircuitArtifact, committed: &[Fr], gate: &constraints::GateDef
                 .iter()
                 .position(|x| x == op)
                 .expect("a committed operand")]
+            .into()
         })
         .collect();
-    eval_gate(gate, &values, &ExternalChallenges::new())
+    let v = eval_gate(gate, &values, &ExternalChallenges::new());
+    assert_eq!(
+        v.c1,
+        Fp::ZERO,
+        "a literal-only gate over base values is base"
+    );
+    v.c0
 }
 
 /// The two table channels' lookups the row does not hold, by name: a generic
@@ -500,15 +507,15 @@ fn violated_tables(a: &CircuitArtifact, r: &Row) -> Vec<String> {
             .position(|x| *x == l.selector)
             .expect("a selector is a committed column");
         let s = committed[at];
-        let values: Vec<Fr> = l
+        let values: Vec<Fp> = l
             .tuple
             .iter()
             .map(|e| expression(a, &committed, e))
             .collect();
         let holds = match l.channel {
             lookup_channel::GENERIC => {
-                let gated = [s * (values[0] + Fr::ONE), s * values[1], s * values[2]];
-                gated.iter().all(|v| *v == Fr::ZERO)
+                let gated = [s * (values[0] + Fp::ONE), s * values[1], s * values[2]];
+                gated.iter().all(|v| *v == Fp::ZERO)
                     || gated
                         .iter()
                         .map(|v| small_int_opt(*v))
@@ -516,14 +523,14 @@ fn violated_tables(a: &CircuitArtifact, r: &Row) -> Vec<String> {
                         .is_some_and(|t| entries.contains(&[t[0], t[1], t[2]]))
             }
             lookup_channel::DECODER => {
-                let table: Vec<Fr> = (0..7)
+                let table: Vec<Fp> = (0..7)
                     .map(|j| committed[a.memory.len() + a.witness.len() + j])
                     .collect();
-                let gated: Vec<Fr> = values
+                let gated: Vec<Fp> = values
                     .iter()
-                    .map(|v| s * (*v + Fr::ONE) - Fr::ONE)
+                    .map(|v| s * (*v + Fp::ONE) - Fp::ONE)
                     .collect();
-                gated == table || gated.iter().all(|v| *v == Fr::MINUS_ONE)
+                gated == table || gated.iter().all(|v| *v == Fp::MINUS_ONE)
             }
             _ => continue,
         };
@@ -544,7 +551,7 @@ fn violated(a: &CircuitArtifact, r: &Row) -> (Vec<String>, Vec<String>, Vec<Stri
     )
 }
 
-fn small_int_opt(v: Fr) -> Option<u64> {
+fn small_int_opt(v: Fp) -> Option<u64> {
     let b = v.to_bytes();
     b[8..]
         .iter()
@@ -552,7 +559,7 @@ fn small_int_opt(v: Fr) -> Option<u64> {
         .then(|| u64::from_le_bytes(b[..8].try_into().unwrap()))
 }
 
-fn small_int(v: Fr) -> u64 {
+fn small_int(v: Fp) -> u64 {
     small_int_opt(v).unwrap_or_else(|| panic!("{v:?} is not a small integer"))
 }
 
@@ -783,16 +790,16 @@ fn the_layout_and_the_gates_are_the_specs() {
         sign.tuple,
         vec![
             constraints::GateDef::Linear {
-                terms: vec![(constraints::Coeff::Literal(Fr::ONE), w(26))],
+                terms: vec![(constraints::Coeff::Literal(Fp::ONE), w(26))],
                 constant: constraints::Coeff::Literal(f(generic_table::SIGN_BASE as u64)),
             },
             constraints::GateDef::Linear {
-                terms: vec![(constraints::Coeff::Literal(Fr::ONE), w(27))],
-                constant: constraints::Coeff::Literal(Fr::ZERO),
+                terms: vec![(constraints::Coeff::Literal(Fp::ONE), w(27))],
+                constant: constraints::Coeff::Literal(Fp::ZERO),
             },
             constraints::GateDef::Linear {
                 terms: vec![],
-                constant: constraints::Coeff::Literal(Fr::ZERO),
+                constant: constraints::Coeff::Literal(Fp::ZERO),
             },
         ]
     );
@@ -926,13 +933,13 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     cases.push(("an slti reading rs2", r, vec!["rs2_mask_rule"]));
     let mut r = row("beq taken");
     r.query("rd", 3, 0, 0, 0);
-    r.set("rd_is_zero", Fr::ONE);
+    r.set("rd_is_zero", Fp::ONE);
     cases.push(("a branch writing x0", r, vec!["rd_mask_rule"]));
     let mut r = row("slt INT_MIN < 1");
     for field in ["mask", "addr", "read_ts", "read_value", "write_value"] {
         r.0.remove(name("rd", field));
     }
-    r.set("rd_inv", Fr::ZERO);
+    r.set("rd_inv", Fp::ZERO);
     cases.push((
         "an slt whose write is masked off",
         r,
@@ -952,7 +959,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         vec!["rd_mask_rule", "rd_addr_rule", "rd_value_rule"],
     ));
     let mut r = Row::default();
-    r.set("kind_jal", Fr::ONE)
+    r.set("kind_jal", Fp::ONE)
         .set("decoded_mask", f(1 << kind::JAL))
         .set("decoded_rd", f(10))
         .set("decoded_next_pc", f(43));
@@ -969,7 +976,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // Addresses.
     for (q, rule) in [("rs1", "rs1_addr_rule"), ("rs2", "rs2_addr_rule")] {
         let mut r = row("bne taken");
-        let addr = r.get(name(q, "addr")) + Fr::ONE;
+        let addr = r.get(name(q, "addr")) + Fp::ONE;
         r.set(name(q, "addr"), addr);
         cases.push(("a register query at the wrong register", r, vec![rule]));
     }
@@ -983,7 +990,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     r.set("rs1_read_value", f(5))
         .set("rs1_write_value", f(5))
         .set("cmp_gap", f(5))
-        .set("eq", Fr::ZERO)
+        .set("eq", Fp::ZERO)
         .set("eq_inv", f(5).inverse().unwrap());
     cases.push(("a jal's absent rs1 reading 5", r, vec!["rs1_value_masked"]));
     let mut r = row("slti 5 < -1");
@@ -1007,7 +1014,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     let rhs = 1 + 8;
     let gap = INT_MIN.wrapping_sub(rhs);
     r.set("cmp_rhs", f(rhs as u64))
-        .set("cmp_rhs_hi", Fr::ZERO)
+        .set("cmp_rhs_hi", Fp::ZERO)
         .set("cmp_gap", f(gap as u64))
         .set("cmp_gap_hi", f(gap as u64 >> 16))
         .set(
@@ -1022,12 +1029,12 @@ fn each_gate_is_the_one_that_refuses_its_row() {
 
     // The comparison.
     let mut r = row("jalr x0 (ret)");
-    r.set("lt", Fr::ONE);
+    r.set("lt", Fp::ONE);
     cases.push(("a jalr's unread lt flipped", r, vec!["cmp_order"]));
     let mut r = row("slt 1 < INT_MIN");
-    r.set("lt", Fr::ONE)
-        .set("rd_selected", Fr::ONE)
-        .set("rd_write_value", Fr::ONE);
+    r.set("lt", Fp::ONE)
+        .set("rd_selected", Fp::ONE)
+        .set("rd_write_value", Fp::ONE);
     cases.push((
         "an slt answering 1 with its gap unchanged",
         r,
@@ -1036,18 +1043,18 @@ fn each_gate_is_the_one_that_refuses_its_row() {
 
     // Equality.
     let mut r = row("bne taken");
-    let inv = r.get("eq_inv") + Fr::ONE;
+    let inv = r.get("eq_inv") + Fp::ONE;
     r.set("eq_inv", inv);
     cases.push(("a wrong inverse", r, vec!["eq_inverse"]));
     let mut r = row("slt INT_MIN < 1");
-    r.set("eq", Fr::ONE).set("eq_inv", Fr::ZERO);
+    r.set("eq", Fp::ONE).set("eq_inv", Fp::ZERO);
     cases.push((
         "an slt calling unequal operands equal",
         r,
         vec!["eq_at_nonzero"],
     ));
     let mut r = row("beq taken");
-    r.set("eq", Fr::ZERO);
+    r.set("eq", Fp::ZERO);
     cases.push((
         "a beq calling equal operands unequal",
         r,
@@ -1057,12 +1064,12 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // Taken.
     let mut r = row("blt(1, INT_MIN) not taken");
     let target = f(0x1_0108);
-    r.set("taken", Fr::ONE)
+    r.set("taken", Fp::ONE)
         .set("pc_write_value", target)
         .set("next_pc_hi", f(1));
     cases.push(("a not-taken blt taking itself", r, vec!["taken_rule"]));
     let mut r = row("beq taken");
-    r.set("taken", Fr::ZERO).set("pc_write_value", f(0x1_0104));
+    r.set("taken", Fp::ZERO).set("pc_write_value", f(0x1_0104));
     cases.push(("a taken beq falling through", r, vec!["taken_rule"]));
 
     // next_pc.
@@ -1073,10 +1080,10 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     r.set("pc_write_value", f(0x1_0104));
     cases.push(("a jal falling through", r, vec!["next_pc_rule"]));
     let mut r = row("jalr wrapping");
-    r.set("pc_wrap", Fr::ZERO);
+    r.set("pc_wrap", Fp::ZERO);
     cases.push(("a jalr dropping its wrap", r, vec!["next_pc_rule"]));
     let mut r = row("jalr rs1 = rd, imm -2, bit 0 set");
-    r.set("jalr_drop", Fr::ZERO);
+    r.set("jalr_drop", Fp::ZERO);
     cases.push((
         "a jalr keeping bit 0 in the sum only",
         r,
@@ -1098,7 +1105,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     ));
     // A dropped bit of −1: a jalr lands one above its sum instead of one below.
     let mut r = row("jalr rs1 = rd, imm -2, bit 0 set");
-    r.set("jalr_drop", Fr::MINUS_ONE)
+    r.set("jalr_drop", Fp::MINUS_ONE)
         .set("pc_write_value", f(0x1_01aa));
     cases.push((
         "a jalr rounding its target up",
@@ -1107,7 +1114,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     ));
     // The truncation target: a row of this family writing HALT_PC.
     let mut r = row("bne not taken");
-    r.set("pc_write_value", Fr::ONE).set("next_pc_hi", Fr::ZERO);
+    r.set("pc_write_value", Fp::ONE).set("next_pc_hi", Fp::ZERO);
     cases.push(("a branch writing HALT_PC", r, vec!["next_pc_rule"]));
 
     // The written value.
@@ -1186,8 +1193,8 @@ fn bare_comparison() -> Comparison {
 
 /// The equation's value at `(lhs, rhs, signs, sc, lt, gap)`, through the
 /// kernel over the gadget's own gate.
-fn equation_at(gate: &constraints::GateDef, c: &Comparison, cells: [(PolyAddress, Fr); 7]) -> Fr {
-    let values: Vec<Fr> = gate
+fn equation_at(gate: &constraints::GateDef, c: &Comparison, cells: [(PolyAddress, Fp); 7]) -> Fp {
+    let values: Vec<Fp2> = gate
         .operands()
         .iter()
         .map(|op| {
@@ -1196,9 +1203,16 @@ fn equation_at(gate: &constraints::GateDef, c: &Comparison, cells: [(PolyAddress
                 .find(|(a, _)| a == op)
                 .unwrap_or_else(|| panic!("the equation reads {op}, which {c:?} does not set"))
                 .1
+                .into()
         })
         .collect();
-    eval_gate(gate, &values, &ExternalChallenges::new())
+    let v = eval_gate(gate, &values, &ExternalChallenges::new());
+    assert_eq!(
+        v.c1,
+        Fp::ZERO,
+        "a literal-only gate over base values is base"
+    );
+    v.c0
 }
 
 /// The comparison, exhaustively: at a 6-bit word, for every operand pair,
@@ -1223,7 +1237,7 @@ fn exactly_one_lt_and_gap_satisfy_the_comparison_at_a_reduced_width() {
                     1 => signed(lhs) < signed(rhs),
                     _ => lhs < rhs,
                 };
-                let at = |lt: u64, gap: Fr| {
+                let at = |lt: u64, gap: Fp| {
                     equation_at(
                         &gate,
                         &c,
@@ -1241,14 +1255,14 @@ fn exactly_one_lt_and_gap_satisfy_the_comparison_at_a_reduced_width() {
                 let mut solutions = Vec::new();
                 for lt in [0u64, 1] {
                     for gap in 0..word {
-                        if at(lt, f(gap)) == Fr::ZERO {
+                        if at(lt, f(gap)) == Fp::ZERO {
                             solutions.push(lt);
                         }
                     }
                     // The field solution for this lt: D + 2^w·lt, which is in
                     // the word for exactly one lt.
                     let d = f(lhs) - f(rhs) - f(word) * f(sc) * (f(ls) - f(rs));
-                    assert_eq!(at(lt, d + f(word) * f(lt)), Fr::ZERO);
+                    assert_eq!(at(lt, d + f(word) * f(lt)), Fp::ZERO);
                 }
                 assert_eq!(
                     solutions,
@@ -1303,8 +1317,8 @@ fn the_pinned_full_width_comparisons_answer_correctly() {
                     r.set("rd_selected", other).set("rd_write_value", other);
                 }
                 _ => {
-                    let taken = Fr::ONE - r.get("taken");
-                    let next = if taken == Fr::ONE { 0x1_0108 } else { 0x1_0104 };
+                    let taken = Fp::ONE - r.get("taken");
+                    let next = if taken == Fp::ONE { 0x1_0108 } else { 0x1_0104 };
                     r.set("taken", taken)
                         .set("pc_write_value", f(next))
                         .set("next_pc_hi", f(1));
@@ -1361,19 +1375,19 @@ fn the_slti_defect_has_no_analogue() {
     // The defect: the immediate's sign read as 0, so 5 < 0xffffffff.
     let mut r = row("slti 5 < -1");
     let gap = 5u32.wrapping_sub(u32::MAX);
-    r.set("cmp_rhs_sign", Fr::ZERO)
-        .set("lt", Fr::ONE)
+    r.set("cmp_rhs_sign", Fp::ZERO)
+        .set("lt", Fp::ONE)
         .set("cmp_gap", f(gap as u64))
         .set("cmp_gap_hi", f(gap as u64 >> 16))
-        .set("rd_selected", Fr::ONE)
-        .set("rd_write_value", Fr::ONE);
+        .set("rd_selected", Fp::ONE)
+        .set("rd_write_value", Fp::ONE);
     assert_eq!(
         violated(&a, &r),
         (none(), none(), names(&["cmp_rhs_get_sign"]))
     );
     // Its other half: the sign taken from rs2's halfword, 0, and the
     // halfword with it.
-    r.set("cmp_rhs_hi", Fr::ZERO);
+    r.set("cmp_rhs_hi", Fp::ZERO);
     assert_eq!(
         violated(&a, &r),
         (none(), names(&["cmp_rhs_lo_range"]), none())
@@ -1390,10 +1404,10 @@ fn each_table_lookup_is_the_one_that_refuses_its_row() {
     // slt(-1, 1) answering 0: rs1's sign read as 0, and the gap unchanged.
     let mut r = row("slt -1 < 1");
     assert_eq!(small_int(r.get("cmp_gap")), 0xffff_fffe);
-    r.set("rs1_sign", Fr::ZERO)
-        .set("lt", Fr::ZERO)
-        .set("rd_selected", Fr::ZERO)
-        .set("rd_write_value", Fr::ZERO);
+    r.set("rs1_sign", Fp::ZERO)
+        .set("lt", Fp::ZERO)
+        .set("rd_selected", Fp::ZERO)
+        .set("rd_write_value", Fp::ZERO);
     assert_eq!(
         violated(&a, &r),
         (none(), none(), names(&["cmp_lhs_get_sign"]))
@@ -1401,10 +1415,10 @@ fn each_table_lookup_is_the_one_that_refuses_its_row() {
     // slt(1, -1) answering 1: rs2's sign read as 0.
     let mut r = row("slt 1 < -1");
     assert_eq!(small_int(r.get("cmp_gap")), 2);
-    r.set("cmp_rhs_sign", Fr::ZERO)
-        .set("lt", Fr::ONE)
-        .set("rd_selected", Fr::ONE)
-        .set("rd_write_value", Fr::ONE);
+    r.set("cmp_rhs_sign", Fp::ZERO)
+        .set("lt", Fp::ONE)
+        .set("rd_selected", Fp::ONE)
+        .set("rd_write_value", Fp::ONE);
     assert_eq!(
         violated(&a, &r),
         (none(), none(), names(&["cmp_rhs_get_sign"]))
@@ -1438,7 +1452,7 @@ fn only_the_evenness_obligation_refuses_a_jalr_that_fakes_an_exit() {
     assert_eq!(small_int(honest.get("jalr_drop")), 1);
 
     let mut fake = honest.clone();
-    fake.set("jalr_drop", Fr::ZERO)
+    fake.set("jalr_drop", Fp::ZERO)
         .set("pc_write_value", f(constants::memory::HALT_PC as u64));
     assert_eq!(
         violated(&a, &fake),
@@ -1446,7 +1460,7 @@ fn only_the_evenness_obligation_refuses_a_jalr_that_fakes_an_exit() {
     );
 
     let mut odd = row("jalr rs1 = rd, imm -2, bit 0 set");
-    odd.set("jalr_drop", Fr::ZERO)
+    odd.set("jalr_drop", Fp::ZERO)
         .set("pc_write_value", f(0x1_01a9));
     assert_eq!(
         violated(&a, &odd),
@@ -1457,7 +1471,7 @@ fn only_the_evenness_obligation_refuses_a_jalr_that_fakes_an_exit() {
     let next = unreduced.get("pc_write_value") + f(TWO_32);
     let hi = unreduced.get("next_pc_hi") + f(1 << 16);
     unreduced
-        .set("pc_wrap", Fr::ZERO)
+        .set("pc_wrap", Fp::ZERO)
         .set("pc_write_value", next)
         .set("next_pc_hi", hi);
     assert_eq!(
@@ -1470,7 +1484,7 @@ fn only_the_evenness_obligation_refuses_a_jalr_that_fakes_an_exit() {
     let next = unreduced.get("pc_write_value") + f(TWO_32);
     let hi = unreduced.get("next_pc_hi") + f(1 << 16);
     unreduced
-        .set("pc_wrap", Fr::ZERO)
+        .set("pc_wrap", Fp::ZERO)
         .set("pc_write_value", next)
         .set("next_pc_hi", hi);
     assert_eq!(
@@ -1486,16 +1500,16 @@ fn only_the_evenness_obligation_refuses_a_jalr_that_fakes_an_exit() {
 fn an_all_zero_mask_is_refused_by_the_decoder_domain_alone() {
     let a = artifact();
     let mut r = row("jal x0");
-    r.set("decoded_mask", Fr::ZERO)
-        .set("kind_jal", Fr::ZERO)
-        .set("rd_selected", Fr::ZERO)
-        .set("rd_hi", Fr::ZERO)
+    r.set("decoded_mask", Fp::ZERO)
+        .set("kind_jal", Fp::ZERO)
+        .set("rd_selected", Fp::ZERO)
+        .set("rd_hi", Fp::ZERO)
         .set("pc_write_value", f(0x1_0104))
         .set("next_pc_hi", f(1));
     for field in ["mask", "addr", "read_ts", "read_value", "write_value"] {
         r.0.remove(name("rd", field));
     }
-    r.set("rd_is_zero", Fr::ZERO);
+    r.set("rd_is_zero", Fp::ZERO);
     assert_eq!(violated(&a, &r), (none(), none(), names(&["decode_row"])));
 }
 
@@ -1523,14 +1537,14 @@ fn a_padding_row_advances_the_pc() {
         "table_imm",
         "table_extra_mask",
     ] {
-        padding.set(column, Fr::MINUS_ONE);
+        padding.set(column, Fp::MINUS_ONE);
     }
     assert_eq!(violated(&a, &padding), (none(), none(), none()));
     let mut r = Row::default();
     r.set("decoded_next_pc", f(0x1_0200))
         .set("pc_write_value", f(0x1_0200));
     assert_eq!(violated(&a, &r).0, none());
-    r.set("pc_write_value", Fr::ZERO);
+    r.set("pc_write_value", Fp::ZERO);
     assert_eq!(violated(&a, &r).0, names(&["next_pc_rule"]));
 }
 
@@ -1624,14 +1638,14 @@ fn the_legal_masks_are_the_instruction_list() {
         .map(|(k, b)| (constraints::Coeff::Literal(f(1 << k)), *b))
         .collect();
     terms.push((
-        constraints::Coeff::Literal(Fr::MINUS_ONE),
+        constraints::Coeff::Literal(Fp::MINUS_ONE),
         jump_branch_slt::DECODED[5],
     ));
     assert_eq!(
         bits.gate,
         constraints::GateDef::Linear {
             terms,
-            constant: constraints::Coeff::Literal(Fr::ZERO),
+            constant: constraints::Coeff::Literal(Fp::ZERO),
         }
     );
     // The masks of the instructions the guest runs, from its decoded table.
@@ -2040,9 +2054,9 @@ fn a_jump_to_a_pc_holding_no_instruction_cannot_be_counted() {
             .find(|(c, _)| *c == address)
             .expect("a filled column")
             .1;
-        let mut values: Vec<Fr> = (0..column.len()).map(|i| column.get(i)).collect();
+        let mut values: Vec<Fp> = (0..column.len()).map(|i| column.get_base(i)).collect();
         values[row] = value;
-        *column = poly::MultilinearPoly::new(poly::PolyBacking::Fr(values));
+        *column = poly::MultilinearPoly::new(poly::PolyBacking::Fp(values));
     }
     let refusal = trace::build_multiplicities(&a, &columns, &decoder)
         .expect_err("a live row at a pc no table holds cannot be counted");
@@ -2152,7 +2166,7 @@ fn assert_rows_hold(columns: &[(PolyAddress, poly::MultilinearPoly)], rows: &[us
     let ch = challenges(&a);
     for &row in rows {
         let mut r = Row::default();
-        let committed: Vec<Fr> = ordered.iter().map(|c| c.get(row)).collect();
+        let committed: Vec<Fp> = ordered.iter().map(|c| c.get_base(row)).collect();
         // Through the named row, so the scratch is computed exactly as the
         // hand-built rows' is.
         for (name, value) in a
@@ -2303,17 +2317,17 @@ fn a_second_shard_fills_the_cycles_after_the_first() {
             .find(|(c, _)| *c == constraints::memory::CYCLE)
             .expect("the cycle column")
             .1;
-        (0..h).map(|i| c.get(i)).collect::<Vec<Fr>>()
+        (0..h).map(|i| c.get_base(i)).collect::<Vec<Fp>>()
     };
 
     let first = filled(&program, &archive, 0, LOG, false);
-    let want: Vec<Fr> = buffer.cycle[..h].iter().map(|c| f(*c)).collect();
+    let want: Vec<Fp> = buffer.cycle[..h].iter().map(|c| f(*c)).collect();
     assert_eq!(cycles(&first), want);
     assert_rows_hold(&first, &[0, 1, h - 1]);
 
     let second = filled(&program, &archive, 1, LOG, false);
-    let mut want: Vec<Fr> = buffer.cycle[h..].iter().map(|c| f(*c)).collect();
-    want.resize(h, Fr::ZERO);
+    let mut want: Vec<Fp> = buffer.cycle[h..].iter().map(|c| f(*c)).collect();
+    want.resize(h, Fp::ZERO);
     assert_eq!(cycles(&second), want);
     assert_rows_hold(&second, &[0, 1, 4, 5, 6, h - 1]);
 }

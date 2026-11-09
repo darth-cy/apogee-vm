@@ -6,11 +6,11 @@
 use constants::transcript_tags::{
     PUBLIC_INPUTS, SUMCHECK_CHALLENGE, SUMCHECK_FINAL_EVALS, SUMCHECK_ROUND,
 };
-use field_a64_c5::{Fp, A64_C5};
+use field_a64_c5::{Fp, Fp2, A64_C5};
 use test_support::Rng;
 use transcript_a64_c5::{
-    io_digest, poseidon2_permute, Challenge, Transcript, TranscriptEvent, TranscriptSnapshot,
-    PROTOCOL_ID, RATE, WIDTH,
+    io_digest, poseidon2_permute, Transcript, TranscriptEvent, TranscriptSnapshot, PROTOCOL_ID,
+    RATE, WIDTH,
 };
 
 /// Chiesa–Orrù's duplex as spongefish writes it (`DuplexSponge`: slice absorb
@@ -88,11 +88,21 @@ fn the_duplex_is_chiesa_orrus() {
         let (mut t, mut model) = (Transcript::new(), Co25::new());
         for _ in 0..(rng.next_u64() % 24) {
             let len = (rng.next_u64() % 19) as usize;
-            match rng.next_u64() % 3 {
+            match rng.next_u64() % 4 {
                 0 => {
                     let xs: Vec<Fp> = (0..len).map(|_| Fp::from_u64(rng.next_u64())).collect();
                     t.append_scalars(SUMCHECK_ROUND, &xs);
                     model.message(SUMCHECK_ROUND, len, &xs);
+                }
+                3 => {
+                    let lanes: Vec<Fp> =
+                        (0..2 * len).map(|_| Fp::from_u64(rng.next_u64())).collect();
+                    let xs: Vec<Fp2> = lanes
+                        .chunks(2)
+                        .map(|c| Fp2 { c0: c[0], c1: c[1] })
+                        .collect();
+                    t.append_ext(SUMCHECK_ROUND, &xs);
+                    model.message(SUMCHECK_ROUND, 2 * len, &lanes);
                 }
                 1 => {
                     let bytes = rng.next_bytes(len);
@@ -107,7 +117,7 @@ fn the_duplex_is_chiesa_orrus() {
                     let mut c = [Fp::ZERO; 2];
                     model.absorb(&[Fp::from_u64(SUMCHECK_CHALLENGE)]);
                     model.squeeze(&mut c);
-                    assert_eq!(t.challenge(SUMCHECK_CHALLENGE), c);
+                    assert_eq!(t.challenge(SUMCHECK_CHALLENGE), Fp2 { c0: c[0], c1: c[1] });
                 }
             }
         }
@@ -157,7 +167,7 @@ fn every_difference_in_the_messages_moves_the_challenge() {
             t.challenge(SUMCHECK_CHALLENGE);
         },
     ];
-    let drawn: Vec<Challenge> = scripts
+    let drawn: Vec<Fp2> = scripts
         .iter()
         .map(|script| {
             let mut t = Transcript::new();
@@ -169,7 +179,7 @@ fn every_difference_in_the_messages_moves_the_challenge() {
 }
 
 /// One step of a script that passes the rate boundary at many offsets.
-fn step(t: &mut Transcript, i: usize) -> Option<Challenge> {
+fn step(t: &mut Transcript, i: usize) -> Option<Fp2> {
     match i % 3 {
         0 => t.append_scalars(SUMCHECK_ROUND, &vec![Fp::from_u64(i as u64); i % 11]),
         1 => t.append_bytes(PUBLIC_INPUTS, &vec![i as u8; 3 * i]),
@@ -212,7 +222,9 @@ fn a_snapshot_resumes_the_stream() {
 fn decoding_refuses_what_no_transcript_produces() {
     let decode = |lanes: [u64; WIDTH], absorbed: u8, squeezed: u8| {
         let mut buf = [0u8; 256];
+        let lanes = lanes.map(u64::to_le_bytes);
         let bytes = postcard::to_slice(&(lanes, absorbed, squeezed), &mut buf).unwrap();
+        assert_eq!(bytes.len(), 8 * WIDTH + 2, "a fixed-size form");
         postcard::from_bytes::<TranscriptSnapshot>(bytes).is_ok()
     };
     let lanes = [1u64; WIDTH];

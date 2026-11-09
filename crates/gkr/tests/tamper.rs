@@ -13,24 +13,25 @@ use common::{
 };
 use constants::{challenge_slot, transcript_tags};
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{
     forward, gate_values, self_check, verify, ExternalChallenges, GkrError, LayerValues,
     SelfCheckError,
 };
 use poly::{eq_table, MultilinearPoly, PolyBacking};
 
-fn fr(v: u32) -> Fr {
-    Fr::from_u64(v as u64)
+/// An integer, embedded in `Fp2`.
+fn fr(v: u32) -> Fp2 {
+    Fp::from_u64(v as u64).into()
 }
 
 /// `values` with one cell of inner layer `layer`, column `column`, bumped by one.
 fn bump(values: &LayerValues, layer: usize, column: usize, row: usize) -> LayerValues {
     let mut out = values.clone();
     let c = &values.layers[layer - 1][column];
-    let mut table: Vec<Fr> = (0..c.len()).map(|i| c.get(i)).collect();
-    table[row] += Fr::ONE;
-    out.layers[layer - 1][column] = MultilinearPoly::new(PolyBacking::Fr(table));
+    let mut table: Vec<Fp2> = (0..c.len()).map(|i| c.get(i)).collect();
+    table[row] += Fp2::ONE;
+    out.layers[layer - 1][column] = MultilinearPoly::new(PolyBacking::Fp2(table));
     out
 }
 
@@ -49,7 +50,7 @@ fn a_flipped_inner_value_is_rejected_at_the_transition_reading_it() {
     // L{2}[0] is abm, read by list 2's tree step: flipping row 3 moves the
     // product by abm[11], which this seed makes nonzero.
     let partner = values.layers[1][0].get(3 + TOY_ROWS / 2);
-    assert_ne!(partner, Fr::ZERO, "the flip must move the tree product");
+    assert_ne!(partner, Fp2::ZERO, "the flip must move the tree product");
     let (_, flipped) = run(&artifact, &base, &bump(&values, 2, 0, 3), &outputs);
     assert_eq!(flipped, Err(GkrError::LayerInconsistency { layer: 2 }));
 
@@ -140,17 +141,17 @@ fn a_cancelling_violation_is_rejected() {
     let cols = toy_columns(0x5313_0500);
     let active: Vec<usize> = (0..TOY_ROWS).filter(|&y| cols.s[y] == 1).collect();
     assert!(active.len() >= 2, "two active rows");
-    let v = Fr::from_u64(0x1234_5678_9abc);
-    let mut e: Vec<Fr> = cols.e.iter().map(|x| fr(*x)).collect();
+    let v = Fp::from_u64(0x1234_5678_9abc);
+    let mut e: Vec<Fp> = cols.e.iter().map(|x| Fp::from_u64(*x as u64)).collect();
     e[active[0]] += v;
     e[active[1]] -= v;
     let base = with_column(&toy_base(&cols), &artifact, PolyAddress::Witness(3), e);
 
     let (_, challenges) = bind(&artifact, &base);
     let values = forward(&artifact, &base, &challenges);
-    let residual: Vec<Fr> = (0..TOY_ROWS)
+    let residual: Vec<Fp2> = (0..TOY_ROWS)
         .map(|y| {
-            let lower: Vec<Fr> = artifact
+            let lower: Vec<Fp2> = artifact
                 .committed()
                 .iter()
                 .map(|a| values.base.get(*a).unwrap().get(y))
@@ -158,16 +159,16 @@ fn a_cancelling_violation_is_rejected() {
             gate_values(&artifact, 0, &lower, &[], &[fr(y as u32)], &challenges)[3]
         })
         .collect();
-    assert_eq!(residual[active[0]], v);
-    assert_eq!(residual[active[1]], -v);
-    let bare: Fr = residual.iter().fold(Fr::ZERO, |acc, r| acc + *r);
-    assert_eq!(bare, Fr::ZERO, "the violations cancel in a bare sum");
-    let r: Vec<Fr> = (0..4).map(|i| Fr::from_u64(0x77 + i)).collect();
+    assert_eq!(residual[active[0]], v.into());
+    assert_eq!(residual[active[1]], (-v).into());
+    let bare: Fp2 = residual.iter().fold(Fp2::ZERO, |acc, r| acc + *r);
+    assert_eq!(bare, Fp2::ZERO, "the violations cancel in a bare sum");
+    let r: Vec<Fp2> = (0..4).map(|i| Fp2::from(Fp::from_u64(0x77 + i))).collect();
     let weighted = eq_table(&r)
         .iter()
         .zip(&residual)
-        .fold(Fr::ZERO, |acc, (w, g)| acc + *w * *g);
-    assert_ne!(weighted, Fr::ZERO, "eq(r, y) separates them");
+        .fold(Fp2::ZERO, |acc, (w, g)| acc + *w * *g);
+    assert_ne!(weighted, Fp2::ZERO, "eq(r, y) separates them");
 
     let (_, result) = run(
         &artifact,
@@ -196,12 +197,12 @@ fn a_forged_output_pair_is_rejected() {
 
     // The batch a transcript without O1 draws: the binding, then L1 at once.
     let (mut t, challenges) = bind(&artifact, &base);
-    let lambda = t.challenge_scalar(transcript_tags::GKR_BATCH);
+    let lambda = t.challenge(transcript_tags::GKR_BATCH);
 
     // The output map is `L{6}[1], L{6}[0]`, so the top's claim is
     // `outputs[1] + λ·outputs[0]`: move the first output by delta and the
     // second by what keeps that claim at λ.
-    let delta = Fr::from_u64(99);
+    let delta = Fp2::from(Fp::from_u64(99));
     let forged = vec![outputs[0] + delta, outputs[1] - lambda * delta];
     assert_eq!(
         forged[1] + lambda * forged[0],
@@ -231,14 +232,14 @@ fn a_wrong_child_pair_is_rejected() {
     };
 
     let mut bumped = proof.clone();
-    bumped.layers[2].final_evals[0] += Fr::ONE;
+    bumped.layers[2].final_evals[0] += Fp2::ONE;
     assert_eq!(
         check(&bumped),
         Err(GkrError::LayerInconsistency { layer: 2 })
     );
 
     let mut rescaled = proof.clone();
-    let two = Fr::from_u64(2);
+    let two = Fp2::from(Fp::from_u64(2));
     rescaled.layers[2].final_evals[0] *= two;
     rescaled.layers[2].final_evals[1] *= two.inverse().unwrap();
     assert_eq!(
@@ -275,7 +276,7 @@ fn a_lying_row_wise_final_eval_is_rejected_at_its_transition() {
         assert!(!artifact.layers[k].halving, "transition {k} is row-wise");
         for j in 0..proof.layers[k].final_evals.len() {
             let mut lying = proof.clone();
-            lying.layers[k].final_evals[j] += Fr::ONE;
+            lying.layers[k].final_evals[j] += Fp2::ONE;
             assert_eq!(
                 check(&lying),
                 Err(GkrError::LayerInconsistency { layer: k }),
@@ -294,7 +295,7 @@ fn malformed_shapes_are_errors_in_order() {
     let (values, proof, _) = honest(&artifact, &base);
     let outputs = output_claims(&artifact, &values);
     let (_, challenges) = bind(&artifact, &base);
-    let check = |proof: &gkr::GkrProof, outputs: &[Fr], ch: &gkr::ExternalChallenges| {
+    let check = |proof: &gkr::GkrProof, outputs: &[Fp2], ch: &gkr::ExternalChallenges| {
         let (mut t, _) = bind(&artifact, &base);
         let before = t.snapshot();
         let result = verify(&artifact, proof, outputs, ch, &mut t);
@@ -311,7 +312,7 @@ fn malformed_shapes_are_errors_in_order() {
         Err(GkrError::ProofShape { layer: 0 })
     );
     let mut long = proof.clone();
-    long.layers[1].final_evals.push(Fr::ZERO);
+    long.layers[1].final_evals.push(Fp2::ZERO);
     assert_eq!(
         check(&long, &outputs, &challenges),
         Err(GkrError::ProofShape { layer: 1 })
@@ -334,7 +335,7 @@ fn malformed_shapes_are_errors_in_order() {
     // Two malformed transitions: the lowest is reported.
     let mut twice = proof.clone();
     twice.layers[0].rounds.pop();
-    twice.layers[2].final_evals.push(Fr::ZERO);
+    twice.layers[2].final_evals.push(Fp2::ZERO);
     assert_eq!(
         check(&twice, &outputs, &challenges),
         Err(GkrError::ProofShape { layer: 0 })
@@ -408,7 +409,7 @@ fn challenge_sites(artifact: &CircuitArtifact) -> [usize; 3] {
 #[test]
 fn a_slot_named_by_a_producing_or_enforcing_gate_is_checked() {
     let (one, gamma) = (
-        Coeff::Literal(Fr::ONE),
+        Coeff::Literal(Fp::ONE),
         Coeff::Challenge(challenge_slot::TOY),
     );
     let mut enforcing = toy();
@@ -433,11 +434,11 @@ fn a_slot_named_by_a_producing_or_enforcing_gate_is_checked() {
     let gated = GateDef::AffineProduct {
         left: vec![
             (one, PolyAddress::Witness(3)),
-            (Coeff::Literal(-Fr::ONE), PolyAddress::Witness(0)),
+            (Coeff::Literal(-Fp::ONE), PolyAddress::Witness(0)),
         ],
-        left_constant: Coeff::Literal(Fr::ZERO),
+        left_constant: Coeff::Literal(Fp::ZERO),
         right: vec![(one, PolyAddress::Setup(0))],
-        right_constant: Coeff::Literal(Fr::ZERO),
+        right_constant: Coeff::Literal(Fp::ZERO),
     };
     enforcing.layers[0].enforcing[0].gate = gated.clone();
     enforcing.relations[3].gate = gated;

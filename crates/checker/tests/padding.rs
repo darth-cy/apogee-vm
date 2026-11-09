@@ -8,7 +8,7 @@ mod common;
 use checker::{check_laws, check_padding, check_padding_identity};
 use common::*;
 use constraints::{CircuitArtifact, Coeff, GateDef};
-use field::Fr;
+use field_a64_c5::Fp;
 
 #[test]
 fn a_flipped_zero_row_verdict_is_rejected() {
@@ -24,12 +24,12 @@ fn a_flipped_zero_row_verdict_is_rejected() {
 #[test]
 fn a_padding_row_breaking_the_gated_equality_is_rejected() {
     for (label, mut a) in toys() {
-        a.padding.row[S] = Fr::ONE;
-        a.padding.row[A] = Fr::from_u64(5);
-        a.padding.row[E] = Fr::from_u64(6);
+        a.padding.row[S] = Fp::ONE;
+        a.padding.row[A] = Fp::from_u64(5);
+        a.padding.row[E] = Fp::from_u64(6);
         let e = check_padding(&a).unwrap_err();
         assert!(e.contains("gated_equality"), "{label}: {e}");
-        a.padding.row[E] = Fr::from_u64(5);
+        a.padding.row[E] = Fp::from_u64(5);
         assert_eq!(check_padding(&a), Ok(()), "{label}");
     }
 }
@@ -41,12 +41,12 @@ fn a_padding_row_breaking_the_gated_equality_is_rejected() {
 fn an_invalid_zero_row_must_be_declared_invalid() {
     for (label, mut a) in toys() {
         let r = relation(&a, "gated_equality");
-        let minus_one = Coeff::Literal(-Fr::ONE);
+        let minus_one = Coeff::Literal(-Fp::ONE);
         a.relations[r].gate = GateDef::Linear {
             terms: vec![(lit(1), W3), (minus_one, W0)],
             constant: minus_one,
         };
-        a.padding.row[E] = Fr::ONE;
+        a.padding.row[E] = Fp::ONE;
         a.padding.zero_row_valid = false;
         assert_eq!(check_padding(&a), Ok(()), "{label}");
         a.padding.zero_row_valid = true;
@@ -86,9 +86,9 @@ fn identity_padded(mut a: CircuitArtifact) -> CircuitArtifact {
     let r = relation(&a, "define_fingerprint3");
     *linear(&mut a.relations[r].gate).1 = lit(1);
     *linear(&mut a.layers[1].producing[1].gate).1 = lit(1);
-    a.padding.row = vec![Fr::ZERO; 6];
-    a.padding.row[A] = Fr::ONE;
-    a.padding.row[B] = Fr::ONE;
+    a.padding.row = vec![Fp::ZERO; 6];
+    a.padding.row[A] = Fp::ONE;
+    a.padding.row[B] = Fp::ONE;
     a
 }
 
@@ -117,7 +117,7 @@ fn a_padding_row_whose_leaves_are_one_passes_and_each_moved_leaf_fails() {
         ];
         for (cell, value, named) in moved {
             let mut b = a.clone();
-            b.padding.row[cell] = Fr::from_u64(value);
+            b.padding.row[cell] = Fp::from_u64(value);
             let e = check_padding_identity(&b).unwrap_err();
             assert!(e.contains(named), "{label}, cell {cell} = {value}: {e}");
         }
@@ -135,7 +135,7 @@ fn a_padding_row_whose_leaves_are_one_passes_and_each_moved_leaf_fails() {
 fn a_leaf_that_is_1_at_row_0_alone_fails() {
     for (label, a) in toys() {
         let mut a = identity_padded(a);
-        let minus_one = Coeff::Literal(-Fr::ONE);
+        let minus_one = Coeff::Literal(-Fp::ONE);
         let r = relation(&a, "define_fingerprint");
         let mut changed = set_coefficient(&mut a.relations[r].gate, W0, minus_one);
         let list = &mut a.layers[0];
@@ -150,7 +150,7 @@ fn a_leaf_that_is_1_at_row_0_alone_fails() {
         let r = relation(&a, "define_fingerprint3");
         *linear(&mut a.relations[r].gate).1 = lit(2);
         *linear(&mut a.layers[1].producing[1].gate).1 = lit(2);
-        a.padding.row[C] = Fr::ONE;
+        a.padding.row[C] = Fp::ONE;
         assert_eq!(check_laws(&a), Ok(()), "{label}");
 
         let e = check_padding_identity(&a).unwrap_err();
@@ -175,7 +175,7 @@ fn a_second_halving_list_is_not_read() {
         assert_eq!(check_laws(&a), Ok(()), "{label}");
         assert_eq!(check_padding_identity(&a), Ok(()), "{label}");
 
-        a.padding.row[B] = Fr::from_u64(2);
+        a.padding.row[B] = Fp::from_u64(2);
         let e = check_padding_identity(&a).unwrap_err();
         let named = "halving gate list 2 reads L{2}[0] (abm), which is 2 on padding.row";
         assert!(e.contains(named), "{label}: {e}");

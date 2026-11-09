@@ -25,7 +25,6 @@ fn two_clean_builds_agree() {
         "rvc-dense",
         "amm",
         "orderbook",
-        "vault",
         "atomics",
         "opcodes",
         "heap",

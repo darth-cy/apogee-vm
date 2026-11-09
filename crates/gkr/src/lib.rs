@@ -29,9 +29,9 @@ use rayon::prelude::*;
 
 use constants::transcript_tags;
 use constraints::{CircuitArtifact, PolyAddress, VirtualKind};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use poly::{eq_table, MultilinearPoly, PolyBacking};
-use transcript::Transcript;
+use transcript_a64_c5::Transcript;
 
 pub use gkr_verify::*;
 
@@ -104,8 +104,8 @@ pub struct SelfCheckError {
 // Tables
 // ---------------------------------------------------------------------------
 
-fn fr_poly(values: Vec<Fr>) -> MultilinearPoly {
-    MultilinearPoly::new(PolyBacking::Fr(values))
+fn ext_poly(values: Vec<Fp2>) -> MultilinearPoly {
+    MultilinearPoly::new(PolyBacking::Fp2(values))
 }
 
 /// Layer `k`'s columns, read in place at their own width: the committed
@@ -201,10 +201,10 @@ struct RowReader<'v> {
 
 /// One rayon task's buffers for [`RowReader::load`], overwritten row after row.
 struct RowScratch {
-    lower: Vec<Fr>,
-    upper: Vec<Fr>,
-    virtuals: Vec<Fr>,
-    gates: Vec<Fr>,
+    lower: Vec<Fp2>,
+    upper: Vec<Fp2>,
+    virtuals: Vec<Fp2>,
+    gates: Vec<Fp2>,
 }
 
 impl<'v> RowReader<'v> {
@@ -231,9 +231,9 @@ impl<'v> RowReader<'v> {
     fn scratch(&self, resolved: &ResolvedList) -> RowScratch {
         let width = self.columns.len();
         RowScratch {
-            lower: vec![Fr::ZERO; width],
-            upper: vec![Fr::ZERO; if self.halving { width } else { 0 }],
-            virtuals: vec![Fr::ZERO; self.kinds.len()],
+            lower: vec![Fp2::ZERO; width],
+            upper: vec![Fp2::ZERO; if self.halving { width } else { 0 }],
+            virtuals: vec![Fp2::ZERO; self.kinds.len()],
             gates: resolved.scratch(),
         }
     }
@@ -256,7 +256,7 @@ impl<'v> RowReader<'v> {
             }
             // A virtual table is never materialized: its closed form, per row.
             for (kind, value) in self.kinds.iter().zip(s.virtuals.iter_mut()) {
-                *value = virtual_at_row(*kind, y);
+                *value = virtual_at_row(*kind, y).into();
             }
         }
         resolved.cache(&s.lower, &s.upper, &s.virtuals, &mut s.gates);
@@ -312,8 +312,8 @@ fn produce(
     }
     let reader = RowReader::new(artifact, base, layers, k);
     let resolved = ResolvedList::new(artifact, k, challenges);
-    let mut out: Vec<Vec<Fr>> = (0..width).map(|_| vec![Fr::ZERO; reader.rows]).collect();
-    let mut blocks: Vec<Vec<&mut [Fr]>> = (0..reader.rows.div_ceil(BLOCK))
+    let mut out: Vec<Vec<Fp2>> = (0..width).map(|_| vec![Fp2::ZERO; reader.rows]).collect();
+    let mut blocks: Vec<Vec<&mut [Fp2]>> = (0..reader.rows.div_ceil(BLOCK))
         .map(|_| Vec::with_capacity(width))
         .collect();
     for column in out.iter_mut() {
@@ -332,7 +332,7 @@ fn produce(
             }
         },
     );
-    out.into_iter().map(fr_poly).collect()
+    out.into_iter().map(ext_poly).collect()
 }
 
 /// Recompute every gate from the materialized layers: every producing gate
@@ -387,7 +387,7 @@ pub fn self_check(
                         for j in producing..producing + enforcing {
                             let value =
                                 resolved.gate(j, &s.lower, &s.upper, &s.virtuals, &mut s.gates);
-                            if value != Fr::ZERO {
+                            if value != Fp2::ZERO {
                                 return Some((y, j));
                             }
                         }
@@ -479,7 +479,7 @@ pub fn explain_self_check(
     if failing.is_none() {
         for j in producing..producing + enforcing {
             let value = resolved.gate(j, &s.lower, &s.upper, &s.virtuals, &mut s.gates);
-            if value != Fr::ZERO {
+            if value != Fp2::ZERO {
                 failing = Some((j, value, None));
                 break;
             }
@@ -557,17 +557,17 @@ pub fn explain_self_check(
     out
 }
 
-/// An `Fr` as a debugging line wants it: a small value in decimal, anything
-/// else as its 32 canonical bytes in hex, **in `to_bytes` order**.
+/// An `Fp2` as a debugging line wants it: a small value in decimal, anything
+/// else as its 16 canonical bytes in hex, **in `to_bytes` order**.
 ///
 /// Decimal for a small value because most of what a failing gate reads is a
-/// bit, a limb, a row index or a count, and `1` reads better than 56 zeros and
+/// bit, a limb, a row index or a count, and `1` reads better than 31 zeros and
 /// a digit. `to_bytes` order for the rest because that is the one encoding this
 /// repository puts on a wire, and `prover`'s debug log prints field elements
 /// the same way, so a value here greps against a value there.
-fn show(x: Fr) -> String {
+fn show(x: Fp2) -> String {
     let le = x.to_bytes();
-    // Below 2^32: the canonical little-endian bytes above the low four are 0.
+    // A base value below 2^32: every canonical byte above the low four is 0.
     if le[4..].iter().all(|b| *b == 0) {
         return format!("{}", u32::from_le_bytes([le[0], le[1], le[2], le[3]]));
     }
@@ -687,7 +687,7 @@ fn check_values(artifact: &CircuitArtifact, values: &LayerValues, what: &str) {
 pub struct LayerSummand<'a> {
     pub artifact: &'a CircuitArtifact,
     pub layer: usize,
-    pub weights: Vec<Fr>,
+    pub weights: Vec<Fp2>,
     pub challenges: &'a ExternalChallenges,
 }
 
@@ -701,11 +701,11 @@ pub struct LayerTables {
 }
 
 /// `[1/2, 1/3, 1/6]`, derived rather than transcribed.
-fn interpolation_constants() -> [Fr; 3] {
+fn interpolation_constants() -> [Fp; 3] {
     let inv = |k: u64| {
-        Fr::from_u64(k)
+        Fp::from_u64(k)
             .inverse()
-            .expect("2, 3 and 6 are invertible in Fr")
+            .expect("2, 3 and 6 are invertible in Fp")
     };
     [inv(2), inv(3), inv(6)]
 }
@@ -714,7 +714,7 @@ fn interpolation_constants() -> [Fr; 3] {
 /// Newton's forward differences, `g(X) = v0 + d1·X + d2·X(X-1)/2 +
 /// d3·X(X-1)(X-2)/6`, expanded — the sumcheck's `interpolate_cubic`, which is
 /// private to `crates/sumcheck`.
-fn interpolate_cubic(v: &[Fr; 4], c: &[Fr; 3]) -> [Fr; 4] {
+fn interpolate_cubic(v: &[Fp2; 4], c: &[Fp; 3]) -> [Fp2; 4] {
     let [inv2, inv3, inv6] = *c;
     let d1 = v[1] - v[0];
     let d2 = (v[2] - v[1]) - d1;
@@ -732,19 +732,19 @@ fn interpolate_cubic(v: &[Fr; 4], c: &[Fr; 3]) -> [Fr; 4] {
 /// the point a virtual table's closed form is evaluated at, and the resolved
 /// list's scratch.
 struct PairScratch {
-    lower: Vec<Fr>,
-    lower_step: Vec<Fr>,
-    upper: Vec<Fr>,
-    upper_step: Vec<Fr>,
-    virtuals: Vec<Fr>,
-    virtuals_step: Vec<Fr>,
+    lower: Vec<Fp2>,
+    lower_step: Vec<Fp2>,
+    upper: Vec<Fp2>,
+    upper_step: Vec<Fp2>,
+    virtuals: Vec<Fp2>,
+    virtuals_step: Vec<Fp2>,
     /// The round's bound challenges first; the rest is written per pair.
-    point: Vec<Fr>,
-    gates: Vec<Fr>,
+    point: Vec<Fp2>,
+    gates: Vec<Fp2>,
 }
 
 /// The line `lo + X·(hi − lo)` of pair `i` of every table, into `lo` and `step`.
-fn lines(tables: &[MultilinearPoly], i: usize, lo: &mut [Fr], step: &mut [Fr]) {
+fn lines(tables: &[MultilinearPoly], i: usize, lo: &mut [Fp2], step: &mut [Fp2]) {
     for (t, (lo, step)) in tables.iter().zip(lo.iter_mut().zip(step.iter_mut())) {
         *lo = t.get(2 * i);
         *step = t.get(2 * i + 1) - *lo;
@@ -758,24 +758,24 @@ fn virtual_lines(
     kinds: &[VirtualKind],
     bound: usize,
     i: usize,
-    point: &mut [Fr],
-    lo: &mut [Fr],
-    step: &mut [Fr],
+    point: &mut [Fp2],
+    lo: &mut [Fp2],
+    step: &mut [Fp2],
 ) {
     for (j, y) in point[bound + 1..].iter_mut().enumerate() {
-        *y = Fr::from_u64(((i >> j) & 1) as u64);
+        *y = Fp::from_u64(((i >> j) & 1) as u64).into();
     }
-    point[bound] = Fr::ZERO;
+    point[bound] = Fp2::ZERO;
     for (kind, lo) in kinds.iter().zip(lo.iter_mut()) {
         *lo = virtual_at_point(*kind, point);
     }
-    point[bound] = Fr::ONE;
+    point[bound] = Fp2::ONE;
     for (kind, (lo, step)) in kinds.iter().zip(lo.iter().zip(step.iter_mut())) {
         *step = virtual_at_point(*kind, point) - *lo;
     }
 }
 
-fn step(values: &mut [Fr], steps: &[Fr]) {
+fn step(values: &mut [Fp2], steps: &[Fp2]) {
     for (v, s) in values.iter_mut().zip(steps) {
         *v += *s;
     }
@@ -790,11 +790,11 @@ fn step(values: &mut [Fr], steps: &[Fr]) {
 /// construction, and a claim the tables do not support is the verifier's to
 /// reject.
 pub fn prove_sumcheck(
-    eq_point: &[Fr],
+    eq_point: &[Fp2],
     summand: &LayerSummand,
     tables: &mut LayerTables,
     t: &mut Transcript,
-) -> (Vec<[Fr; 4]>, Vec<Fr>) {
+) -> (Vec<[Fp2; 4]>, Vec<Fp2>) {
     let n = eq_point.len();
     let artifact = summand.artifact;
     let kinds: Vec<VirtualKind> = if artifact.layers[summand.layer].halving {
@@ -823,7 +823,7 @@ pub fn prove_sumcheck(
     //     );
     // }
     let resolved = ResolvedList::new(artifact, summand.layer, summand.challenges);
-    let mut eq = fr_poly(eq_table(eq_point));
+    let mut eq = ext_poly(eq_table(eq_point));
     let constants = interpolation_constants();
     let mut rounds = Vec::with_capacity(n);
     let mut point = Vec::with_capacity(n);
@@ -834,15 +834,15 @@ pub fn prove_sumcheck(
             .into_par_iter()
             .map_init(
                 || {
-                    let mut at = vec![Fr::ZERO; n];
+                    let mut at = vec![Fp2::ZERO; n];
                     at[..bound].copy_from_slice(&point);
                     PairScratch {
-                        lower: vec![Fr::ZERO; tables.lower.len()],
-                        lower_step: vec![Fr::ZERO; tables.lower.len()],
-                        upper: vec![Fr::ZERO; tables.upper.len()],
-                        upper_step: vec![Fr::ZERO; tables.upper.len()],
-                        virtuals: vec![Fr::ZERO; kinds.len()],
-                        virtuals_step: vec![Fr::ZERO; kinds.len()],
+                        lower: vec![Fp2::ZERO; tables.lower.len()],
+                        lower_step: vec![Fp2::ZERO; tables.lower.len()],
+                        upper: vec![Fp2::ZERO; tables.upper.len()],
+                        upper_step: vec![Fp2::ZERO; tables.upper.len()],
+                        virtuals: vec![Fp2::ZERO; kinds.len()],
+                        virtuals_step: vec![Fp2::ZERO; kinds.len()],
                         point: at,
                         gates: resolved.scratch(),
                     }
@@ -863,7 +863,7 @@ pub fn prove_sumcheck(
                     let (eq_lo, eq_hi) = (eq.get(2 * i), eq.get(2 * i + 1));
                     let eq_step = eq_hi - eq_lo;
                     let mut eq_at = eq_lo;
-                    let mut acc = [Fr::ZERO; 4];
+                    let mut acc = [Fp2::ZERO; 4];
                     for node in acc.iter_mut() {
                         *node = eq_at
                             * resolved.summand(
@@ -882,12 +882,12 @@ pub fn prove_sumcheck(
                 },
             )
             .reduce(
-                || [Fr::ZERO; 4],
+                || [Fp2::ZERO; 4],
                 |a, b| [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]],
             );
         let g = interpolate_cubic(&at_nodes, &constants);
-        t.append_scalars(transcript_tags::SUMCHECK_ROUND, &g);
-        let r = t.challenge_scalar(transcript_tags::SUMCHECK_CHALLENGE);
+        t.append_ext(transcript_tags::SUMCHECK_ROUND, &g);
+        let r = t.challenge(transcript_tags::SUMCHECK_CHALLENGE);
         for table in tables.lower.iter_mut().chain(tables.upper.iter_mut()) {
             table.bind(r);
         }
@@ -905,17 +905,17 @@ pub fn prove_sumcheck(
 /// A halving list's two child tables of `column`, each copied once, straight
 /// from the column: child 0 is the first `half` rows, child 1 the rest, the
 /// child bit being the highest variable. A halving list never reads the base,
-/// so its column is one `forward` wrote, in `Fr`; any other backing is read
+/// so its column is one `forward` wrote, in `Fp2`; any other backing is read
 /// through `get`.
 fn children(column: &MultilinearPoly, half: usize) -> (MultilinearPoly, MultilinearPoly) {
     let (lo, hi) = match column.backing() {
-        PolyBacking::Fr(v) => (v[..half].to_vec(), v[half..].to_vec()),
+        PolyBacking::Fp2(v) => (v[..half].to_vec(), v[half..].to_vec()),
         _ => (
             (0..half).map(|i| column.get(i)).collect(),
             (half..2 * half).map(|i| column.get(i)).collect(),
         ),
     };
-    (fr_poly(lo), fr_poly(hi))
+    (ext_poly(lo), ext_poly(hi))
 }
 
 /// Prove the circuit's outputs, as `values` holds them, down to its committed
@@ -944,21 +944,21 @@ pub fn prove(
     // O1: the top has no variables (Law 3), so each output is its column's
     // one value, claimed at the empty point.
     let top = &values.layers[depth - 1];
-    let mut message: Vec<Fr> = Vec::new();
+    let mut message: Vec<Fp2> = Vec::new();
     for out in &artifact.outputs {
         if let PolyAddress::Inner { offset, .. } = *out {
             message.push(top[offset as usize].get(0));
         }
     }
-    t.append_scalars(transcript_tags::GKR_OUTPUTS, &message);
-    let mut point: Vec<Fr> = Vec::new();
+    t.append_ext(transcript_tags::GKR_OUTPUTS, &message);
+    let mut point: Vec<Fp2> = Vec::new();
 
     let mut layers: Vec<Option<SumcheckProof>> = vec![None; depth];
     for k in (0..depth).rev() {
         let list = &artifact.layers[k];
 
         // L1.
-        let lambda = t.challenge_scalar(transcript_tags::GKR_BATCH);
+        let lambda = t.challenge(transcript_tags::GKR_BATCH);
         let summand = LayerSummand {
             artifact,
             layer: k,
@@ -967,7 +967,7 @@ pub fn prove(
         };
 
         // L2: one binding copy per column, at the column's width. The first
-        // bind folds a narrow copy straight into a half-size `Fr` table.
+        // bind folds a narrow copy straight into a half-size `Fp2` table.
         let columns = layer_columns(artifact, &values.base, &values.layers, k);
         let mut tables = if list.halving {
             let half = 1usize << (artifact.layer_vars(k) - 1);
@@ -982,7 +982,7 @@ pub fn prove(
         let (rounds, rho) = prove_sumcheck(&point, &summand, &mut tables, t);
 
         // L3: every table is bound to rho, one value each.
-        let final_evals: Vec<Fr> = if list.halving {
+        let final_evals: Vec<Fp2> = if list.halving {
             tables
                 .lower
                 .iter()
@@ -992,12 +992,12 @@ pub fn prove(
         } else {
             tables.lower.iter().map(|c| c.get(0)).collect()
         };
-        t.append_scalars(transcript_tags::GKR_LAYER_CLAIMS, &final_evals);
+        t.append_ext(transcript_tags::GKR_LAYER_CLAIMS, &final_evals);
 
         // L4.
         point = rho;
         if list.halving {
-            point.push(t.challenge_scalar(transcript_tags::GKR_CHILD));
+            point.push(t.challenge(transcript_tags::GKR_CHILD));
         }
         layers[k] = Some(SumcheckProof {
             rounds,

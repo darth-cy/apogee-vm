@@ -11,24 +11,29 @@
 
 use constants::challenge_slot::TOY;
 use constraints::{Coeff, GateDef, PolyAddress};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{eval_gate, ExternalChallenges};
 
-fn fr(v: u64) -> Fr {
-    Fr::from_u64(v)
+/// An integer as a kernel value, which is an `Fp2` element.
+fn fr(v: u64) -> Fp2 {
+    Fp::from_u64(v).into()
 }
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(fr(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn x(i: u32) -> PolyAddress {
     PolyAddress::Witness(i)
 }
 
-/// Slot `TOY` set to a value far from any small integer.
-fn gamma() -> (ExternalChallenges, Fr) {
-    let gamma = fr(0x9e37_79b9_7f4a_7c15) * fr(0x0123_4567_89ab_cdef);
+/// Slot `TOY` set to a value far from any small integer, and off the base
+/// field, so a challenge coefficient is extension arithmetic.
+fn gamma() -> (ExternalChallenges, Fp2) {
+    let gamma = Fp2 {
+        c0: Fp::from_u64(0x9e37_79b9_7f4a_7c15),
+        c1: Fp::from_u64(0x0123_4567_89ab_cdef),
+    };
     let mut challenges = ExternalChallenges::new();
     challenges.insert(TOY, gamma);
     (challenges, gamma)

@@ -25,18 +25,18 @@ lists (the halving ones are `n`), inner columns, artifact bytes, and a shard pro
 
 | id | family | `n` | `M` | `W` | `S` | gates | lookups | row-wise | inner | bytes | proof |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | `ADD_SUB_LUI_AUIPC` | 22 | 21 | 28 | 7 | 38 | 8/4/0/1 | 5 | 300 | 58,219 | 60,952 |
-| 1 | `JUMP_BRANCH_SLT` | 22 | 21 | 44 | 10 | 42 | 8/11/2/1 | 5 | 392 | 76,980 | 65,912 |
-| 2 | `SHIFT_BITWISE` | 22 | 21 | 61 | 10 | 48 | 8/24/6/1 | 6 | 478 | 102,837 | 72,032 |
-| 3 | `MUL_DIV` | 20 | 21 | 54 | 9 | 54 | 8/16/2/1 | 6 | 444 | 92,640 | 63,248 |
-| 4 | `MEM_WORD` | 22 | 31 | 24 | 7 | 33 | 12/5/0/1 | 5 | 314 | 60,383 | 61,592 |
-| 5 | `MEM_SUBWORD` | 22 | 31 | 55 | 10 | 53 | 12/22/1/1 | 6 | 472 | 98,846 | 71,968 |
-| 6 | `ATOMICS` | 20 | 26 | 54 | 9 | 46 | 10/19/6/1 | 6 | 472 | 101,593 | 64,304 |
-| 7 | `INIT_TEARDOWN` | 22 | 2 | 0 | 1 | 0 | — | 1 | 46 | 3,907 | 35,608 |
-| 8 | `ZERO_WINDOWS` | 22 | 2 | 0 | 0 | 0 | — | 1 | 46 | 3,418 | 35,576 |
-| 9 | `PUBLIC_INPUT` | 12 | 3 | 0 | 0 | 0 | — | 1 | 26 | 2,455 | 11,848 |
-| 10 | `PUBLIC_OUTPUT` | 12 | 2 | 0 | 0 | 0 | — | 1 | 26 | 2,338 | 11,816 |
-| 11 | `ADVICE_WINDOWS` | 22 | 3 | 0 | 0 | 0 | — | 1 | 46 | 3,535 | 35,608 |
+| 0 | `ADD_SUB_LUI_AUIPC` | 22 | 21 | 28 | 7 | 38 | 8/4/0/1 | 5 | 300 | 34,075 | 30,600 |
+| 1 | `JUMP_BRANCH_SLT` | 22 | 21 | 44 | 10 | 42 | 8/11/2/1 | 5 | 392 | 45,036 | 33,080 |
+| 2 | `SHIFT_BITWISE` | 22 | 21 | 61 | 10 | 48 | 8/24/6/1 | 6 | 478 | 58,029 | 36,144 |
+| 3 | `MUL_DIV` | 20 | 21 | 54 | 9 | 55 | 8/16/2/1 | 6 | 444 | 52,719 | 31,744 |
+| 4 | `MEM_WORD` | 22 | 31 | 24 | 7 | 33 | 12/5/0/1 | 5 | 314 | 35,279 | 30,920 |
+| 5 | `MEM_SUBWORD` | 22 | 31 | 55 | 10 | 53 | 12/22/1/1 | 6 | 472 | 56,366 | 36,112 |
+| 6 | `ATOMICS` | 20 | 26 | 54 | 9 | 46 | 10/19/6/1 | 6 | 472 | 57,193 | 32,272 |
+| 7 | `INIT_TEARDOWN` | 22 | 2 | 0 | 1 | 0 | — | 1 | 46 | 3,019 | 17,912 |
+| 8 | `ZERO_WINDOWS` | 22 | 2 | 0 | 0 | 0 | — | 1 | 46 | 2,794 | 17,896 |
+| 9 | `PUBLIC_INPUT` | 12 | 3 | 0 | 0 | 0 | — | 1 | 26 | 1,759 | 5,992 |
+| 10 | `PUBLIC_OUTPUT` | 12 | 2 | 0 | 0 | 0 | — | 1 | 26 | 1,714 | 5,976 |
+| 11 | `ADVICE_WINDOWS` | 22 | 3 | 0 | 0 | 0 | — | 1 | 46 | 2,839 | 17,912 |
 
 **UNFINISHED** ([proof.md](proof.md) §3): a proof's bytes are its GKR pass and outputs alone; the
 witness commitments and the opening a commitment scheme adds are not counted, because they are
@@ -46,7 +46,7 @@ not there.
 [lookup.md](lookup.md) §3 derives from the family's channels: 19 with `TIMESTAMP`, else 16 with
 `RANGE16`, else 0. A height changes `trace_vars`, each list's variable count and the number of
 halving lists, one per variable and as wide as the outputs, and no gate below them: at `2^20`
-`ADD_SUB_LUI_AUIPC` has 284 inner columns, 57,129 bytes and a 53,384-byte proof.
+`ADD_SUB_LUI_AUIPC` has 284 inner columns, 32,985 bytes and a 26,808-byte proof.
 
 **Shared circuits.** `PUBLIC_OUTPUT`'s circuit is `ZERO_WINDOWS`' and `ADVICE_WINDOWS`' is
 `PUBLIC_INPUT`'s, byte for byte at one height, all `constraints::memory` constructors

@@ -12,30 +12,33 @@ mod common;
 
 use common::{bind, toy, toy_base, toy_columns, ToyColumns, TOY_ROWS};
 use constants::transcript_tags as tags;
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{forward, prove, GkrProof};
 use poly::{eq_eval, MultilinearPoly, PolyBacking};
-use transcript::Transcript;
+use transcript_a64_c5::Transcript;
 
-fn poly(values: Vec<Fr>) -> MultilinearPoly {
-    MultilinearPoly::new(PolyBacking::Fr(values))
+fn poly(values: Vec<Fp2>) -> MultilinearPoly {
+    MultilinearPoly::new(PolyBacking::Fp2(values))
 }
 
-fn fr(v: u32) -> Fr {
-    Fr::from_u64(v as u64)
+fn fr(v: u32) -> Fp2 {
+    ext(v as u64)
 }
 
-fn bits(i: usize, n: usize) -> Vec<Fr> {
-    (0..n)
-        .map(|j| Fr::from_u64(((i >> j) & 1) as u64))
-        .collect()
+/// An integer, embedded in `Fp2`.
+fn ext(v: u64) -> Fp2 {
+    Fp::from_u64(v).into()
 }
 
-fn cubic_at(g: &[Fr; 4], x: Fr) -> Fr {
+fn bits(i: usize, n: usize) -> Vec<Fp2> {
+    (0..n).map(|j| ext(((i >> j) & 1) as u64)).collect()
+}
+
+fn cubic_at(g: &[Fp2; 4], x: Fp2) -> Fp2 {
     g[0] + x * (g[1] + x * (g[2] + x * g[3]))
 }
 
-fn table(p: &MultilinearPoly) -> Vec<Fr> {
+fn table(p: &MultilinearPoly) -> Vec<Fp2> {
     (0..p.len()).map(|i| p.get(i)).collect()
 }
 
@@ -56,18 +59,18 @@ struct Hand {
 /// `column` and every level of its product tree above it: level `j + 1`'s row
 /// `i` is level `j`'s rows `i` and `i + half` multiplied, the child bit being
 /// the highest variable, down to one row.
-fn tree(column: Vec<Fr>) -> Vec<MultilinearPoly> {
+fn tree(column: Vec<Fp2>) -> Vec<MultilinearPoly> {
     let mut levels = vec![column];
     while let Some(below) = levels.last().filter(|level| level.len() > 1) {
         let half = below.len() / 2;
-        let above: Vec<Fr> = (0..half).map(|i| below[i] * below[i + half]).collect();
+        let above: Vec<Fp2> = (0..half).map(|i| below[i] * below[i + half]).collect();
         levels.push(above);
     }
     levels.into_iter().map(poly).collect()
 }
 
-fn hand(cols: &ToyColumns, gamma: Fr) -> Hand {
-    let col = |v: &[u32]| -> Vec<Fr> { v.iter().map(|x| fr(*x)).collect() };
+fn hand(cols: &ToyColumns, gamma: Fp2) -> Hand {
+    let col = |v: &[u32]| -> Vec<Fp2> { v.iter().map(|x| fr(*x)).collect() };
     let (m, a, b, c, e, s) = (
         col(&cols.m),
         col(&cols.a),
@@ -77,14 +80,17 @@ fn hand(cols: &ToyColumns, gamma: Fr) -> Hand {
         col(&cols.s),
     );
     let rows = 0..TOY_ROWS;
-    let ab: Vec<Fr> = rows.clone().map(|y| a[y] * b[y]).collect();
-    let fingerprint: Vec<Fr> = rows
+    let ab: Vec<Fp2> = rows.clone().map(|y| a[y] * b[y]).collect();
+    let fingerprint: Vec<Fp2> = rows
         .clone()
-        .map(|y| (gamma * a[y] + Fr::from_u64(y as u64)) * c[y])
+        .map(|y| (gamma * a[y] + ext(y as u64)) * c[y])
         .collect();
-    let masked_m: Vec<Fr> = rows.clone().map(|y| m[y] * s[y] + Fr::ONE - s[y]).collect();
-    let abm: Vec<Fr> = rows.clone().map(|y| ab[y] * masked_m[y]).collect();
-    let fingerprint3: Vec<Fr> = rows.map(|y| fingerprint[y] + Fr::from_u64(3)).collect();
+    let masked_m: Vec<Fp2> = rows
+        .clone()
+        .map(|y| m[y] * s[y] + Fp2::ONE - s[y])
+        .collect();
+    let abm: Vec<Fp2> = rows.clone().map(|y| ab[y] * masked_m[y]).collect();
+    let fingerprint3: Vec<Fp2> = rows.map(|y| fingerprint[y] + ext(3)).collect();
     Hand {
         abm: tree(abm),
         fingerprint3: tree(fingerprint3),
@@ -100,27 +106,27 @@ fn hand(cols: &ToyColumns, gamma: Fr) -> Hand {
 enum Summand {
     /// Transition `2 + level`, halving the trees' level `level`:
     /// `abm(x,0)·abm(x,1) + λ·fp3(x,0)·fp3(x,1)`.
-    Halving { level: usize, lambda: Fr },
+    Halving { level: usize, lambda: Fp2 },
     /// Transition 1: `ab·masked_m + λ·(fingerprint + 3)`.
-    One { lambda: Fr },
+    One { lambda: Fp2 },
     /// Transition 0: `a·b + λ·(γ·a + row)·c + λ²·(m·s + 1 − s) + λ³·(e − a)·s`.
-    Zero { lambda: Fr, gamma: Fr },
+    Zero { lambda: Fp2, gamma: Fp2 },
 }
 
 impl Hand {
     /// A halving transition's four claims at `y`: level `level` of the `abm`
     /// tree at `(y, 0)` and `(y, 1)`, then the `fingerprint3` tree's.
-    fn children(&self, level: usize, y: &[Fr]) -> Vec<Fr> {
+    fn children(&self, level: usize, y: &[Fp2]) -> Vec<Fp2> {
         let child = |column: &MultilinearPoly, b: u64| {
             let mut point = y.to_vec();
-            point.push(Fr::from_u64(b));
+            point.push(ext(b));
             column.evaluate(&point)
         };
         let (abm, fp3) = (&self.abm[level], &self.fingerprint3[level]);
         vec![child(abm, 0), child(abm, 1), child(fp3, 0), child(fp3, 1)]
     }
 
-    fn summand(&self, s: Summand, y: &[Fr]) -> Fr {
+    fn summand(&self, s: Summand, y: &[Fp2]) -> Fp2 {
         match s {
             Summand::Halving { level, lambda } => {
                 let c = self.children(level, y);
@@ -128,29 +134,29 @@ impl Hand {
             }
             Summand::One { lambda } => {
                 self.ab.evaluate(y) * self.masked_m.evaluate(y)
-                    + lambda * (self.fingerprint.evaluate(y) + Fr::from_u64(3))
+                    + lambda * (self.fingerprint.evaluate(y) + ext(3))
             }
             Summand::Zero { lambda, gamma } => {
-                let v: Vec<Fr> = self.base.iter().map(|c| c.evaluate(y)).collect();
+                let v: Vec<Fp2> = self.base.iter().map(|c| c.evaluate(y)).collect();
                 let (m, a, b, c, e, s) = (v[0], v[1], v[2], v[3], v[4], v[5]);
                 // `row`'s multilinear extension, Σ 2^j·y_j, written out here.
                 let row = y
                     .iter()
                     .enumerate()
-                    .fold(Fr::ZERO, |acc, (j, yj)| acc + Fr::from_u64(1 << j) * *yj);
+                    .fold(Fp2::ZERO, |acc, (j, yj)| acc + ext(1 << j) * *yj);
                 let l2 = lambda * lambda;
                 a * b
                     + lambda * (gamma * a + row) * c
-                    + l2 * (m * s + Fr::ONE - s)
+                    + l2 * (m * s + Fp2::ONE - s)
                     + l2 * lambda * (e - a) * s
             }
         }
     }
 
     /// `Σ_rest eq(p, (bound, X, rest)) · S(bound, X, rest)`.
-    fn naive(&self, s: Summand, p: &[Fr], bound: &[Fr], x: Fr) -> Fr {
+    fn naive(&self, s: Summand, p: &[Fp2], bound: &[Fp2], x: Fp2) -> Fp2 {
         let rest = p.len() - bound.len() - 1;
-        (0..1usize << rest).fold(Fr::ZERO, |acc, i| {
+        (0..1usize << rest).fold(Fp2::ZERO, |acc, i| {
             let mut point = bound.to_vec();
             point.push(x);
             point.extend(bits(i, rest));
@@ -164,14 +170,14 @@ impl Hand {
         &self,
         s: Summand,
         t: &mut Transcript,
-        p: &[Fr],
-        proof_rounds: &[[Fr; 4]],
+        p: &[Fp2],
+        proof_rounds: &[[Fp2; 4]],
         compared: &mut usize,
-    ) -> Vec<Fr> {
-        let mut bound: Vec<Fr> = Vec::new();
+    ) -> Vec<Fp2> {
+        let mut bound: Vec<Fp2> = Vec::new();
         for (i, g) in proof_rounds.iter().enumerate() {
             for node in 0..4u64 {
-                let x = Fr::from_u64(node);
+                let x = ext(node);
                 assert_eq!(
                     cubic_at(g, x),
                     self.naive(s, p, &bound, x),
@@ -179,8 +185,8 @@ impl Hand {
                 );
                 *compared += 1;
             }
-            t.append_scalars(tags::SUMCHECK_ROUND, g);
-            bound.push(t.challenge_scalar(tags::SUMCHECK_CHALLENGE));
+            t.append_ext(tags::SUMCHECK_ROUND, g);
+            bound.push(t.challenge(tags::SUMCHECK_CHALLENGE));
         }
         bound
     }
@@ -190,13 +196,13 @@ impl Hand {
     fn absorb_outputs(&self, t: &mut Transcript) {
         let mut outputs = table(&self.fingerprint3[4]);
         outputs.extend(table(&self.abm[4]));
-        t.append_scalars(tags::GKR_OUTPUTS, &outputs);
+        t.append_ext(tags::GKR_OUTPUTS, &outputs);
     }
 }
 
 /// An honest proof of the toy, and a fresh transcript bound exactly as the
 /// prover's was, to replay the schedule on.
-fn prove_toy(seed: u64) -> (ToyColumns, GkrProof, Transcript, Fr) {
+fn prove_toy(seed: u64) -> (ToyColumns, GkrProof, Transcript, Fp2) {
     let artifact = toy();
     let cols = toy_columns(seed);
     let base = toy_base(&cols);
@@ -215,12 +221,12 @@ fn every_round_of_every_transition_matches_the_definition() {
         let h = hand(&cols, gamma);
         let mut compared = 0;
         h.absorb_outputs(&mut t);
-        let mut p: Vec<Fr> = Vec::new();
+        let mut p: Vec<Fp2> = Vec::new();
 
         // Transitions 5 down to 2, halving the trees' levels 3 down to 0.
         for k in (2..6).rev() {
             let level = k - 2;
-            let lambda = t.challenge_scalar(tags::GKR_BATCH);
+            let lambda = t.challenge(tags::GKR_BATCH);
             let s = Summand::Halving { level, lambda };
             let rho = h.rounds(s, &mut t, &p, &proof.layers[k].rounds, &mut compared);
             let claims = h.children(level, &rho);
@@ -228,13 +234,13 @@ fn every_round_of_every_transition_matches_the_definition() {
                 proof.layers[k].final_evals, claims,
                 "transition {k}'s child claims"
             );
-            t.append_scalars(tags::GKR_LAYER_CLAIMS, &claims);
+            t.append_ext(tags::GKR_LAYER_CLAIMS, &claims);
             p = rho;
-            p.push(t.challenge_scalar(tags::GKR_CHILD));
+            p.push(t.challenge(tags::GKR_CHILD));
         }
 
         // Transition 1.
-        let lambda = t.challenge_scalar(tags::GKR_BATCH);
+        let lambda = t.challenge(tags::GKR_BATCH);
         let s = Summand::One { lambda };
         let rho = h.rounds(s, &mut t, &p, &proof.layers[1].rounds, &mut compared);
         let claims = vec![
@@ -243,13 +249,13 @@ fn every_round_of_every_transition_matches_the_definition() {
             h.masked_m.evaluate(&rho),
         ];
         assert_eq!(proof.layers[1].final_evals, claims, "layer 1's claims");
-        t.append_scalars(tags::GKR_LAYER_CLAIMS, &claims);
+        t.append_ext(tags::GKR_LAYER_CLAIMS, &claims);
 
         // Transition 0.
-        let lambda = t.challenge_scalar(tags::GKR_BATCH);
+        let lambda = t.challenge(tags::GKR_BATCH);
         let s = Summand::Zero { lambda, gamma };
         let rho = h.rounds(s, &mut t, &rho, &proof.layers[0].rounds, &mut compared);
-        let claims: Vec<Fr> = h.base.iter().map(|c| c.evaluate(&rho)).collect();
+        let claims: Vec<Fp2> = h.base.iter().map(|c| c.evaluate(&rho)).collect();
         assert_eq!(proof.layers[0].final_evals, claims, "the base claims");
 
         // The halving transitions' 0, 1, 2 and 3 rounds, then 4 and 4.
@@ -269,23 +275,23 @@ fn the_oracle_rejects_a_perturbed_round() {
     let (cols, proof, mut t, gamma) = prove_toy(0x5313_1300);
     let h = hand(&cols, gamma);
     h.absorb_outputs(&mut t);
-    t.challenge_scalar(tags::GKR_BATCH);
-    t.append_scalars(tags::GKR_LAYER_CLAIMS, &h.children(3, &[]));
-    let p = [t.challenge_scalar(tags::GKR_CHILD)];
+    t.challenge(tags::GKR_BATCH);
+    t.append_ext(tags::GKR_LAYER_CLAIMS, &h.children(3, &[]));
+    let p = [t.challenge(tags::GKR_CHILD)];
     let s = Summand::Halving {
         level: 2,
-        lambda: t.challenge_scalar(tags::GKR_BATCH),
+        lambda: t.challenge(tags::GKR_BATCH),
     };
     assert_eq!(
-        cubic_at(&proof.layers[4].rounds[0], Fr::from_u64(2)),
-        h.naive(s, &p, &[], Fr::from_u64(2)),
+        cubic_at(&proof.layers[4].rounds[0], ext(2)),
+        h.naive(s, &p, &[], ext(2)),
         "the unperturbed round matches"
     );
     let mut broken = proof.layers[4].rounds[0];
-    broken[1] += Fr::ONE;
+    broken[1] += Fp2::ONE;
     let mismatches = (0..4u64)
         .filter(|&node| {
-            let x = Fr::from_u64(node);
+            let x = ext(node);
             cubic_at(&broken, x) != h.naive(s, &p, &[], x)
         })
         .count();

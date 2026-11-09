@@ -13,7 +13,7 @@
 //!
 //! ```text
 //!   <stem>.vk         VerifyingKey::to_bytes
-//!   <stem>.identity   the identity this run claims, 64 lowercase hex digits + newline
+//!   <stem>.identity   the identity this run claims, 128 lowercase hex digits + newline
 //!   <stem>.public     PublicInputs::to_bytes   (the block's own statement)
 //!   <stem>.block      BlockProof::to_bytes
 //! ```
@@ -22,7 +22,7 @@
 //! and `.block` as they are, and `crates/verifier/tests/cli.rs` writes them
 //! through this module rather than through a local closure, which is what keeps
 //! the two from drifting. **Its identity is not `.identity`.** The CLI takes
-//! the 64 hex digits themselves, and a verifier supplies its own:
+//! the 128 hex digits themselves, and a verifier supplies its own:
 //!
 //! ```text
 //!   verifier block <stem>.vk <identity from your own channel> <stem>.public <stem>.block
@@ -79,7 +79,7 @@ impl ProofPaths {
     }
 }
 
-/// The 64 lowercase hex digits of a program identity, as the CLI takes them.
+/// The 128 lowercase hex digits of a program identity, as the CLI takes them.
 ///
 /// Byte order is exactly `to_bytes()`'s, which is what
 /// `crates/verifier/src/main.rs` parses back — there is no second convention.
@@ -126,13 +126,13 @@ pub fn write_proof(
 /// recompute the identity from the key's own contents and revalidate every
 /// circuit against the registry (`docs/spec/proof.md` §7).
 ///
-/// The identity comes back as the 32 bytes, parsed from the file's hex. It is
+/// The identity comes back as the 64 bytes, parsed from the file's hex. It is
 /// **not** compared against the key's: a reader that wants that comparison
 /// writes it, against a value from a channel the prover does not control.
 pub fn read_proof(
     dir: &Path,
     stem: &str,
-) -> Result<(VerifyingKey, [u8; 32], PublicInputs, BlockProof), String> {
+) -> Result<(VerifyingKey, [u8; 64], PublicInputs, BlockProof), String> {
     let paths = ProofPaths::new(dir, stem);
     let read = |path: &Path| -> Result<Vec<u8>, String> {
         fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
@@ -148,14 +148,14 @@ pub fn read_proof(
     Ok((vk, identity, public, block))
 }
 
-/// 64 hex digits, with whatever whitespace an editor left around them.
-fn parse_identity(bytes: &[u8]) -> Result<[u8; 32], String> {
+/// 128 hex digits, with whatever whitespace an editor left around them.
+fn parse_identity(bytes: &[u8]) -> Result<[u8; 64], String> {
     let text = core::str::from_utf8(bytes).map_err(|_| "not UTF-8".to_string())?;
     let text = text.trim();
-    if text.len() != 64 {
-        return Err(format!("{} hex digits, not 64", text.len()));
+    if text.len() != 128 {
+        return Err(format!("{} hex digits, not 128", text.len()));
     }
-    let mut out = [0u8; 32];
+    let mut out = [0u8; 64];
     for (i, byte) in out.iter_mut().enumerate() {
         *byte = u8::from_str_radix(&text[2 * i..2 * i + 2], 16)
             .map_err(|_| format!("byte {i} is not hex"))?;
@@ -180,17 +180,17 @@ mod tests {
 
     /// The hex the CLI parses back, and nothing else.
     ///
-    /// `crates/verifier/src/main.rs` takes identity as 64 lowercase hex digits
+    /// `crates/verifier/src/main.rs` takes identity as 128 lowercase hex digits
     /// in `to_bytes()` order, and the file spells the run's claim the same way,
     /// so a reader compares it with its own trusted value as one string.
     #[test]
     fn the_identity_file_round_trips_through_the_cli_s_own_spelling() {
-        let mut bytes = [0u8; 32];
+        let mut bytes = [0u8; 64];
         for (i, b) in bytes.iter_mut().enumerate() {
             *b = (i as u8).wrapping_mul(37).wrapping_add(3);
         }
         let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(hex.len(), 64);
+        assert_eq!(hex.len(), 128);
         assert!(hex
             .chars()
             .all(|c| c.is_ascii_digit() || c.is_ascii_lowercase()));
@@ -200,9 +200,9 @@ mod tests {
         assert_eq!(parse_identity(format!("  {hex} \n").as_bytes()), Ok(bytes));
         // And what is refused, by name rather than by a half-decoded value.
         assert!(parse_identity(b"").is_err());
-        assert!(parse_identity(&hex.as_bytes()[..62]).is_err());
+        assert!(parse_identity(&hex.as_bytes()[..126]).is_err());
         assert!(parse_identity(format!("{hex}00").as_bytes()).is_err());
-        assert!(parse_identity(&[b'z'; 64]).is_err());
+        assert!(parse_identity(&[b'z'; 128]).is_err());
     }
 
     /// **Write then read is the identity**, over a synthetic key and a block
@@ -229,7 +229,7 @@ mod tests {
                 pc_ts: 0,
                 reg_values: [0; 31],
             },
-            memory_roots: vec![[field::Fr::ONE, field::Fr::ONE]; 3],
+            memory_roots: vec![[field_a64_c5::Fp2::ONE, field_a64_c5::Fp2::ONE]; 3],
         };
         // Three shells, because `BlockProof::from_bytes` requires one proof and
         // one root pair per shard and the statement
@@ -239,7 +239,7 @@ mod tests {
             family,
             shard_index: 0,
             ts_window: [0, 0],
-            global_digest: field::Fr::ZERO,
+            global_digest: field_a64_c5::Fp2::ZERO,
             outputs: vec![],
             gkr: GkrProof { layers: vec![] },
         };

@@ -31,7 +31,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use constants::{address_space, challenge_slot, family, lookup_channel, memory};
-use field::Fr;
+use field_a64_c5::Fp;
 
 use crate::build;
 use crate::gadgets;
@@ -183,7 +183,7 @@ pub fn frame_queries(family: u32) -> &'static [usize] {
 // ---------------------------------------------------------------------------
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn slot(s: u32) -> Coeff {
@@ -258,7 +258,7 @@ fn leaf(tuple: &GateDef, mask: PolyAddress) -> GateDef {
     let GateDef::Linear { terms, constant } = tuple else {
         panic!("leaf: a memory tuple is a Linear gate");
     };
-    let mut linear = vec![(*constant, mask), (Coeff::Literal(Fr::MINUS_ONE), mask)];
+    let mut linear = vec![(*constant, mask), (Coeff::Literal(Fp::MINUS_ONE), mask)];
     let mut products = Vec::new();
     for (c, x) in terms {
         if *x == mask {
@@ -284,7 +284,7 @@ fn booleanity(mask: PolyAddress) -> GateDef {
     GateDef::Quadratic {
         constant: lit(0),
         linear: vec![(lit(1), mask)],
-        products: vec![(Coeff::Literal(Fr::MINUS_ONE), mask, mask)],
+        products: vec![(Coeff::Literal(Fp::MINUS_ONE), mask, mask)],
     }
 }
 
@@ -294,7 +294,7 @@ fn write_back(at: usize) -> GateDef {
     GateDef::Linear {
         terms: vec![
             (lit(1), frame(at, FIELD_WRITE_VALUE)),
-            (Coeff::Literal(Fr::MINUS_ONE), frame(at, FIELD_READ_VALUE)),
+            (Coeff::Literal(Fp::MINUS_ONE), frame(at, FIELD_READ_VALUE)),
         ],
         constant: lit(0),
     }
@@ -313,7 +313,7 @@ fn write_back(at: usize) -> GateDef {
 fn x0_gates(at: usize, width: usize) -> [(&'static str, GateDef); 4] {
     let (addr, m) = (frame(at, FIELD_ADDR), frame(at, FIELD_MASK));
     let (inv, z, sel) = (rd_inv(width), rd_is_zero(width), rd_selected(width));
-    let minus = Coeff::Literal(Fr::MINUS_ONE);
+    let minus = Coeff::Literal(Fp::MINUS_ONE);
     let [inverse, at_nonzero] = gadgets::is_zero(&[(lit(1), addr)], inv, z, m);
     [
         ("rd_is_zero_inverse", inverse),
@@ -344,11 +344,17 @@ fn x0_gates(at: usize, width: usize) -> [(&'static str, GateDef); 4] {
 /// `[0, 2^38)`: `read_ts + a ≤ 4·cycle + Δ` as integers, under the counting
 /// premise of `docs/spec/memory.md` §4.2. §2.4; `Δ − a` is the field element,
 /// `Δ − 1` for every query but the pc, whose is `−4`.
+///
+/// **UNFINISHED: A64-C5 CHARACTERISTIC.** The counting premise needs
+/// `p/(2^38 + 3)` above a statement's tuple count, and at `p = 2^64 − 59` it
+/// is about `2^26`: `cycle` is never bounded, so nothing makes a timestamp an
+/// integer, and a loop of that many edges balances with no init. A later stage
+/// bounds every write timestamp structurally (`docs/spec/memory.md` §4.2).
 fn gap_lookups(query: usize, at: usize) -> [LookupExpr; 2] {
     let (name, hi) = (FRAME_NAMES[query], gap_hi(at));
     let selector = frame(at, FIELD_MASK);
     let channel = lookup_channel::TIMESTAMP;
-    let chunk = Fr::from_u64(1 << lookup_channel::BITS[channel as usize]);
+    let chunk = Fp::from_u64(1 << lookup_channel::BITS[channel as usize]);
     [
         LookupExpr {
             name: format!("gap_hi_{name}"),
@@ -366,11 +372,11 @@ fn gap_lookups(query: usize, at: usize) -> [LookupExpr; 2] {
             tuple: vec![GateDef::Linear {
                 terms: vec![
                     (lit(memory::TS_STEP), CYCLE),
-                    (Coeff::Literal(Fr::MINUS_ONE), frame(at, FIELD_READ_TS)),
+                    (Coeff::Literal(Fp::MINUS_ONE), frame(at, FIELD_READ_TS)),
                     (Coeff::Literal(-chunk), hi),
                 ],
                 constant: Coeff::Literal(
-                    Fr::from_u64(FRAME_DELTA[query]) - Fr::from_u64(FRAME_MIN_ADVANCE[query]),
+                    Fp::from_u64(FRAME_DELTA[query]) - Fp::from_u64(FRAME_MIN_ADVANCE[query]),
                 ),
             }],
         },

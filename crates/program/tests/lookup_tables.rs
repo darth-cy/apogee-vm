@@ -9,7 +9,7 @@
 
 mod common;
 
-use field::Fr;
+use field_a64_c5::Fp;
 use program::lookup_tables::{
     generic_entries, generic_table, zero_entry, AND_BASE, AND_ROWS, GENERIC_ROWS, GENERIC_WIDTH,
     SHIFT_BASE, SHIFT_ROWS, SIGN_BASE, SIGN_ROWS,
@@ -81,7 +81,7 @@ fn the_generic_table_is_its_reference_computation() {
     for column in &columns {
         assert_eq!(column.num_vars(), VARS as usize);
     }
-    let cell = |row: usize, j: usize| columns[j].get(row);
+    let cell = |row: usize, j: usize| columns[j].get_base(row);
     for j in 0..GENERIC_WIDTH {
         assert_eq!(cell(0, j), zero_entry()[j], "the ZeroEntry at row 0");
     }
@@ -89,7 +89,7 @@ fn the_generic_table_is_its_reference_computation() {
         for (j, value) in entry.iter().enumerate() {
             assert_eq!(
                 cell(i + 1, j),
-                Fr::from_u64(*value as u64),
+                Fp::from_u64(*value as u64),
                 "row {} column {j}",
                 i + 1
             );
@@ -97,7 +97,7 @@ fn the_generic_table_is_its_reference_computation() {
     }
     for row in [GENERIC_ROWS, GENERIC_ROWS + 1, rows - 1] {
         for j in 0..GENERIC_WIDTH {
-            assert_eq!(cell(row, j), Fr::ZERO, "row {row} is the ZeroEntry again");
+            assert_eq!(cell(row, j), Fp::ZERO, "row {row} is the ZeroEntry again");
         }
     }
 }
@@ -128,7 +128,7 @@ fn a_poisoned_row_differs_from_the_committed_table() {
     let differing: Vec<usize> = (0..poisoned.len())
         .filter(|i| {
             (0..GENERIC_WIDTH)
-                .any(|j| columns[j].get(i + 1) != Fr::from_u64(poisoned[*i][j] as u64))
+                .any(|j| columns[j].get_base(i + 1) != Fp::from_u64(poisoned[*i][j] as u64))
         })
         .collect();
     assert_eq!(

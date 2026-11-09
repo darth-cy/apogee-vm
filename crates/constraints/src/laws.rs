@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use constants::{challenge_slot, lookup_channel};
-use field::Fr;
+use field_a64_c5::Fp;
 
 use crate::{
     CachedEntry, CircuitArtifact, Coeff, GateDef, LayerSpec, PolyAddress,
@@ -191,7 +191,7 @@ fn header(a: &CircuitArtifact) -> Result<(), ConstraintError> {
     if a.coefficient_encoding != COEFFICIENT_ENCODING_CANONICAL_LE {
         return Err(malformed(format!(
             "coefficient encoding {}; the only one is {COEFFICIENT_ENCODING_CANONICAL_LE}, \
-             canonical 32-byte little-endian",
+             canonical 8-byte little-endian",
             a.coefficient_encoding
         )));
     }
@@ -358,9 +358,9 @@ fn lookups(a: &CircuitArtifact) -> Result<(), ConstraintError> {
             // any literal, but `β^j·c` above it is one `Coeff` only at `c = 1`:
             // an expression this rule refuses has no denominator gate at all
             // (`docs/spec/lookup.md` §5).
-            let unit = |c: &Coeff| matches!(c, Coeff::Literal(v) if *v == Fr::ONE);
+            let unit = |c: &Coeff| matches!(c, Coeff::Literal(v) if *v == Fp::ONE);
             if j > 0
-                && (!terms.iter().all(|(c, _)| unit(c)) || *constant != Coeff::Literal(Fr::ZERO))
+                && (!terms.iter().all(|(c, _)| unit(c)) || *constant != Coeff::Literal(Fp::ZERO))
             {
                 return Err(malformed(format!(
                     "lookup `{name}` weights expression {j} by something other than 1, or gives \
@@ -378,9 +378,9 @@ fn lookups(a: &CircuitArtifact) -> Result<(), ConstraintError> {
 /// `constraints::memory` builds all count.
 fn boolean_in_list_0(a: &CircuitArtifact, x: PolyAddress) -> bool {
     let want = normal_form(&GateDef::Quadratic {
-        constant: Coeff::Literal(Fr::ZERO),
-        linear: vec![(Coeff::Literal(Fr::ONE), x)],
-        products: vec![(Coeff::Literal(Fr::MINUS_ONE), x, x)],
+        constant: Coeff::Literal(Fp::ZERO),
+        linear: vec![(Coeff::Literal(Fp::ONE), x)],
+        products: vec![(Coeff::Literal(Fp::MINUS_ONE), x, x)],
     });
     a.layers[0]
         .enforcing
@@ -835,7 +835,7 @@ pub(crate) enum Symbol {
 /// `Σ coefficient · Π symbols`, kept normalized: every sum and product below
 /// merges as it goes, so a gate's expansion never holds more monomials than the
 /// polynomial has — quadratic in the gate's distinct operands, never quartic.
-pub(crate) type Expansion = Vec<(Vec<Symbol>, Fr)>;
+pub(crate) type Expansion = Vec<(Vec<Symbol>, Fp)>;
 
 /// Where a gate's operands live: the flat list, or gate list `k` of the
 /// layered encoding.
@@ -863,7 +863,7 @@ impl Namespace<'_> {
                 };
                 flat.expand(&self.cached[offset as usize].gate)
             }
-            other => vec![(vec![Symbol::Column(self.column(other))], Fr::ONE)],
+            other => vec![(vec![Symbol::Column(self.column(other))], Fp::ONE)],
         }
     }
 
@@ -884,9 +884,9 @@ impl Namespace<'_> {
             ),
             GateDef::MaskIntoIdentity { input, mask } => {
                 let mut out = product(&self.operand(*input), &self.operand(*mask));
-                out.push((Vec::new(), Fr::ONE));
+                out.push((Vec::new(), Fp::ONE));
                 out.extend(product(
-                    &[(Vec::new(), Fr::MINUS_ONE)],
+                    &[(Vec::new(), Fp::MINUS_ONE)],
                     &self.operand(*mask),
                 ));
                 normalize(out)
@@ -902,13 +902,13 @@ impl Namespace<'_> {
             ),
             GateDef::TreeProduct { input } => {
                 let x = self.column(*input);
-                vec![(vec![Symbol::Child(x, 0), Symbol::Child(x, 1)], Fr::ONE)]
+                vec![(vec![Symbol::Child(x, 0), Symbol::Child(x, 1)], Fp::ONE)]
             }
             GateDef::TreeCross { left, right } => {
                 let (p, q) = (self.column(*left), self.column(*right));
                 normalize(vec![
-                    (vec![Symbol::Child(p, 0), Symbol::Child(q, 1)], Fr::ONE),
-                    (vec![Symbol::Child(p, 1), Symbol::Child(q, 0)], Fr::ONE),
+                    (vec![Symbol::Child(p, 0), Symbol::Child(q, 1)], Fp::ONE),
+                    (vec![Symbol::Child(p, 1), Symbol::Child(q, 0)], Fp::ONE),
                 ])
             }
             GateDef::Quadratic {
@@ -932,11 +932,11 @@ impl Namespace<'_> {
 fn coefficient(c: Coeff) -> Expansion {
     match c {
         Coeff::Literal(v) => vec![(Vec::new(), v)],
-        Coeff::Challenge(slot) => vec![(vec![Symbol::Challenge(slot)], Fr::ONE)],
+        Coeff::Challenge(slot) => vec![(vec![Symbol::Challenge(slot)], Fp::ONE)],
     }
 }
 
-fn product(a: &[(Vec<Symbol>, Fr)], b: &[(Vec<Symbol>, Fr)]) -> Expansion {
+fn product(a: &[(Vec<Symbol>, Fp)], b: &[(Vec<Symbol>, Fp)]) -> Expansion {
     let mut out = Vec::new();
     for (ma, ca) in a {
         for (mb, cb) in b {
@@ -980,7 +980,7 @@ fn normalize(mut terms: Expansion) -> Expansion {
             _ => out.push((m, c)),
         }
     }
-    out.retain(|(_, c)| *c != Fr::ZERO);
+    out.retain(|(_, c)| *c != Fp::ZERO);
     out
 }
 
@@ -1057,7 +1057,7 @@ fn inline(
     {
         return Ok(gate.clone());
     }
-    let zero = Coeff::Literal(Fr::ZERO);
+    let zero = Coeff::Literal(Fp::ZERO);
     if let GateDef::Product { coeff, left, right } = gate {
         match (linear(left), linear(right)) {
             (Some(Some((terms, constant))), None) => {

@@ -22,7 +22,7 @@ use alloc::vec::Vec;
 use constants::extra_mask::add_sub_lui_auipc as kind;
 use constants::extra_mask::system_code;
 use constants::{family, lookup_channel, memory as mem};
-use field::Fr;
+use field_a64_c5::Fp;
 
 use crate::lookup::ChannelSpec;
 use crate::memory::{
@@ -118,15 +118,15 @@ const A7: u64 = 17;
 const A0: u64 = 10;
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn neg(v: u64) -> Coeff {
-    Coeff::Literal(-Fr::from_u64(v))
+    Coeff::Literal(-Fp::from_u64(v))
 }
 
-fn two_32() -> Fr {
-    Fr::from_u64(1 << 32)
+fn two_32() -> Fp {
+    Fp::from_u64(1 << 32)
 }
 
 /// `Σ a·x + Σ b·y·z`, constant 0, literal coefficients.
@@ -203,7 +203,7 @@ fn range16(name: &str, expression: GateDef) -> LookupExpr {
 fn low_half(x: PolyAddress, hi: PolyAddress) -> GateDef {
     linear(vec![
         (lit(1), x),
-        (Coeff::Literal(-Fr::from_u64(1 << 16)), hi),
+        (Coeff::Literal(-Fp::from_u64(1 << 16)), hi),
     ])
 }
 

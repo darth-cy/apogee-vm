@@ -43,7 +43,7 @@ use constraints::memory::{
     FRAME_MIN_ADVANCE, FRAME_NAMES, FRAME_READ_ONLY, FRAME_SPACE, PC, RAM, RD, RS1,
 };
 use constraints::PolyAddress;
-use field::Fr;
+use field_a64_c5::Fp;
 use gkr::{
     boundary_factors, reconciles, self_check, BoundaryFinals, ExternalChallenges, SelfCheckError,
 };
@@ -56,8 +56,8 @@ const JUMP: usize = 1;
 const MEM: usize = 4;
 /// How many frames fib's statement has; the windows follow them.
 const FRAMES: usize = 6;
-fn int(v: u64) -> Fr {
-    Fr::from_u64(v)
+fn int(v: u64) -> Fp {
+    Fp::from_u64(v)
 }
 
 /// fib's honest statement: its trace, slots 1–4, its frame plan, its ten
@@ -129,10 +129,10 @@ fn fib() -> Fib {
 /// that shard's base, every other cell as it is. A forgery spanning two
 /// families' frames — two `rd` writes to one register that consecutive cycles
 /// of different families made — is one call.
-fn tampered(shards: &[Shard], cells: &[(usize, PolyAddress, usize, Fr)]) -> Vec<Shard> {
+fn tampered(shards: &[Shard], cells: &[(usize, PolyAddress, usize, Fp)]) -> Vec<Shard> {
     let mut out = shards.to_vec();
     for (i, shard) in out.iter_mut().enumerate() {
-        let mine: Vec<(PolyAddress, usize, Fr)> = cells
+        let mine: Vec<(PolyAddress, usize, Fp)> = cells
             .iter()
             .filter(|c| c.0 == i)
             .map(|c| (c.1, c.2, c.3))
@@ -224,7 +224,7 @@ fn locate(f: &Fib, e: &MemoryEvent) -> (usize, usize, usize) {
         let q = queries[at];
         FRAME_SPACE[q] == e.space.tag()
             && FRAME_DELTA[q] == e.delta()
-            && cell(&f.shards[i], frame(at, FIELD_MASK), row) == Fr::ONE
+            && cell(&f.shards[i], frame(at, FIELD_MASK), row) == Fp::ONE
             && cell(&f.shards[i], frame(at, FIELD_ADDR), row) == int(e.addr as u64)
             && cell(&f.shards[i], frame(at, FIELD_READ_TS), row) == int(e.read_ts)
     };
@@ -242,7 +242,7 @@ fn locate(f: &Fib, e: &MemoryEvent) -> (usize, usize, usize) {
 fn first_live(f: &Fib, q: usize) -> (usize, usize, usize) {
     for i in 0..FRAMES {
         let Some(at) = slot(f, i, q) else { continue };
-        let live = |y: &usize| cell(&f.shards[i], frame(at, FIELD_MASK), *y) == Fr::ONE;
+        let live = |y: &usize| cell(&f.shards[i], frame(at, FIELD_MASK), *y) == Fp::ONE;
         if let Some(row) = (0..f.plan[i].1.len()).find(live) {
             return (i, row, at);
         }
@@ -298,7 +298,7 @@ fn balanced_and_refused_by(f: &Fib, forged: &[Shard], i: usize, row: usize, rela
 }
 
 /// `v`'s canonical integer, which fits a `u64`.
-fn small(v: Fr) -> u64 {
+fn small(v: Fp) -> u64 {
     let b = v.to_bytes();
     assert!(b[8..].iter().all(|x| *x == 0), "{v:?} is past 64 bits");
     u64::from_le_bytes(b[..8].try_into().expect("8 bytes"))
@@ -332,7 +332,7 @@ fn one_changed_value_does_not_reconcile() {
         (i, at),
         (MEM, slot(&f, MEM, RAM).expect("mem_word has ram"))
     );
-    let value = cell(&f.shards[i], frame(at, FIELD_READ_VALUE), row) + Fr::ONE;
+    let value = cell(&f.shards[i], frame(at, FIELD_READ_VALUE), row) + Fp::ONE;
     let forged = tampered(&f.shards, &[(i, frame(at, FIELD_READ_VALUE), row, value)]);
     let expected = Surface {
         reconciles: false,
@@ -430,10 +430,10 @@ fn a_zeroed_register_write_and_a_nonzero_x0_write_are_each_refused_by_their_gate
     let (i2, r2, k2) = locate(&f, &w2);
     assert_ne!(i1, i2, "the pair spans two families' frames");
     let cells = [
-        (i1, rd_is_zero(width(&f, i1)), r1, Fr::ONE),
-        (i1, rd_inv(width(&f, i1)), r1, Fr::ZERO),
-        (i1, frame(k1, FIELD_WRITE_VALUE), r1, Fr::ZERO),
-        (i2, frame(k2, FIELD_READ_VALUE), r2, Fr::ZERO),
+        (i1, rd_is_zero(width(&f, i1)), r1, Fp::ONE),
+        (i1, rd_inv(width(&f, i1)), r1, Fp::ZERO),
+        (i1, frame(k1, FIELD_WRITE_VALUE), r1, Fp::ZERO),
+        (i2, frame(k2, FIELD_READ_VALUE), r2, Fp::ZERO),
     ];
     let forged = tampered(&f.shards, &cells);
     balanced_and_refused_by(&f, &forged, i1, r1, "rd_is_zero_at_nonzero");
@@ -443,7 +443,7 @@ fn a_zeroed_register_write_and_a_nonzero_x0_write_are_each_refused_by_their_gate
     let (i2, r2, k2) = locate(&f, &w2);
     assert_eq!((i1, i2), (JUMP, JUMP));
     let cells = [
-        (i1, rd_is_zero(width(&f, i1)), r1, Fr::ZERO),
+        (i1, rd_is_zero(width(&f, i1)), r1, Fp::ZERO),
         (i1, rd_selected(width(&f, i1)), r1, int(5)),
         (i1, frame(k1, FIELD_WRITE_VALUE), r1, int(5)),
         (i2, frame(k2, FIELD_READ_VALUE), r2, int(5)),
@@ -468,7 +468,7 @@ fn a_read_only_query_writing_back_another_value_is_refused_by_its_gate() {
     for q in FRAME_READ_ONLY {
         let (i, row, at) = first_live(&f, q);
         families.push(i);
-        let value = cell(&f.shards[i], frame(at, FIELD_READ_VALUE), row) + Fr::ONE;
+        let value = cell(&f.shards[i], frame(at, FIELD_READ_VALUE), row) + Fp::ONE;
         let forged = with_cells(&f.shards[i], &[(frame(at, FIELD_WRITE_VALUE), row, value)]);
         let (a, challenges) = (&forged.artifact, &forged.challenges);
         let values = forwarded_shard(&forged);
@@ -504,10 +504,10 @@ fn the_gap_obligations_accept_exactly_0_through_2_38_minus_1() {
     let layout = a.committed();
     let at = |address| layout.iter().position(|c| *c == address).expect("a column");
     let top = int(1 << 38);
-    let row = |gap: Fr, hi: Fr| {
-        let mut committed = vec![Fr::ZERO; layout.len()];
+    let row = |gap: Fp, hi: Fp| {
+        let mut committed = vec![Fp::ZERO; layout.len()];
         committed[at(CYCLE)] = int(1 << 36);
-        committed[at(frame(rs1, FIELD_MASK))] = Fr::ONE;
+        committed[at(frame(rs1, FIELD_MASK))] = Fp::ONE;
         committed[at(frame(rs1, FIELD_READ_TS))] = top - gap;
         committed[at(gap_hi(rs1))] = hi;
         WitnessRow {
@@ -521,13 +521,13 @@ fn the_gap_obligations_accept_exactly_0_through_2_38_minus_1() {
         assert_eq!(violated_lookups(&a, &w), Vec::<String>::new(), "gap {gap}");
     }
     let his = [
-        Fr::ZERO,
-        Fr::ONE,
+        Fp::ZERO,
+        Fp::ONE,
         int((1 << 19) - 1),
         int(1 << 19),
-        Fr::MINUS_ONE,
+        Fp::MINUS_ONE,
     ];
-    for (label, gap) in [("-1", Fr::MINUS_ONE), ("2^38", top)] {
+    for (label, gap) in [("-1", Fp::MINUS_ONE), ("2^38", top)] {
         for hi in his {
             let names = violated_lookups(&a, &row(gap, hi));
             assert_ne!(names, Vec::<String>::new(), "gap {label}, hi {hi:?}");
@@ -535,7 +535,7 @@ fn the_gap_obligations_accept_exactly_0_through_2_38_minus_1() {
     }
     let lo = ["gap_lo_rs1".to_string()];
     let hi = ["gap_hi_rs1".to_string()];
-    assert_eq!(violated_lookups(&a, &row(Fr::MINUS_ONE, Fr::ZERO)), lo);
+    assert_eq!(violated_lookups(&a, &row(Fp::MINUS_ONE, Fp::ZERO)), lo);
     assert_eq!(violated_lookups(&a, &row(top, int(1 << 19))), hi);
     assert_eq!(violated_lookups(&a, &row(top, int((1 << 19) - 1))), lo);
 }
@@ -560,9 +560,9 @@ fn consecutive_rows_are_a_cycle_apart() {
     let at = |address| layout.iter().position(|c| *c == address).expect("a column");
     let quarter = int(4).inverse().expect("4 is invertible");
     let row = |k: u64| {
-        let mut committed = vec![Fr::ZERO; layout.len()];
+        let mut committed = vec![Fp::ZERO; layout.len()];
         committed[at(CYCLE)] = int(C) + int(k) * quarter;
-        committed[at(frame(pc, FIELD_MASK))] = Fr::ONE;
+        committed[at(frame(pc, FIELD_MASK))] = Fp::ONE;
         committed[at(frame(pc, FIELD_READ_TS))] = int(TS_STEP * C);
         WitnessRow {
             committed,
@@ -613,7 +613,7 @@ fn a_pc_query_masked_by_minus_1_reads_as_a_register_and_only_booleanity_refuses_
     let (t10, v10) = (f.finals.reg_ts[10], f.finals.reg_values[9]);
     let advance = FRAME_MIN_ADVANCE[PC];
     assert!(t10 + advance <= ts && ts - t10 - advance < 1 << 19);
-    let cells = |mask: Fr| {
+    let cells = |mask: Fp| {
         [
             (ALU, CYCLE, row, int(cycle)),
             (ALU, frame(pc, FIELD_MASK), row, mask),
@@ -636,9 +636,9 @@ fn a_pc_query_masked_by_minus_1_reads_as_a_register_and_only_booleanity_refuses_
         lookups: Vec::new(),
         reconciles: true,
     };
-    let forged = tampered(&f.shards, &cells(Fr::MINUS_ONE));
+    let forged = tampered(&f.shards, &cells(Fp::MINUS_ONE));
     assert_eq!(surface(&f, &forged, &finals), expected);
-    let as_pc = tampered(&f.shards, &cells(Fr::ONE));
+    let as_pc = tampered(&f.shards, &cells(Fp::ONE));
     let expected = Surface {
         reconciles: false,
         ..honest()

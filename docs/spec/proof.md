@@ -35,7 +35,7 @@ leaves its caller to check the identity and the statement's input, output and ex
 | `shard_counts: Vec<u32>` | one per family of the `VmConfig`, in its order, possibly 0 |
 | `windows: Vec<u32>` | `ZERO_WINDOWS`' window ids, one per shard ([memory.md](memory.md) §3.5) |
 | `boundary: BoundaryFinals` | the 64 register and pc boundary scalars ([memory.md](memory.md) §4.1) |
-| `memory_roots: Vec<[Fr; 2]>` | per statement shard, `[read_root, write_root]` |
+| `memory_roots: Vec<[Fp2; 2]>` | per statement shard, `[read_root, write_root]` |
 
 The first three are the claim; the rest is the execution's record, which the prover chooses. All of
 it but the roots and the exit status is absorbed before any challenge (§2). **UNFINISHED** (§3): a
@@ -82,12 +82,12 @@ transcript, tag values in [transcript.md](transcript.md) §4.
 | G2 | absorb | `VM_CONFIG` | the config ([program.md](program.md) §7) |
 | G3 | absorb | `SHARD_COUNTS` | `shard_counts` |
 | G4 | absorb | `MEMORY_WINDOWS` | `windows` |
-| G5 | absorb | `PROGRAM_IDENTITY` | `[vk.identity]` |
-| G6 | absorb | `PUBLIC_INPUTS`, bytes | the 32 bytes of `io_digest(input, output)` ([public-values.md](public-values.md) §5) |
+| G5 | absorb | `PROGRAM_IDENTITY` | `vk.identity`'s 8 lanes |
+| G6 | absorb | `PUBLIC_INPUTS` | `io_digest(input, output)`'s 8 lanes ([public-values.md](public-values.md) §5) |
 | — | — | — | **UNFINISHED**: every statement shard's memory-column commitments, absent (§3) |
 | G7 | absorb | `MEMORY_BOUNDARY` | the 64 boundary scalars |
 | G8 | squeeze ×4 | `MEMORY_CHALLENGE` | `γ_M, α_addr, α_ts, α_val`, challenge slots 1–4 |
-| G9 | squeeze | `GLOBAL_STATE_DIGEST` | the **global state digest** |
+| G9 | squeeze | `GLOBAL_STATE_DIGEST` | the **global state digest**, one `Fp2` |
 
 G2–G4 are `verifier_core::absorb_statement_descriptor`.
 
@@ -124,7 +124,7 @@ global one:
 
 | # | op | tag | message |
 | --- | --- | --- | --- |
-| S1 | absorb | `SHARD_SEED` | `[global state digest, family, index]` |
+| S1 | absorb | `SHARD_SEED` | `[digest.c0, digest.c1, family, index]`, the global state digest first |
 | S2 | absorb | `SHARD_TS_WINDOW` | `[ts_start, ts_end]` (§8) |
 | — | — | — | **UNFINISHED**: the shard's `W` commitments, multiplicities included, absent (§3) |
 | S3 | squeeze ×2 | `LOOKUP_CHALLENGE` | `g`, then `β` ([lookup.md](lookup.md) §2) |
@@ -302,8 +302,8 @@ nothing to soundness.
 
 ## 9. Wire forms and the proof archive
 
-`verifier_core::wire`: integers little-endian; an `Fr` its 32 canonical bytes
-([primitives.md](primitives.md) §1), refused at or above `p`; `bytes` a `u32` length then the
+`verifier_core::wire`: integers little-endian; an `Fp` its 8 canonical bytes and an `Fp2` its 16
+([primitives.md](primitives.md) §1), a lane at or above `p` refused; `bytes` a `u32` length then the
 bytes; `list<T>` a `u32` count then the items; `T[k]` exactly `k` items, no count. Every decoder is
 total: it refuses a count the remaining bytes cannot hold, so it reserves nothing an untrusted
 length asks for, and refuses trailing bytes.
@@ -311,25 +311,25 @@ length asks for, and refuses trailing bytes.
 ```text
 PublicInputs   input bytes, output bytes, exit_status u32,
                shard_counts list<u32>, windows list<u32>,
-               boundary Fr[64]                     memory.md §4.1's order and ranges
-               memory_roots list<Fr[2]>
+               boundary Fp[64]                     memory.md §4.1's order and ranges
+               memory_roots list<Fp2[2]>
 
-ShardProof     family u32, shard_index u32, ts_start u64, ts_end u64, global_digest Fr,
-               outputs list<Fr>,
-               gkr list<(rounds list<Fr[4]>, final_evals list<Fr>)>       transition 0 first
+ShardProof     family u32, shard_index u32, ts_start u64, ts_end u64, global_digest Fp2,
+               outputs list<Fp2>,
+               gkr list<(rounds list<Fp2[4]>, final_evals list<Fp2>)>     transition 0 first
 
 BlockProof     config bytes                        VmConfig, program.md §7
                statement bytes                     PublicInputs
                shards list<bytes>                  each a ShardProof; then BlockProof::shape
 
-VerifyingKey   code_version u32, config bytes, entry_pc u32, identity Fr,
+VerifyingKey   code_version u32, config bytes, entry_pc u32, identity Fp[8],
                circuits list<(family u32, artifact bytes,          CircuitArtifact, gkr.md §4.1
                               channels list<(channel u32, table list<Address>,
                                              multiplicity Address)>)>
 Address        tag u8 (0 M, 1 W, 2 S, 3 V), index u32; a V's index is its gkr.md §2.1 kind tag
 
 BlockReconciliation   list<(family u32, shard_index u32, ts_start u64, ts_end u64,
-                            read_root Fr, write_root Fr)>
+                            read_root Fp2, write_root Fp2)>
 ```
 
 **UNFINISHED** (§3): `PublicInputs` is meant to carry the memory commitments, `ShardProof` the
@@ -341,7 +341,7 @@ circuit at `2^n` with `C` committed and `I` inner columns, `O` outputs, and `R` 
 before its `n` halving ones, that is
 
 ```text
-64 + 32·O + 8·(R + n) + 128·(R·n + n(n − 1)/2) + 32·(C + I + O·(n − 1))   bytes
+48 + 16·O + 8·(R + n) + 64·(R·n + n(n − 1)/2) + 16·(C + I + O·(n − 1))   bytes
 ```
 
 which [circuits.md](circuits.md) §1 tabulates per family.
@@ -351,7 +351,7 @@ as `host::proof_archive`, writes four files, each a bare `to_bytes` with no head
 
 ```text
 <stem>.vk         VerifyingKey
-<stem>.identity   the key's identity: its 32 bytes in order, 64 lowercase hex digits, a newline
+<stem>.identity   the key's identity: its 64 bytes in order, 128 lowercase hex digits, a newline
 <stem>.public     PublicInputs: the block's own statement
 <stem>.block      BlockProof
 ```

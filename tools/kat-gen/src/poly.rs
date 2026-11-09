@@ -1,4 +1,5 @@
-//! The multilinear-polynomial fixtures, generated against `ark-poly`.
+//! The multilinear-polynomial fixtures, generated against `ark-poly` over the
+//! A64-C5 fields.
 //!
 //! Two files, both written to `crates/poly/tests/vectors/`:
 //!
@@ -7,15 +8,17 @@
 //! * `evaluate_diff.txt` — a 100-case differential corpus at `n <= 12` across
 //!   all five backings.
 //!
-//! Every expected value here comes from arkworks: bind chains from
-//! `MultilinearExtension::fix_variables`, evaluations from
-//! `Polynomial::evaluate`, and `eq` from the direct product formula. None of
-//! it is `crates/poly`'s own answer read back.
+//! A table's values are base-field elements; every challenge and evaluation
+//! point is an `Fp2` element, and so is every value computed from one. Every
+//! expected value here comes from arkworks, over its `Fp2` with the table
+//! lifted into it: bind chains from `MultilinearExtension::fix_variables`,
+//! evaluations from `Polynomial::evaluate`, and `eq` from the direct product
+//! formula. None of it is `crates/poly`'s own answer read back.
 
 use std::fmt::Write as _;
 
-use crate::ark_fr::ArkFr as Fr;
-use ark_ff::{BigInteger, One, PrimeField};
+use crate::ark_a64_c5::{ArkFp as Fp, ArkFp2 as Fp2};
+use ark_ff::{BigInteger, One, PrimeField, Zero};
 use ark_poly::{DenseMultilinearExtension, MultilinearExtension, Polynomial};
 use test_support::{sha256, to_hex, Rng};
 
@@ -25,7 +28,7 @@ const KAT_VARS: usize = 10;
 const KAT_POINTS: usize = 20;
 /// `eq_table` is committed on the challenge prefixes `r[..k]` for `k <= this`.
 /// Larger `k` is checked in-process against `eq_eval`, which is stronger than
-/// another 130 KB of hex.
+/// another 80 KB of hex.
 const KAT_EQ_PREFIX: usize = 6;
 
 /// The differential corpus of `evaluate_diff.txt`. Case `i` is seeded
@@ -34,44 +37,65 @@ const DIFF_SEED: u64 = 20260908;
 const DIFF_CASES: usize = 100;
 
 /// The five backings, in the order the corpus cycles through them.
-const BACKINGS: [&str; 5] = ["u1", "u8", "u16", "u32", "fr"];
+const BACKINGS: [&str; 5] = ["u1", "u8", "u16", "u32", "fp"];
 
-fn hex_fr(x: &Fr) -> String {
-    let bytes = x.into_bigint().to_bytes_le();
-    assert_eq!(bytes.len(), 32, "Fr must serialize to 32 bytes");
-    to_hex(&bytes)
+/// `Fp2::to_bytes`: `c0` then `c1`, each 8 bytes little-endian canonical.
+fn fp2_bytes(x: &Fp2) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(16);
+    for c in [x.c0, x.c1] {
+        let half = c.into_bigint().to_bytes_le();
+        assert_eq!(half.len(), 8, "Fp must serialize to 8 bytes");
+        bytes.extend_from_slice(&half);
+    }
+    bytes
 }
 
-/// A field element from four `u64` draws read as one 256-bit little-endian
-/// integer, reduced mod p. `crates/poly`'s tests rebuild the same value from
-/// the same draws through `Fr::from_u64`, and check the two agree.
-fn next_fr(rng: &mut Rng) -> Fr {
-    Fr::from_le_bytes_mod_order(&rng.next_le32())
+fn hex_fp2(x: &Fp2) -> String {
+    to_hex(&fp2_bytes(x))
+}
+
+/// The canonical embedding of the base field in `Fp2`.
+fn lift(x: Fp) -> Fp2 {
+    Fp2::new(x, Fp::zero())
+}
+
+/// A base element from one `u64` draw, reduced mod p. `crates/poly`'s tests
+/// rebuild the same value from the same draw through `Fp::from_u64`, and check
+/// the two agree.
+fn next_fp(rng: &mut Rng) -> Fp {
+    Fp::from_le_bytes_mod_order(&rng.next_u64().to_le_bytes())
+}
+
+/// An `Fp2` element from two base draws, `c0` first.
+fn next_fp2(rng: &mut Rng) -> Fp2 {
+    let c0 = next_fp(rng);
+    let c1 = next_fp(rng);
+    Fp2::new(c0, c1)
 }
 
 /// One entry of a case's table, drawn in the native width of `backing` and
-/// returned already lifted. The draw rule is the file header's, and
+/// returned already lifted into `Fp2`. The draw rule is the file header's, and
 /// `crates/poly`'s tests reproduce it to rebuild the table.
-fn next_entry(rng: &mut Rng, backing: &str) -> Fr {
-    match backing {
-        "u1" => Fr::from(rng.next_u64() & 1),
-        "u8" => Fr::from(rng.next_u64() as u8 as u64),
-        "u16" => Fr::from(rng.next_u64() as u16 as u64),
-        "u32" => Fr::from(rng.next_u64() as u32 as u64),
-        "fr" => next_fr(rng),
+fn next_entry(rng: &mut Rng, backing: &str) -> Fp2 {
+    lift(match backing {
+        "u1" => Fp::from(rng.next_u64() & 1),
+        "u8" => Fp::from(rng.next_u64() as u8 as u64),
+        "u16" => Fp::from(rng.next_u64() as u16 as u64),
+        "u32" => Fp::from(rng.next_u64() as u32 as u64),
+        "fp" => next_fp(rng),
         other => panic!("unknown backing {other}"),
-    }
+    })
 }
 
 /// `eq(r, y)` for a cube vertex `y`, by the direct product formula — a
 /// different algorithm from the iterative doubling `poly::eq_table` uses.
-fn eq_at_vertex(r: &[Fr], y: usize) -> Fr {
-    let mut acc = Fr::one();
+fn eq_at_vertex(r: &[Fp2], y: usize) -> Fp2 {
+    let mut acc = Fp2::one();
     for (j, rj) in r.iter().enumerate() {
         acc *= if (y >> j) & 1 == 1 {
             *rj
         } else {
-            Fr::one() - rj
+            Fp2::one() - rj
         };
     }
     acc
@@ -100,9 +124,12 @@ fn kats() -> String {
     out.push_str("# regenerate: cargo run -p kat-gen\n");
     out.push_str("# seed: 20260907 (splitmix64)\n");
     out.push_str("#\n");
-    out.push_str("# Field elements are 32 bytes of lowercase hex in little-endian byte order,\n");
-    out.push_str("# exactly as Fr::to_bytes emits them. Source values are u32 and are written\n");
-    out.push_str("# as 8 hex digits big-endian, because a small-typed entry is a number.\n");
+    out.push_str("# The field is A64-C5, p = 2^64 - 59. The source is a base-field table;\n");
+    out.push_str("# every challenge, point coordinate and computed value is in\n");
+    out.push_str("# F_{p^2} = F_p[x]/(x^2 - 2), written as 16 bytes of lowercase hex: c0 then\n");
+    out.push_str("# c1 of c0 + c1 x, each 8 bytes little-endian canonical, exactly as\n");
+    out.push_str("# Fp2::to_bytes emits them. Source values are u32 and are written as 8 hex\n");
+    out.push_str("# digits big-endian, because a small-typed entry is a number.\n");
     out.push_str("#\n");
     out.push_str("# The evaluation at y in {0,1}^n sits at index sum_j y_j 2^j: variable 0 is\n");
     out.push_str("# the low bit. bind(r) fixes variable 0.\n");
@@ -124,13 +151,13 @@ fn kats() -> String {
         let _ = writeln!(out, "value {i} {v:08x}");
     }
 
-    let lifted: Vec<Fr> = source.iter().map(|v| Fr::from(*v as u64)).collect();
+    let lifted: Vec<Fp2> = source.iter().map(|v| lift(Fp::from(*v as u64))).collect();
     let mle = DenseMultilinearExtension::from_evaluations_vec(KAT_VARS, lifted);
 
-    let challenges: Vec<Fr> = (0..KAT_VARS).map(|_| next_fr(&mut rng)).collect();
+    let challenges: Vec<Fp2> = (0..KAT_VARS).map(|_| next_fp2(&mut rng)).collect();
     out.push('\n');
     for (i, r) in challenges.iter().enumerate() {
-        let _ = writeln!(out, "challenge {i} {}", hex_fr(r));
+        let _ = writeln!(out, "challenge {i} {}", hex_fp2(r));
     }
 
     // The bind chain, taken from the original polynomial each time, so a bug in
@@ -140,17 +167,17 @@ fn kats() -> String {
         assert_eq!(folded.num_vars, KAT_VARS - k);
         out.push('\n');
         for (i, v) in folded.evaluations.iter().enumerate() {
-            let _ = writeln!(out, "bind {k} {i} {}", hex_fr(v));
+            let _ = writeln!(out, "bind {k} {i} {}", hex_fp2(v));
         }
     }
 
     out.push('\n');
     for case in 0..KAT_POINTS {
-        let point: Vec<Fr> = (0..KAT_VARS).map(|_| next_fr(&mut rng)).collect();
+        let point: Vec<Fp2> = (0..KAT_VARS).map(|_| next_fp2(&mut rng)).collect();
         for (i, c) in point.iter().enumerate() {
-            let _ = writeln!(out, "point {case} {i} {}", hex_fr(c));
+            let _ = writeln!(out, "point {case} {i} {}", hex_fp2(c));
         }
-        let _ = writeln!(out, "result {case} {}", hex_fr(&mle.evaluate(&point)));
+        let _ = writeln!(out, "result {case} {}", hex_fp2(&mle.evaluate(&point)));
     }
 
     for k in 0..=KAT_EQ_PREFIX {
@@ -159,7 +186,7 @@ fn kats() -> String {
             let _ = writeln!(
                 out,
                 "eq {k} {y} {}",
-                hex_fr(&eq_at_vertex(&challenges[..k], y))
+                hex_fp2(&eq_at_vertex(&challenges[..k], y))
             );
         }
     }
@@ -181,21 +208,23 @@ fn differential() -> String {
     out.push_str("# regenerate: cargo run -p kat-gen\n");
     out.push_str("# seed: 20260908 (splitmix64); case i draws from Rng::new(seed + i)\n");
     out.push_str("#\n");
-    out.push_str("# Field elements are 32 bytes of lowercase hex, little-endian canonical.\n");
+    out.push_str("# The field is A64-C5, p = 2^64 - 59. Tables are base-field; points and\n");
+    out.push_str("# results are in F_{p^2} = F_p[x]/(x^2 - 2), written as 16 bytes of\n");
+    out.push_str("# lowercase hex: c0 then c1 of c0 + c1 x, each 8 bytes little-endian\n");
+    out.push_str("# canonical, exactly as Fp2::to_bytes emits them.\n");
     out.push_str("#\n");
     out.push_str("# Case i has `i % 13` variables and backing BACKINGS[i % 5]. Its 2^n table\n");
     out.push_str("# entries are drawn in index order, one draw each, as\n");
     out.push_str("#\n");
     out.push_str("#   u1  -> next_u64() & 1        u16 -> next_u64() as u16\n");
     out.push_str("#   u8  -> next_u64() as u8      u32 -> next_u64() as u32\n");
-    out.push_str("#   fr  -> next_le32() read as a 256-bit little-endian integer mod p\n");
-    out.push_str("#          (four draws)\n");
+    out.push_str("#   fp  -> next_u64() mod p\n");
     out.push_str("#\n");
     out.push_str("# The table is not written out -- 100 cases of up to 4096 entries is a\n");
-    out.push_str("# megabyte of hex -- so `digest` pins it instead: SHA-256 over the lifted\n");
-    out.push_str("# entries, 32 canonical little-endian bytes each, concatenated in index\n");
-    out.push_str("# order. A replay that rebuilds a different table fails on the digest\n");
-    out.push_str("# rather than on the result.\n");
+    out.push_str("# megabyte of hex -- so `digest` pins it instead: SHA-256 over the entries\n");
+    out.push_str("# lifted into F_{p^2}, 16 bytes each as above, concatenated in index order.\n");
+    out.push_str("# A replay that rebuilds a different table fails on the digest rather than\n");
+    out.push_str("# on the result.\n");
     out.push_str("#\n");
     out.push_str("#   case   <i> <backing> <num_vars> <digest>\n");
     out.push_str("#   point  <i> <index> <hex>          one coordinate, drawn after the table\n");
@@ -207,23 +236,23 @@ fn differential() -> String {
         let num_vars = i % 13;
         let mut rng = Rng::new(DIFF_SEED + i as u64);
 
-        let table: Vec<Fr> = (0..1usize << num_vars)
+        let table: Vec<Fp2> = (0..1usize << num_vars)
             .map(|_| next_entry(&mut rng, backing))
             .collect();
-        let mut bytes = Vec::with_capacity(32 * table.len());
+        let mut bytes = Vec::with_capacity(16 * table.len());
         for v in &table {
-            bytes.extend_from_slice(&v.into_bigint().to_bytes_le());
+            bytes.extend_from_slice(&fp2_bytes(v));
         }
         let digest = to_hex(&sha256(&bytes));
 
-        let point: Vec<Fr> = (0..num_vars).map(|_| next_fr(&mut rng)).collect();
+        let point: Vec<Fp2> = (0..num_vars).map(|_| next_fp2(&mut rng)).collect();
         let mle = DenseMultilinearExtension::from_evaluations_vec(num_vars, table);
 
         let _ = writeln!(out, "\ncase {i} {backing} {num_vars} {digest}");
         for (j, c) in point.iter().enumerate() {
-            let _ = writeln!(out, "point {i} {j} {}", hex_fr(c));
+            let _ = writeln!(out, "point {i} {j} {}", hex_fp2(c));
         }
-        let result = hex_fr(&mle.evaluate(&point));
+        let result = hex_fp2(&mle.evaluate(&point));
         let _ = writeln!(out, "result {i} {result}");
         // A generator whose input stream had collapsed would still write 100
         // cases that all "match", so every table and every answer has to be its

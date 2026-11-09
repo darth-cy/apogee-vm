@@ -6,7 +6,7 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 
 use constants::{extra_mask, family, guest_memory};
-use field::Fr;
+use field_a64_c5::Fp;
 use loader::{Segment, Slot};
 use poly::PolyBacking;
 use program::{
@@ -40,26 +40,26 @@ fn every_row_that_is_not_live_is_padding_in_every_field() {
             let columns: Vec<_> = (0..table.columns.len())
                 .map(|c| table.column_poly(c))
                 .collect();
-            let padding = vec![Fr::MINUS_ONE; columns.len()];
+            let padding = vec![Fp::MINUS_ONE; columns.len()];
             for row in 0..table.height as usize {
-                let values: Vec<Fr> = columns.iter().map(|p| p.get(row)).collect();
+                let values: Vec<Fp> = columns.iter().map(|p| p.get_base(row)).collect();
                 if table.is_live(row) {
                     // The export is the stored column, cell for cell.
                     for (c, v) in values.iter().enumerate() {
                         assert_eq!(
                             *v,
-                            Fr::from_u64(table.get(c, row).unwrap() as u64),
+                            Fp::from_u64(table.get(c, row).unwrap() as u64),
                             "{name}: exported {} column {c} differs from the stored value",
                             family_name(table.family)
                         );
                     }
                     assert!(
-                        values.iter().all(|v| *v != Fr::MINUS_ONE),
+                        values.iter().all(|v| *v != Fp::MINUS_ONE),
                         "{name}: a live {} row holds the sentinel",
                         family_name(table.family)
                     );
                     assert!(
-                        values.iter().any(|v| *v != Fr::ZERO),
+                        values.iter().any(|v| *v != Fp::ZERO),
                         "{name}: a live {} row is all zeros",
                         family_name(table.family)
                     );
@@ -180,7 +180,9 @@ fn every_table_is_exactly_its_config_height() {
                     PolyBacking::U8(v) => v.len(),
                     PolyBacking::U16(v) => v.len(),
                     PolyBacking::U32(v) => v.len(),
-                    PolyBacking::Fr(_) => panic!("a stored column is never Fr"),
+                    PolyBacking::Fp(_) | PolyBacking::Fp2(_) => {
+                        panic!("a stored column is an integer column")
+                    }
                 };
                 assert_eq!(len, *height as usize);
             }
@@ -190,7 +192,7 @@ fn every_table_is_exactly_its_config_height() {
         assert_eq!(alu.height, 1 << 22, "{name}");
         if name == "fib" {
             // One export at the full default height, to see the length and
-            // the variable count directly. 2^22 rows of Fr is 128 MiB, so it
+            // the variable count directly. 2^22 rows of Fp is 128 MiB, so it
             // is done once and not per guest.
             let exported = alu.column_poly(0);
             assert_eq!(exported.len(), 1 << 22);
@@ -601,7 +603,8 @@ fn the_narrowest_backing_is_chosen_at_each_boundary() {
         PolyBacking::U8(_) => "u8",
         PolyBacking::U16(_) => "u16",
         PolyBacking::U32(_) => "u32",
-        PolyBacking::Fr(_) => "fr",
+        PolyBacking::Fp(_) => "fp",
+        PolyBacking::Fp2(_) => "fp2",
     };
     let imm_of = |words: &[u32]| {
         let image = common::image_of(0x1_0000, words);
@@ -647,7 +650,7 @@ fn each_column_is_stored_in_the_narrowest_backing() {
                     PolyBacking::U8(_) => (2..=0xff).contains(&max),
                     PolyBacking::U16(_) => (0x100..=0xffff).contains(&max),
                     PolyBacking::U32(_) => max > 0xffff,
-                    PolyBacking::Fr(_) => false,
+                    PolyBacking::Fp(_) | PolyBacking::Fp2(_) => false,
                 };
                 assert!(fits, "{name} {field:?}: max {max} in {backing:?}");
             }

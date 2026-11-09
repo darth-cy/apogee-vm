@@ -3,10 +3,15 @@
 
 mod common;
 
-use common::{next_fr, vertex};
-use field::Fr;
+use common::{next_fp, next_fp2, vertex};
+use field_a64_c5::{Fp, Fp2};
 use poly::{eq_eval, eq_table, MultilinearPoly, PolyBacking};
 use test_support::Rng;
+
+/// The integer `v` as `get` returns it: in `Fp`, then embedded in `Fp2`.
+fn lift(v: u64) -> Fp2 {
+    Fp2::from(Fp::from_u64(v))
+}
 
 // ---------------------------------------------------------------------------
 // The index convention, pinned by a literal
@@ -22,15 +27,15 @@ fn the_index_convention_is_little_endian() {
         .collect();
     let p = MultilinearPoly::new(PolyBacking::U16(values));
 
-    assert_eq!(p.get(0b011), Fr::from_u64(110));
-    assert_eq!(p.get(0b001), Fr::from_u64(100), "0b001 is y0 = 1");
-    assert_eq!(p.get(0b010), Fr::from_u64(10), "0b010 is y1 = 1");
-    assert_eq!(p.get(0b100), Fr::from_u64(1), "0b100 is y2 = 1");
-    assert_eq!(p.get(0b111), Fr::from_u64(111));
-    assert_eq!(p.get(0b000), Fr::ZERO);
+    assert_eq!(p.get(0b011), lift(110));
+    assert_eq!(p.get(0b001), lift(100), "0b001 is y0 = 1");
+    assert_eq!(p.get(0b010), lift(10), "0b010 is y1 = 1");
+    assert_eq!(p.get(0b100), lift(1), "0b100 is y2 = 1");
+    assert_eq!(p.get(0b111), lift(111));
+    assert_eq!(p.get(0b000), Fp2::ZERO);
 
     // `point[j]` is variable `j`, so the same vertex as a point agrees.
-    assert_eq!(p.evaluate(&[Fr::ONE, Fr::ONE, Fr::ZERO]), Fr::from_u64(110));
+    assert_eq!(p.evaluate(&[Fp2::ONE, Fp2::ONE, Fp2::ZERO]), lift(110));
     for y in 0..8 {
         assert_eq!(p.evaluate(&vertex(y, 3)), p.get(y), "vertex {y}");
     }
@@ -38,9 +43,9 @@ fn the_index_convention_is_little_endian() {
     // `bind` fixes variable 0: binding 1 keeps the odd indices, binding 0 the
     // even ones, and the old variable 1 becomes the new variable 0.
     let mut one = p.clone();
-    one.bind(Fr::ONE);
+    one.bind(Fp2::ONE);
     let mut zero = p.clone();
-    zero.bind(Fr::ZERO);
+    zero.bind(Fp2::ZERO);
     assert_eq!(one.num_vars(), 2);
     for y in 0..4 {
         assert_eq!(one.get(y), p.get(2 * y + 1), "bind(1) at {y}");
@@ -60,9 +65,9 @@ fn binding_every_variable_equals_evaluate() {
         let backing = if round % 2 == 0 {
             PolyBacking::U32((0..entries).map(|_| rng.next_u64() as u32).collect())
         } else {
-            PolyBacking::Fr((0..entries).map(|_| next_fr(&mut rng)).collect())
+            PolyBacking::Fp((0..entries).map(|_| next_fp(&mut rng)).collect())
         };
-        let point: Vec<Fr> = (0..10).map(|_| next_fr(&mut rng)).collect();
+        let point: Vec<Fp2> = (0..10).map(|_| next_fp2(&mut rng)).collect();
 
         let p = MultilinearPoly::new(backing);
         let expected = p.evaluate(&point);
@@ -93,31 +98,31 @@ fn binding_every_variable_equals_evaluate() {
 fn the_eq_machinery_agrees_with_itself() {
     let mut rng = Rng::new(20260917);
     for _ in 0..10 {
-        let r: Vec<Fr> = (0..6).map(|_| next_fr(&mut rng)).collect();
+        let r: Vec<Fp2> = (0..6).map(|_| next_fp2(&mut rng)).collect();
         let table = eq_table(&r);
         assert_eq!(table.len(), 64);
 
-        let mut sum = Fr::ZERO;
+        let mut sum = Fp2::ZERO;
         for (y, entry) in table.iter().enumerate() {
             assert_eq!(*entry, eq_eval(&r, &vertex(y, 6)), "vertex {y}");
             sum += *entry;
         }
-        assert_eq!(sum, Fr::ONE, "eq(r, .) sums to one over the cube");
+        assert_eq!(sum, Fp2::ONE, "eq(r, .) sums to one over the cube");
 
-        let other: Vec<Fr> = (0..6).map(|_| next_fr(&mut rng)).collect();
+        let other: Vec<Fp2> = (0..6).map(|_| next_fp2(&mut rng)).collect();
         assert_eq!(eq_eval(&r, &other), eq_eval(&other, &r), "eq is symmetric");
 
         // The table is the multilinear extension of `eq_eval`, off the cube as
         // well as on it — which is the property the GKR engine leans on when it
         // treats `eq` as a virtual column.
-        let table_poly = MultilinearPoly::new(PolyBacking::Fr(table));
+        let table_poly = MultilinearPoly::new(PolyBacking::Fp2(table));
         assert_eq!(table_poly.evaluate(&other), eq_eval(&r, &other));
     }
 
-    assert_eq!(eq_table(&[]), vec![Fr::ONE], "the empty product is one");
-    assert_eq!(eq_eval(&[], &[]), Fr::ONE);
-    assert_eq!(eq_table(&[Fr::ZERO]), vec![Fr::ONE, Fr::ZERO]);
-    assert_eq!(eq_table(&[Fr::ONE]), vec![Fr::ZERO, Fr::ONE]);
+    assert_eq!(eq_table(&[]), vec![Fp2::ONE], "the empty product is one");
+    assert_eq!(eq_eval(&[], &[]), Fp2::ONE);
+    assert_eq!(eq_table(&[Fp2::ZERO]), vec![Fp2::ONE, Fp2::ZERO]);
+    assert_eq!(eq_table(&[Fp2::ONE]), vec![Fp2::ZERO, Fp2::ONE]);
 }
 
 // ---------------------------------------------------------------------------
@@ -157,33 +162,33 @@ fn new_rejects_a_bitset_with_a_dirty_tail() {
 #[test]
 #[should_panic(expected = "no variables left to bind")]
 fn bind_rejects_a_constant() {
-    MultilinearPoly::new(PolyBacking::Fr(vec![Fr::ONE])).bind(Fr::ONE);
+    MultilinearPoly::new(PolyBacking::Fp(vec![Fp::ONE])).bind(Fp2::ONE);
 }
 
 #[test]
 #[should_panic(expected = "no variables left to bind")]
 fn bind_rejects_one_binding_too_many() {
     let mut p = MultilinearPoly::new(PolyBacking::U8(vec![1, 2]));
-    p.bind(Fr::ONE);
-    p.bind(Fr::ONE);
+    p.bind(Fp2::ONE);
+    p.bind(Fp2::ONE);
 }
 
 #[test]
 #[should_panic(expected = "point has 2 coordinates, expected 3")]
 fn evaluate_rejects_a_short_point() {
-    MultilinearPoly::new(PolyBacking::U8(vec![0; 8])).evaluate(&[Fr::ONE, Fr::ONE]);
+    MultilinearPoly::new(PolyBacking::U8(vec![0; 8])).evaluate(&[Fp2::ONE, Fp2::ONE]);
 }
 
 #[test]
 #[should_panic(expected = "point has 4 coordinates, expected 3")]
 fn evaluate_rejects_a_long_point() {
-    MultilinearPoly::new(PolyBacking::U8(vec![0; 8])).evaluate(&[Fr::ONE; 4]);
+    MultilinearPoly::new(PolyBacking::U8(vec![0; 8])).evaluate(&[Fp2::ONE; 4]);
 }
 
 #[test]
 #[should_panic(expected = "point has 1 coordinates, expected 0")]
 fn evaluate_rejects_a_point_for_a_constant() {
-    MultilinearPoly::new(PolyBacking::U8(vec![7])).evaluate(&[Fr::ONE]);
+    MultilinearPoly::new(PolyBacking::U8(vec![7])).evaluate(&[Fp2::ONE]);
 }
 
 #[test]
@@ -196,14 +201,14 @@ fn get_rejects_an_index_past_the_table() {
 #[should_panic(expected = "is out of range")]
 fn get_rejects_an_index_past_a_bound_table() {
     let mut p = MultilinearPoly::new(PolyBacking::U8(vec![0; 4]));
-    p.bind(Fr::ONE);
+    p.bind(Fp2::ONE);
     p.get(2);
 }
 
 #[test]
 #[should_panic(expected = "eq_eval: r has 3 coordinates, y has 2")]
 fn eq_eval_rejects_a_length_mismatch() {
-    eq_eval(&[Fr::ONE; 3], &[Fr::ONE; 2]);
+    eq_eval(&[Fp2::ONE; 3], &[Fp2::ONE; 2]);
 }
 
 /// The controls above are only meaningful if the shapes they reject are the
@@ -212,19 +217,22 @@ fn eq_eval_rejects_a_length_mismatch() {
 fn the_legal_edges_are_accepted() {
     let one_var = MultilinearPoly::new(PolyBacking::U1(vec![0b10], 2));
     assert_eq!(one_var.num_vars(), 1);
-    assert_eq!((one_var.get(0), one_var.get(1)), (Fr::ZERO, Fr::ONE));
+    assert_eq!((one_var.get(0), one_var.get(1)), (Fp2::ZERO, Fp2::ONE));
 
     let constant = MultilinearPoly::new(PolyBacking::U1(vec![1], 1));
     assert_eq!(constant.num_vars(), 0);
     assert_eq!(constant.len(), 1);
-    assert_eq!(constant.evaluate(&[]), Fr::ONE);
+    assert_eq!(constant.evaluate(&[]), Fp2::ONE);
 
     // Exactly one full limb, and one entry past it: the two places the tail
     // check has to not fire.
     let full = MultilinearPoly::new(PolyBacking::U1(vec![u64::MAX], 64));
     assert_eq!(full.num_vars(), 6);
-    assert_eq!(full.get(63), Fr::ONE);
+    assert_eq!(full.get(63), Fp2::ONE);
     let two_limbs = MultilinearPoly::new(PolyBacking::U1(vec![0, u64::MAX], 128));
     assert_eq!(two_limbs.num_vars(), 7);
-    assert_eq!((two_limbs.get(63), two_limbs.get(64)), (Fr::ZERO, Fr::ONE));
+    assert_eq!(
+        (two_limbs.get(63), two_limbs.get(64)),
+        (Fp2::ZERO, Fp2::ONE)
+    );
 }

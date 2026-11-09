@@ -179,13 +179,12 @@ fn writable_at(loads: &[Load], addr: u64, what: &str) -> Result<(), String> {
 // The guests
 // ---------------------------------------------------------------------------
 
-const GUESTS: [&str; 13] = [
+const GUESTS: [&str; 12] = [
     "fib",
     "echo",
     "rvc-dense",
     "amm",
     "orderbook",
-    "vault",
     "atomics",
     "opcodes",
     "heap",

@@ -15,12 +15,12 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use constants::{generic_table, lookup_channel};
-use field::Fr;
+use field_a64_c5::Fp;
 
 use crate::{Coeff, GateDef, LookupExpr, PolyAddress};
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 /// A sign lookup's key is `hi + SIGN_BASE + 1` for a halfword `hi`, which is
@@ -58,7 +58,7 @@ pub fn is_zero(
     [
         GateDef::Quadratic {
             constant: lit(0),
-            linear: vec![(lit(1), z), (Coeff::Literal(Fr::MINUS_ONE), enable)],
+            linear: vec![(lit(1), z), (Coeff::Literal(Fp::MINUS_ONE), enable)],
             products: x.iter().map(|(c, v)| (*c, *v, inv)).collect(),
         },
         GateDef::Quadratic {
@@ -123,7 +123,7 @@ pub fn comparison_equation(c: &Comparison, word_bits: u32) -> GateDef {
         (1..=32).contains(&word_bits),
         "a comparison's word is 1 to 32 bits wide, not {word_bits}"
     );
-    let word = Fr::from_u64(1 << word_bits);
+    let word = Fp::from_u64(1 << word_bits);
     let mut products = Vec::new();
     for bit in &c.signed {
         products.push((Coeff::Literal(-word), *bit, c.lhs_sign));
@@ -133,9 +133,9 @@ pub fn comparison_equation(c: &Comparison, word_bits: u32) -> GateDef {
         constant: lit(0),
         linear: vec![
             (lit(1), c.lhs),
-            (Coeff::Literal(Fr::MINUS_ONE), c.rhs),
+            (Coeff::Literal(Fp::MINUS_ONE), c.rhs),
             (Coeff::Literal(word), c.lt),
-            (Coeff::Literal(Fr::MINUS_ONE), c.gap),
+            (Coeff::Literal(Fp::MINUS_ONE), c.gap),
         ],
         products,
     }
@@ -173,7 +173,7 @@ pub fn comparison(c: &Comparison) -> (Vec<(String, GateDef)>, Vec<LookupExpr>) {
             GateDef::Quadratic {
                 constant: lit(0),
                 linear: vec![(lit(1), c.lt)],
-                products: vec![(Coeff::Literal(Fr::MINUS_ONE), c.lt, c.lt)],
+                products: vec![(Coeff::Literal(Fp::MINUS_ONE), c.lt, c.lt)],
             },
         ),
     ];
@@ -187,7 +187,7 @@ pub fn comparison(c: &Comparison) -> (Vec<(String, GateDef)>, Vec<LookupExpr>) {
         }],
     };
     let halfword = lookup_channel::BITS[lookup_channel::RANGE16 as usize];
-    let half = Coeff::Literal(-Fr::from_u64(1 << halfword));
+    let half = Coeff::Literal(-Fp::from_u64(1 << halfword));
     let sign = |name: String, hi: PolyAddress, bit: PolyAddress| LookupExpr {
         name,
         channel: lookup_channel::GENERIC,

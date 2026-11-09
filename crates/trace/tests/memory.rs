@@ -11,7 +11,7 @@ use constraints::memory::{
     RD, RS1, RS2,
 };
 use constraints::PolyAddress;
-use field::Fr;
+use field_a64_c5::Fp;
 use isa::Instr;
 use loader::load_elf;
 use program::row_kind;
@@ -393,9 +393,9 @@ fn the_gap_columns_hold_the_high_chunk_at_the_chunks_edge() {
             .find(|(a, _)| *a == gap_hi(q))
             .expect("a gap column")
             .1;
-        (0..4).map(|y| column.get(y)).collect::<Vec<Fr>>()
+        (0..4).map(|y| column.get_base(y)).collect::<Vec<Fp>>()
     };
-    let chunks = |v: [u64; 4]| v.map(Fr::from_u64).to_vec();
+    let chunks = |v: [u64; 4]| v.map(Fp::from_u64).to_vec();
     assert_eq!(at(PC), chunks([0, 0, 0, 0]));
     assert_eq!(at(RS1), chunks([0, 0, 0, 0]));
     assert_eq!(at(RS2), chunks([0, 0, 1, 1]));
@@ -422,13 +422,13 @@ fn the_first_word_of_a_window_is_that_windows_alone() {
     };
     let ts = teardown(0, 0);
     assert!(
-        (0..h).all(|y| ts.get(y) == Fr::ZERO),
+        (0..h).all(|y| ts.get_base(y) == Fp::ZERO),
         "window 0 holds no write"
     );
     let (ts, value) = (teardown(1, 0), teardown(1, 1));
     assert_eq!(
-        (ts.get(0), value.get(0)),
-        (Fr::from_u64(7), Fr::from_u64(0xabcd))
+        (ts.get_base(0), value.get_base(0)),
+        (Fp::from_u64(7), Fp::from_u64(0xabcd))
     );
-    assert!((1..h).all(|y| ts.get(y) == Fr::ZERO));
+    assert!((1..h).all(|y| ts.get_base(y) == Fp::ZERO));
 }

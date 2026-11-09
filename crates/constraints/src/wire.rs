@@ -17,7 +17,7 @@ use core::marker::PhantomData;
 use serde::de::{Deserialize, Deserializer, Error as _, SeqAccess, Visitor};
 use serde::{Serialize, Serializer};
 
-use field::Fr;
+use field_a64_c5::Fp;
 
 use crate::{
     CachedEntry, CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, LookupExpr, Padding,
@@ -198,16 +198,16 @@ impl Serialize for Coeff {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         match *self {
             Coeff::Literal(v) => (0u8, 0u32, v).serialize(s),
-            Coeff::Challenge(slot) => (1u8, slot, Fr::ZERO).serialize(s),
+            Coeff::Challenge(slot) => (1u8, slot, Fp::ZERO).serialize(s),
         }
     }
 }
 
 impl<'de> Deserialize<'de> for Coeff {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Coeff, D::Error> {
-        match <(u8, u32, Fr)>::deserialize(d)? {
+        match <(u8, u32, Fp)>::deserialize(d)? {
             (0, 0, v) => Ok(Coeff::Literal(v)),
-            (1, slot, v) if v == Fr::ZERO => Ok(Coeff::Challenge(slot)),
+            (1, slot, v) if v == Fp::ZERO => Ok(Coeff::Challenge(slot)),
             _ => Err(D::Error::custom(
                 "malformed coefficient: unknown tag, or a nonzero unused field",
             )),
@@ -528,7 +528,7 @@ impl<'de> Deserialize<'de> for CircuitArtifact {
             Seq<LookupExpr>,
             Seq<ScratchSlot>,
             Seq<PolyAddress>,
-            (Seq<Fr>, bool),
+            (Seq<Fp>, bool),
         )>::deserialize(d)?;
         let names = |v: Vec<Name>| v.into_iter().map(|Name(n)| n).collect();
         Ok(CircuitArtifact {

@@ -3,6 +3,8 @@
 
 use std::time::{Duration, Instant};
 
+use field_a64_c5::{Fp, Fp2};
+
 use test_support::Rng;
 
 /// Best of this many runs, to blunt scheduler noise.
@@ -52,16 +54,22 @@ pub fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1e3
 }
 
-/// Canonical bytes of a nonzero element, so two libraries handed the same
-/// stream get the same values. Nonzero because an inversion benchmark must not
+/// A nonzero canonical base element, so two libraries handed the same stream
+/// get the same values. Nonzero because an inversion benchmark must not
 /// measure the zero path.
-pub fn next_canonical(rng: &mut Rng) -> [u8; 32] {
+pub fn next_canonical(rng: &mut Rng) -> Fp {
     loop {
-        let mut b = rng.next_le32();
-        b[31] &= 0x3f; // p < 2^254, so clearing two bits keeps rejection rare
-        match field::Fr::from_bytes(&b) {
-            Some(x) if x != field::Fr::ZERO => return b,
+        match Fp::from_canonical(rng.next_u64()) {
+            Some(x) if x != Fp::ZERO => return x,
             _ => continue,
         }
+    }
+}
+
+/// A challenge-field element of two such draws.
+pub fn next_fp2(rng: &mut Rng) -> Fp2 {
+    Fp2 {
+        c0: next_canonical(rng),
+        c1: next_canonical(rng),
     }
 }

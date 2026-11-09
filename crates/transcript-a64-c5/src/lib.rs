@@ -12,7 +12,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use field_a64_c5::Fp;
+use field_a64_c5::{Fp, Fp2};
 
 mod params;
 
@@ -122,10 +122,6 @@ const _: () = assert!(PROTOCOL_ID.len() <= 7 * (WIDTH - RATE));
 /// A domain-separation tag. Values live only in `constants::transcript_tags`.
 pub type Tag = u64;
 
-/// One element of the quadratic extension `F_{p^2}`: its two coordinates, in
-/// the order they leave the rate.
-pub type Challenge = [Fp; 2];
-
 /// A digest: the whole rate after the last message.
 pub type Digest = [Fp; RATE];
 
@@ -141,8 +137,9 @@ fn lane(bytes: &[u8]) -> Fp {
 /// sponge, and a snapshot does not carry it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TranscriptEvent {
-    /// A message under `tag` with `n` payload lanes: its scalars, or its
-    /// 7-byte chunks. The frame's two lanes are not counted.
+    /// A message under `tag` with `n` payload lanes: its scalars, two per
+    /// `F_{p^2}` element, or its 7-byte chunks. The frame's two lanes are not
+    /// counted.
     Absorb { tag: Tag, n: usize },
     /// A challenge drawn under `tag`.
     Challenge { tag: Tag },
@@ -230,6 +227,20 @@ impl Transcript {
             .push(TranscriptEvent::Absorb { tag, n: xs.len() });
     }
 
+    /// Absorb `F_{p^2}` elements under `tag`: exactly `append_scalars` of their
+    /// coordinates, `c0` then `c1` of each.
+    pub fn append_ext(&mut self, tag: Tag, xs: &[Fp2]) {
+        self.frame(tag, 2 * xs.len());
+        for x in xs {
+            self.absorb(x.c0);
+            self.absorb(x.c1);
+        }
+        self.events.push(TranscriptEvent::Absorb {
+            tag,
+            n: 2 * xs.len(),
+        });
+    }
+
     /// Absorb `tag`, the byte length, then the bytes in 7-byte little-endian
     /// lanes, the last zero-padded. The byte length, not the lane count, keeps
     /// `"abc"` and `"abc\0"` apart.
@@ -245,10 +256,13 @@ impl Transcript {
     }
 
     /// Absorb `tag` and draw one challenge in `F_{p^2}`: two lanes of a fresh
-    /// permutation.
-    pub fn challenge(&mut self, tag: Tag) -> Challenge {
+    /// permutation, `c0` then `c1`.
+    pub fn challenge(&mut self, tag: Tag) -> Fp2 {
         self.absorb(Fp::from_u64(tag));
-        let c = [self.squeeze(), self.squeeze()];
+        let c = Fp2 {
+            c0: self.squeeze(),
+            c1: self.squeeze(),
+        };
         self.events.push(TranscriptEvent::Challenge { tag });
         c
     }
@@ -284,31 +298,27 @@ impl Transcript {
 }
 
 // ---------------------------------------------------------------------------
-// Snapshot serde (§3): `(lanes, absorbed, squeezed)`, each lane canonical.
+// Snapshot serde (§3): `(lanes, absorbed, squeezed)`, each lane `Fp`'s 8
+// canonical bytes, so a snapshot is a fixed 130 bytes under postcard.
 // ---------------------------------------------------------------------------
 
 impl serde::Serialize for TranscriptSnapshot {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        (self.state.map(Fp::to_u64), self.absorbed, self.squeezed).serialize(s)
+        (self.state, self.absorbed, self.squeezed).serialize(s)
     }
 }
 
 impl<'de> serde::Deserialize<'de> for TranscriptSnapshot {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<TranscriptSnapshot, D::Error> {
         use serde::de::Error;
-        let (lanes, absorbed, squeezed) = <([u64; WIDTH], u8, u8)>::deserialize(d)?;
-        let malformed = || D::Error::custom("malformed transcript snapshot");
+        // A lane at or above `p` is refused by `Fp`'s own decoding.
+        let (state, absorbed, squeezed) = <([Fp; WIDTH], u8, u8)>::deserialize(d)?;
 
-        // Refuse what `snapshot` cannot produce: a lane at or above `p`, or
-        // positions no operation sequence reaches. A squeeze leaves
+        // Refuse positions no operation sequence reaches. A squeeze leaves
         // `squeezed ≥ 1` and `absorbed = 0`; an absorb leaves `squeezed = RATE`.
         let (a, q) = (absorbed as usize, squeezed as usize);
         if a > RATE || !(1..=RATE).contains(&q) || (a > 0 && q < RATE) {
-            return Err(malformed());
-        }
-        let mut state = [Fp::ZERO; WIDTH];
-        for (x, &v) in state.iter_mut().zip(&lanes) {
-            *x = Fp::from_canonical(v).ok_or_else(malformed)?;
+            return Err(D::Error::custom("malformed transcript snapshot"));
         }
         Ok(TranscriptSnapshot {
             state,

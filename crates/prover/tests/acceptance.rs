@@ -13,13 +13,12 @@
 mod common;
 
 use constants::{family, transcript_tags as tags};
-use program::ProgramIdentity;
 use prover::{
     global_commit_phase, prove_shard, prove_shard_columns, public_inputs, shard_columns,
     statement_inputs, ProverSetup, ProvingContext,
 };
 use trace::TraceArchive;
-use transcript::TranscriptEvent::{self, Absorb, Challenge};
+use transcript_a64_c5::TranscriptEvent::{self, Absorb, Challenge};
 use verifier::{verify_shard, PublicInputs, ShardProof, VerifyError};
 use verifier_core::{global_commit, reduce_shard, statement_shards};
 
@@ -177,7 +176,7 @@ fn a5_every_statement_twin_is_refused_as_statement() {
     let vk = &setup.vk;
     for proof in &proofs {
         let mut k = vk.clone();
-        k.identity = ProgramIdentity(k.identity.0 + field::Fr::ONE);
+        k.identity.0[0] += field_a64_c5::Fp::ONE;
         statement_refusal(verify_shard(&k, proof, &public), "identity");
 
         let mut p = public.clone();
@@ -221,7 +220,7 @@ fn a5_every_statement_twin_is_refused_as_statement() {
 fn a_statement_root_that_is_not_its_proofs_is_refused_by_that_shard() {
     let (setup, _, public, proofs) = proved();
     assert_eq!((proofs[0].family, proofs[1].family), (INIT, ADD));
-    let seven = field::Fr::from_u64(7);
+    let seven = field_a64_c5::Fp::from_u64(7);
     let mut forged = public.clone();
     let [read, write] = forged.memory_roots[0];
     forged.memory_roots[0] = [read * seven, write * seven];
@@ -272,12 +271,12 @@ fn one_claim_after_each_batch(a: &constraints::CircuitArtifact, log: &[Transcrip
             }
             Absorb {
                 tag: tags::GKR_LAYER_CLAIMS,
-                n_scalars,
+                n,
             } => {
                 let k = depth - batches;
                 let points = if a.layers[k].halving { 2 } else { 1 };
                 assert_eq!(outstanding, 0);
-                assert_eq!(n_scalars, points * a.layer_width(k) as usize);
+                assert_eq!(n, 2 * points * a.layer_width(k) as usize);
                 outstanding = points;
                 last = i;
             }
@@ -298,12 +297,13 @@ fn one_claim_after_each_batch(a: &constraints::CircuitArtifact, log: &[Transcrip
 }
 
 /// The GKR engine's transcript events over `a`, as `docs/spec/gkr.md` §5.2
-/// writes them, from the artifact's shape alone.
+/// writes them, from the artifact's shape alone. Every message carries `Fp2`
+/// values, two lanes each.
 fn gkr_schedule(a: &constraints::CircuitArtifact) -> Vec<TranscriptEvent> {
     let depth = a.depth();
     let mut events = vec![Absorb {
         tag: tags::GKR_OUTPUTS,
-        n_scalars: a.outputs.len(),
+        n: 2 * a.outputs.len(),
     }];
     for k in (0..depth).rev() {
         events.push(Challenge {
@@ -312,7 +312,7 @@ fn gkr_schedule(a: &constraints::CircuitArtifact) -> Vec<TranscriptEvent> {
         for _ in 0..a.layer_vars(k + 1) {
             events.push(Absorb {
                 tag: tags::SUMCHECK_ROUND,
-                n_scalars: 4,
+                n: 2 * 4,
             });
             events.push(Challenge {
                 tag: tags::SUMCHECK_CHALLENGE,
@@ -321,7 +321,7 @@ fn gkr_schedule(a: &constraints::CircuitArtifact) -> Vec<TranscriptEvent> {
         let halving = a.layers[k].halving;
         events.push(Absorb {
             tag: tags::GKR_LAYER_CLAIMS,
-            n_scalars: a.layer_width(k) as usize * if halving { 2 } else { 1 },
+            n: 2 * a.layer_width(k) as usize * if halving { 2 } else { 1 },
         });
         if halving {
             events.push(Challenge {
@@ -368,7 +368,7 @@ fn a6_a8_every_base_claim_is_at_one_point_and_the_schedule_holds() {
         log[first_challenge - 1],
         Absorb {
             tag: tags::MEMORY_BOUNDARY,
-            n_scalars: 64
+            n: 64
         }
     );
     assert_eq!(
@@ -389,11 +389,11 @@ fn a6_a8_every_base_claim_is_at_one_point_and_the_schedule_holds() {
             [
                 Absorb {
                     tag: tags::SHARD_SEED,
-                    n_scalars: 3
+                    n: 4
                 },
                 Absorb {
                     tag: tags::SHARD_TS_WINDOW,
-                    n_scalars: 2
+                    n: 2
                 },
                 Challenge {
                     tag: tags::LOOKUP_CHALLENGE
@@ -407,7 +407,7 @@ fn a6_a8_every_base_claim_is_at_one_point_and_the_schedule_holds() {
             log[4],
             Absorb {
                 tag: tags::GKR_OUTPUTS,
-                n_scalars: a.outputs.len()
+                n: 2 * a.outputs.len()
             }
         );
         let last_gkr = one_claim_after_each_batch(a, &log);

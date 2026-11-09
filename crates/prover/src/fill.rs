@@ -28,7 +28,7 @@ use constraints::mul_div as md_circuit;
 use constraints::sha256 as sh_circuit;
 use constraints::shift_bitwise as sb_circuit;
 use constraints::PolyAddress;
-use field::Fr;
+use field_a64_c5::Fp;
 use poly::{MultilinearPoly, PolyBacking};
 use program::lookup_tables::generic_table;
 use program::FamilyId;
@@ -389,8 +389,8 @@ fn delegation_frame_range16(
 ) -> Vec<(PolyAddress, MultilinearPoly)> {
     let rows = 0..frames.len();
     let mut out: Vec<(PolyAddress, MultilinearPoly)> = Vec::new();
-    let cycles: Vec<Fr> = frames.cycles().iter().map(|c| Fr::from_u64(*c)).collect();
-    out.push((deleg::CYCLE, fr_column(cycles, h)));
+    let cycles: Vec<Fp> = frames.cycles().iter().map(|c| Fp::from_u64(*c)).collect();
+    out.push((deleg::CYCLE, fp_column(cycles, h)));
     out.push((
         deleg::LIVE,
         u32_column(rows.clone().map(|_| 1).collect(), h),
@@ -415,8 +415,8 @@ fn delegation_frame_range16(
         ] {
             out.push((deleg::word(j, field), u32_column(values, h)));
         }
-        let read_ts: Vec<Fr> = rows.clone().map(|r| Fr::from_u64(w.read_ts[r])).collect();
-        out.push((deleg::word(j, deleg::WORD_READ_TS), fr_column(read_ts, h)));
+        let read_ts: Vec<Fp> = rows.clone().map(|r| Fp::from_u64(w.read_ts[r])).collect();
+        out.push((deleg::word(j, deleg::WORD_READ_TS), fp_column(read_ts, h)));
     }
     for j in 0..words {
         for c in 0..2 {
@@ -789,22 +789,19 @@ fn u32_column(mut values: Vec<u32>, height: usize) -> MultilinearPoly {
     MultilinearPoly::new(PolyBacking::U32(values))
 }
 
-fn fr_column(mut values: Vec<Fr>, height: usize) -> MultilinearPoly {
-    values.resize(height, Fr::ZERO);
-    MultilinearPoly::new(PolyBacking::Fr(values))
+fn fp_column(mut values: Vec<Fp>, height: usize) -> MultilinearPoly {
+    values.resize(height, Fp::ZERO);
+    MultilinearPoly::new(PolyBacking::Fp(values))
 }
 
-/// A signed integer as a field element. Every value a fill hands to an `Fr`
-/// column is a product or a sign-adjusted operand, so it fits an `i128` and is
-/// far below the modulus either way.
-fn signed(v: i128) -> Fr {
-    let magnitude = |m: u128| {
-        let shift = Fr::from_u64(1 << 32) * Fr::from_u64(1 << 32);
-        Fr::from_u64((m >> 64) as u64) * shift + Fr::from_u64(m as u64)
-    };
+/// A signed integer as a field element, its residue mod `p`. Every value a
+/// fill hands to an `Fp` column is a product or a sign-adjusted operand, so
+/// it fits an `i128`.
+fn signed(v: i128) -> Fp {
+    let magnitude = Fp::from_u128(v.unsigned_abs());
     match v < 0 {
-        true => -magnitude(v.unsigned_abs()),
-        false => magnitude(v as u128),
+        true => -magnitude,
+        false => magnitude,
     }
 }
 
@@ -1048,9 +1045,9 @@ fn jump_branch_slt(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPol
             column.push(v);
         }
         eq_inv.push(
-            (Fr::from_u64(a as u64) - Fr::from_u64(rhs as u64))
+            (Fp::from_u64(a as u64) - Fp::from_u64(rhs as u64))
                 .inverse()
-                .unwrap_or(Fr::ZERO),
+                .unwrap_or(Fp::ZERO),
         );
         for (column, v) in decoded.iter_mut().zip(row_values) {
             column.push(v);
@@ -1088,10 +1085,10 @@ fn jump_branch_slt(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPol
     ] {
         out.push((address, u32_column(values, h)));
     }
-    eq_inv.resize(h, Fr::ZERO);
+    eq_inv.resize(h, Fp::ZERO);
     out.push((
         jbs_circuit::EQ_INV,
-        MultilinearPoly::new(PolyBacking::Fr(eq_inv)),
+        MultilinearPoly::new(PolyBacking::Fp(eq_inv)),
     ));
     for j in 0..jbs_circuit::TABLE_WIDTH {
         out.push((PolyAddress::Setup(j as u32), table.column_poly(j)));
@@ -1303,8 +1300,8 @@ fn shift_bitwise(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)
             out.push((address, u32_column(values, h)));
         }
     }
-    out.push((sb_circuit::SHIFT_IN, fr_column(shift_in, h)));
-    out.push((sb_circuit::SHIFT_PROD, fr_column(shift_prod, h)));
+    out.push((sb_circuit::SHIFT_IN, fp_column(shift_in, h)));
+    out.push((sb_circuit::SHIFT_PROD, fp_column(shift_prod, h)));
     for j in 0..sb_circuit::TABLE_WIDTH {
         out.push((PolyAddress::Setup(j as u32), table.column_poly(j)));
     }
@@ -1498,8 +1495,8 @@ fn mul_div(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         mx_col.push(signed(mx));
         my_col.push(signed(my));
         let unit = |on: bool, x: u32| match on {
-            true => Fr::from_u64(x as u64).inverse().unwrap_or(Fr::ZERO),
-            false => Fr::ZERO,
+            true => Fp::from_u64(x as u64).inverse().unwrap_or(Fp::ZERO),
+            false => Fp::ZERO,
         };
         r_inv_col.push(unit(is_div, r_word));
         d_inv_col.push(unit(is_div, b));
@@ -1557,7 +1554,7 @@ fn mul_div(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         (md_circuit::R_INV, r_inv_col),
         (md_circuit::D_INV, d_inv_col),
     ] {
-        out.push((address, fr_column(values, h)));
+        out.push((address, fp_column(values, h)));
     }
     for j in 0..md_circuit::TABLE_WIDTH {
         out.push((PolyAddress::Setup(j as u32), table.column_poly(j)));

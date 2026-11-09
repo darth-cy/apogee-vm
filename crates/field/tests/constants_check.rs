@@ -7,8 +7,8 @@ mod common;
 use std::str::FromStr;
 
 use common::{ark_to_bytes, ArkFr};
-use constants::{FR_INV, FR_MODULUS, FR_MODULUS_MINUS_TWO, FR_R, FR_R2};
 use field::Fr;
+use field::{FR_INV, FR_MODULUS, FR_MODULUS_MINUS_TWO, FR_R, FR_R2};
 use test_support::to_hex;
 
 /// The Fr modulus in decimal, as `docs/spec/primitives.md` §1 writes it.

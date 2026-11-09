@@ -29,7 +29,7 @@ use alloc::vec::Vec;
 
 use constants::extra_mask::mul_div as kind;
 use constants::{family, generic_table, lookup_channel};
-use field::Fr;
+use field_a64_c5::Fp;
 
 use crate::gadgets::is_zero;
 use crate::lookup::ChannelSpec;
@@ -130,10 +130,11 @@ pub const P_HIGH_HI: PolyAddress = w(25);
 pub const P_SIGN: PolyAddress = w(26);
 /// `W[34..37]`: the quotient word, its high halfword, and its sign adjustment.
 ///
-/// `q_sign` is a **free** boolean, pinned only by `q`'s own range: tying it to
-/// bit `WORD_BITS − 1` of `q` would make `−2^31 ÷ −1` unprovable, that case
-/// being exactly the one whose quotient is `+2^31` with the word's top bit
-/// set (`docs/spec/mul-div.md` §5.3).
+/// On a signed division `q_sign` is a **free** boolean, pinned only by `q`'s
+/// own range: tying it to bit `WORD_BITS − 1` of `q` would make `−2^31 ÷ −1`
+/// unprovable, that case being exactly the one whose quotient is `+2^31` with
+/// the word's top bit set (`docs/spec/mul-div.md` §5.3). On an unsigned one it
+/// is 0, by `q_sign_unsigned` (§5.1).
 pub const Q: PolyAddress = w(27);
 pub const Q_HI: PolyAddress = w(28);
 pub const Q_SIGN: PolyAddress = w(29);
@@ -197,20 +198,20 @@ pub const LEGAL_MASKS: [u32; 8] = [
 ];
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn neg(v: u64) -> Coeff {
-    Coeff::Literal(-Fr::from_u64(v))
+    Coeff::Literal(-Fp::from_u64(v))
 }
 
 /// `2^bits`, for a `bits` below 64.
-fn two_to(bits: u32) -> Fr {
-    Fr::from_u64(1u64 << bits)
+fn two_to(bits: u32) -> Fp {
+    Fp::from_u64(1u64 << bits)
 }
 
 /// `2^(2·bits)`, the square of [`two_to`], which at 32 bits is `2^64`.
-fn two_to_double(bits: u32) -> Fr {
+fn two_to_double(bits: u32) -> Fp {
     two_to(bits) * two_to(bits)
 }
 
@@ -286,7 +287,7 @@ fn range32(name: &str, value: PolyAddress, hi: PolyAddress) -> [LookupExpr; 2] {
             &format!("{name}_lo_range"),
             linear(vec![
                 (lit(1), value),
-                (Coeff::Literal(-Fr::from_u64(1 << 16)), hi),
+                (Coeff::Literal(-Fp::from_u64(1 << 16)), hi),
             ]),
         ),
     ]
@@ -327,7 +328,7 @@ fn names(list: &[&str]) -> Vec<String> {
 /// lookup does.
 ///
 /// Panics unless `word_bits` is between 1 and 32: `2^word_bits` is a `u64`
-/// only up to 32, and `2^(2·word_bits)` is its square in `Fr`.
+/// only up to 32, and `2^(2·word_bits)` is its square in `Fp`.
 pub fn arithmetic_gates(word_bits: u32) -> Vec<(String, GateDef)> {
     assert!(
         (1..=32).contains(&word_bits),
@@ -372,6 +373,15 @@ pub fn arithmetic_gates(word_bits: u32) -> Vec<(String, GateDef)> {
     ] {
         gates.push((name.into(), booleanity(x)));
     }
+    // An unsigned quotient is not negative. Its divisor reaches 2^w − 1, so a
+    // q_adj of −2^w would carry the division identity's total to −2^(2w),
+    // which at w = 32 is past p: divu and remu of 0xffffffff by 0xffffffff
+    // would admit q = 0, q_sign = 1, r = 58, a residual of exactly −p
+    // (`docs/spec/mul-div.md` §5.1).
+    gates.push((
+        "q_sign_unsigned".into(),
+        quadratic(vec![], vec![(lit(1), Q_SIGN, DIVU), (lit(1), Q_SIGN, REMU)]),
+    ));
 
     // The one product's multiplicands: the two sign-adjusted operands on a
     // multiply row, the sign-adjusted divisor and quotient on a division one.
@@ -392,8 +402,15 @@ pub fn arithmetic_gates(word_bits: u32) -> Vec<(String, GateDef)> {
 
     // ONE product identity, for all four multiplies and the division alike:
     // mx·my = p_low + 2^w·p_high − 2^(2w)·p_sign. Both halves are range
-    // checked and p_sign is boolean, so the decomposition is the unique one;
-    // the field identity is the integer identity because both sides are ≪ r.
+    // checked and p_sign is boolean, so the decomposition is the unique one
+    // over the integers.
+    //
+    // UNFINISHED: A64-C5 CHARACTERISTIC. At w = 32 the right side ranges over
+    // [−2^64, 2^64), about 2p, so the field identity is not the integer one: a
+    // multiply's p_low and p_high are pinned only up to a multiple of p
+    // (`docs/spec/mul-div.md` §5.1). The division's total stays below p, a
+    // signed divisor's magnitude being at most 2^31 and q_sign_unsigned keeping
+    // an unsigned quotient non-negative.
     gates.push((
         "product_rule".into(),
         quadratic(
@@ -488,7 +505,7 @@ pub fn arithmetic_gates(word_bits: u32) -> Vec<(String, GateDef)> {
     gates.push((
         "zero_divisor_quotient".into(),
         quadratic(
-            vec![(Coeff::Literal(Fr::ONE - word), DZ)],
+            vec![(Coeff::Literal(Fp::ONE - word), DZ)],
             vec![(lit(1), DZ, Q)],
         ),
     ));

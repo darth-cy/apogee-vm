@@ -6,8 +6,8 @@
 //! The key is loaded once, its identity compared with the one given — a verifier
 //! takes a program's identity from a channel the prover does not control, never
 //! from the key or the proof — and then the proofs are verified against the one
-//! public-inputs file. `<identity-hex>` is the identity's 32 canonical bytes as
-//! 64 lowercase hex digits, little-endian.
+//! public-inputs file. `<identity-hex>` is the identity's 64 canonical bytes as
+//! 128 lowercase hex digits, in `to_bytes` order.
 //!
 //! A statement is proven only when **every one of its shards** is: a shard
 //! checks the memory argument's reconciliation over roots the other shards'
@@ -100,7 +100,7 @@ fn shards(args: &[String]) {
 /// The key, its identity held to the one given, and the statement.
 fn load(key: &str, identity: &str, public: &str) -> (VerifyingKey, PublicInputs) {
     let trusted =
-        parse_identity(identity).unwrap_or_else(|| usage("the identity is not 64 hex digits"));
+        parse_identity(identity).unwrap_or_else(|| usage("the identity is not 128 hex digits"));
     let vk = load_verifying_key(&read(key)).unwrap_or_else(|e| fail(&format!("{key}: {e}")));
     if vk.identity.to_bytes() != trusted {
         fail(&format!("{key}: the key's identity is not the one given"));
@@ -110,9 +110,9 @@ fn load(key: &str, identity: &str, public: &str) -> (VerifyingKey, PublicInputs)
     (vk, statement)
 }
 
-fn parse_identity(hex: &str) -> Option<[u8; 32]> {
+fn parse_identity(hex: &str) -> Option<[u8; 64]> {
     let digits = hex.as_bytes();
-    if digits.len() != 64 {
+    if digits.len() != 128 {
         return None;
     }
     let nibble = |c: u8| match c {
@@ -120,7 +120,7 @@ fn parse_identity(hex: &str) -> Option<[u8; 32]> {
         b'a'..=b'f' => Some(c - b'a' + 10),
         _ => None,
     };
-    let mut out = [0u8; 32];
+    let mut out = [0u8; 64];
     for (i, pair) in digits.chunks(2).enumerate() {
         out[i] = nibble(pair[0])? << 4 | nibble(pair[1])?;
     }

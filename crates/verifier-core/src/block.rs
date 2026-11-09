@@ -16,7 +16,7 @@
 use alloc::vec::Vec;
 
 use constants::family;
-use field::Fr;
+use field_a64_c5::Fp2;
 
 use crate::statement::{statement_shards, VmConfig};
 use crate::types::{PublicInputs, ShardProof};
@@ -31,7 +31,7 @@ pub struct ShardRecord {
     /// `[ts_start, ts_end)`, the shard's claimed time window.
     pub ts_window: [u64; 2],
     /// `[read_root, write_root]`.
-    pub roots: [Fr; 2],
+    pub roots: [Fp2; 2],
 }
 
 /// The cross-shard record set: every shard's record in statement order,
@@ -187,8 +187,8 @@ impl BlockReconciliation {
             w.u32(r.shard_index);
             w.u64(r.ts_window[0]);
             w.u64(r.ts_window[1]);
-            w.fr(&r.roots[0]);
-            w.fr(&r.roots[1]);
+            w.fp2(r.roots[0]);
+            w.fp2(r.roots[1]);
         }
         w.bytes
     }
@@ -196,14 +196,14 @@ impl BlockReconciliation {
     pub fn from_bytes(bytes: &[u8]) -> Result<BlockReconciliation, &'static str> {
         let mut r = Reader::new(bytes);
         // A record is two `u32`s, two `u64`s and two field elements.
-        let n = r.count(4 + 4 + 8 + 8 + 32 + 32)?;
+        let n = r.count(4 + 4 + 8 + 8 + 16 + 16)?;
         let records = (0..n)
             .map(|_| {
                 Ok(ShardRecord {
                     family: r.u32()?,
                     shard_index: r.u32()?,
                     ts_window: [r.u64()?, r.u64()?],
-                    roots: [r.fr()?, r.fr()?],
+                    roots: [r.fp2()?, r.fp2()?],
                 })
             })
             .collect::<Result<Vec<_>, &'static str>>()?;
@@ -268,7 +268,10 @@ mod tests {
             family,
             shard_index,
             ts_window: window,
-            roots: [Fr::from_u64(3), Fr::from_u64(5)],
+            roots: [
+                Fp2::from(field_a64_c5::Fp::from_u64(3)),
+                Fp2::from(field_a64_c5::Fp::from_u64(5)),
+            ],
         }
     }
 

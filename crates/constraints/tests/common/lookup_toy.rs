@@ -31,7 +31,7 @@ use constraints::memory::{
     frame_queries, frame_with_channels_artifact, FamilySpec, FIELD_MASK, FIELD_READ_VALUE,
 };
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
-use field::Fr;
+use field_a64_c5::Fp;
 
 /// The toy's height, and the smallest a real execution family can have.
 ///
@@ -70,7 +70,7 @@ const TOY_CHANNELS: [u32; 4] = [
 ];
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn w(i: u32) -> PolyAddress {
@@ -100,7 +100,7 @@ fn booleanity(x: PolyAddress) -> GateDef {
     GateDef::Quadratic {
         constant: lit(0),
         linear: vec![(lit(1), x)],
-        products: vec![(Coeff::Literal(Fr::MINUS_ONE), x, x)],
+        products: vec![(Coeff::Literal(Fp::MINUS_ONE), x, x)],
     }
 }
 
@@ -170,7 +170,7 @@ pub fn lookup_toy() -> CircuitArtifact {
     // `word` is a 32-bit value under the range convention of
     // `docs/spec/memory.md` §7: one witnessed high halfword and two
     // obligations, both under the row's mask, and no gate.
-    let halfword = Coeff::Literal(-Fr::from_u64(1 << 16));
+    let halfword = Coeff::Literal(-Fp::from_u64(1 << 16));
     let lookups = vec![
         LookupExpr {
             name: "word_hi_range".into(),
@@ -247,7 +247,7 @@ pub fn lookup_toy() -> CircuitArtifact {
     let mut terms: Vec<(Coeff, PolyAddress)> = (0..MASK_BITS)
         .map(|k| (lit(1 << k), w(KIND + k as u32)))
         .collect();
-    terms.push((Coeff::Literal(Fr::MINUS_ONE), w(DECODED + 5)));
+    terms.push((Coeff::Literal(Fp::MINUS_ONE), w(DECODED + 5)));
     enforcing.push(("decoded_mask_bits".to_string(), linear(&terms, lit(0))));
 
     let channels: Vec<_> = TOY_CHANNELS

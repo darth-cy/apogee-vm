@@ -14,10 +14,10 @@
 mod common;
 
 use constants::{family, transcript_tags as tags};
-use field::Fr;
+use field_a64_c5::Fp;
 use loader::{load_elf, ProgramImage, Slot};
 use program::{decode_program, program_identity, ProgramIdentity, ProgramParams};
-use transcript::Transcript;
+use transcript_a64_c5::Transcript;
 
 fn identity_of(image: &ProgramImage, params: &ProgramParams) -> ProgramIdentity {
     let (tables, config) = decode_program(image, params).unwrap();
@@ -56,23 +56,23 @@ fn fib_at_the_defaults_is_deterministic() {
 }
 
 /// The digest is exactly the documented recipe, rebuilt here message by
-/// message: `PROGRAM_IDENTITY`, `VM_CONFIG`, `PROGRAM_ENTRY`, then one raw
-/// sample. Fails if a message moved or one were added.
+/// message: `PROGRAM_IDENTITY`, `VM_CONFIG`, `PROGRAM_ENTRY`, then
+/// `digest()`. Fails if a message moved or one were added.
 #[test]
 fn the_identity_is_the_documented_recipe() {
     let image = common::guest("fib");
     let (tables, config) = decode_program(&image, &common::smallest()).unwrap();
 
-    let fr = |x: u32| Fr::from_u64(x as u64);
+    let fr = |x: u32| Fp::from_u64(x as u64);
     let mut tr = Transcript::new();
     tr.append_scalar(tags::PROGRAM_IDENTITY, fr(family::CODE_VERSION));
-    let mut vm: Vec<Fr> = config.families.iter().map(|(f, _)| fr(*f)).collect();
+    let mut vm: Vec<Fp> = config.families.iter().map(|(f, _)| fr(*f)).collect();
     vm.extend(config.families.iter().map(|(_, h)| fr(*h)));
     vm.push(fr(config.bytecode_size_words));
     tr.append_scalars(tags::VM_CONFIG, &vm);
     tr.append_scalar(tags::PROGRAM_ENTRY, fr(image.entry));
     assert_eq!(
-        ProgramIdentity(tr.sample()),
+        ProgramIdentity(tr.digest()),
         program_identity(&image, &tables, &config)
     );
 }

@@ -13,7 +13,7 @@
 //! The family is two instructions and one idea. `lw` and `sw` name a word by
 //! `rs1 + imm`, and the whole of the addressing is one fact:
 //! `addr = 4·word_index` is an alignment statement over the integers and
-//! **nothing at all over `Fr`**, where 4 is a unit. What makes the split
+//! **nothing at all over `Fp`**, where 4 is a unit. What makes the split
 //! genuinely base-4 is the bound on `word_index`, and
 //! [`a_misaligned_word_access_is_unprovable`] and
 //! [`a_word_index_above_2_to_the_30_is_refused`] are the two halves of that
@@ -31,7 +31,7 @@ use constants::{challenge_slot, family, lookup_channel};
 use constraints::lookup::{check_discharge, ChannelSpec};
 use constraints::memory::check_memory;
 use constraints::{family_circuit, mem_word, CircuitArtifact, GateDef, PolyAddress, VirtualKind};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{eval_gate, gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallenges};
 
 const VARS: u32 = 20;
@@ -61,8 +61,8 @@ fn artifact() -> CircuitArtifact {
     mem_word::artifact(VARS)
 }
 
-fn f(v: u64) -> Fr {
-    Fr::from_u64(v)
+fn f(v: u64) -> Fp {
+    Fp::from_u64(v)
 }
 
 fn challenges(a: &CircuitArtifact) -> ExternalChallenges {
@@ -73,9 +73,9 @@ fn challenges(a: &CircuitArtifact) -> ExternalChallenges {
         (challenge_slot::MEM_ALPHA_TS, 17),
         (challenge_slot::MEM_ALPHA_VAL, 19),
     ] {
-        ch.insert(slot, f(v));
+        ch.insert(slot, f(v).into());
     }
-    insert_lookup_challenges(&mut ch, f(23), f(29), a);
+    insert_lookup_challenges(&mut ch, f(23).into(), f(29).into(), a);
     ch
 }
 
@@ -85,7 +85,7 @@ fn challenges(a: &CircuitArtifact) -> ExternalChallenges {
 
 /// A row by column name; a column not named is 0.
 #[derive(Clone, Debug, Default)]
-struct Row(BTreeMap<&'static str, Fr>);
+struct Row(BTreeMap<&'static str, Fp>);
 
 /// `<q>_<field>`, a column name, leaked to `'static` for the map.
 fn name(q: &str, field: &str) -> &'static str {
@@ -93,19 +93,19 @@ fn name(q: &str, field: &str) -> &'static str {
 }
 
 impl Row {
-    fn set(&mut self, name: &'static str, v: Fr) -> &mut Row {
+    fn set(&mut self, name: &'static str, v: Fp) -> &mut Row {
         self.0.insert(name, v);
         self
     }
 
-    fn get(&self, name: &str) -> Fr {
-        self.0.get(name).copied().unwrap_or(Fr::ZERO)
+    fn get(&self, name: &str) -> Fp {
+        self.0.get(name).copied().unwrap_or(Fp::ZERO)
     }
 
     /// Set the query `q`'s five columns, reading a write made eight timestamps
     /// before its own.
     fn query(&mut self, q: &'static str, delta: u64, addr: u64, read: u64, write: u64) {
-        self.set(name(q, "mask"), Fr::ONE)
+        self.set(name(q, "mask"), Fp::ONE)
             .set(name(q, "addr"), f(addr))
             .set(name(q, "read_ts"), f(4 * CYCLE + delta - 8))
             .set(name(q, "read_value"), f(read))
@@ -120,7 +120,7 @@ impl Row {
     }
 
     /// The row's committed values in layout order.
-    fn committed(&self, a: &CircuitArtifact) -> Vec<Fr> {
+    fn committed(&self, a: &CircuitArtifact) -> Vec<Fp> {
         let names: Vec<&str> = a
             .memory
             .iter()
@@ -137,19 +137,19 @@ impl Row {
     /// The row as a witness row of `a`, its scratch computed row-locally.
     fn witness(&self, a: &CircuitArtifact, row: usize) -> WitnessRow {
         let committed = self.committed(a);
-        let virtuals: Vec<Fr> = a
+        let virtuals: Vec<Fp2> = a
             .virtuals
             .iter()
-            .map(|(k, _)| virtual_at_row(*k, row))
+            .map(|(k, _)| virtual_at_row(*k, row).into())
             .collect();
         let ch = challenges(a);
-        let mut scratch = vec![Fr::ZERO; a.scratch.len()];
-        let mut lower = committed.clone();
+        let mut scratch = vec![Fp2::ZERO; a.scratch.len()];
+        let mut lower: Vec<Fp2> = committed.iter().map(|v| (*v).into()).collect();
         for k in 0..a.depth() {
             if a.layers[k].halving {
                 break;
             }
-            let v: &[Fr] = if k == 0 { &virtuals } else { &[] };
+            let v: &[Fp2] = if k == 0 { &virtuals } else { &[] };
             let values = gate_values(a, k, &lower, &[], v, &ch);
             let produced = values[..a.layers[k].producing.len()].to_vec();
             for (j, value) in produced.iter().enumerate() {
@@ -238,7 +238,7 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, word: u32, rd_old: u32) -> Row {
 
     let mut r = Row::default();
     r.set("cycle", f(CYCLE));
-    r.set("pc_mask", Fr::ONE)
+    r.set("pc_mask", Fp::ONE)
         .set("pc_read_ts", f(4 * (CYCLE - 1)))
         .set("pc_read_value", f(i.pc as u64))
         .set("pc_write_value", f(seq as u64));
@@ -253,7 +253,7 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, word: u32, rd_old: u32) -> Row {
         };
         r.query("rd", 3, i.rd as u64, rd_old as u64, write as u64);
         match i.rd {
-            0 => r.set("rd_is_zero", Fr::ONE),
+            0 => r.set("rd_is_zero", Fp::ONE),
             d => r.set("rd_inv", f(d as u64).inverse().expect("nonzero")),
         };
     } else {
@@ -276,7 +276,7 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, word: u32, rd_old: u32) -> Row {
         r.set(witness, f(v as u64)).set(table, f(v as u64));
     }
     r.set("table_pc", f(i.pc as u64));
-    r.set(name("kind", mnemonic(i.bit)), Fr::ONE);
+    r.set(name("kind", mnemonic(i.bit)), Fp::ONE);
 
     for (column, v) in [
         ("wrap", wrap as u64),
@@ -290,9 +290,9 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, word: u32, rd_old: u32) -> Row {
 }
 
 /// A lookup expression's value on the committed row.
-fn expression(a: &CircuitArtifact, committed: &[Fr], gate: &GateDef) -> Fr {
+fn expression(a: &CircuitArtifact, committed: &[Fp], gate: &GateDef) -> Fp {
     let layout = a.committed();
-    let values: Vec<Fr> = gate
+    let values: Vec<Fp2> = gate
         .operands()
         .iter()
         .map(|op| {
@@ -300,18 +300,16 @@ fn expression(a: &CircuitArtifact, committed: &[Fr], gate: &GateDef) -> Fr {
                 .iter()
                 .position(|x| x == op)
                 .expect("a committed operand")]
+            .into()
         })
         .collect();
-    eval_gate(gate, &values, &ExternalChallenges::new())
-}
-
-/// The canonical integer of a field element, if it is below `2^64`.
-fn small_int(v: Fr) -> Option<u64> {
-    let bytes = v.to_bytes();
-    bytes[8..]
-        .iter()
-        .all(|b| *b == 0)
-        .then(|| u64::from_le_bytes(bytes[..8].try_into().expect("eight bytes")))
+    let v = eval_gate(gate, &values, &ExternalChallenges::new());
+    assert_eq!(
+        v.c1,
+        Fp::ZERO,
+        "a literal-only gate over base values is base"
+    );
+    v.c0
 }
 
 /// The names of the **table**-channel lookups the row violates — the one
@@ -329,21 +327,21 @@ fn violated_tables(a: &CircuitArtifact, r: &Row) -> Vec<String> {
             .position(|x| *x == l.selector)
             .expect("a selector is a committed column");
         let s = committed[at];
-        let values: Vec<Fr> = l
+        let values: Vec<Fp> = l
             .tuple
             .iter()
             .map(|e| expression(a, &committed, e))
             .collect();
         let holds = match l.channel {
             lookup_channel::DECODER => {
-                let table: Vec<Fr> = (0..mem_word::TABLE_WIDTH)
+                let table: Vec<Fp> = (0..mem_word::TABLE_WIDTH)
                     .map(|j| committed[a.memory.len() + a.witness.len() + j])
                     .collect();
-                let gated: Vec<Fr> = values
+                let gated: Vec<Fp> = values
                     .iter()
-                    .map(|v| s * (*v + Fr::ONE) - Fr::ONE)
+                    .map(|v| s * (*v + Fp::ONE) - Fp::ONE)
                     .collect();
-                gated == table || gated.iter().all(|v| *v == Fr::MINUS_ONE)
+                gated == table || gated.iter().all(|v| *v == Fp::MINUS_ONE)
             }
             _ => continue,
         };
@@ -814,16 +812,16 @@ fn every_row_kind_satisfies_every_gate_and_every_bound() {
     // wrapping address and a `word_index` at each end of its range.
     let rows = honest_rows();
     let has = |p: fn(&Row) -> bool| rows.iter().any(|(_, r)| p(r));
-    assert!(has(|r| r.get("kind_lw") == Fr::ONE));
-    assert!(has(|r| r.get("kind_sw") == Fr::ONE));
-    assert!(has(|r| r.get("wrap") == Fr::ONE));
+    assert!(has(|r| r.get("kind_lw") == Fp::ONE));
+    assert!(has(|r| r.get("kind_sw") == Fp::ONE));
+    assert!(has(|r| r.get("wrap") == Fp::ONE));
     assert!(has(|r| r.get("word_index") == f((1 << 30) - 1)));
     assert!(has(
-        |r| r.get("word_index") == Fr::ZERO && r.get("pc_mask") == Fr::ONE
+        |r| r.get("word_index") == Fp::ZERO && r.get("pc_mask") == Fp::ONE
     ));
-    assert!(has(|r| r.get("rd_mask") == Fr::ONE
-        && r.get("rd_addr") == Fr::ZERO
-        && r.get("rd_selected") != Fr::ZERO));
+    assert!(has(|r| r.get("rd_mask") == Fp::ONE
+        && r.get("rd_addr") == Fp::ZERO
+        && r.get("rd_selected") != Fp::ZERO));
 }
 
 /// A row named by [`honest_rows`].
@@ -886,7 +884,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     let moved = f(LW_ADDR as u64) - f(1 << 32) * f(2);
     r.set("wrap", f(2))
         .set("word_index", moved * f(4).inverse().expect("nonzero"))
-        .set("word_index_hi", Fr::ZERO)
+        .set("word_index_hi", Fp::ZERO)
         .set("load_addr", moved);
     cases.push(("an lw claiming a wrap of two", r, vec!["wrap_boolean"]));
 
@@ -914,12 +912,12 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // x0, or two further gates fire; the mask rule refuses even that.
     let mut r = row("sw");
     r.query("rd", 3, 0, LW_RD_OLD as u64, 0);
-    r.set("rd_is_zero", Fr::ONE);
+    r.set("rd_is_zero", Fp::ONE);
     cases.push(("a store writing x0", r, vec!["rd_mask_rule"]));
 
     // Addresses. Each register query's address is the decoded one.
     let mut r = row("lw");
-    let addr = r.get("rs1_addr") + Fr::ONE;
+    let addr = r.get("rs1_addr") + Fp::ONE;
     r.set("rs1_addr", addr);
     cases.push((
         "a load reading the wrong base register",
@@ -927,7 +925,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         vec!["rs1_addr_rule"],
     ));
     let mut r = row("sw");
-    let addr = r.get("rs2_addr") + Fr::ONE;
+    let addr = r.get("rs2_addr") + Fp::ONE;
     r.set("rs2_addr", addr);
     cases.push((
         "a store reading the wrong source register",
@@ -956,7 +954,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     let mut r = Row::default();
     r.set("rs1_read_value", f(4))
         .set("rs1_write_value", f(4))
-        .set("word_index", Fr::ONE);
+        .set("word_index", Fp::ONE);
     cases.push((
         "a padding row whose absent rs1 reads 4",
         r,
@@ -975,7 +973,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // The address split itself: a load reading one word further, with the
     // query's address moved to match so that the address rule still holds.
     let mut r = row("lw");
-    let index = r.get("word_index") + Fr::ONE;
+    let index = r.get("word_index") + Fp::ONE;
     let addr = r.get("load_addr") + f(4);
     r.set("word_index", index).set("load_addr", addr);
     cases.push((
@@ -1114,7 +1112,7 @@ fn each_table_lookup_is_the_one_that_refuses_its_row() {
     // stands in its way.
     let mut r = Row::default();
     r.set("cycle", f(CYCLE));
-    r.set("pc_mask", Fr::ONE)
+    r.set("pc_mask", Fp::ONE)
         .set("pc_read_ts", f(4 * (CYCLE - 1)))
         .set("pc_read_value", f(0x1000))
         .set("pc_write_value", f(0x1004));
@@ -1144,13 +1142,13 @@ fn each_table_lookup_is_the_one_that_refuses_its_row() {
 /// A misaligned word access is unprovable, and the range check is the whole of
 /// why.
 ///
-/// `addr = 4·word_index` says nothing over `Fr`: 4 is a unit there, so
+/// `addr = 4·word_index` says nothing over `Fp`: 4 is a unit there, so
 /// `word_index := addr·4⁻¹` satisfies the split for *any* address, and the
 /// rows below are exactly that witness. Every **gate** holds on them — the
 /// split, the query's address rule, the copies, the mask rules, the decoder —
 /// and what refuses each one is `word_index_lo_range`, the low half of the
-/// 16+16 pair, because `addr·4⁻¹` is not a 32-bit integer and is not even a
-/// 64-bit one. No choice of high chunk rescues it: the scaled obligation holds
+/// 16+16 pair, because `addr·4⁻¹` is `(addr + (4 − offset)·p)/4`, above
+/// `2^62`, and no 32-bit integer. No choice of high chunk rescues it: the scaled obligation holds
 /// the high chunk below `2^14` and the pair holds the remainder below `2^16`,
 /// so the three together admit `word_index < 2^30` and nothing above, and this
 /// element is nowhere near an integer that small.
@@ -1162,11 +1160,11 @@ fn a_misaligned_word_access_is_unprovable() {
         let address = LW_ADDR + offset;
         assert_eq!(address % 4, offset, "the address really is misaligned");
         let word_index = f(address as u64) * quarter;
-        // The witness the field admits is not an integer at all, so neither
-        // chunk of a 16+16 split can hold it.
+        // The witness the field admits is no small integer, so neither chunk
+        // of a 16+16 split can hold it.
         assert!(
-            small_int(word_index).is_none(),
-            "addr·4⁻¹ is below 2^64 at offset {offset}"
+            word_index.to_u64() >= 1 << 62,
+            "addr·4⁻¹ is below 2^62 at offset {offset}"
         );
 
         let mut r = row("lw");
@@ -1174,7 +1172,7 @@ fn a_misaligned_word_access_is_unprovable() {
             .set("table_imm", f((LW_IMM + offset) as u64))
             .set("load_addr", f(address as u64))
             .set("word_index", word_index)
-            .set("word_index_hi", Fr::ZERO);
+            .set("word_index_hi", Fp::ZERO);
         assert_eq!(
             violated(&a, &r),
             (none(), names(&["word_index_lo_range"]), none()),
@@ -1197,8 +1195,8 @@ fn a_misaligned_word_access_is_unprovable() {
 fn a_word_index_above_2_to_the_30_is_refused() {
     let a = artifact();
     let honest_row = row("lw at the address space's end, wrapping to zero");
-    assert_eq!(honest_row.get("wrap"), Fr::ONE);
-    assert_eq!(honest_row.get("word_index"), Fr::ZERO);
+    assert_eq!(honest_row.get("wrap"), Fp::ONE);
+    assert_eq!(honest_row.get("word_index"), Fp::ZERO);
     assert_eq!(
         violated(&a, &honest_row),
         (none(), none(), none()),
@@ -1207,7 +1205,7 @@ fn a_word_index_above_2_to_the_30_is_refused() {
 
     let mut r = honest_row;
     let index = 1u64 << 30;
-    r.set("wrap", Fr::ZERO)
+    r.set("wrap", Fp::ZERO)
         .set("word_index", f(index))
         .set("word_index_hi", f(index >> 16))
         .set("load_addr", f(1 << 32));

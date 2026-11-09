@@ -8,7 +8,7 @@ mod common;
 
 use common::{discharge, honest, toy, toy_base, toy_cache_free, toy_columns};
 use constraints::{CachedEntry, Coeff, ConstraintError, GateDef, PolyAddress};
-use field::Fr;
+use field_a64_c5::Fp;
 
 #[test]
 fn cached_and_cache_free_are_one_circuit() {
@@ -71,20 +71,20 @@ fn a_degree_two_cached_entry_proves_and_verifies() {
             offset: 1,
         },
         gate: GateDef::Product {
-            coeff: Coeff::Literal(Fr::ONE),
+            coeff: Coeff::Literal(Fp::ONE),
             left: a,
             right: b,
         },
     });
     list.producing[0].gate = GateDef::Linear {
         terms: vec![(
-            Coeff::Literal(Fr::ONE),
+            Coeff::Literal(Fp::ONE),
             PolyAddress::Cached {
                 layer: 0,
                 offset: 1,
             },
         )],
-        constant: Coeff::Literal(Fr::ZERO),
+        constant: Coeff::Literal(Fp::ZERO),
     };
     artifact
         .validate()
@@ -116,7 +116,7 @@ fn a_cached_entry_in_list_one_proves_and_verifies() {
         layer: 1,
         offset: 0,
     };
-    let one = Coeff::Literal(Fr::ONE);
+    let one = Coeff::Literal(Fp::ONE);
 
     let mut linear = toy();
     linear.layers[1].cached.push(CachedEntry {
@@ -124,12 +124,12 @@ fn a_cached_entry_in_list_one_proves_and_verifies() {
         address: entry,
         gate: GateDef::Linear {
             terms: vec![(one, inner(1, 1))],
-            constant: Coeff::Literal(Fr::ZERO),
+            constant: Coeff::Literal(Fp::ZERO),
         },
     });
     linear.layers[1].producing[1].gate = GateDef::Linear {
         terms: vec![(one, entry)],
-        constant: Coeff::Literal(Fr::from_u64(3)),
+        constant: Coeff::Literal(Fp::from_u64(3)),
     };
 
     let mut quadratic = toy();
@@ -144,7 +144,7 @@ fn a_cached_entry_in_list_one_proves_and_verifies() {
     });
     quadratic.layers[1].producing[0].gate = GateDef::Linear {
         terms: vec![(one, entry)],
-        constant: Coeff::Literal(Fr::ZERO),
+        constant: Coeff::Literal(Fp::ZERO),
     };
 
     let base = toy_base(&toy_columns(0x5313_1110));

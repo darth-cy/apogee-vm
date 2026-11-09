@@ -18,7 +18,7 @@
 mod common;
 
 use constants::family;
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use prover::{
     global_commit_phase, prove_shard, prove_shard_columns, public_inputs, shard_columns,
     statement_inputs, ProverSetup, ProvingContext,
@@ -266,7 +266,7 @@ fn a4_a6_every_block_twin_is_refused() {
     // load (`docs/spec/proof.md` §7.2), and checks 1 to 5 refuse it
     // anyway because G5 absorbs the identity.
     let mut other = setup.vk.clone();
-    other.identity.0 += Fr::ONE;
+    other.identity.0[0] += Fp::ONE;
     assert_eq!(
         verify_block(&other, &block, &honest),
         Err(VerifyError::MemoryArgument(
@@ -419,12 +419,12 @@ fn a7_a_corrupted_cell_in_the_second_shard_refuses_the_block() {
         .iter()
         .position(|(a, _)| *a == wrap)
         .expect("the wrap column");
-    let mut values: Vec<Fr> = (0..columns[at].1.len())
-        .map(|i| columns[at].1.get(i))
+    let mut values: Vec<Fp> = (0..columns[at].1.len())
+        .map(|i| columns[at].1.get_base(i))
         .collect();
-    assert_eq!(values[0], Fr::ZERO, "row 0 of shard 1 carries no wrap");
-    values[0] = Fr::ONE;
-    columns[at].1 = poly::MultilinearPoly::new(poly::PolyBacking::Fr(values));
+    assert_eq!(values[0], Fp::ZERO, "row 0 of shard 1 carries no wrap");
+    values[0] = Fp::ONE;
+    columns[at].1 = poly::MultilinearPoly::new(poly::PolyBacking::Fp(values));
 
     let (tampered, _) = prove_shard_columns(&ctx, ADD, 1, columns);
     let mut twin = honest.clone();
@@ -534,8 +534,8 @@ fn a2_a_multi_family_block_proves_and_verifies() {
     // each one shard beside the execution families'.
     assert_eq!(records.len(), execution.len() + 4);
     for r in &records {
-        assert_ne!(r.roots[0], Fr::ZERO, "a read root is present");
-        assert_ne!(r.roots[1], Fr::ZERO, "a write root is present");
+        assert_ne!(r.roots[0], Fp2::ZERO, "a read root is present");
+        assert_ne!(r.roots[1], Fp2::ZERO, "a write root is present");
     }
     assert_eq!(verify_block(&setup.vk, &block, block.statement()), Ok(()));
 }

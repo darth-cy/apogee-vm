@@ -12,7 +12,7 @@
 
 use constants::family;
 use constraints::family_circuit;
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr_verify::{BoundaryFinals, GkrProof};
 use verifier_core::{
     global_commit, identity_digest, PublicInputs, ShardProof, VerifyingKey, VmConfig,
@@ -103,7 +103,8 @@ pub fn jbs_statement() -> PublicInputs {
     // Statement order is INIT, ZERO, then ascending, so the jump family's
     // root pair goes before the two public ones this pushes back on at the end.
     let roots = s.memory_roots.split_off(2);
-    s.memory_roots.push([Fr::from_u64(5), Fr::from_u64(6)]);
+    s.memory_roots
+        .push([Fp2::from(Fp::from_u64(5)), Fp2::from(Fp::from_u64(6))]);
     s.memory_roots.extend(roots);
     s
 }
@@ -133,10 +134,10 @@ pub fn statement() -> PublicInputs {
         windows: vec![],
         boundary: finals(42),
         memory_roots: vec![
-            [Fr::from_u64(1), Fr::from_u64(2)],
-            [Fr::from_u64(3), Fr::from_u64(4)],
-            [Fr::from_u64(7), Fr::from_u64(8)],
-            [Fr::from_u64(9), Fr::from_u64(10)],
+            [Fp2::from(Fp::from_u64(1)), Fp2::from(Fp::from_u64(2))],
+            [Fp2::from(Fp::from_u64(3)), Fp2::from(Fp::from_u64(4))],
+            [Fp2::from(Fp::from_u64(7)), Fp2::from(Fp::from_u64(8))],
+            [Fp2::from(Fp::from_u64(9)), Fp2::from(Fp::from_u64(10))],
         ],
     }
 }
@@ -153,7 +154,7 @@ pub fn shell(vk: &VerifyingKey, public: &PublicInputs) -> ShardProof {
         shard_index: 0,
         ts_window: TRIVIAL_TS_WINDOW,
         global_digest: global_commit(vk, public).digest,
-        outputs: vec![Fr::ZERO; outputs],
+        outputs: vec![Fp2::ZERO; outputs],
         gkr: GkrProof { layers: vec![] },
     }
 }

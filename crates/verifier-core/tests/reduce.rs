@@ -8,9 +8,9 @@ mod common;
 
 use common::{shell, statement, vk, ADD, INIT, ZERO};
 use constants::transcript_tags as tags;
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr_verify::SumcheckProof;
-use transcript::TranscriptEvent::{Absorb, Challenge};
+use transcript_a64_c5::TranscriptEvent::{Absorb, Challenge};
 use verifier_core::{
     derive_global_phase, global_commit, memory_slots, reduce_shard, shard_challenges,
     shard_transcript, statement_shards, verify_global_memory, VerifyError, TRIVIAL_TS_WINDOW,
@@ -28,14 +28,14 @@ fn refusal(
 }
 
 /// G1 to G9, event for event: the suite, the descriptor's three messages, the
-/// identity, the I/O digest's bytes, the boundary, four memory challenges, the
-/// digest.
+/// identity's 8 lanes, the I/O digest's 8 lanes, the boundary, four memory
+/// challenges, the digest.
 #[test]
 fn the_global_transcript_is_the_frozen_order() {
     let (key, public) = (vk(), statement());
     let g = global_commit(&key, &public);
     let log: Vec<_> = g.transcript.event_log().to_vec();
-    let absorb = |tag, n_scalars| Absorb { tag, n_scalars };
+    let absorb = |tag, n| Absorb { tag, n };
     let mut want = vec![
         absorb(tags::PROTOCOL_SUITE, 1),
         // Six families: add/sub, the two RAM window ones, the public pair and
@@ -43,8 +43,8 @@ fn the_global_transcript_is_the_frozen_order() {
         absorb(tags::VM_CONFIG, 2 * 6 + 1),
         absorb(tags::SHARD_COUNTS, 6),
         absorb(tags::MEMORY_WINDOWS, 0),
-        absorb(tags::PROGRAM_IDENTITY, 1),
-        absorb(tags::PUBLIC_INPUTS, 2),
+        absorb(tags::PROGRAM_IDENTITY, 8),
+        absorb(tags::PUBLIC_INPUTS, 8),
         // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. Every
         // statement shard's memory-column commitments belong HERE, before the
         // boundary and the challenges, and none is absorbed
@@ -84,10 +84,10 @@ fn the_global_transcript_is_the_frozen_order() {
         p.windows.push(1);
     }));
     assert!(moved(|p| p.windows.push(1)));
-    assert!(!moved(|p| p.memory_roots[0][0] += Fr::ONE));
+    assert!(!moved(|p| p.memory_roots[0][0] += Fp2::ONE));
     assert!(!moved(|p| p.exit_status += 1));
     let mut k = vk();
-    k.identity.0 += Fr::ONE;
+    k.identity.0[0] += Fp::ONE;
     assert_ne!(global_commit(&k, &public).digest, digest);
 }
 
@@ -114,18 +114,18 @@ fn UNFINISHED_the_generic_table_is_bound_into_every_challenge() {
 /// `g`, and none is absorbed (`docs/architecture.md` §0).
 #[test]
 fn a_shard_transcript_starts_with_its_seed_and_its_window() {
-    let (t, g, beta) = shard_transcript(Fr::from_u64(7), ADD, 0, TRIVIAL_TS_WINDOW);
+    let (t, g, beta) = shard_transcript(Fp2::from(Fp::from_u64(7)), ADD, 0, TRIVIAL_TS_WINDOW);
     assert_ne!(g, beta);
     assert_eq!(
         t.event_log(),
         &[
             Absorb {
                 tag: tags::SHARD_SEED,
-                n_scalars: 3
+                n: 4
             },
             Absorb {
                 tag: tags::SHARD_TS_WINDOW,
-                n_scalars: 2
+                n: 2
             },
             Challenge {
                 tag: tags::LOOKUP_CHALLENGE
@@ -135,12 +135,22 @@ fn a_shard_transcript_starts_with_its_seed_and_its_window() {
             },
         ]
     );
-    // Each part of the seed moves the challenges.
-    let (_, g2, _) = shard_transcript(Fr::from_u64(8), ADD, 0, TRIVIAL_TS_WINDOW);
-    let (_, g3, _) = shard_transcript(Fr::from_u64(7), INIT, 0, TRIVIAL_TS_WINDOW);
-    let (_, g4, _) = shard_transcript(Fr::from_u64(7), ADD, 1, TRIVIAL_TS_WINDOW);
-    let (_, g5, _) = shard_transcript(Fr::from_u64(7), ADD, 0, [0, 4]);
-    for other in [g2, g3, g4, g5] {
+    // Each part of the seed moves the challenges, either half of the digest
+    // included.
+    let (_, g1, _) = shard_transcript(
+        Fp2 {
+            c0: Fp::from_u64(7),
+            c1: Fp::ONE,
+        },
+        ADD,
+        0,
+        TRIVIAL_TS_WINDOW,
+    );
+    let (_, g2, _) = shard_transcript(Fp2::from(Fp::from_u64(8)), ADD, 0, TRIVIAL_TS_WINDOW);
+    let (_, g3, _) = shard_transcript(Fp2::from(Fp::from_u64(7)), INIT, 0, TRIVIAL_TS_WINDOW);
+    let (_, g4, _) = shard_transcript(Fp2::from(Fp::from_u64(7)), ADD, 1, TRIVIAL_TS_WINDOW);
+    let (_, g5, _) = shard_transcript(Fp2::from(Fp::from_u64(7)), ADD, 0, [0, 4]);
+    for other in [g1, g2, g3, g4, g5] {
         assert_ne!(other, g);
     }
 }
@@ -149,16 +159,24 @@ fn a_shard_transcript_starts_with_its_seed_and_its_window() {
 /// the seed and the window, replayed by hand.
 #[test]
 fn g_is_the_first_lookup_squeeze_and_beta_the_second() {
-    let digest = Fr::from_u64(7);
+    let digest = Fp2 {
+        c0: Fp::from_u64(7),
+        c1: Fp::from_u64(70),
+    };
     let (_, g, beta) = shard_transcript(digest, ADD, 3, TRIVIAL_TS_WINDOW);
-    let mut t = transcript::Transcript::new();
+    let mut t = transcript_a64_c5::Transcript::new();
     t.append_scalars(
         tags::SHARD_SEED,
-        &[digest, Fr::from_u64(ADD as u64), Fr::from_u64(3)],
+        &[
+            digest.c0,
+            digest.c1,
+            Fp::from_u64(ADD as u64),
+            Fp::from_u64(3),
+        ],
     );
-    t.append_scalars(tags::SHARD_TS_WINDOW, &[Fr::ZERO, Fr::from_u64(1 << 38)]);
-    assert_eq!(g, t.challenge_scalar(tags::LOOKUP_CHALLENGE));
-    assert_eq!(beta, t.challenge_scalar(tags::LOOKUP_CHALLENGE));
+    t.append_scalars(tags::SHARD_TS_WINDOW, &[Fp::ZERO, Fp::from_u64(1 << 38)]);
+    assert_eq!(g, t.challenge(tags::LOOKUP_CHALLENGE));
+    assert_eq!(beta, t.challenge(tags::LOOKUP_CHALLENGE));
 }
 
 /// The challenges a shard's circuit reads (§4): slots 1 to 4 from the memory
@@ -169,8 +187,8 @@ fn g_is_the_first_lookup_squeeze_and_beta_the_second() {
 fn a_shard_reads_the_window_constant_of_its_own_window() {
     use constants::challenge_slot as slot;
     let key = vk();
-    let memory = [11, 12, 13, 14].map(Fr::from_u64);
-    let (g, beta) = (Fr::from_u64(21), Fr::from_u64(22));
+    let memory = [11, 12, 13, 14].map(|v| Fp2::from(Fp::from_u64(v)));
+    let (g, beta) = (Fp2::from(Fp::from_u64(21)), Fp2::from(Fp::from_u64(22)));
     let windows = [3, 9];
     let expected = |circuit: &constraints::FamilyCircuit, window: u32| {
         let mut want = gkr_verify::window_challenges(
@@ -327,7 +345,7 @@ fn a_statement_the_key_does_not_describe_is_refused_as_statement() {
         proof.clone(),
     ));
     let mut q = proof.clone();
-    q.global_digest += Fr::ONE;
+    q.global_digest += Fp2::ONE;
     cases.push(("made for another statement", key.clone(), honest.clone(), q));
 
     for (want, k, p, q) in cases {
@@ -356,7 +374,7 @@ fn a_proof_shaped_wrong_is_refused_as_malformed() {
     q.family = 3;
     cases.push(("a shard the statement does not have", q));
     let mut q = honest.clone();
-    q.outputs.push(Fr::ZERO);
+    q.outputs.push(Fp2::ZERO);
     cases.push(("the outputs are not the circuit's output map", q));
     cases.push(("a GKR transition is not its layer's shape", honest.clone()));
     let mut q = honest.clone();
@@ -448,7 +466,7 @@ fn the_statement_half_of_the_memory_argument_is_one_check_for_a_statement() {
     // And the product is what refuses them: the roots move it, though they
     // move no challenge — the digest test above pins that they do not.
     let mut p = statement();
-    p.memory_roots[0][0] += Fr::ONE;
+    p.memory_roots[0][0] += Fp2::ONE;
     let g = derive_global_phase(&key, &p).expect("a statement the key describes");
     assert_eq!(
         verify_global_memory(&key, &g, &p),

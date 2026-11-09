@@ -12,7 +12,7 @@ mod common;
 
 use common::{toy, toy_cache_free, toy_cache_free_bytes, toy_cached_bytes};
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
-use field::Fr;
+use field_a64_c5::Fp;
 use serde::Serialize;
 
 const ENDS_EARLY: &str = "malformed circuit artifact: Hit the end of buffer, expected more data";
@@ -26,7 +26,7 @@ fn encode<T: Serialize + ?Sized>(value: &T) -> Vec<u8> {
 
 /// A coefficient as its three wire fields, so a test can write one no `Coeff`
 /// value encodes to.
-type RawCoeff = (u8, u32, [u8; 32]);
+type RawCoeff = (u8, u32, [u8; 8]);
 /// An address as its three wire fields.
 type RawAddress = (u8, u32, u32);
 
@@ -34,16 +34,16 @@ fn raw_gate(tag: u8, split: u32, coeffs: &[RawCoeff], operands: &[RawAddress]) -
     encode(&(tag, split, coeffs, operands))
 }
 
-const ZERO: [u8; 32] = [0; 32];
+const ZERO: [u8; 8] = [0; 8];
 
-fn one() -> [u8; 32] {
-    Fr::ONE.to_bytes()
+fn one() -> [u8; 8] {
+    Fp::ONE.to_bytes()
 }
 
-/// A literal whose 32 bytes appear nowhere else in the toy, so its gate can be
+/// A literal whose 8 bytes appear nowhere else in the toy, so its gate can be
 /// found in the file by search.
-fn marker() -> Fr {
-    Fr::from_u64(0x0123_4567_89ab_cdef)
+fn marker() -> Fp {
+    Fp::from_u64(0x0123_4567_89ab_cdef)
 }
 
 /// The toy's bytes with relation 5's gate replaced by `gate`, which may be any
@@ -106,27 +106,27 @@ fn both_compilations_round_trip_byte_identically() {
     assert_ne!(toy(), toy_cache_free());
 }
 
-/// Every `Fr` on the wire is its canonical 32 little-endian bytes with no
+/// Every `Fp` on the wire is its canonical 8 little-endian bytes with no
 /// length prefix. The file ends with the padding contract:
-/// the row's one-byte count, 6, then six zeros in 192 bytes, then the one
+/// the row's one-byte count, 6, then six zeros in 48 bytes, then the one
 /// `zero_row_valid` byte.
 #[test]
-fn a_field_element_is_32_canonical_bytes_with_no_prefix() {
+fn a_field_element_is_8_canonical_bytes_with_no_prefix() {
     let bytes = toy_cached_bytes();
     let a = toy();
     assert_eq!(a.padding.row.len(), 6);
     assert!(a.padding.zero_row_valid);
-    let tail = &bytes[bytes.len() - 194..];
+    let tail = &bytes[bytes.len() - 50..];
     assert_eq!(tail[0], 6, "the padding row's element count");
     assert!(
-        tail[1..193].iter().all(|&b| b == 0),
-        "six zeros, 32 bytes each"
+        tail[1..49].iter().all(|&b| b == 0),
+        "six zeros, 8 bytes each"
     );
-    assert_eq!(tail[193], 1, "zero_row_valid is one byte");
-    // The literal 3 of `define_fingerprint3` is `03` then 31 zeros.
-    let three = Fr::from_u64(3).to_bytes();
+    assert_eq!(tail[49], 1, "zero_row_valid is one byte");
+    // The literal 3 of `define_fingerprint3` is `03` then 7 zeros.
+    let three = Fp::from_u64(3).to_bytes();
     assert_eq!(three[0], 3);
-    assert!(bytes.windows(32).any(|w| w == three));
+    assert!(bytes.windows(8).any(|w| w == three));
 }
 
 // ---------------------------------------------------------------------------
@@ -157,16 +157,16 @@ fn a_trailing_byte_is_refused() {
 }
 
 /// A varint written longer than it needs to be is refused. The leading
-/// `format_version`, 1, is re-encoded as `0x81 0x00`: postcard reads that as 1,
+/// `format_version`, 2, is re-encoded as `0x82 0x00`: postcard reads that as 2,
 /// so the artifact decodes to the toy, and only the canonical comparison stands
 /// between the reader and two byte strings for one artifact.
 #[test]
 fn an_overlong_varint_is_refused() {
     let bytes = toy_cached_bytes();
-    assert_eq!(bytes[0], 0x01, "the file starts with format_version 1");
-    let overlong = [&[0x81u8, 0x00][..], &bytes[1..]].concat();
+    assert_eq!(bytes[0], 0x02, "the file starts with format_version 2");
+    let overlong = [&[0x82u8, 0x00][..], &bytes[1..]].concat();
 
-    assert_eq!(postcard::from_bytes::<u32>(&[0x81, 0x00]), Ok(1));
+    assert_eq!(postcard::from_bytes::<u32>(&[0x82, 0x00]), Ok(2));
     assert_eq!(
         postcard::from_bytes::<CircuitArtifact>(&overlong).as_ref(),
         Ok(&toy())
@@ -178,26 +178,26 @@ fn an_overlong_varint_is_refused() {
 }
 
 /// The format version is read first, and no other version is decoded. The
-/// cached toy's bytes with their first word 2, or 128 (two varint bytes), are
-/// refused naming the version, where under 1 they decode to the toy; and so is
-/// a format-0 file, whose lookup element has no selector, holding one lookup
-/// `(name, channel, tuple)`.
+/// cached toy's bytes with their first word 1, BN254's format, or 128 (two
+/// varint bytes), are refused naming the version, where under 2 they decode to
+/// the toy; and so is a format-0 file, whose lookup element has no selector,
+/// holding one lookup `(name, channel, tuple)`.
 ///
 /// Kills a reader that checks the version only after decoding the rest: that
 /// reader takes the format-0 lookup's tuple length for a selector, misreads
 /// the gate after it, and refuses the file as a malformed gate rather than as
 /// format 0.
 #[test]
-fn a_format_version_other_than_one_is_refused() {
+fn a_format_version_other_than_two_is_refused() {
     let bytes = toy_cached_bytes();
     assert_eq!(CircuitArtifact::from_bytes(&bytes), Ok(toy()));
     let refused = |version: u32| {
         Err(format!(
-            "malformed circuit artifact: format version {version}, but this reader reads 1 only"
+            "malformed circuit artifact: format version {version}, but this reader reads 2 only"
         ))
     };
-    let two = [&[2u8][..], &bytes[1..]].concat();
-    assert_eq!(CircuitArtifact::from_bytes(&two), refused(2));
+    let one = [&[1u8][..], &bytes[1..]].concat();
+    assert_eq!(CircuitArtifact::from_bytes(&one), refused(1));
     let wide = [&[0x80u8, 0x01][..], &bytes[1..]].concat();
     assert_eq!(postcard::from_bytes::<u32>(&[0x80, 0x01]), Ok(128));
     assert_eq!(CircuitArtifact::from_bytes(&wide), refused(128));
@@ -258,11 +258,11 @@ fn a_length_prefix_claiming_two_to_the_32_is_refused() {
     let huge = encode(&(1u64 << 32));
     assert_eq!(huge, [0x80, 0x80, 0x80, 0x80, 0x10]);
 
-    // format_version 1, coefficient_encoding 0, trace_vars 4, then the memory
+    // format_version 2, coefficient_encoding 0, trace_vars 4, then the memory
     // layout's length.
     let bytes = toy_cached_bytes();
-    assert_eq!(&bytes[..4], &[1, 0, 4, 1], "the toy has one memory column");
-    let claim = [&[1u8, 0, 4][..], &huge].concat();
+    assert_eq!(&bytes[..4], &[2, 0, 4, 1], "the toy has one memory column");
+    let claim = [&[2u8, 0, 4][..], &huge].concat();
     assert_eq!(CircuitArtifact::from_bytes(&claim), Err(ENDS_EARLY.into()));
 
     // tag 0, split 0, one coefficient, then 2^32 operands.
@@ -419,7 +419,7 @@ fn an_unknown_address_tag_is_refused() {
 fn an_unknown_coefficient_tag_is_refused() {
     assert_eq!(
         postcard::from_bytes::<Coeff>(&encode(&(0u8, 0u32, ZERO))),
-        Ok(Coeff::Literal(Fr::ZERO))
+        Ok(Coeff::Literal(Fp::ZERO))
     );
     assert_eq!(
         postcard::from_bytes::<Coeff>(&encode(&(1u8, 0u32, ZERO))),
@@ -461,7 +461,7 @@ fn a_coefficient_with_a_nonzero_unused_field_is_refused() {
     );
     assert_eq!(
         postcard::from_bytes::<Coeff>(&encode(&(0u8, 0u32, one()))),
-        Ok(Coeff::Literal(Fr::ONE))
+        Ok(Coeff::Literal(Fp::ONE))
     );
     let gate = |c: RawCoeff| raw_gate(0, 0, &[c], &[]);
     assert!(CircuitArtifact::from_bytes(&with_gate_bytes(&gate((0, 0, one())))).is_ok());
@@ -471,30 +471,30 @@ fn a_coefficient_with_a_nonzero_unused_field_is_refused() {
     );
 }
 
-/// One coefficient encoding: canonical. 32 bytes of `0xff`, and the modulus
+/// One coefficient encoding: canonical. 8 bytes of `0xff`, and the modulus
 /// itself, are refused in a `Coeff::Literal`; the modulus less one is the
 /// largest literal there is.
 #[test]
 fn a_non_canonical_field_element_is_refused() {
-    let largest = Fr::MINUS_ONE.to_bytes();
+    let largest = Fp::MINUS_ONE.to_bytes();
     let mut modulus = largest;
     assert_eq!(modulus[0] & 1, 0, "the modulus is odd, so p − 1 ends even");
     modulus[0] += 1;
 
     assert_eq!(
         postcard::from_bytes::<Coeff>(&encode(&(0u8, 0u32, largest))),
-        Ok(Coeff::Literal(Fr::MINUS_ONE))
+        Ok(Coeff::Literal(Fp::MINUS_ONE))
     );
-    for bad in [modulus, [0xff; 32]] {
+    for bad in [modulus, [0xff; 8]] {
         assert_eq!(
             postcard::from_bytes::<Coeff>(&encode(&(0u8, 0u32, bad))),
             Err(postcard::Error::SerdeDeCustom)
         );
     }
 
-    let gate = |v: [u8; 32]| raw_gate(0, 0, &[(0, 0, v)], &[]);
+    let gate = |v: [u8; 8]| raw_gate(0, 0, &[(0, 0, v)], &[]);
     assert!(CircuitArtifact::from_bytes(&with_gate_bytes(&gate(largest))).is_ok());
-    for bad in [modulus, [0xff; 32]] {
+    for bad in [modulus, [0xff; 8]] {
         assert_eq!(
             CircuitArtifact::from_bytes(&with_gate_bytes(&gate(bad))),
             Err(SHAPE_REFUSED.into())
@@ -613,8 +613,8 @@ fn a_linear_whose_coefficient_count_is_not_operands_plus_one_is_refused() {
 /// `docs/spec/gkr.md` §4.1: tag 5, split `t`, coefficients
 /// `c_0, a_1..a_t, b_1..b_u`, operands `x_1..x_t, y_1, z_1, .., y_u, z_u`.
 fn quadratic(t: u32, u: u32) -> (GateDef, Vec<RawCoeff>, Vec<RawAddress>) {
-    let lit = |v: u32| Coeff::Literal(Fr::from_u64(v as u64));
-    let raw = |v: u32| (0u8, 0u32, Fr::from_u64(v as u64).to_bytes());
+    let lit = |v: u32| Coeff::Literal(Fp::from_u64(v as u64));
+    let raw = |v: u32| (0u8, 0u32, Fp::from_u64(v as u64).to_bytes());
     let gate = GateDef::Quadratic {
         constant: lit(100),
         linear: (0..t)
@@ -748,9 +748,9 @@ fn a_lookup_round_trips_byte_for_byte() {
         0,
         0,
         &[
-            (0, 0, Fr::from_u64(4).to_bytes()),
+            (0, 0, Fp::from_u64(4).to_bytes()),
             (0, 0, one()),
-            (0, 0, Fr::MINUS_ONE.to_bytes()),
+            (0, 0, Fp::MINUS_ONE.to_bytes()),
         ],
         &[(0, 0, 0), (3, 1, 0)],
     ));

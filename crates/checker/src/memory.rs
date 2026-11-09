@@ -23,7 +23,7 @@ use constraints::memory::{
     RD,
 };
 use constraints::PolyAddress;
-use field::Fr;
+use field_a64_c5::Fp;
 use poly::{MultilinearPoly, PolyBacking};
 use trace::{MemoryEvent, MemoryEventLog};
 
@@ -47,7 +47,7 @@ fn column(mut values: Vec<u64>, height: usize) -> MultilinearPoly {
     } else if max <= u32::MAX as u64 {
         PolyBacking::U32(values.into_iter().map(|v| v as u32).collect())
     } else {
-        PolyBacking::Fr(values.into_iter().map(Fr::from_u64).collect())
+        PolyBacking::Fp(values.into_iter().map(Fp::from_u64).collect())
     };
     MultilinearPoly::new(backing)
 }
@@ -162,18 +162,18 @@ pub fn frame_witness_from_log(
     };
     let width = queries.len();
     let named = rows.iter().map(|row| row[at].filter(|e| e.addr != 0));
-    let mut inv: Vec<Fr> = named
+    let mut inv: Vec<Fp> = named
         .clone()
         .map(|e| {
-            e.map_or(Fr::ZERO, |e| {
-                let addr = Fr::from_u64(e.addr as u64);
+            e.map_or(Fp::ZERO, |e| {
+                let addr = Fp::from_u64(e.addr as u64);
                 addr.inverse()
                     .expect("a nonzero register index is invertible")
             })
         })
         .collect();
-    inv.resize(height, Fr::ZERO);
-    out.push((rd_inv(width), MultilinearPoly::new(PolyBacking::Fr(inv))));
+    inv.resize(height, Fp::ZERO);
+    out.push((rd_inv(width), MultilinearPoly::new(PolyBacking::Fp(inv))));
     let is_zero = rows
         .iter()
         .map(|row| row[at].map_or(0, |e| (e.addr == 0) as u64));

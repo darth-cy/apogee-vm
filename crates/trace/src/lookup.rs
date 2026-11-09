@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use constants::lookup_channel;
 use constraints::lookup::ChannelSpec;
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
-use field::Fr;
+use field_a64_c5::Fp;
 use gkr_verify::virtual_at_row;
 use poly::{MultilinearPoly, PolyBacking};
 
@@ -96,7 +96,7 @@ pub fn build_multiplicities(
         // than per table row: a table of 2^20 rows has 2^20 of those, and a
         // trace looks up a handful.
         let mut wanted: BTreeMap<Key, u32> = BTreeMap::new();
-        let mut tuple = vec![Fr::ZERO; width];
+        let mut tuple = vec![Fp::ZERO; width];
         for row in 0..rows {
             for (selector, expressions) in &resolved {
                 let s = read(columns, selector, row);
@@ -141,7 +141,7 @@ pub fn build_multiplicities(
 
 /// One lookup, resolved: its selector, and per tuple position the
 /// literal-weighted sources and the constant.
-type Resolved = (Source, Vec<(Vec<(Fr, Source)>, Fr)>);
+type Resolved = (Source, Vec<(Vec<(Fp, Source)>, Fp)>);
 
 /// Where one value of the counting is read.
 #[derive(Clone, Copy, Debug)]
@@ -172,9 +172,9 @@ fn resolve(
         .ok_or(format!("multiplicities: no column {address} was given"))
 }
 
-fn read(columns: &[(PolyAddress, MultilinearPoly)], src: &Source, row: usize) -> Fr {
+fn read(columns: &[(PolyAddress, MultilinearPoly)], src: &Source, row: usize) -> Fp {
     match src {
-        Source::Column(i) => columns[*i].1.get(row),
+        Source::Column(i) => columns[*i].1.get_base(row),
         Source::Virtual(kind) => virtual_at_row(*kind, row),
     }
 }
@@ -223,14 +223,14 @@ fn channel_name(channel: u32) -> Result<&'static str, String> {
         .ok_or(format!("multiplicities: channel {channel} is not one"))
 }
 
-/// A tuple's map key: its columns' canonical bytes, `MAX_TUPLE` wide and zero
+/// A tuple's map key: its columns' canonical values, `MAX_TUPLE` wide and zero
 /// past the tuple, so it is `Copy` and a row costs no allocation.
-type Key = [[u8; 32]; lookup_channel::MAX_TUPLE];
+type Key = [u64; lookup_channel::MAX_TUPLE];
 
-fn key(tuple: &[Fr]) -> Key {
-    let mut out = [[0u8; 32]; lookup_channel::MAX_TUPLE];
+fn key(tuple: &[Fp]) -> Key {
+    let mut out = [0u64; lookup_channel::MAX_TUPLE];
     for (slot, v) in out.iter_mut().zip(tuple) {
-        *slot = v.to_bytes();
+        *slot = v.to_u64();
     }
     out
 }
@@ -239,10 +239,10 @@ fn key(tuple: &[Fr]) -> Key {
 /// `docs/spec/lookup.md` §4: a range channel gates to 0, the generic
 /// channel to the all-zero `ZeroEntry` with its key offset by one, and the
 /// decoder channel to `MINUS_ONE` in every column.
-fn gate(channel: u32, j: usize, s: Fr, raw: Fr) -> Fr {
+fn gate(channel: u32, j: usize, s: Fp, raw: Fp) -> Fp {
     match channel {
-        lookup_channel::GENERIC if j == 0 => s * (raw + Fr::ONE),
-        lookup_channel::DECODER => s * (raw + Fr::ONE) - Fr::ONE,
+        lookup_channel::GENERIC if j == 0 => s * (raw + Fp::ONE),
+        lookup_channel::DECODER => s * (raw + Fp::ONE) - Fp::ONE,
         _ => s * raw,
     }
 }

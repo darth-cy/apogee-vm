@@ -8,25 +8,26 @@ use common::{bind, output_claims, toy, toy_base, toy_columns};
 use constants::transcript_tags as tags;
 use constraints::CircuitArtifact;
 use gkr::{forward, prove, verify};
-use transcript::TranscriptEvent::{self, Absorb, Challenge};
+use transcript_a64_c5::TranscriptEvent::{self, Absorb, Challenge};
 
-/// The toy's schedule written out: after the binding and the external
-/// challenge, the outputs (the two roots), then the four halving transitions
-/// from the top (0, 1, 2 and 3 rounds, each leaving 4 child claims and drawing
-/// the child challenge), then two row-wise transitions of 4 rounds each,
-/// leaving 3 and then 6 claims.
+/// The toy's schedule written out: after the binding (the digest's 8 lanes)
+/// and the external challenge, the outputs (the two roots), then the four
+/// halving transitions from the top (0, 1, 2 and 3 rounds, each leaving 4
+/// child claims and drawing the child challenge), then two row-wise
+/// transitions of 4 rounds each, leaving 3 and then 6 claims. Every value
+/// after the binding is an `Fp2` element, two lanes.
 fn expected_log() -> Vec<TranscriptEvent> {
     let mut log = vec![
         Absorb {
             tag: tags::WITNESS_DIGEST,
-            n_scalars: 1,
+            n: 8,
         },
         Challenge {
             tag: tags::SUMCHECK_CHALLENGE,
         },
         Absorb {
             tag: tags::GKR_OUTPUTS,
-            n_scalars: 2,
+            n: 2 * 2,
         },
     ];
     let transition = |log: &mut Vec<TranscriptEvent>, rounds: usize, claims: usize| {
@@ -36,7 +37,7 @@ fn expected_log() -> Vec<TranscriptEvent> {
         for _ in 0..rounds {
             log.push(Absorb {
                 tag: tags::SUMCHECK_ROUND,
-                n_scalars: 4,
+                n: 2 * 4,
             });
             log.push(Challenge {
                 tag: tags::SUMCHECK_CHALLENGE,
@@ -44,7 +45,7 @@ fn expected_log() -> Vec<TranscriptEvent> {
         }
         log.push(Absorb {
             tag: tags::GKR_LAYER_CLAIMS,
-            n_scalars: claims,
+            n: 2 * claims,
         });
     };
     for rounds in 0..4 {
@@ -107,7 +108,7 @@ fn outstanding_claims_never_exceed_one(
             }
             Absorb {
                 tag: tags::GKR_LAYER_CLAIMS,
-                n_scalars,
+                n,
             } => {
                 assert_eq!(outstanding, 0, "claims come out of a sumcheck");
                 assert!(batches >= 1, "claims come out of a batched transition");
@@ -116,8 +117,8 @@ fn outstanding_claims_never_exceed_one(
                 // A halving transition leaves two points, (ρ, 0) and (ρ, 1).
                 let points = if artifact.layers[k].halving { 2 } else { 1 };
                 assert_eq!(
-                    n_scalars,
-                    points * artifact.layer_width(k) as usize,
+                    n,
+                    2 * points * artifact.layer_width(k) as usize,
                     "transition {k} leaves one claim per column at each point"
                 );
                 outstanding = points;
@@ -204,7 +205,7 @@ fn the_walker_rejects_a_reduction_before_its_claims() {
                 e,
                 Absorb {
                     tag: tags::GKR_LAYER_CLAIMS,
-                    n_scalars: 4
+                    n: 8
                 }
             )
         })

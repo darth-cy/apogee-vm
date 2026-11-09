@@ -176,8 +176,8 @@ fn the_input_window_column_is_the_verifiers_own_layout() {
     assert_eq!(init.len(), words.len());
     for (y, want) in words.iter().enumerate() {
         assert_eq!(
-            init.get(y),
-            field::Fr::from_u64(*want as u64),
+            init.get_base(y),
+            field_a64_c5::Fp::from_u64(*want as u64),
             "row {y} of the init column"
         );
     }

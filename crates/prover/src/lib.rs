@@ -86,7 +86,7 @@ mod streaming;
 use constants::family;
 use constants::transcript_tags as tags;
 use constraints::PolyAddress;
-use field::Fr;
+use field_a64_c5::Fp2;
 use gkr::{forward, prove, BaseLayer};
 use loader::ProgramImage;
 use poly::MultilinearPoly;
@@ -95,7 +95,7 @@ use trace::{
     advice_window_count, build_boundary_finals, build_multiplicities, init_windows, plan_shards,
     TraceArchive,
 };
-use transcript::{Transcript, TranscriptEvent, TranscriptSnapshot};
+use transcript_a64_c5::{Transcript, TranscriptEvent, TranscriptSnapshot};
 use verifier_core::{
     advice_first_window, global_commit, identity_digest, shard_challenges, shard_transcript,
     window_height, BoundaryFinals, FamilyCircuit, GkrProof, PublicInputs, ShardProof, VerifyingKey,
@@ -254,7 +254,7 @@ impl ProverSetup {
             "apogee setup    key ok families={} entry_pc={:#x} identity={}",
             families.len(),
             program.image.entry,
-            debug::fr_full(&vk.identity.0)
+            debug::hex(&vk.identity.to_bytes())
         );
         Ok(ProverSetup {
             program,
@@ -300,8 +300,8 @@ pub struct StatementInputs {
 pub struct GlobalCommitState {
     pub statement: PublicInputs,
     pub transcript: TranscriptSnapshot,
-    pub memory_challenges: [Fr; 4],
-    pub digest: Fr,
+    pub memory_challenges: [Fp2; 4],
+    pub digest: Fp2,
 }
 
 /// The shard counts of an execution: one per config family, in its order —
@@ -438,8 +438,8 @@ pub(crate) fn global_commit_of(vk: &VerifyingKey, statement: PublicInputs) -> Gl
     dlog!(
         Phase,
         "apogee commit   done digest={} memory-challenges={}",
-        debug::fr_full(&global.digest),
-        debug::frs(&global.memory, 4)
+        debug::hex(&global.digest.to_bytes()),
+        debug::fp2s(&global.memory, 4)
     );
     GlobalCommitState {
         statement,
@@ -533,16 +533,6 @@ pub(crate) fn shard_columns_of(
     Ok(columns)
 }
 
-/// The low 64 bits of a field element's canonical encoding. The cycle column
-/// holds cycle numbers, so an honest column's entries are far below `2^64`;
-/// a tampered one is read as its low bits rather than refused, because the
-/// prover checks nothing (`docs/spec/gkr.md` §5.1) and a wrong window is a
-/// proof the verifier refuses.
-fn low64(v: Fr) -> u64 {
-    let b = v.to_bytes();
-    u64::from_le_bytes(b[..8].try_into().expect("8 bytes"))
-}
-
 /// The shard's claimed time window, `docs/spec/proof.md` §8.
 ///
 /// For a **cycle-owning** family it is read off the shard's own `M[0]` cycle
@@ -564,12 +554,13 @@ fn ts_window(family: FamilyId, base: &BaseLayer) -> [u64; 2] {
     let cycles = base
         .get(PolyAddress::Memory(0))
         .expect("a family with a time window has its cycle column at M[0]");
-    let mut top = 0u64;
-    for i in 0..cycles.len() {
-        top = top.max(low64(cycles.get(i)));
-    }
+    // A tampered cycle is read as its canonical value rather than refused: the
+    // prover checks nothing (`docs/spec/gkr.md` §5.1), and a wrong window is a
+    // proof the verifier refuses.
+    let cycle = |i: usize| cycles.get_base(i).to_u64();
+    let top = (0..cycles.len()).map(cycle).max().unwrap_or(0);
     let ts = |c: u64| c.saturating_mul(constants::memory::TS_STEP);
-    [ts(low64(cycles.get(0))), ts(top).saturating_add(4)]
+    [ts(cycle(0)), ts(top).saturating_add(4)]
 }
 
 /// A shard after its GKR proof: what an opening would need, and the live shard
@@ -578,10 +569,10 @@ pub(crate) struct ShardGkr {
     pub(crate) family: FamilyId,
     pub(crate) index: u32,
     pub(crate) ts_window: [u64; 2],
-    pub(crate) outputs: Vec<Fr>,
+    pub(crate) outputs: Vec<Fp2>,
     pub(crate) gkr: GkrProof,
     /// The base claims' one point.
-    pub(crate) point: Vec<Fr>,
+    pub(crate) point: Vec<Fp2>,
     pub(crate) transcript: Transcript,
 }
 
@@ -646,8 +637,8 @@ impl ProvingContext<'_> {
             "apogee shard    {:<22} ts={} g={} beta={}",
             debug::shard(family, index),
             debug::ts_window(ts_window),
-            debug::fr(&g),
-            debug::fr(&beta)
+            debug::fp2(&g),
+            debug::fp2(&beta)
         );
         let (outputs, gkr, replay_from) = {
             let values = forward(artifact, base, &challenges);
@@ -693,7 +684,7 @@ impl ProvingContext<'_> {
                 let who = debug::shard(family, index);
                 // Per layer: the shape the forward pass wrote, and the bytes it
                 // is holding. **No per-cell scan here.** Sweeping every column
-                // of every layer for an all-zero test is ~90M `Fr::get` calls on
+                // of every layer for an all-zero test is ~90M `MultilinearPoly::get` calls on
                 // one shard — it would make `deep` change what it is measuring,
                 // which is the one thing a debugging aid may not do. The top
                 // layer alone gets that test, below, where it is a handful of
@@ -734,7 +725,7 @@ impl ProvingContext<'_> {
                 }
             });
             let top = &values.layers[artifact.depth() - 1];
-            let outputs: Vec<Fr> = artifact
+            let outputs: Vec<Fp2> = artifact
                 .outputs
                 .iter()
                 .map(|out| match *out {
@@ -762,8 +753,8 @@ impl ProvingContext<'_> {
             "apogee shard    {:<22} outputs={} read_root={} write_root={}",
             debug::shard(family, index),
             outputs.len(),
-            debug::fr(&outputs[constants::memory::READ_ROOT]),
-            debug::fr(&outputs[constants::memory::WRITE_ROOT])
+            debug::fp2(&outputs[constants::memory::READ_ROOT]),
+            debug::fp2(&outputs[constants::memory::WRITE_ROOT])
         );
         dlog!(
             Phase,
@@ -837,26 +828,26 @@ impl ProvingContext<'_> {
 fn replay_point(
     artifact: &constraints::CircuitArtifact,
     proof: &GkrProof,
-    outputs: &[Fr],
+    outputs: &[Fp2],
     from: &TranscriptSnapshot,
-) -> (Vec<Fr>, TranscriptSnapshot) {
+) -> (Vec<Fp2>, TranscriptSnapshot) {
     let mut t = Transcript::restore(from);
-    t.append_scalars(tags::GKR_OUTPUTS, outputs);
-    let mut point: Vec<Fr> = Vec::new();
+    t.append_ext(tags::GKR_OUTPUTS, outputs);
+    let mut point: Vec<Fp2> = Vec::new();
     for k in (0..artifact.depth()).rev() {
-        t.challenge_scalar(tags::GKR_BATCH);
+        t.challenge(tags::GKR_BATCH);
         let layer = &proof.layers[k];
         point = layer
             .rounds
             .iter()
             .map(|round| {
-                t.append_scalars(tags::SUMCHECK_ROUND, round);
-                t.challenge_scalar(tags::SUMCHECK_CHALLENGE)
+                t.append_ext(tags::SUMCHECK_ROUND, round);
+                t.challenge(tags::SUMCHECK_CHALLENGE)
             })
             .collect();
-        t.append_scalars(tags::GKR_LAYER_CLAIMS, &layer.final_evals);
+        t.append_ext(tags::GKR_LAYER_CLAIMS, &layer.final_evals);
         if artifact.layers[k].halving {
-            point.push(t.challenge_scalar(tags::GKR_CHILD));
+            point.push(t.challenge(tags::GKR_CHILD));
         }
     }
     (point, t.snapshot())

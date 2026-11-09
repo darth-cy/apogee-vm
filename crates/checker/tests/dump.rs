@@ -11,7 +11,7 @@ use std::process::{Command, Output};
 use checker::dump;
 use common::*;
 use constraints::{Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
-use field::Fr;
+use field_a64_c5::Fp;
 
 #[test]
 fn the_dump_names_everything_in_the_toy() {
@@ -21,8 +21,8 @@ fn the_dump_names_everything_in_the_toy() {
         let has_line = |line: &str| lines.contains(&line);
         let header = [
             "circuit artifact",
-            "  format version        1",
-            "  coefficient encoding  0 (every Fr canonical 32-byte little-endian)",
+            "  format version        2",
+            "  coefficient encoding  0 (every Fp canonical 8-byte little-endian)",
             "  trace length          2^4 rows",
             "  depth                 6 gate lists",
         ];
@@ -123,17 +123,15 @@ fn the_dump_names_everything_in_the_toy() {
     }
 }
 
-/// A literal at or above `2^64` prints as hex, even when its low eight bytes
+/// A literal at or above `2^32` prints as hex, even when its low four bytes
 /// alone are a small number.
 #[test]
 fn a_large_literal_is_not_read_from_its_low_bytes() {
     let mut a = toy_cache_free();
-    let value = (1u128 << 64) + 5;
-    let mut bytes = [0u8; 32];
-    bytes[..16].copy_from_slice(&value.to_le_bytes());
-    *linear(&mut a.layers[1].producing[1].gate).1 = Coeff::Literal(Fr::from_bytes(&bytes).unwrap());
+    let value = (1u64 << 32) + 5;
+    *linear(&mut a.layers[1].producing[1].gate).1 = Coeff::Literal(Fp::from_u64(value));
     let line = format!(
-        "  L{{2}}[1](x) = Σ_y eq(x, y) · (1·L{{1}}[1] + 0x{value:064x})   [relation 5 define_fingerprint3]"
+        "  L{{2}}[1](x) = Σ_y eq(x, y) · (1·L{{1}}[1] + 0x{value:016x})   [relation 5 define_fingerprint3]"
     );
     let text = dump(&a);
     assert!(
@@ -142,15 +140,15 @@ fn a_large_literal_is_not_read_from_its_low_bytes() {
     );
 }
 
-/// A negated literal as `-k`, a large one as 64 hex digits, a challenge by name.
+/// A negated literal as `-k`, a large one as 16 hex digits, a challenge by name.
 #[test]
 fn coefficients_render_one_way() {
     let mut a = toy_cache_free();
     let (terms, constant) = linear(&mut a.layers[1].producing[1].gate);
-    terms[0].0 = Coeff::Literal(-Fr::from_u64(7));
-    *constant = Coeff::Literal(Fr::from_u64(1 << 40));
+    terms[0].0 = Coeff::Literal(-Fp::from_u64(7));
+    *constant = Coeff::Literal(Fp::from_u64(1 << 40));
     let line = format!(
-        "  L{{2}}[1](x) = Σ_y eq(x, y) · (-7·L{{1}}[1] + 0x{:064x})   [relation 5 define_fingerprint3]",
+        "  L{{2}}[1](x) = Σ_y eq(x, y) · (-7·L{{1}}[1] + 0x{:016x})   [relation 5 define_fingerprint3]",
         1u64 << 40
     );
     let text = dump(&a);
@@ -175,7 +173,7 @@ fn a_lookup_prints_its_channel_selector_and_tuple() {
             terms: vec![
                 (lit(4), W0),
                 (
-                    Coeff::Literal(-Fr::ONE),
+                    Coeff::Literal(-Fp::ONE),
                     PolyAddress::Virtual(VirtualKind::RamLive),
                 ),
             ],
@@ -201,7 +199,7 @@ fn a_lawless_artifact_still_dumps() {
     let mut a = toy();
     a.layers[0].producing[0].relation = 99;
     a.outputs.push(inner(9, 9));
-    a.padding.row.push(Fr::ONE);
+    a.padding.row.push(Fp::ONE);
     let text = dump(&a);
     assert!(text.contains("[relation 99 ?]"));
     assert!(text.contains("  2  L{9}[9]  ?"));

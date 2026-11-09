@@ -26,7 +26,7 @@ use std::mem::discriminant;
 use std::slice;
 
 use constraints::PolyAddress;
-use field::Fr;
+use field_a64_c5::Fp;
 use gkr_verify::BoundaryFinals;
 use poly::{MultilinearPoly, PolyBacking};
 use program::FamilyId;
@@ -45,7 +45,7 @@ pub struct Cell {
     pub shard: u32,
     pub address: PolyAddress,
     pub row: usize,
-    pub value: Fr,
+    pub value: Fp,
 }
 
 /// A tamper: cells rewritten in the witness, and optionally the statement's
@@ -67,10 +67,10 @@ pub struct TamperHarness<'a> {
 }
 
 /// `column` with `row` set to `value`.
-fn with_cell(column: &MultilinearPoly, row: usize, value: Fr) -> MultilinearPoly {
-    let mut values: Vec<Fr> = (0..column.len()).map(|i| column.get(i)).collect();
+fn with_cell(column: &MultilinearPoly, row: usize, value: Fp) -> MultilinearPoly {
+    let mut values: Vec<Fp> = (0..column.len()).map(|i| column.get_base(i)).collect();
     values[row] = value;
-    MultilinearPoly::new(PolyBacking::Fr(values))
+    MultilinearPoly::new(PolyBacking::Fp(values))
 }
 
 impl<'a> TamperHarness<'a> {
@@ -104,7 +104,7 @@ impl<'a> TamperHarness<'a> {
     }
 
     /// An honest cell's value, as the fill wrote it.
-    pub fn cell(&self, family: FamilyId, shard: u32, address: PolyAddress, row: usize) -> Fr {
+    pub fn cell(&self, family: FamilyId, shard: u32, address: PolyAddress, row: usize) -> Fp {
         let windows = &self.inputs.windows;
         let columns = shard_columns(self.setup, self.archive, family, shard, windows)
             .unwrap_or_else(|e| panic!("{e}"));
@@ -113,7 +113,7 @@ impl<'a> TamperHarness<'a> {
             .find(|(a, _)| *a == address)
             .unwrap_or_else(|| panic!("shard ({family}, {shard}) has no {address}"))
             .1
-            .get(row)
+            .get_base(row)
     }
 
     /// Prove the statement again with `tamper` applied, and verify shard

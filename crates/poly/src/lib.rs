@@ -1,5 +1,6 @@
 #![no_std]
-//! Multilinear polynomials over `Fr`, with small-type backing and a lazy lift.
+//! Multilinear polynomials: committed columns over the base field `Fp` at
+//! their native width, bound tables over the challenge field `Fp2`.
 //!
 //! # The index convention
 //!
@@ -22,26 +23,28 @@
 //!
 //! Trace columns are mostly narrow integers — bits, bytes, u32 words — so a
 //! column stays at its native width, cheap to fill during trace generation,
-//! until a challenge forces field arithmetic. *Lazy* means bind-triggered:
+//! until a challenge forces field arithmetic. A column no integer width holds
+//! is [`PolyBacking::Fp`]. *Lazy* means bind-triggered:
 //! [`MultilinearPoly::get`] and [`MultilinearPoly::evaluate`] lift on the fly
-//! and leave the backing alone; the first [`MultilinearPoly::bind`] lifts the
-//! table to [`PolyBacking::Fr`] — folding the small table straight into a
-//! half-size `Fr` one — and it stays there. There are never two representations
-//! of one polynomial.
+//! and leave the backing alone; the first [`MultilinearPoly::bind`], at a
+//! challenge in `Fp2`, lifts the table to [`PolyBacking::Fp2`] — folding the
+//! base table straight into a half-size `Fp2` one, in mixed arithmetic — and it
+//! stays there. There are never two representations of one polynomial.
 //!
-//! Lift is the canonical embedding of the integer into `Fr`: a `U1` bit becomes
-//! `Fr::ZERO` or `Fr::ONE`, a `U8`/`U16`/`U32` word becomes `Fr::from_u64`.
+//! Lift is the canonical embedding of the integer into `Fp`, and of `Fp` into
+//! `Fp2`: a `U1` bit becomes 0 or 1, a `U8`/`U16`/`U32` word `Fp::from_u64`.
+//! [`MultilinearPoly::get_base`] reads a base table without the second step.
 
 extern crate alloc;
 
 use alloc::vec::Vec;
 
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 
 /// How a polynomial's evaluation table is stored.
 ///
 /// The four small variants exist to keep trace columns at their native width;
-/// see the module docs. All five behave identically once read.
+/// see the module docs. Every variant but `Fp2` is a **base** table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PolyBacking {
     /// One bit per evaluation: the `Vec<u64>` limbs, then the entry count.
@@ -54,7 +57,11 @@ pub enum PolyBacking {
     U8(Vec<u8>),
     U16(Vec<u16>),
     U32(Vec<u32>),
-    Fr(Vec<Fr>),
+    /// Full base-field values: a committed column no integer width holds.
+    Fp(Vec<Fp>),
+    /// Challenge-field values: a bound table, or a layer the GKR forward pass
+    /// wrote.
+    Fp2(Vec<Fp2>),
 }
 
 impl PolyBacking {
@@ -65,24 +72,41 @@ impl PolyBacking {
             PolyBacking::U8(v) => v.len(),
             PolyBacking::U16(v) => v.len(),
             PolyBacking::U32(v) => v.len(),
-            PolyBacking::Fr(v) => v.len(),
+            PolyBacking::Fp(v) => v.len(),
+            PolyBacking::Fp2(v) => v.len(),
         }
     }
 
-    /// The single definition of the lift: entry `index`, embedded in `Fr`.
-    fn entry(&self, index: usize) -> Fr {
+    /// The single definition of the lift into `Fp`: entry `index` of a base
+    /// table. Panics on an `Fp2` one.
+    fn base(&self, index: usize) -> Fp {
         match self {
-            PolyBacking::U1(limbs, _) => {
-                if (limbs[index / 64] >> (index % 64)) & 1 == 1 {
-                    Fr::ONE
-                } else {
-                    Fr::ZERO
-                }
+            PolyBacking::U1(limbs, _) => Fp::from_u64((limbs[index / 64] >> (index % 64)) & 1),
+            PolyBacking::U8(v) => Fp::from_u64(v[index] as u64),
+            PolyBacking::U16(v) => Fp::from_u64(v[index] as u64),
+            PolyBacking::U32(v) => Fp::from_u64(v[index] as u64),
+            PolyBacking::Fp(v) => v[index],
+            PolyBacking::Fp2(_) => panic!("an Fp2 table has no base value"),
+        }
+    }
+
+    /// Entry `index`, embedded in `Fp2`.
+    fn entry(&self, index: usize) -> Fp2 {
+        match self {
+            PolyBacking::Fp2(v) => v[index],
+            base => base.base(index).into(),
+        }
+    }
+
+    /// Entry `i` of the table bound at `r`, `f(2i) + r·(f(2i+1) − f(2i))`: in
+    /// mixed arithmetic for a base table, where `r` meets a base difference.
+    fn fold(&self, i: usize, r: Fp2) -> Fp2 {
+        match self {
+            PolyBacking::Fp2(v) => v[2 * i] + r * (v[2 * i + 1] - v[2 * i]),
+            base => {
+                let lo = base.base(2 * i);
+                r * (base.base(2 * i + 1) - lo) + lo
             }
-            PolyBacking::U8(v) => Fr::from_u64(v[index] as u64),
-            PolyBacking::U16(v) => Fr::from_u64(v[index] as u64),
-            PolyBacking::U32(v) => Fr::from_u64(v[index] as u64),
-            PolyBacking::Fr(v) => v[index],
         }
     }
 }
@@ -140,53 +164,57 @@ impl MultilinearPoly {
         1usize << self.num_vars
     }
 
-    /// The evaluation at a cube vertex, lifted on the fly if the backing is
-    /// still small. Does not mutate the backing.
-    pub fn get(&self, index: usize) -> Fr {
-        assert!(
-            index < self.len(),
-            "MultilinearPoly::get: index {index} is out of range for {} evaluations",
-            self.len()
-        );
+    /// The evaluation at a cube vertex, lifted on the fly into `Fp2` if the
+    /// backing is base. Does not mutate the backing.
+    pub fn get(&self, index: usize) -> Fp2 {
+        self.check(index, "get");
         self.backing.entry(index)
     }
 
+    /// The evaluation at a cube vertex of a base table. Panics on an `Fp2`
+    /// table: a bound one, or a layer above the base.
+    pub fn get_base(&self, index: usize) -> Fp {
+        self.check(index, "get_base");
+        self.backing.base(index)
+    }
+
+    fn check(&self, index: usize, what: &str) {
+        assert!(
+            index < self.len(),
+            "MultilinearPoly::{what}: index {index} is out of range for {} evaluations",
+            self.len()
+        );
+    }
+
     /// Fix the current variable 0 to `r`, halving the table. The first call
-    /// lifts the backing to [`PolyBacking::Fr`], where it stays.
-    pub fn bind(&mut self, r: Fr) {
+    /// lifts the backing to [`PolyBacking::Fp2`], where it stays.
+    pub fn bind(&mut self, r: Fp2) {
         assert!(
             self.num_vars > 0,
             "MultilinearPoly::bind: the polynomial has no variables left to bind"
         );
         let half = self.len() / 2;
-        // Take the backing so an `Fr` table can be folded in place. A small
-        // one is folded straight into a half-size `Fr` table, each entry read
-        // through the one lift, so no full-size lifted copy is ever made.
-        let values = match core::mem::replace(&mut self.backing, PolyBacking::Fr(Vec::new())) {
-            PolyBacking::Fr(mut values) => {
+        // Take the backing so an `Fp2` table can be folded in place. A base
+        // one is folded straight into a half-size `Fp2` table, so no full-size
+        // lifted copy is ever made.
+        let values = match core::mem::replace(&mut self.backing, PolyBacking::Fp2(Vec::new())) {
+            PolyBacking::Fp2(mut values) => {
                 for i in 0..half {
                     let lo = values[2 * i];
-                    let hi = values[2 * i + 1];
-                    values[i] = lo + r * (hi - lo);
+                    values[i] = lo + r * (values[2 * i + 1] - lo);
                 }
                 values.truncate(half);
                 values
             }
-            small => (0..half)
-                .map(|i| {
-                    let lo = small.entry(2 * i);
-                    let hi = small.entry(2 * i + 1);
-                    lo + r * (hi - lo)
-                })
-                .collect(),
+            base => (0..half).map(|i| base.fold(i, r)).collect(),
         };
-        self.backing = PolyBacking::Fr(values);
+        self.backing = PolyBacking::Fp2(values);
         self.num_vars -= 1;
     }
 
     /// The value off the cube at `point`, where `point[j]` is variable `j`.
     /// Non-destructive: it folds a scratch table and never touches the backing.
-    pub fn evaluate(&self, point: &[Fr]) -> Fr {
+    pub fn evaluate(&self, point: &[Fp2]) -> Fp2 {
         assert_eq!(
             point.len(),
             self.num_vars,
@@ -197,14 +225,10 @@ impl MultilinearPoly {
         if self.num_vars == 0 {
             return self.get(0);
         }
-        // The first round lifts on the fly, exactly as `get` does.
+        // The first round lifts on the fly, exactly as `bind` does.
         let r = point[0];
-        let mut scratch: Vec<Fr> = (0..self.len() / 2)
-            .map(|i| {
-                let lo = self.backing.entry(2 * i);
-                let hi = self.backing.entry(2 * i + 1);
-                lo + r * (hi - lo)
-            })
+        let mut scratch: Vec<Fp2> = (0..self.len() / 2)
+            .map(|i| self.backing.fold(i, r))
             .collect();
         for &r in &point[1..] {
             let half = scratch.len() / 2;
@@ -218,7 +242,7 @@ impl MultilinearPoly {
         scratch[0]
     }
 
-    /// The live backing. After any `bind` it is always [`PolyBacking::Fr`],
+    /// The live backing. After any `bind` it is always [`PolyBacking::Fp2`],
     /// which is what makes the lazy lift observable from a test.
     pub fn backing(&self) -> &PolyBacking {
         &self.backing
@@ -230,12 +254,12 @@ impl MultilinearPoly {
 ///
 /// Built by iterative doubling — one multiplication per new entry, so `2^n - 1`
 /// in total.
-pub fn eq_table(r: &[Fr]) -> Vec<Fr> {
-    let mut table: Vec<Fr> = Vec::new();
-    table.push(Fr::ONE);
+pub fn eq_table(r: &[Fp2]) -> Vec<Fp2> {
+    let mut table: Vec<Fp2> = Vec::new();
+    table.push(Fp2::ONE);
     for (j, &rj) in r.iter().enumerate() {
         let half = 1usize << j;
-        table.resize(2 * half, Fr::ZERO);
+        table.resize(2 * half, Fp2::ZERO);
         for i in 0..half {
             // Variable j is bit j, so `y_j = 1` lands `half` further along.
             let v = table[i];
@@ -249,7 +273,7 @@ pub fn eq_table(r: &[Fr]) -> Vec<Fr> {
 
 /// `eq(r, y) = prod_j (r_j * y_j + (1 - r_j) * (1 - y_j))`, off the cube in
 /// both arguments. `O(n)`, and symmetric in `r` and `y`.
-pub fn eq_eval(r: &[Fr], y: &[Fr]) -> Fr {
+pub fn eq_eval(r: &[Fp2], y: &[Fp2]) -> Fp2 {
     assert_eq!(
         r.len(),
         y.len(),
@@ -257,9 +281,9 @@ pub fn eq_eval(r: &[Fr], y: &[Fr]) -> Fr {
         r.len(),
         y.len()
     );
-    let mut acc = Fr::ONE;
+    let mut acc = Fp2::ONE;
     for (&rj, &yj) in r.iter().zip(y.iter()) {
-        acc *= rj * yj + (Fr::ONE - rj) * (Fr::ONE - yj);
+        acc *= rj * yj + (Fp2::ONE - rj) * (Fp2::ONE - yj);
     }
     acc
 }

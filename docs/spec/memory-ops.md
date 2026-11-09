@@ -72,7 +72,7 @@ MEM_SUBWORD   addr_split   rs1 + imm − 2^32·wrap − 4·word_index − 2·bit
 ATOMICS       addr_word    rs1 − 4·word_index
 ```
 
-Over `Fr` that says nothing, 4 being a unit. Three `RANGE16` obligations under `m_pc`, on
+Over `Fp` that says nothing, 4 being a unit. Three `RANGE16` obligations under `m_pc`, on
 `word_index_hi`, `word_index − 2^16·word_index_hi` and `4·word_index_hi` (`word_index_hi_range`,
 `word_index_lo_range`, `word_index_hi_scaled`), cap `word_index` at `2^30 − 1`, the top word's. With
 `rs1` a word (§5) and `imm` a table value the split is then one of integers: `wrap` is the true
@@ -177,7 +177,7 @@ rd_value_rule        rd_selected − LOADK·sub − (2^32 − 2^16)·se − 6528
 access's. Each part has a direct bound and a scaled one: `high < 2^32` makes `high·w·p` an integer,
 `sub_scaled < 2^32` is `sub < w` and `low_scaled < 2^32` is `low < p`. So `splice_rule` holds over ℤ
 with one solution, the base-`(p, w)` digits of the word, and a word not below `2^32` has none. A
-scaled bound alone admits non-integers, its scale being a unit of `Fr` ([lookup.md](lookup.md)
+scaled bound alone admits non-integers, its scale being a unit of `Fp` ([lookup.md](lookup.md)
 §11); `constraints::lookup::check_copowers` holds `word_index_hi`, `high`, `sub`, `low` and
 `src_sub` to their direct bounds, one obligation being exact for `sub` and `src_sub`, both below
 `w ≤ 2^16`. `src_high`'s pair makes `rs2 = src_sub + w·src_high` integral, so `src_sub` is

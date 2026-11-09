@@ -190,13 +190,13 @@ mod tests {
             shard_counts: vec![0, 1, 0, 1, 1, 0],
             windows: vec![],
             boundary,
-            memory_roots: vec![[field::Fr::ONE, field::Fr::ONE]; 3],
+            memory_roots: vec![[field_a64_c5::Fp2::ONE, field_a64_c5::Fp2::ONE]; 3],
         };
         let shell = ShardProof {
             family: family::INIT_TEARDOWN,
             shard_index: 0,
             ts_window: [0, 0],
-            global_digest: field::Fr::ZERO,
+            global_digest: field_a64_c5::Fp2::ZERO,
             outputs: vec![],
             gkr: GkrProof { layers: vec![] },
         };

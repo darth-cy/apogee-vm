@@ -16,7 +16,9 @@ helpers for the memory argument ([memory.md](memory.md) §3, §4) and LogUp
 Layer `k`, `0 ≤ k ≤ N`, `N ≥ 1`, is `w_k` columns of `n_k` variables, indexed as
 [primitives.md](primitives.md) §2 fixes. **Layer 0** is the committed columns `M`, `W`, `S` in
 layout order at `n_0 = trace_vars`, beside the virtual tables the artifact lists (§2.1), which
-count in no width. **Gate list** `k` reads layer `k` and writes layer `k + 1`; the **top**, layer
+count in no width. Layer 0 and the virtual tables are base values, `Fp`; every layer above, every
+claim and every round is `Fp2`, which a challenge coefficient reaches ([primitives.md](primitives.md)
+§1). **Gate list** `k` reads layer `k` and writes layer `k + 1`; the **top**, layer
 `N`, has no variables, `n_N = 0`, and is exactly the outputs, one value each. A list is
 **row-wise**, `n_{k+1} = n_k`, or **halving**, `n_{k+1} = n_k − 1`.
 
@@ -69,9 +71,9 @@ tables ([lookup.md](lookup.md) §3).
 
 ## 3. Gate shapes
 
-`constraints::GateDef` is a closed enum. A coefficient is `Coeff::Literal(Fr)` or
+`constraints::GateDef` is a closed enum. A coefficient is `Coeff::Literal(Fp)` or
 `Coeff::Challenge(slot)`, a `constants::challenge_slot` read from the pass's `ExternalChallenges`,
-of degree 0.
+an `Fp2` value, of degree 0.
 
 | tag | variant | value |
 | --- | --- | --- |
@@ -109,11 +111,11 @@ proves, and as a **flat relation list** over `M`, `W`, `S`, `V` and `scratch`, w
 checks read ([circuits.md](circuits.md) §3). Law 4 makes them one constraint set. In wire order:
 
 ```text
-CircuitArtifact = (format_version = 1, coefficient_encoding = 0, trace_vars ≤ 30,
+CircuitArtifact = (format_version = 2, coefficient_encoding = 0, trace_vars ≤ 30,
                    memory, witness, setup: [name], virtuals: [(VirtualKind, name)],
                    layers: [LayerSpec], relations: [Relation], lookups: [LookupExpr],
                    scratch: [(name, L{k}[j])], outputs: [L{N}[j]],
-                   padding: (row: [Fr], zero_row_valid: bool))
+                   padding: (row: [Fp], zero_row_valid: bool))
 LayerSpec       = (halving, num_vars, width,
                    cached:    [(name, C{k}[j], GateDef)],
                    producing: [(relation, L{k+1}[j], GateDef)],
@@ -124,20 +126,20 @@ LookupExpr      = (name, channel, selector: PolyAddress, tuple: [GateDef])
 
 `validate` holds the first three to those values and every name to non-empty `[a-z0-9_]`, unique
 in the artifact; names mean nothing to the engine. Encoding 0, `COEFFICIENT_ENCODING_CANONICAL_LE`,
-is every `Fr` canonical 32-byte little-endian, and 30 is `MAX_TRACE_VARS`. `outputs` orders the
+is every `Fp` canonical 8-byte little-endian, and 30 is `MAX_TRACE_VARS`. `outputs` orders the
 top layer as `verify` takes the outputs' values; a relation with an output defines that slot, one
 without is enforcing; `lookups` are [lookup.md](lookup.md) §1's.
 
 ### 4.1 Wire form
 
 `postcard` over §4's tuples, hand-written serde: a `u32` is a varint, a `u8` tag and a `bool` a
-byte, an `Option` a tag byte, a sequence a varint count then its elements, a name a `str`, an `Fr`
-its 32 canonical bytes.
+byte, an `Option` a tag byte, a sequence a varint count then its elements, a name a `str`, an `Fp`
+its 8 canonical bytes.
 
 ```text
 PolyAddress  (tag u8, a u32, b u32): 0 M, 1 W, 2 S, 5 scratch (a = index); 3 V (a = kind);
              4 L, 6 C (a = layer, b = offset); unused fields 0
-Coeff        (tag u8, slot u32, value Fr): 0 literal (slot 0), 1 challenge (value 0)
+Coeff        (tag u8, slot u32, value Fp): 0 literal (slot 0), 1 challenge (value 0)
 GateDef      (tag u8, split u32, coefficients [Coeff], operands [PolyAddress] in operands() order)
   0 Linear            split 0  c_1..c_t, c_0                 x_1..x_t
   1 Product           split 0  c                             x, y
@@ -148,9 +150,9 @@ GateDef      (tag u8, split u32, coefficients [Coeff], operands [PolyAddress] in
   6 TreeCross         split 0  —                             p, q
 ```
 
-`CircuitArtifact::from_bytes` refuses a `format_version` other than 1 before decoding the rest,
+`CircuitArtifact::from_bytes` refuses a `format_version` other than 2 before decoding the rest,
 postcard not being self-describing; refuses an unknown tag, a nonzero unused field, a gate with
-counts its shape lacks and a non-canonical `Fr`; re-encodes and compares, as postcard admits
+counts its shape lacks and a non-canonical `Fp`; re-encodes and compares, as postcard admits
 overlong varints and trailing bytes; never panics or reserves what a declared length asks; and
 checks no law.
 
@@ -271,12 +273,12 @@ Each challenge is drawn after what it protects:
   moves two outputs so that their batch is unchanged. If some `v_j` is not the true `v̂_j`, or
   some `E_e` is nonzero on the cube, `Σ_j λ^j·(v_j − v̂_j) − Σ_e λ^{w_{k+1}+e}·Ê_e(p)` is a nonzero
   polynomial in `λ` of degree below `w_{k+1} + |E_k|`; `Ê_e`, the extension of `E_e`'s values, is
-  fixed before `p` is drawn and vanishes there with probability at most `n_{k+1}/|Fr|`.
-- **`ρ_i` after round `i`**: a wrong cubic agrees with the true one there with chance ≤ `3/|Fr|`.
+  fixed before `p` is drawn and vanishes there with probability at most `n_{k+1}/|Fp2|`.
+- **`ρ_i` after round `i`**: a wrong cubic agrees with the true one there with chance ≤ `3/|Fp2|`.
 - **`τ` after both children**: a wrong pair's line meets `τ ↦ L{k}[j](ρ, τ)` in at most one point.
 
 Summed over a registered circuit's transitions at its default height, these stay under
-`2^14/|Fr|`. The random-oracle assumption is [architecture.md](../architecture.md)'s.
+`2^14/|Fp2| = 2^−114`. The random-oracle assumption is [architecture.md](../architecture.md)'s.
 
 ### 5.5 Shapes and errors
 

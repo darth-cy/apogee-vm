@@ -28,7 +28,7 @@ use constraints::{
     ProducingEntry, Relation, ScratchSlot, VirtualKind, COEFFICIENT_ENCODING_CANONICAL_LE,
     FORMAT_VERSION,
 };
-use field::Fr;
+use field_a64_c5::Fp;
 
 /// The toy's cache-free compilation.
 pub fn toy_cache_free() -> CircuitArtifact {
@@ -38,11 +38,11 @@ pub fn toy_cache_free() -> CircuitArtifact {
 }
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn neg(v: u64) -> Coeff {
-    Coeff::Literal(-Fr::from_u64(v))
+    Coeff::Literal(-Fp::from_u64(v))
 }
 
 fn inner(layer: u32, offset: u32) -> PolyAddress {
@@ -299,7 +299,7 @@ pub fn toy() -> CircuitArtifact {
         // The inactive row is all zero: with s = 0, masked_m is the product
         // tree's identity and the gated equality holds whatever e and a are.
         padding: Padding {
-            row: vec![Fr::ZERO; 6],
+            row: vec![Fp::ZERO; 6],
             zero_row_valid: true,
         },
     }

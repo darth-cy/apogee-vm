@@ -15,13 +15,12 @@ use loader::{load_elf, ProgramImage, Segment, Slot};
 use program::{decode_program, ProgramParams};
 
 /// Every guest, in `guests/Cargo.toml`'s order.
-pub const GUESTS: [&str; 14] = [
+pub const GUESTS: [&str; 13] = [
     "fib",
     "echo",
     "rvc-dense",
     "amm",
     "orderbook",
-    "vault",
     "atomics",
     "opcodes",
     "heap",

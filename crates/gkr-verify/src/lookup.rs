@@ -5,7 +5,7 @@
 
 use constants::{challenge_slot, lookup_channel};
 use constraints::CircuitArtifact;
-use field::Fr;
+use field_a64_c5::Fp2;
 
 use crate::ExternalChallenges;
 
@@ -27,8 +27,8 @@ use crate::ExternalChallenges;
 /// holds every lookup of a channel to one width.
 pub fn insert_lookup_challenges(
     into: &mut ExternalChallenges,
-    g: Fr,
-    beta: Fr,
+    g: Fp2,
+    beta: Fp2,
     a: &CircuitArtifact,
 ) {
     let decoder_width = a
@@ -50,8 +50,8 @@ pub fn insert_lookup_challenges(
         }
     }
     if decoder_width > 0 {
-        let mut sum = Fr::ZERO;
-        let mut power = Fr::ONE;
+        let mut sum = Fp2::ZERO;
+        let mut power = Fp2::ONE;
         for _ in 0..decoder_width {
             sum += power;
             power *= beta;
@@ -67,6 +67,6 @@ pub fn insert_lookup_challenges(
 /// load-bearing: `den` is the product of every leaf denominator, so one leaf
 /// `(0, 0)` makes the root `(0, 0)` whatever the other leaves hold, and
 /// `num == 0` alone would accept it.
-pub fn channel_holds(root: (Fr, Fr)) -> bool {
-    root.0 == Fr::ZERO && root.1 != Fr::ZERO
+pub fn channel_holds(root: (Fp2, Fp2)) -> bool {
+    root.0 == Fp2::ZERO && root.1 != Fp2::ZERO
 }

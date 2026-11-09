@@ -18,9 +18,9 @@ use constants::{generic_table, lookup_channel};
 use constraints::lookup::{check_discharge, ChannelSpec};
 use constraints::memory::check_memory;
 use constraints::{CircuitArtifact, FamilyCircuit, PolyAddress, VirtualKind};
-use field::Fr;
+use field_a64_c5::Fp2;
 use gkr_verify::{BoundaryFinals, GkrProof, SumcheckProof};
-use transcript::Transcript;
+use transcript_a64_c5::Transcript;
 
 use crate::statement::{identity_digest, ProgramIdentity, VmConfig};
 use crate::wire::{Read, Reader, Writer};
@@ -91,18 +91,7 @@ pub struct PublicInputs {
     pub windows: Vec<u32>,
     pub boundary: BoundaryFinals,
     /// Per shard, in statement order, `[read_root, write_root]`.
-    pub memory_roots: Vec<[Fr; 2]>,
-}
-
-/// `v` as a `u64`, when it is one.
-fn small(v: Fr) -> Option<u64> {
-    let b = v.to_bytes();
-    if b[8..].iter().any(|x| *x != 0) {
-        return None;
-    }
-    let mut w = [0u8; 8];
-    w.copy_from_slice(&b[..8]);
-    Some(u64::from_le_bytes(w))
+    pub memory_roots: Vec<[Fp2; 2]>,
 }
 
 impl PublicInputs {
@@ -114,12 +103,12 @@ impl PublicInputs {
         w.u32s(&self.shard_counts);
         w.u32s(&self.windows);
         for x in crate::statement::boundary_scalars(&self.boundary) {
-            w.fr(&x);
+            w.fp(x);
         }
         w.count(self.memory_roots.len());
         for [read, write] in &self.memory_roots {
-            w.fr(read);
-            w.fr(write);
+            w.fp2(*read);
+            w.fp2(*write);
         }
         w.bytes
     }
@@ -140,7 +129,7 @@ impl PublicInputs {
             reg_values: [0; 31],
         };
         let timestamp = |r: &mut Reader| -> Read<u64> {
-            small(r.fr()?)
+            Some(r.fp()?.to_u64())
                 .filter(|t| *t < 1 << TS_BITS)
                 .ok_or("a boundary timestamp is not below 2^38")
         };
@@ -149,13 +138,12 @@ impl PublicInputs {
         }
         boundary.pc_ts = timestamp(&mut r)?;
         for v in boundary.reg_values.iter_mut() {
-            *v = small(r.fr()?)
-                .and_then(|v| u32::try_from(v).ok())
-                .ok_or("a boundary value is not below 2^32")?;
+            *v = u32::try_from(r.fp()?.to_u64())
+                .map_err(|_| "a boundary value is not below 2^32")?;
         }
-        let roots = r.count(64)?;
+        let roots = r.count(32)?;
         let memory_roots = (0..roots)
-            .map(|_| Ok([r.fr()?, r.fr()?]))
+            .map(|_| Ok([r.fp2()?, r.fp2()?]))
             .collect::<Result<Vec<_>, _>>()?;
         r.finish()?;
         Ok(PublicInputs {
@@ -189,9 +177,9 @@ pub struct ShardProof {
     /// for a window family (`docs/spec/proof.md` §8).
     pub ts_window: [u64; 2],
     /// The global state digest the prover seeded this shard with.
-    pub global_digest: Fr,
+    pub global_digest: Fp2,
     /// The top layer: one value per output-map entry, in its order.
-    pub outputs: Vec<Fr>,
+    pub outputs: Vec<Fp2>,
     /// One sumcheck per gate list, transition 0 first.
     pub gkr: GkrProof,
 }
@@ -203,8 +191,8 @@ impl ShardProof {
         w.u32(self.shard_index);
         w.u64(self.ts_window[0]);
         w.u64(self.ts_window[1]);
-        w.fr(&self.global_digest);
-        w.frs(&self.outputs);
+        w.fp2(self.global_digest);
+        w.fp2s(&self.outputs);
         write_gkr(&mut w, &self.gkr);
         w.bytes
     }
@@ -214,8 +202,8 @@ impl ShardProof {
         let family = r.u32()?;
         let shard_index = r.u32()?;
         let ts_window = [r.u64()?, r.u64()?];
-        let global_digest = r.fr()?;
-        let outputs = r.frs()?;
+        let global_digest = r.fp2()?;
+        let outputs = r.fp2s()?;
         let gkr = read_gkr(&mut r)?;
         r.finish()?;
         Ok(ShardProof {
@@ -237,10 +225,10 @@ pub fn write_gkr(w: &mut Writer, gkr: &GkrProof) {
         w.count(layer.rounds.len());
         for round in &layer.rounds {
             for c in round {
-                w.fr(c);
+                w.fp2(*c);
             }
         }
-        w.frs(&layer.final_evals);
+        w.fp2s(&layer.final_evals);
     }
 }
 
@@ -249,11 +237,11 @@ pub fn read_gkr(r: &mut Reader) -> Read<GkrProof> {
     let layers = r.count(8)?;
     let mut out = Vec::new();
     for _ in 0..layers {
-        let n = r.count(4 * 32)?;
+        let n = r.count(4 * 16)?;
         let rounds = (0..n)
-            .map(|_| Ok([r.fr()?, r.fr()?, r.fr()?, r.fr()?]))
-            .collect::<Read<Vec<[Fr; 4]>>>()?;
-        let final_evals = r.frs()?;
+            .map(|_| Ok([r.fp2()?, r.fp2()?, r.fp2()?, r.fp2()?]))
+            .collect::<Read<Vec<[Fp2; 4]>>>()?;
+        let final_evals = r.fp2s()?;
         out.push(SumcheckProof {
             rounds,
             final_evals,
@@ -342,7 +330,7 @@ impl VerifyingKey {
         w.u32(self.code_version);
         w.bytes(&self.config.to_bytes());
         w.u32(self.entry_pc);
-        w.fr(&self.identity.0);
+        w.raw(&self.identity.to_bytes());
         w.count(self.circuits.len());
         for c in &self.circuits {
             w.u32(c.family);
@@ -375,7 +363,8 @@ impl VerifyingKey {
         let code_version = r.u32()?;
         let config = VmConfig::from_bytes(r.bytes()?).ok_or("the VmConfig does not decode")?;
         let entry_pc = r.u32()?;
-        let identity = ProgramIdentity(r.fr()?);
+        let identity = ProgramIdentity::from_bytes(r.take(64)?.try_into().expect("64 bytes"))
+            .ok_or("a field element is not canonical")?;
         let n = r.count(12)?;
         let mut circuits = Vec::new();
         for _ in 0..n {
@@ -504,8 +493,8 @@ impl VerifyingKey {
 pub struct ColumnClaims {
     /// The committed columns, in layout order: `M`, `W`, `S`.
     pub columns: Vec<PolyAddress>,
-    pub point: Vec<Fr>,
+    pub point: Vec<Fp2>,
     /// One per column, in the same order.
-    pub values: Vec<Fr>,
+    pub values: Vec<Fp2>,
     pub transcript: Transcript,
 }

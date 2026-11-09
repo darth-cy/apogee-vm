@@ -9,7 +9,7 @@ use constraints::{
     CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, Padding, PolyAddress,
     ProducingEntry, Relation, ScratchSlot, COEFFICIENT_ENCODING_CANONICAL_LE, FORMAT_VERSION,
 };
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{
     forward, prove, verify, BaseClaim, BaseLayer, ExternalChallenges, GkrError, GkrProof,
     LayerValues,
@@ -17,7 +17,7 @@ use gkr::{
 use poly::{MultilinearPoly, PolyBacking};
 use sumcheck::{absorb_witness_digest, witness_digest};
 use test_support::Rng;
-use transcript::Transcript;
+use transcript_a64_c5::Transcript;
 
 #[path = "../../../constraints/tests/common/toy.rs"]
 mod toy;
@@ -72,12 +72,12 @@ pub fn toy_base(cols: &ToyColumns) -> BaseLayer {
     ])
 }
 
-/// A base layer with one column replaced by `Fr` values.
+/// A base layer with one column replaced by `Fp` values.
 pub fn with_column(
     base: &BaseLayer,
     artifact: &CircuitArtifact,
     address: PolyAddress,
-    values: Vec<Fr>,
+    values: Vec<Fp>,
 ) -> BaseLayer {
     BaseLayer::new(
         artifact
@@ -85,7 +85,7 @@ pub fn with_column(
             .into_iter()
             .map(|a| {
                 let column = if a == address {
-                    MultilinearPoly::new(PolyBacking::Fr(values.clone()))
+                    MultilinearPoly::new(PolyBacking::Fp(values.clone()))
                 } else {
                     base.get(a).expect("a committed column").clone()
                 };
@@ -109,18 +109,18 @@ pub fn committed_columns(artifact: &CircuitArtifact, base: &BaseLayer) -> Vec<Mu
 /// external challenge from it — after the binding, as the caller must.
 pub fn bind(artifact: &CircuitArtifact, base: &BaseLayer) -> (Transcript, ExternalChallenges) {
     let mut t = Transcript::new();
-    absorb_witness_digest(&mut t, witness_digest(&committed_columns(artifact, base)));
+    absorb_witness_digest(&mut t, &witness_digest(&committed_columns(artifact, base)));
     let mut challenges = ExternalChallenges::new();
     challenges.insert(
         challenge_slot::TOY,
-        t.challenge_scalar(transcript_tags::SUMCHECK_CHALLENGE),
+        t.challenge(transcript_tags::SUMCHECK_CHALLENGE),
     );
     (t, challenges)
 }
 
 /// The top layer as the verifier is told it: one value per output-map entry,
 /// the top having no variables.
-pub fn output_claims(artifact: &CircuitArtifact, values: &LayerValues) -> Vec<Fr> {
+pub fn output_claims(artifact: &CircuitArtifact, values: &LayerValues) -> Vec<Fp2> {
     let top = values.layers.last().expect("a circuit has a top layer");
     artifact
         .outputs
@@ -139,7 +139,7 @@ pub fn run(
     artifact: &CircuitArtifact,
     bound: &BaseLayer,
     values: &LayerValues,
-    outputs: &[Fr],
+    outputs: &[Fp2],
 ) -> (GkrProof, Result<Vec<BaseClaim>, GkrError>) {
     let (mut prover, challenges) = bind(artifact, bound);
     let proof = prove(artifact, values, &challenges, &mut prover);
@@ -184,8 +184,8 @@ pub fn discharge(base: &BaseLayer, claims: &[BaseClaim]) -> Result<(), String> {
 // Circuits beyond the toy, built in the tests that need them
 // ---------------------------------------------------------------------------
 
-/// A base of `Fr` columns, given in layout order.
-pub fn fr_base(artifact: &CircuitArtifact, columns: Vec<Vec<Fr>>) -> BaseLayer {
+/// A base of `Fp` columns, given in layout order.
+pub fn fr_base(artifact: &CircuitArtifact, columns: Vec<Vec<Fp>>) -> BaseLayer {
     let committed = artifact.committed();
     assert_eq!(
         columns.len(),
@@ -196,17 +196,17 @@ pub fn fr_base(artifact: &CircuitArtifact, columns: Vec<Vec<Fr>>) -> BaseLayer {
         committed
             .into_iter()
             .zip(columns)
-            .map(|(a, c)| (a, MultilinearPoly::new(PolyBacking::Fr(c))))
+            .map(|(a, c)| (a, MultilinearPoly::new(PolyBacking::Fp(c))))
             .collect(),
     )
 }
 
 fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fr::from_u64(v))
+    Coeff::Literal(Fp::from_u64(v))
 }
 
 fn neg(v: u64) -> Coeff {
-    Coeff::Literal(-Fr::from_u64(v))
+    Coeff::Literal(-Fp::from_u64(v))
 }
 
 fn copy(x: PolyAddress) -> GateDef {
@@ -253,7 +253,7 @@ pub fn circuit(
             .collect(),
         outputs,
         padding: Padding {
-            row: vec![Fr::ZERO; witness.len()],
+            row: vec![Fp::ZERO; witness.len()],
             zero_row_valid: true,
         },
     };

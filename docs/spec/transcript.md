@@ -1,26 +1,18 @@
 # The transcript
 
-**UNFINISHED: not linked yet.** This page specifies `crates/transcript-a64-c5`, the transcript, and
-`crates/field-a64-c5`, the A64-C5 field it runs over. The protocol still runs on
-`crates/transcript` and `crates/field`, the crates they replace, until the re-fielding stage moves
-every caller to them.
-
 Every challenge in the protocol is drawn from a Poseidon2 duplex sponge over the A64-C5 field
-through a typed message layer. This page specifies the field, the permutation and where its
-parameters come from, the sponge, the framing and every tag, and §5 states what the construction
-claims. Implementation: `crates/transcript-a64-c5` over `crates/field-a64-c5`, both `#![no_std]`.
+through a typed message layer. This page specifies the permutation and where its parameters come
+from, the sponge, the framing and every tag, and §5 states what the construction claims.
+Implementation: `crates/transcript-a64-c5`, `#![no_std]`, over `crates/field-a64-c5`
+([primitives.md](primitives.md) §1).
 
 ## 1. Poseidon2-A64-C5
 
 ### 1.1 The field
 
-`p = 2^64 − 59 = 0xFFFFFFFFFFFFFFC5 = 18446744073709551557`, the A64-C5 prime, and
-`p − 1 = 2^2 · 11 · 137 · 547 · 5594472617641`: `3 ∤ p − 1`, so `x ↦ x^3` permutes the field, and
-the 2-adicity is 2. `field_a64_c5::Fp` holds an element as its canonical representative below `p`;
-`from_u64` reduces the 59 words at and above it. Since `2^64 ≡ 59`, `from_u128` reduces any
-`x < 2^128`, a product or a lane of a linear layer, by folding its high word down twice, which
-leaves less than `2^64 + 3481 < 2p`, and subtracting `p` at most once. `field-a64-c5`'s
-`tests/arithmetic.rs` holds `+`, `×` and both reductions to Rust's own `u128` remainder.
+Every lane is an element of `Fp`, the base field of [primitives.md](primitives.md) §1, and a
+challenge one of its quadratic extension `Fp2`. `3 ∤ p − 1`, so `x ↦ x^3` permutes the field, and
+its 2-adicity is 2 (§5.2).
 
 ### 1.2 The permutation
 
@@ -97,19 +89,21 @@ seeded scripts.
 ```text
 append_scalars(tag, xs):  absorb(tag); absorb(|xs|); absorb(x) for x in xs
 append_scalar(tag, x)  =  append_scalars(tag, [x])
+append_ext(tag, xs)    =  append_scalars(tag, [x.c0, x.c1 for x in xs])
 append_bytes(tag, b):     absorb(tag); absorb(|b|); absorb(c) for each 7-byte chunk c of b,
                           zero-padded to 8 bytes, read little-endian
-challenge(tag):           absorb(tag); return (squeeze(), squeeze())
+challenge(tag):           absorb(tag); return Fp2 { c0: squeeze(), c1: squeeze() }
 digest():                 return squeeze() eight times
 ```
 
 Every lane is canonical: a tag is a small constant, a length is below `2^63` and a chunk below
-`2^56 < p`. The length, the scalar count or for bytes the byte count, delimits a message: `"abc"`
-and `"abc\0"` are each one chunk, and differ.
+`2^56 < p`. The length, the lane count or for bytes the byte count, delimits a message: `"abc"`
+and `"abc\0"` are each one chunk, and differ. An `Fp2` message is a scalar message of its values'
+coordinates, two lanes a value: the protocol fixes which messages carry which field, so the kind
+need not be framed.
 
-A **challenge** is one element of the quadratic extension `F_{p^2}`: two independent uniform lanes
-of a fresh permutation, its coordinates in the order they leave the rate. Its representation is the
-field's. A protocol draws as many as it needs, each under its own tag absorb. A **digest** is the
+A **challenge** is one element of the quadratic extension `Fp2`: two independent uniform lanes
+of a fresh permutation, `c0` then `c1` in the order they leave the rate. A protocol draws as many as it needs, each under its own tag absorb. A **digest** is the
 whole rate of one more permutation, 8 lanes. Every digest (program identity, `io_digest`
 ([public-values.md](public-values.md) §5), `sumcheck::witness_digest`) is a fresh sponge of typed
 messages ended by `digest()`, never by a challenge under one of its message tags.
@@ -118,13 +112,15 @@ The framing carries no kind, so each tag names exactly one of scalars, bytes or 
 tag of two kinds would make `append_bytes(T, b"")` and `append_scalars(T, [])` the same `T, 0`.
 
 `snapshot()` captures the state and both positions, and `Transcript::restore` resumes the same
-stream. Its serde form is `([u64; 16], a: u8, s: u8)`. Decoding refuses a lane at or above `p` and
+stream. Its serde form is `([Fp; 16], a: u8, s: u8)`, each lane in `Fp`'s 8 canonical bytes, so a
+snapshot is a fixed 130 bytes under `postcard`. Decoding refuses a lane at or above `p` and
 the positions the duplex never reaches: `a > 8`, `s` outside `1..=8`, or `a > 0` with `s < 8`. The
 archived path's phase files hold the global transcript, and each shard's after its GKR pass, in this
 form ([streaming.md](streaming.md) §6). A shard transcript is no restored global sponge but a fresh
 one whose first message carries the global state digest ([proof.md](proof.md) §4).
 
-Each typed operation appends `Absorb { tag, n }` (payload lanes: scalars, or chunks) or
+Each typed operation appends `Absorb { tag, n }` (payload lanes: scalars, two per `Fp2` value, or
+chunks) or
 `Challenge { tag }` to `event_log()`. The log never feeds the sponge and a snapshot omits it;
 `checker::tape` holds the global transcript's log to the order G1–G9 ([tools.md](../tools.md) §4).
 
@@ -132,27 +128,28 @@ Each typed operation appends `Absorb { tag, n }` (payload lanes: scalars, or chu
 
 `Tag = u64`: `constants::transcript_tags`, 23 tags numbered from 1 to 24 and named by
 `transcript_tags::NAMES[tag − 1]`; 0 is not a tag, and 13 is retired, never to be reassigned.
-Kinds: **S** scalars, **B** bytes, **C** challenge. Where: G1–G9 and the shard transcript are
+Kinds: **S** scalars, `Fp` or `Fp2` (†† marks `Fp2`, two lanes a value), **B** bytes, **C**
+challenge. Where: G1–G9 and the shard transcript are
 [proof.md](proof.md) §2, §4; identity [program.md](program.md) §8; GKR [gkr.md](gkr.md) §5;
 `io_digest` [public-values.md](public-values.md) §5. † marks a tag on no proof path.
 
 | tag | | | where |
 | --- | --- | --- | --- |
 | 1 | `PROTOCOL_SUITE` | S | G1: `[PROTOCOL_VERSION]` |
-| 2 | `PUBLIC_INPUTS` | B | G6: `io_digest` |
-| 3 | `SUMCHECK_ROUND` | S | a sumcheck round's coefficients |
+| 2 | `PUBLIC_INPUTS` | S | G6: `io_digest`'s 8 lanes |
+| 3 | `SUMCHECK_ROUND` | S †† | a sumcheck round's coefficients |
 | 4 | `SUMCHECK_CHALLENGE` | C | a round's challenge; first, a zerocheck's eq-randomizers |
 | 5 | `WITNESS_DIGEST` | S | `sumcheck::witness_digest`'s sponge, and its result † |
-| 6 | `SUMCHECK_FINAL_EVALS` | S | the zerocheck's final evaluations † |
+| 6 | `SUMCHECK_FINAL_EVALS` | S †† | the zerocheck's final evaluations † |
 | 7 | `PUBLIC_INPUT_STREAM` | B | `io_digest`: the input |
 | 8 | `PUBLIC_OUTPUT_STREAM` | B | `io_digest`: the output |
-| 9 | `PROGRAM_IDENTITY` | S | identity: `[code_version]`; G5: `[identity]` |
+| 9 | `PROGRAM_IDENTITY` | S | identity: `[code_version]`; G5: the identity's 8 lanes |
 | 10 | `VM_CONFIG` | S | identity; G2 |
 | 11 | `SHARD_COUNTS` | S | G3 |
-| 12 | `GKR_OUTPUTS` | S | GKR: the outputs |
+| 12 | `GKR_OUTPUTS` | S †† | GKR: the outputs |
 | 13 | — | | retired: no message carries it |
 | 14 | `GKR_BATCH` | C | GKR: a transition's claim batch |
-| 15 | `GKR_LAYER_CLAIMS` | S | GKR: a transition's claimed values |
+| 15 | `GKR_LAYER_CLAIMS` | S †† | GKR: a transition's claimed values |
 | 16 | `GKR_CHILD` | C | GKR: a halving transition's line point |
 | 17 | `MEMORY_WINDOWS` | S | G4 |
 | 18 | `MEMORY_BOUNDARY` | S | G7 |
@@ -160,7 +157,7 @@ Kinds: **S** scalars, **B** bytes, **C** challenge. Where: G1–G9 and the shard
 | 20 | `LOOKUP_CHALLENGE` | C | shard: `g`, then `β` ([lookup.md](lookup.md) §2) |
 | 21 | `MEMORY_CHALLENGE` | C | G8, four times |
 | 22 | `GLOBAL_STATE_DIGEST` | C | G9 |
-| 23 | `SHARD_SEED` | S | shard: `[digest, family, index]` |
+| 23 | `SHARD_SEED` | S | shard: `[digest.c0, digest.c1, family, index]` |
 | 24 | `SHARD_TS_WINDOW` | S | shard: `[start, end]` |
 
 **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** No tag absorbs a commitment, because

@@ -31,7 +31,7 @@
 //! `constants::generic_table::SHIFT_COPOWER_BITS`.
 
 use constants::generic_table;
-use field::Fr;
+use field_a64_c5::Fp;
 use poly::{MultilinearPoly, PolyBacking};
 
 /// The channel's tuple width: a key and two values, which the AND table and
@@ -113,6 +113,6 @@ pub fn generic_entries() -> Vec<[u32; GENERIC_WIDTH]> {
 }
 
 /// The `ZeroEntry`, which every switched-off row of the channel looks up.
-pub fn zero_entry() -> [Fr; GENERIC_WIDTH] {
-    [Fr::ZERO; GENERIC_WIDTH]
+pub fn zero_entry() -> [Fp; GENERIC_WIDTH] {
+    [Fp::ZERO; GENERIC_WIDTH]
 }

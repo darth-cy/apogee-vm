@@ -19,7 +19,7 @@ use constants::{challenge_slot, family, generic_table, lookup_channel};
 use constraints::lookup::{check_discharge, ChannelSpec};
 use constraints::memory::{self, check_memory};
 use constraints::{family_circuit, mul_div, CircuitArtifact, GateDef, PolyAddress, VirtualKind};
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::{eval_gate, gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallenges};
 use program::lookup_tables::generic_entries;
 
@@ -35,12 +35,12 @@ fn artifact() -> CircuitArtifact {
     mul_div::artifact(VARS)
 }
 
-fn f(v: u64) -> Fr {
-    Fr::from_u64(v)
+fn f(v: u64) -> Fp {
+    Fp::from_u64(v)
 }
 
 /// A signed integer as a field element.
-fn signed(v: i128) -> Fr {
+fn signed(v: i128) -> Fp {
     let magnitude = |m: u128| {
         let shift = f(1 << 32) * f(1 << 32);
         f((m >> 64) as u64) * shift + f(m as u64)
@@ -59,9 +59,9 @@ fn challenges(a: &CircuitArtifact) -> ExternalChallenges {
         (challenge_slot::MEM_ALPHA_TS, 17),
         (challenge_slot::MEM_ALPHA_VAL, 19),
     ] {
-        ch.insert(slot, f(v));
+        ch.insert(slot, f(v).into());
     }
-    insert_lookup_challenges(&mut ch, f(23), f(29), a);
+    insert_lookup_challenges(&mut ch, f(23).into(), f(29).into(), a);
     ch
 }
 
@@ -71,7 +71,7 @@ fn challenges(a: &CircuitArtifact) -> ExternalChallenges {
 
 /// A row by column name; a column not named is 0.
 #[derive(Clone, Debug, Default)]
-struct Row(BTreeMap<&'static str, Fr>);
+struct Row(BTreeMap<&'static str, Fp>);
 
 /// `<q>_<field>`, a column name, leaked to `'static` for the map.
 fn name(q: &str, field: &str) -> &'static str {
@@ -79,19 +79,19 @@ fn name(q: &str, field: &str) -> &'static str {
 }
 
 impl Row {
-    fn set(&mut self, name: &'static str, v: Fr) -> &mut Row {
+    fn set(&mut self, name: &'static str, v: Fp) -> &mut Row {
         self.0.insert(name, v);
         self
     }
 
-    fn get(&self, name: &str) -> Fr {
-        self.0.get(name).copied().unwrap_or(Fr::ZERO)
+    fn get(&self, name: &str) -> Fp {
+        self.0.get(name).copied().unwrap_or(Fp::ZERO)
     }
 
     /// Set the query `q`'s five columns, reading a write made eight timestamps
     /// before its own.
     fn query(&mut self, q: &'static str, delta: u64, addr: u64, read: u64, write: u64) {
-        self.set(name(q, "mask"), Fr::ONE)
+        self.set(name(q, "mask"), Fp::ONE)
             .set(name(q, "addr"), f(addr))
             .set(name(q, "read_ts"), f(4 * CYCLE + delta - 8))
             .set(name(q, "read_value"), f(read))
@@ -106,7 +106,7 @@ impl Row {
     }
 
     /// The row's committed values in layout order.
-    fn committed(&self, a: &CircuitArtifact) -> Vec<Fr> {
+    fn committed(&self, a: &CircuitArtifact) -> Vec<Fp> {
         let names: Vec<&str> = a
             .memory
             .iter()
@@ -123,19 +123,19 @@ impl Row {
     /// The row as a witness row of `a`, its scratch computed row-locally.
     fn witness(&self, a: &CircuitArtifact, row: usize) -> WitnessRow {
         let committed = self.committed(a);
-        let virtuals: Vec<Fr> = a
+        let virtuals: Vec<Fp2> = a
             .virtuals
             .iter()
-            .map(|(k, _)| virtual_at_row(*k, row))
+            .map(|(k, _)| virtual_at_row(*k, row).into())
             .collect();
         let ch = challenges(a);
-        let mut scratch = vec![Fr::ZERO; a.scratch.len()];
-        let mut lower = committed.clone();
+        let mut scratch = vec![Fp2::ZERO; a.scratch.len()];
+        let mut lower: Vec<Fp2> = committed.iter().map(|v| (*v).into()).collect();
         for k in 0..a.depth() {
             if a.layers[k].halving {
                 break;
             }
-            let v: &[Fr] = if k == 0 { &virtuals } else { &[] };
+            let v: &[Fp2] = if k == 0 { &virtuals } else { &[] };
             let values = gate_values(a, k, &lower, &[], v, &ch);
             let produced = values[..a.layers[k].producing.len()].to_vec();
             for (j, value) in produced.iter().enumerate() {
@@ -368,7 +368,7 @@ fn build(i: Instr, a: u32, b: u32, rd_old: u32, signs: Signs, w: Witness) -> Row
 
     let mut r = Row::default();
     r.set("cycle", f(CYCLE));
-    r.set("pc_mask", Fr::ONE)
+    r.set("pc_mask", Fp::ONE)
         .set("pc_read_ts", f(4 * (CYCLE - 1)))
         .set("pc_read_value", f(i.pc as u64))
         .set("pc_write_value", f(seq as u64));
@@ -377,7 +377,7 @@ fn build(i: Instr, a: u32, b: u32, rd_old: u32, signs: Signs, w: Witness) -> Row
     let write = if i.rd == 0 { 0 } else { value };
     r.query("rd", 3, i.rd as u64, rd_old as u64, write as u64);
     match i.rd {
-        0 => r.set("rd_is_zero", Fr::ONE),
+        0 => r.set("rd_is_zero", Fp::ONE),
         d => r.set("rd_inv", f(d as u64).inverse().expect("nonzero")),
     };
     r.set("rd_selected", f(value as u64));
@@ -395,7 +395,7 @@ fn build(i: Instr, a: u32, b: u32, rd_old: u32, signs: Signs, w: Witness) -> Row
         r.set(witness, f(v as u64)).set(table, f(v as u64));
     }
     r.set("table_pc", f(i.pc as u64));
-    r.set(name("kind", mnemonic(i.bit)), Fr::ONE);
+    r.set(name("kind", mnemonic(i.bit)), Fp::ONE);
 
     for (column, v) in [
         ("f_div", div as u64),
@@ -432,8 +432,8 @@ fn build(i: Instr, a: u32, b: u32, rd_old: u32, signs: Signs, w: Witness) -> Row
     r.set("mx", signed(mx));
     r.set("my", signed(my));
     let unit = |on: bool, x: u32| match on {
-        true => f(x as u64).inverse().unwrap_or(Fr::ZERO),
-        false => Fr::ZERO,
+        true => f(x as u64).inverse().unwrap_or(Fp::ZERO),
+        false => Fp::ZERO,
     };
     r.set("r_inv", unit(div, r_word));
     r.set("d_inv", unit(div, b));
@@ -447,9 +447,9 @@ fn mnemonic(bit: u32) -> &'static str {
 }
 
 /// A lookup expression's value on the committed row.
-fn expression(a: &CircuitArtifact, committed: &[Fr], gate: &GateDef) -> Fr {
+fn expression(a: &CircuitArtifact, committed: &[Fp], gate: &GateDef) -> Fp {
     let layout = a.committed();
-    let values: Vec<Fr> = gate
+    let values: Vec<Fp2> = gate
         .operands()
         .iter()
         .map(|op| {
@@ -457,13 +457,20 @@ fn expression(a: &CircuitArtifact, committed: &[Fr], gate: &GateDef) -> Fr {
                 .iter()
                 .position(|x| x == op)
                 .expect("a committed operand")]
+            .into()
         })
         .collect();
-    eval_gate(gate, &values, &ExternalChallenges::new())
+    let v = eval_gate(gate, &values, &ExternalChallenges::new());
+    assert_eq!(
+        v.c1,
+        Fp::ZERO,
+        "a literal-only gate over base values is base"
+    );
+    v.c0
 }
 
 /// The canonical integer of a field element, if it is below `2^64`.
-fn small_int(v: Fr) -> Option<u64> {
+fn small_int(v: Fp) -> Option<u64> {
     let bytes = v.to_bytes();
     bytes[8..]
         .iter()
@@ -487,15 +494,15 @@ fn violated_tables(a: &CircuitArtifact, r: &Row) -> Vec<String> {
             .position(|x| *x == l.selector)
             .expect("a selector is a committed column");
         let s = committed[at];
-        let values: Vec<Fr> = l
+        let values: Vec<Fp> = l
             .tuple
             .iter()
             .map(|e| expression(a, &committed, e))
             .collect();
         let holds = match l.channel {
             lookup_channel::GENERIC => {
-                let gated = [s * (values[0] + Fr::ONE), s * values[1], s * values[2]];
-                gated.iter().all(|v| *v == Fr::ZERO)
+                let gated = [s * (values[0] + Fp::ONE), s * values[1], s * values[2]];
+                gated.iter().all(|v| *v == Fp::ZERO)
                     || gated
                         .iter()
                         .map(|v| small_int(*v))
@@ -503,14 +510,14 @@ fn violated_tables(a: &CircuitArtifact, r: &Row) -> Vec<String> {
                         .is_some_and(|t| entries.contains(&[t[0], t[1], t[2]]))
             }
             lookup_channel::DECODER => {
-                let table: Vec<Fr> = (0..mul_div::TABLE_WIDTH)
+                let table: Vec<Fp> = (0..mul_div::TABLE_WIDTH)
                     .map(|j| committed[a.memory.len() + a.witness.len() + j])
                     .collect();
-                let gated: Vec<Fr> = values
+                let gated: Vec<Fp> = values
                     .iter()
-                    .map(|v| s * (*v + Fr::ONE) - Fr::ONE)
+                    .map(|v| s * (*v + Fp::ONE) - Fp::ONE)
                     .collect();
-                gated == table || gated.iter().all(|v| *v == Fr::MINUS_ONE)
+                gated == table || gated.iter().all(|v| *v == Fp::MINUS_ONE)
             }
             _ => continue,
         };
@@ -579,7 +586,7 @@ fn the_registry_holds_the_family() {
 
 /// The layout is `docs/spec/mul-div.md` §2's, the gates and the lookups §4's,
 /// by name and in order: 21 memory columns, 54 witness, 9 setup, two
-/// range tables, 54 enforcing gates, 27 obligations over four channels, and a
+/// range tables, 55 enforcing gates, 27 obligations over four channels, and a
 /// circuit 26 transitions deep at `2^20`.
 #[test]
 fn the_layout_and_the_gates_are_the_spec() {
@@ -696,7 +703,7 @@ fn the_layout_and_the_gates_are_the_spec() {
         (21, 54, 9)
     );
 
-    // The enforcing gates: the frame's ten, then the family's forty-four,
+    // The enforcing gates: the frame's ten, then the family's forty-five,
     // which are `family_spec`'s plumbing and `arithmetic_gates`' arithmetic.
     let enforcing: Vec<String> = a.layers[0]
         .enforcing
@@ -745,6 +752,7 @@ fn the_layout_and_the_gates_are_the_spec() {
             "p_sign_boolean",
             "q_sign_boolean",
             "r_sign_boolean",
+            "q_sign_unsigned",
             "mx_rule",
             "my_rule",
             "product_rule",
@@ -762,14 +770,14 @@ fn the_layout_and_the_gates_are_the_spec() {
             "rd_value_rule",
         ])
     );
-    assert_eq!(enforcing.len(), 54);
+    assert_eq!(enforcing.len(), 55);
     // The width seam carries the arithmetic half and nothing else: the tail of
     // the enforcing list, in order, is exactly what it returns.
     let arithmetic: Vec<String> = mul_div::arithmetic_gates(mul_div::WORD_BITS)
         .into_iter()
         .map(|(name, _)| name)
         .collect();
-    assert_eq!(enforcing[54 - arithmetic.len()..], arithmetic[..]);
+    assert_eq!(enforcing[55 - arithmetic.len()..], arithmetic[..]);
 
     // The obligations: eight timestamp gaps under their own queries' masks,
     // then sixteen halfword pairs, two sign lookups and one decoder row, each
@@ -1035,7 +1043,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // The division half. `f_div` is read by six formulas, so a multiply row
     // that claims it is refused by all of them at once.
     let mut r = row("mul 0x7 0x3");
-    r.set("f_div", Fr::ONE);
+    r.set("f_div", Fp::ONE);
     cases.push((
         "a multiply row claiming the division half",
         r,
@@ -1109,7 +1117,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     cases.push(("a padding row reading rs2", r, vec!["rs2_mask_rule"]));
     let mut r = Row::default();
     r.query("rd", 3, 0, 0, 0);
-    r.set("rd_is_zero", Fr::ONE);
+    r.set("rd_is_zero", Fp::ONE);
     cases.push(("a padding row writing x0", r, vec!["rd_mask_rule"]));
     // A padding row rewriting x10 after the program has exited. Its pc mask is
     // 0, so the mask rule's `m_pc` factor is what refuses the write, and the
@@ -1127,7 +1135,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // Addresses.
     for (q, rule) in [("rs1", "rs1_addr_rule"), ("rs2", "rs2_addr_rule")] {
         let mut r = row("mul 0x7 0x3");
-        let addr = r.get(name(q, "addr")) + Fr::ONE;
+        let addr = r.get(name(q, "addr")) + Fp::ONE;
         r.set(name(q, "addr"), addr);
         cases.push(("an operand read from the wrong register", r, vec![rule]));
     }
@@ -1181,7 +1189,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         vec!["my_rule", "product_rule"],
     ));
     let mut r = row("mul 0x7 0x3");
-    r.set("p_high", Fr::ONE);
+    r.set("p_high", Fp::ONE);
     cases.push((
         "a product with 2^32 added to its high half",
         r,
@@ -1207,21 +1215,21 @@ fn each_gate_is_the_one_that_refuses_its_row() {
 
     // The two is-zero gadgets.
     let mut r = row("divu 0xffffffff 0x1");
-    r.set("rz", Fr::ZERO);
+    r.set("rz", Fp::ZERO);
     cases.push((
         "an exact division claiming a nonzero remainder",
         r,
         vec!["rz_inverse"],
     ));
     let mut r = row("divu 0x7 0x3");
-    r.set("rz", Fr::ONE).set("r_inv", Fr::ZERO);
+    r.set("rz", Fp::ONE).set("r_inv", Fp::ZERO);
     cases.push((
         "an inexact division claiming a zero remainder",
         r,
         vec!["rz_at_nonzero"],
     ));
     let mut r = row("divu 0xdeadbeef 0x0");
-    r.set("dz", Fr::ZERO);
+    r.set("dz", Fp::ZERO);
     cases.push((
         "a zero divisor claimed nonzero",
         r,
@@ -1230,7 +1238,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     // A nonzero divisor claimed zero is what would buy a free gap, and three
     // gates refuse it: the gadget, the gap it was for, and the pin on `q`.
     let mut r = row("divu 0x7 0x3");
-    r.set("dz", Fr::ONE).set("d_inv", Fr::ZERO);
+    r.set("dz", Fp::ONE).set("d_inv", Fp::ZERO);
     cases.push((
         "a nonzero divisor claimed zero",
         r,
@@ -1239,7 +1247,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
 
     // The remainder's sign, and the negative-dividend flag it is built on.
     let mut r = row("div 0x80000000 0xffffffff");
-    r.set("d1", Fr::ZERO);
+    r.set("d1", Fp::ZERO);
     cases.push((
         "a negative dividend whose division row does not say so",
         r,
@@ -1291,13 +1299,31 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         vec!["zero_divisor_quotient"],
     ));
 
+    // An unsigned quotient's sign: adjusted below zero, it wraps the identity
+    // by exactly p at the full width, and its own gate alone refuses it.
+    cases.push((
+        "a divu whose quotient adjusts below zero, wrapping the identity by p",
+        forged_division(
+            Instr::new(kind::DIVU),
+            0xFFFF_FFFF,
+            0xFFFF_FFFF,
+            Witness {
+                q: 0,
+                q_sign: 1,
+                r: 58,
+                r_sign: 0,
+            },
+        ),
+        vec!["q_sign_unsigned"],
+    ));
+
     // The selection.
     let mut r = row("mul 0x7 0x3");
     r.set("rd_selected", f(22)).set("rd_write_value", f(22));
     cases.push(("a mul writing one too many", r, vec!["rd_value_rule"]));
     let mut r = row("mul 0x7 0x3");
     r.drop_query("rd");
-    r.set("rd_inv", Fr::ZERO);
+    r.set("rd_inv", Fp::ZERO);
     cases.push((
         "a mul whose write is masked off",
         r,
@@ -1329,7 +1355,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         .map(|e| a.relations[e.relation as usize].name.as_str())
         .filter(|n| !frame.contains(n) && !n.ends_with("_boolean"))
         .collect();
-    assert_eq!(owed.len(), 28);
+    assert_eq!(owed.len(), 29);
     for gate in owed {
         assert!(named.contains(gate), "no row above is refused by `{gate}`");
     }
@@ -1462,10 +1488,16 @@ fn truncated(signed_op: bool, a: i128, b: i128, bits: u32) -> (i128, i128) {
 /// toward zero, all ones with the dividend back on a zero divisor, and
 /// `−2^3 ÷ −1` giving `−2^3` with no remainder. Where the divisor is nonzero
 /// the whole witness is unique — one `q_sign` and one of everything else.
-/// Where the divisor is zero **both** values of `q_sign` satisfy and nothing
-/// else varies: the identity's product is zero either way and `rd` reads the
-/// word `q`, never `q_adj`, so that freedom is harmless and is why `q_sign`
-/// may not be tied to a sign lookup (`docs/spec/mul-div.md` §5.3).
+/// Where a signed division's divisor is zero **both** values of `q_sign`
+/// satisfy and nothing else varies: the identity's product is zero either way
+/// and `rd` reads the word `q`, never `q_adj`, so that freedom is harmless and
+/// is why `q_sign` may not be tied to a sign lookup (`docs/spec/mul-div.md`
+/// §5.3). An unsigned division's `q_sign` is 0 there too, by its own gate.
+///
+/// What this cannot show: at four bits the identity's total stays far below
+/// `p`, so a witness that satisfies it only modulo `p` never arises. The one
+/// such wrap a 32-bit word reaches is
+/// `an_unsigned_quotient_cannot_wrap_the_identity_past_p`'s row.
 #[test]
 fn the_division_encoding_admits_exactly_one_witness_at_a_reduced_width() {
     let gates = mul_div::arithmetic_gates(REDUCED_BITS);
@@ -1540,11 +1572,11 @@ fn the_division_encoding_admits_exactly_one_witness_at_a_reduced_width() {
     let square = REDUCED * REDUCED;
     // The gadgets' inverses, one per value of the reduced word; 0 has none,
     // and the gadget does not read one there.
-    let inverse: Vec<Fr> = (0..REDUCED)
-        .map(|v| f(v as u64).inverse().unwrap_or(Fr::ZERO))
+    let inverse: Vec<Fp> = (0..REDUCED)
+        .map(|v| f(v as u64).inverse().unwrap_or(Fp::ZERO))
         .collect();
-    let mut values = vec![Fr::ZERO; cells.len()];
-    let mut buf: Vec<Fr> = Vec::new();
+    let mut values = vec![Fp::ZERO; cells.len()];
+    let mut buf: Vec<Fp2> = Vec::new();
     let mut quadrants: BTreeSet<(bool, i128, i128)> = BTreeSet::new();
 
     for bit in [kind::DIV, kind::DIVU, kind::REM, kind::REMU] {
@@ -1553,7 +1585,7 @@ fn the_division_encoding_admits_exactly_one_witness_at_a_reduced_width() {
         for (k, index) in i_kind.iter().enumerate() {
             values[*index] = f((k as u32 == bit) as u64);
         }
-        values[i_f_div] = Fr::ONE;
+        values[i_f_div] = Fp::ONE;
         for dividend in 0..REDUCED {
             for divisor in 0..REDUCED {
                 // Determined by the kind and the operands alone: the top bits
@@ -1614,11 +1646,11 @@ fn the_division_encoding_admits_exactly_one_witness_at_a_reduced_width() {
                                     // can satisfy it at this `rz` — and where
                                     // `r` is 0 no value is distinguishable.
                                     values[i_r_inv] =
-                                        (Fr::ONE - f(rz as u64)) * inverse[r as usize];
+                                        (Fp::ONE - f(rz as u64)) * inverse[r as usize];
                                     values[i_rz] = f(rz as u64);
                                     for dz in 0..2 {
                                         values[i_d_inv] =
-                                            (Fr::ONE - f(dz as u64)) * inverse[divisor as usize];
+                                            (Fp::ONE - f(dz as u64)) * inverse[divisor as usize];
                                         values[i_dz] = f(dz as u64);
                                         for r_sign in 0..2 {
                                             let r_adj = r - r_sign * REDUCED;
@@ -1635,9 +1667,11 @@ fn the_division_encoding_admits_exactly_one_witness_at_a_reduced_width() {
                                             let mut refused = 0;
                                             for (operands, (_, gate)) in reads.iter().zip(&gates) {
                                                 buf.clear();
-                                                buf.extend(operands.iter().map(|i| values[*i]));
+                                                buf.extend(
+                                                    operands.iter().map(|i| Fp2::from(values[*i])),
+                                                );
                                                 refused += (eval_gate(gate, &buf, &empty)
-                                                    != Fr::ZERO)
+                                                    != Fp2::ZERO)
                                                     as usize;
                                             }
                                             let in_range = [p_low, p_high, q, r, gap]
@@ -1671,10 +1705,11 @@ fn the_division_encoding_admits_exactly_one_witness_at_a_reduced_width() {
                     .collect();
                 assert_eq!(rest.len(), 1, "{what}: more than one witness but q_sign");
                 let q_signs: BTreeSet<i128> = solutions.iter().map(|s| s[2]).collect();
-                match divisor {
+                match (divisor, signed_op) {
                     // The identity's product is zero either way and `rd` reads
-                    // the word, so both flags satisfy and nothing else moves.
-                    0 => {
+                    // the word, so both flags satisfy and nothing else moves;
+                    // an unsigned division's flag is 0 by `q_sign_unsigned`.
+                    (0, true) => {
                         assert_eq!(q_signs, BTreeSet::from([0, 1]), "{what}: q_sign is free");
                         assert_eq!(solutions.len(), 2, "{what}");
                     }
@@ -1718,7 +1753,7 @@ fn the_division_encoding_admits_exactly_one_witness_at_a_reduced_width() {
 /// The value of the relation `name`'s gate on `r`, through the kernel. Every
 /// gate read this way is over committed columns and literal coefficients, so
 /// it needs neither scratch nor a challenge.
-fn relation_at(a: &CircuitArtifact, r: &Row, name: &str) -> Fr {
+fn relation_at(a: &CircuitArtifact, r: &Row, name: &str) -> Fp {
     let relation = a
         .relations
         .iter()
@@ -1751,7 +1786,7 @@ fn a_quotient_off_by_one_is_refused_by_the_gap_or_by_the_identity() {
     );
     assert_eq!(
         relation_at(&a, &too_small, "division_rule"),
-        Fr::ZERO,
+        Fp::ZERO,
         "3·1 + 4 = 7: the identity holds"
     );
     assert_eq!(
@@ -1829,7 +1864,7 @@ fn the_signed_overflow_has_exactly_the_pinned_answer() {
     );
     assert_eq!(
         relation_at(&a, &nothing, "division_rule"),
-        Fr::ZERO,
+        Fp::ZERO,
         "a quotient of 0 with the dividend left over satisfies the identity"
     );
     assert_eq!(
@@ -1837,6 +1872,68 @@ fn the_signed_overflow_has_exactly_the_pinned_answer() {
         (none(), names(&["gap_lo_range"]), none()),
         "and the magnitude bound is what refuses it"
     );
+}
+
+/// An unsigned division whose quotient claims a negative adjusted value, a
+/// wrap only a 32-bit word reaches. For `divu` and `remu` of `0xffffffff` by
+/// `0xffffffff`, the quotient 0 with `q_sign = 1` adjusts to `−2^32`, and with
+/// the remainder 58 the identity's residual is
+/// `(2^32 − 1)·(−2^32) + 58 − (2^32 − 1) = 59 − 2^64 = −p`, zero in the field.
+/// The product's halves `0, 1` with `p_sign = 1` are its integer decomposition
+/// and the gap `0xffffffc4` is a word, so every other gate, range and table
+/// holds, and `q_sign_unsigned` alone refuses the row, which would write 0 for
+/// `divu`'s 1 and 58 for `remu`'s 0 (`docs/spec/mul-div.md` §5.1). No reduced
+/// width can show it: there the identity's total stays far below `p`.
+#[test]
+fn an_unsigned_quotient_cannot_wrap_the_identity_past_p() {
+    let a = artifact();
+    let ones = 0xFFFF_FFFF;
+    for (bit, answer, forged_answer) in [(kind::DIVU, 1, 0), (kind::REMU, 0, 58)] {
+        let i = Instr::new(bit);
+        let what = mnemonic(bit);
+        let honest_row = honest(i, ones, ones, 0x3333_3333);
+        assert_eq!(
+            violated(&a, &honest_row),
+            (none(), none(), none()),
+            "{what}"
+        );
+        assert_eq!(
+            small_int(honest_row.get("rd_selected")),
+            Some(answer),
+            "{what}"
+        );
+
+        let forged = forged_division(
+            i,
+            ones,
+            ones,
+            Witness {
+                q: 0,
+                q_sign: 1,
+                r: 58,
+                r_sign: 0,
+            },
+        );
+        for (column, v) in [
+            ("p_low", 0),
+            ("p_high", 1),
+            ("p_sign", 1),
+            ("gap", 0xFFFF_FFC4),
+            ("rd_selected", forged_answer),
+        ] {
+            assert_eq!(small_int(forged.get(column)), Some(v), "{what}: {column}");
+        }
+        assert_eq!(
+            relation_at(&a, &forged, "division_rule"),
+            Fp::ZERO,
+            "{what}: the residual is −p"
+        );
+        assert_eq!(
+            violated(&a, &forged),
+            (names(&["q_sign_unsigned"]), none(), none()),
+            "{what}: a negative unsigned quotient is refused by its own gate alone"
+        );
+    }
 }
 
 /// The sign readings, which no gate can check. `rs1_top` and `rs2_top` are
@@ -2167,7 +2264,7 @@ fn assert_rows_hold(columns: &[(PolyAddress, poly::MultilinearPoly)], rows: &[us
     let ch = challenges(&a);
     for &row in rows {
         let mut r = Row::default();
-        let committed: Vec<Fr> = ordered.iter().map(|c| c.get(row)).collect();
+        let committed: Vec<Fp> = ordered.iter().map(|c| c.get_base(row)).collect();
         // Through the named row, so the scratch is computed exactly as the
         // hand-built rows' is.
         for (name, value) in a

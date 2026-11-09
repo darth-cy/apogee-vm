@@ -12,7 +12,7 @@ publish.workspace = true
 # `challenge_slot::NAMES`, for rendering a challenge coefficient.
 constants.workspace = true
 constraints.workspace = true
-field.workspace = true
+field-a64-c5.workspace = true
 # The kernel (`eval_gate`, `gate_values`, re-exported from `gkr-verify`) and the
 # forward pass the cross-check runs.
 gkr.workspace = true
@@ -25,7 +25,7 @@ prover.workspace = true
 trace.workspace = true
 # The transcript-tape validator: `TranscriptEvent`, the global commit phase's
 # absorb sequence as the checker renders and diffs it.
-transcript.workspace = true
+transcript-a64-c5.workspace = true
 verifier.workspace = true
 verifier-core.workspace = true
 

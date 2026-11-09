@@ -40,9 +40,9 @@ pub fn render(elf: &[u8], source_label: &str, params: &ProgramParams) -> Result<
          bytecode ceiling  {} words\n\
          program identity  {identity}\n\
          \n\
-         The identity is one Fr, canonical little-endian: the code version, the\n\
-         VmConfig and the entry point, digested by the recipe in docs/spec/program.md\n\
-         section 8.\n\
+         The identity is a digest, 8 Fp lanes canonical little-endian: the code\n\
+         version, the VmConfig and the entry point, digested by the recipe in\n\
+         docs/spec/program.md section 8.\n\
          \n\
          ALARM - UNFINISHED - WARNING - TODO: NO COMMITMENT SCHEME. The identity is\n\
          meant to commit to every column below and to the image's words in RAM\n\
@@ -94,7 +94,7 @@ fn listing(out: &mut String, image: &loader::ProgramImage, tables: &DecodedTable
          are `-`. `imm` is the two's-complement word the instruction uses, or on a\n\
          system row the system code (0 ecall, 1 ebreak, 2 fence). `kind` is the\n\
          one-hot extra mask, written as its bit number. Every row the listing does\n\
-         not show is padding: Fr::MINUS_ONE in every field.\n\
+         not show is padding: Fp::MINUS_ONE in every field.\n\
          \n\
          pc          next_pc     family              mnemonic   rs1 rs2  rd  imm         kind\n"
     );

@@ -12,7 +12,7 @@ use checker::{violated_relations, WitnessRow};
 use common::*;
 use constants::challenge_slot;
 use constraints::CircuitArtifact;
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use gkr::ExternalChallenges;
 use test_support::Rng;
 
@@ -26,10 +26,10 @@ fn satisfying(
     active: bool,
     rng: &mut Rng,
 ) -> (WitnessRow, ExternalChallenges) {
-    let gamma = fr(rng);
+    let gamma = fr2(rng);
     let row = (rng.next_u64() % 15) as usize; // so that row + 1 is still a row
-    let mut committed: Vec<Fr> = (0..6).map(|_| fr(rng)).collect();
-    committed[S] = if active { Fr::ONE } else { Fr::ZERO };
+    let mut committed: Vec<Fp> = (0..6).map(|_| fr(rng)).collect();
+    committed[S] = if active { Fp::ONE } else { Fp::ZERO };
     if active {
         committed[E] = committed[A];
     }
@@ -41,15 +41,15 @@ fn satisfying(
         committed[S],
     );
     let ab = x * b;
-    let fingerprint = (gamma * x + Fr::from_u64(row as u64)) * c;
-    let masked_m = m * s + Fr::ONE - s;
-    let mut scratch = vec![Fr::ZERO; a.scratch.len()];
-    let values = [
-        ("ab", ab),
+    let fingerprint = (gamma * x + Fp::from_u64(row as u64)) * c;
+    let masked_m = m * s + Fp::ONE - s;
+    let mut scratch = vec![Fp2::ZERO; a.scratch.len()];
+    let values: [(&str, Fp2); 5] = [
+        ("ab", ab.into()),
         ("fingerprint", fingerprint),
-        ("masked_m", masked_m),
-        ("abm", ab * masked_m),
-        ("fingerprint3", fingerprint + Fr::from_u64(3)),
+        ("masked_m", masked_m.into()),
+        ("abm", (ab * masked_m).into()),
+        ("fingerprint3", fingerprint + Fp::from_u64(3)),
     ];
     for (name, value) in values {
         scratch[slot(a, name)] = value;
@@ -145,7 +145,7 @@ fn run(evaluate: Evaluator) -> Result<(), String> {
                 };
                 let what = match cell {
                     Cell::Committed(i) => {
-                        bad.committed[*i] += Fr::ONE;
+                        bad.committed[*i] += Fp::ONE;
                         format!("committed[{i}]")
                     }
                     Cell::Row => {
@@ -153,7 +153,7 @@ fn run(evaluate: Evaluator) -> Result<(), String> {
                         "the row index".to_string()
                     }
                     Cell::Scratch(name) => {
-                        bad.scratch[slot(&a, name)] += Fr::ONE;
+                        bad.scratch[slot(&a, name)] += Fp::ONE;
                         name.to_string()
                     }
                 };

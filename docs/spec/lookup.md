@@ -172,7 +172,7 @@ challenge and proves it ([gkr.md](gkr.md) §5). `den` is the product of every le
 `num = 0` means the sum vanishes only where `den ≠ 0`: one leaf `(0, 0)` — a table row whose
 `T + g` vanishes, counted 0 — makes the root `(0, 0)` whatever the other leaves hold. With `g`
 drawn after the columns — which with no commitment it is not (§2) — that has probability at most
-fractions/`|Fr|`, and `den ≠ 0` makes it a refusal.
+fractions/`|Fp2|`, and `den ≠ 0` makes it a refusal.
 
 ## 9. The generic table
 
@@ -250,7 +250,7 @@ enforces this rule and the lookup rules a second time, with code of its own
 
 **The copower rule**, `constraints::lookup::check_copowers`, run by every constructor that bounds a
 column through a copower. A bound `x < p` written as `x·p′ < 2^32`, `p·p′ = 2^32`, bounds nothing
-alone: `p′` is a unit of `Fr`, so `x = s·p′⁻¹` ranges over a coset of `2^32` values. Each such `x`
+alone: `p′` is a unit of `Fp`, so `x = s·p′⁻¹` ranges over a coset of `2^32` values. Each such `x`
 therefore also carries a direct `RANGE16` bound, as a halfword or as a high chunk and a remainder,
 under the same selector.
 
@@ -259,8 +259,9 @@ under the same selector.
 - **Every gated tuple is a table row**: §1's identity over challenges drawn after every column it
   reads — **UNFINISHED**, they are not (§2) — boolean selectors (§2), both root conditions (§8) and
   the GKR pass. The error is at most
-  fractions/`|Fr|` for `g`, plus looked-up tuples × table rows × (width − 1)/`|Fr|` for a `β`
-  collision: below `2^−190` at every menu height.
+  fractions/`|Fp2|` for `g`, plus looked-up tuples × table rows × (width − 1)/`|Fp2|` for a `β`
+  collision, which only the decoder and generic channels have: below `2^−79` a shard at every menu
+  height.
 - **A lookup answers from its own sub-table**: one width per channel (§11), disjoint key ranges and
   the `+ 1` (§9), and its family's bound on the key (§4).
 - **A switched-off row costs nothing**: its neutral tuple is a table row the multiplicity counts

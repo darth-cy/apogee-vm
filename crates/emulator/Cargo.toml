@@ -15,4 +15,4 @@ trace.workspace = true
 test-support.workspace = true
 # `tests/archive.rs` holds an archived run's public values to the live run's
 # through `io_digest`.
-transcript.workspace = true
+transcript-a64-c5.workspace = true

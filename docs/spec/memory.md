@@ -268,11 +268,18 @@ its own verification.
 **The count.** Read each query as an edge from its read tuple to its write tuple. Inits are only
 written and finals only read, so a balanced multiset is paths from inits to finals plus loops. An
 edge advances the timestamp by an integer in `[1, 2^38 + 3]` (the gap plus the query's least
-advance, 4 at the pc and 1 elsewhere), so a loop needs more than `p/(2^38 + 3) > 2^215` edges,
-and a statement has fewer than `2^62` tuples: under `2^32` shards a family (a `u32` count), 12
-families, at most `2^22` rows (the menu's top), at most 12 tuples a row (`MEM_WORD`'s six
-queries, both sides), and 66 boundary tuples. So nothing loops: every path starts at an init at
-timestamp 0 and ends at a final, and every timestamp on it is an integer below `2^101`.
+advance, 4 at the pc and 1 elsewhere), so a loop needs at least `p/(2^38 + 3)` edges, and a
+statement has fewer than `2^62` tuples: under `2^32` shards a family (a `u32` count), 12 families,
+at most `2^22` rows (the menu's top), at most 12 tuples a row (`MEM_WORD`'s six queries, both
+sides), and 66 boundary tuples.
+
+**UNFINISHED: A64-C5 CHARACTERISTIC.** At `p = 2^64 − 59` that bound is about `2^26` edges, far
+below `2^62`, so the count excludes no loop. Nothing bounds `cycle`, so a timestamp is an integer
+only modulo `p`, and a loop of that many queries at one address balances with no init: a register
+or RAM read returning a value no write gave. A later stage bounds every write timestamp
+structurally, after which every timestamp on a path is an integer below `2^41` and no loop exists.
+Until then, what follows rests on the premise that nothing loops: every path starts at an init at
+timestamp 0 and ends at a final.
 
 ## 5. Halting
 
@@ -368,8 +375,9 @@ column precedes the challenges.
 Both sides of §4.2 are products of linear forms in `(γ_M, α_addr, α_ts, α_val)`, one per distinct
 tuple, every tuple meant to be fixed before those are drawn (§6.1, §8) — **UNFINISHED**: none is,
 so none of what follows holds yet ([proof.md](proof.md) §3). By Schwartz–Zippel they agree on
-unequal multisets with probability at most `N/p`, `N < 2^62` (§4.2), and on equal ones §4.2's
-count gives:
+unequal multisets with probability at most `N/|Fp2| = N/p^2`, below `2^−66` at `N < 2^62` (§4.2),
+and on equal ones §4.2's count gives — **UNFINISHED** at A64-C5's characteristic, which leaves it a
+premise (§4.2):
 
 - **One init per address** of `REG`, `PC` and `RAM`: the 33 boundary inits once per statement,
   and §3.5's windows, disjoint and of one height. A second init would let a stale read balance.

@@ -62,7 +62,7 @@ use std::time::Instant;
 
 use constants::{family, lookup_channel};
 use constraints::FamilyCircuit;
-use field::Fr;
+use field_a64_c5::Fp2;
 use program::FamilyId;
 
 /// How much the log says. Ordered: a line at level `L` is emitted when the
@@ -323,19 +323,19 @@ pub fn shard(family: FamilyId, index: u32) -> String {
     format!("{}#{index}", family_name(family))
 }
 
-/// An `Fr` short enough to read and long enough to compare: the first six and
-/// last four digits of [`fr_full`].
+/// An `Fp2` short enough to read and long enough to compare: the first six and
+/// last four digits of its [`hex`].
 ///
 /// Truncated because the interesting question about a challenge is never its
 /// value, it is whether two runs produced the same one.
-pub fn fr(x: &Fr) -> String {
-    let hex = fr_full(x);
-    format!("{}..{}", &hex[..6], &hex[60..])
+pub fn fp2(x: &Fp2) -> String {
+    let hex = hex(&x.to_bytes());
+    format!("{}..{}", &hex[..6], &hex[28..])
 }
 
-/// A list of `Fr` as [`fr`] does each, at most `max` of them.
-pub fn frs(xs: &[Fr], max: usize) -> String {
-    let shown: Vec<String> = xs.iter().take(max).map(fr).collect();
+/// A list of `Fp2` as [`fp2`] does each, at most `max` of them.
+pub fn fp2s(xs: &[Fp2], max: usize) -> String {
+    let shown: Vec<String> = xs.iter().take(max).map(fp2).collect();
     if xs.len() > max {
         format!("[{}, +{}]", shown.join(" "), xs.len() - max)
     } else {
@@ -408,22 +408,23 @@ pub fn circuit(c: &FamilyCircuit, h: u32) -> String {
     )
 }
 
-/// An `Fr` in full: its 32 canonical bytes as 64 hex digits, **in `to_bytes`
+/// A canonical encoding in full, two hex digits a byte, **in `to_bytes`
 /// order**.
 ///
 /// # Which order, and why it matters
 ///
-/// Bare hex in this log is always a field element's canonical little-endian
-/// bytes, which is what the `verifier` CLI takes as its `<identity-hex>`
-/// argument and what every wire form in this repository carries
+/// Bare hex in this log is always a wire form's bytes — a field element's
+/// canonical little-endian ones, or the identity's, its lanes' in order —
+/// which is what the `verifier` CLI takes as its `<identity-hex>` argument and
+/// what every wire form in this repository carries
 /// (`docs/spec/primitives.md` §1). So a value this log prints can be pasted
 /// into the CLI without reversing anything.
 ///
 /// In full, not truncated, for the identity, which a reader compares against
 /// the value the `verifier` CLI is handed, and for the global digest, where two
 /// runs that should agree diverge first.
-pub fn fr_full(x: &Fr) -> String {
-    x.to_bytes().iter().map(|b| format!("{b:02x}")).collect()
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// A shard-count vector against the families it counts.
@@ -448,7 +449,7 @@ pub fn ts_window(window: [u64; 2]) -> String {
 /// frame word. It is invisible in a proof, which is what makes it worth a line.
 /// `O(rows)`, so `Deep` only.
 pub fn all_zero(column: &poly::MultilinearPoly) -> bool {
-    (0..column.len()).all(|i| column.get(i) == Fr::ZERO)
+    (0..column.len()).all(|i| column.get(i) == Fp2::ZERO)
 }
 
 #[cfg(test)]
@@ -556,26 +557,22 @@ mod tests {
     }
 
     #[test]
-    fn a_full_fr_is_every_digit_and_a_short_one_is_not() {
-        assert_eq!(fr_full(&Fr::ONE).len(), 64);
-        assert!(fr(&Fr::ONE).len() < 20);
+    fn a_full_value_is_every_digit_and_a_short_one_is_not() {
+        assert_eq!(hex(&Fp2::ONE.to_bytes()).len(), 32);
+        assert!(fp2(&Fp2::ONE).len() < 20);
     }
 
     /// The order is `to_bytes`', so a printed value pastes into the `verifier`
-    /// CLI. `fr_full` is the full canonical encoding of the same bytes, and this
-    /// holds the two equal by construction.
+    /// CLI.
     #[test]
     fn a_field_element_prints_in_to_bytes_order() {
-        for x in [Fr::ZERO, Fr::ONE, Fr::MINUS_ONE, Fr::from_u64(1 << 40)] {
-            let want: String = x.to_bytes().iter().map(|b| format!("{b:02x}")).collect();
-            assert_eq!(fr_full(&x), want);
-        }
-        // `Fr::ONE` is 1, whose canonical little-endian bytes begin 01.
-        assert!(fr_full(&Fr::ONE).starts_with("01"), "{}", fr_full(&Fr::ONE));
-        assert_eq!(fr(&Fr::ZERO), "000000..0000");
+        // `Fp2::ONE` is 1, whose canonical little-endian bytes begin 01.
+        let one = hex(&Fp2::ONE.to_bytes());
+        assert!(one.starts_with("01"), "{one}");
+        assert_eq!(fp2(&Fp2::ZERO), "000000..0000");
         // Distinct values stay distinguishable in the short form, which is the
         // only property the log needs of it.
-        assert_ne!(fr(&Fr::from_u64(1)), fr(&Fr::from_u64(2)));
+        assert_ne!(fp2(&Fp2::ONE), fp2(&(Fp2::ONE + Fp2::ONE)));
     }
 
     #[test]

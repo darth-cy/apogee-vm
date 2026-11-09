@@ -1,7 +1,7 @@
 //! Sumcheck verification against naive verification, on the same claim:
 //! `A * A - B = 0` on every one of `2^VARS` rows.
 //!
-//! The naive verifier holds the witness and recomputes every row in `Fr`. The
+//! The naive verifier holds the witness and recomputes every row in `Fp`. The
 //! sumcheck verifier holds a digest and a proof — 4 coefficients per round plus
 //! one eval per gate input — and never sees a row. That is the comparison: the
 //! work is `O(2^n)` on one side and `O(n)` on the other, and this routine says
@@ -18,9 +18,9 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use constants::transcript_tags;
-use field::Fr;
+use field_a64_c5::{Fp, Fp2};
 use sumcheck::SumcheckProof;
-use transcript::Transcript;
+use transcript_a64_c5::{Digest, Transcript};
 
 use crate::square::Square;
 use crate::timing::{ms, Best, REPS};
@@ -40,10 +40,10 @@ const VERIFY_ITERS: usize = 500;
 /// Recompute every row. There is no early return on the first bad row: an
 /// honest verifier on a satisfying witness sweeps the whole table anyway, and
 /// that sweep is the cost being compared.
-fn naive_verify(a: &[Fr], b: &[Fr]) -> bool {
+fn naive_verify(a: &[Fp], b: &[Fp]) -> bool {
     let mut ok = true;
     for i in 0..a.len() {
-        ok &= a[i] * a[i] - b[i] == Fr::ZERO;
+        ok &= a[i] * a[i] - b[i] == Fp::ZERO;
     }
     ok
 }
@@ -51,7 +51,7 @@ fn naive_verify(a: &[Fr], b: &[Fr]) -> bool {
 /// The sumcheck verifier's whole session for this claim: a fresh transcript,
 /// the digest it is handed, and the proof. Building the transcript is inside
 /// the measurement because the verifier really does pay for it.
-fn sumcheck_verify(inst: &Square, digest: Fr, proof: &SumcheckProof) -> bool {
+fn sumcheck_verify(inst: &Square, digest: &Digest, proof: &SumcheckProof) -> bool {
     let mut t = Transcript::new();
     sumcheck::absorb_witness_digest(&mut t, digest);
     sumcheck::verify_zerocheck(&inst.gate, VARS, proof, &mut t).is_ok()
@@ -63,17 +63,17 @@ fn sumcheck_verify(inst: &Square, digest: Fr, proof: &SumcheckProof) -> bool {
 /// This is a second copy of the zerocheck's transcript script, and a copy
 /// drifts — so the caller checks it against the real verifier's sponge and
 /// refuses to report a number if the two have come apart.
-fn transcript_only(proof: &SumcheckProof, digest: Fr) -> Transcript {
+fn transcript_only(proof: &SumcheckProof, digest: &Digest) -> Transcript {
     let mut t = Transcript::new();
     sumcheck::absorb_witness_digest(&mut t, digest);
     for _ in 0..proof.rounds.len() {
-        t.challenge_scalar(transcript_tags::SUMCHECK_CHALLENGE);
+        t.challenge(transcript_tags::SUMCHECK_CHALLENGE);
     }
     for g in &proof.rounds {
-        t.append_scalars(transcript_tags::SUMCHECK_ROUND, g);
-        t.challenge_scalar(transcript_tags::SUMCHECK_CHALLENGE);
+        t.append_ext(transcript_tags::SUMCHECK_ROUND, g);
+        t.challenge(transcript_tags::SUMCHECK_CHALLENGE);
     }
-    t.append_scalars(transcript_tags::SUMCHECK_FINAL_EVALS, &proof.final_evals);
+    t.append_ext(transcript_tags::SUMCHECK_FINAL_EVALS, &proof.final_evals);
     t
 }
 
@@ -88,7 +88,7 @@ pub fn run() {
     let digest_time = setup.elapsed();
     let mut working = inst.columns();
     let mut t = Transcript::new();
-    sumcheck::absorb_witness_digest(&mut t, digest);
+    sumcheck::absorb_witness_digest(&mut t, &digest);
     let prove_start = Instant::now();
     let proof = sumcheck::prove_zerocheck(&inst.gate, &mut working, &mut t);
     let prove_time = prove_start.elapsed();
@@ -100,20 +100,20 @@ pub fn run() {
         "the witness being timed must satisfy the gate"
     );
     let mut bad_b = b.clone();
-    bad_b[0] += Fr::ONE; // A^2 - B - 1, nonzero for every A
+    bad_b[0] += Fp::ONE; // A^2 - B - 1, nonzero for every A
     assert!(
         !naive_verify(&a, &bad_b),
         "the naive verifier must reject a corrupted row"
     );
     drop(bad_b);
     assert!(
-        sumcheck_verify(&inst, digest, &proof),
+        sumcheck_verify(&inst, &digest, &proof),
         "the honest proof being timed must verify"
     );
     let mut bad_proof = proof.clone();
-    bad_proof.rounds[0][0] += Fr::ONE; // g(0)+g(1) shifts by 2
+    bad_proof.rounds[0][0] += Fp2::ONE; // g(0)+g(1) shifts by 2
     assert!(
-        !sumcheck_verify(&inst, digest, &bad_proof),
+        !sumcheck_verify(&inst, &digest, &bad_proof),
         "the sumcheck verifier must reject a corrupted round"
     );
     drop(bad_proof);
@@ -130,7 +130,7 @@ pub fn run() {
     for _ in 0..REPS {
         let start = Instant::now();
         for _ in 0..VERIFY_ITERS {
-            black_box(sumcheck_verify(&inst, digest, &proof));
+            black_box(sumcheck_verify(&inst, &digest, &proof));
         }
         verify.record(start.elapsed() / VERIFY_ITERS as u32);
     }
@@ -139,16 +139,16 @@ pub fn run() {
     // schedule: the sponge state after the replay must equal the sponge state
     // after the real verifier's run.
     let mut real = Transcript::new();
-    sumcheck::absorb_witness_digest(&mut real, digest);
+    sumcheck::absorb_witness_digest(&mut real, &digest);
     sumcheck::verify_zerocheck(&inst.gate, VARS, &proof, &mut real)
         .expect("the honest proof verifies");
-    let replay_is_faithful = transcript_only(&proof, digest).snapshot() == real.snapshot();
+    let replay_is_faithful = transcript_only(&proof, &digest).snapshot() == real.snapshot();
 
     let mut sponge = Best::new();
     for _ in 0..REPS {
         let start = Instant::now();
         for _ in 0..VERIFY_ITERS {
-            black_box(transcript_only(&proof, digest));
+            black_box(transcript_only(&proof, &digest));
         }
         sponge.record(start.elapsed() / VERIFY_ITERS as u32);
     }
@@ -162,7 +162,7 @@ pub fn run() {
     println!("{:<38} {:>10} {:>14}", "verifier", "time", "input read");
     println!(
         "{:<38} {:>10.3} ms {:>11.1} MiB",
-        "naive: recompute every row in Fr",
+        "naive: recompute every row in Fp",
         ms(naive.get()),
         mib(naive_bytes)
     );
