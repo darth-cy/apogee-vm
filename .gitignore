@@ -2,4 +2,3 @@
 .DS_Store
 /crates/guest-sdk/target
 /guests/target
-/assets

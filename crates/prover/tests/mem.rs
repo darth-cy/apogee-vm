@@ -44,10 +44,10 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
     let transitions: usize = (0..a.depth())
         .map(|k| {
             let claims = a.layer_width(k) as usize * if a.layers[k].halving { 2 } else { 1 };
-            4 + 128 * a.layer_vars(k + 1) as usize + 4 + 32 * claims
+            4 + 64 * a.layer_vars(k + 1) as usize + 4 + 16 * claims
         })
         .sum();
-    4 + 4 + 16 + 32 + (4 + 32 * a.outputs.len()) + 4 + transitions
+    4 + 4 + 16 + 16 + (4 + 16 * a.outputs.len()) + 4 + transitions
 }
 
 /// The guest decodes into the five execution families it runs — add/sub and
@@ -65,7 +65,7 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// of it is `crates/emulator/tests/guests.rs`', which checks the exit status
 /// and the journal and nothing below that.
 #[test]
-#[ignore = "five 2^20-row execution shards: one statement's proof needs tens of GB"]
+#[ignore = "five 2^20-row execution shards: one statement's proof peaks at 18.1 GB"]
 fn a1_the_guest_proves_and_every_shard_verifies() {
     let (setup, archive, public, proofs) = proved();
     let config = &setup.program.config;

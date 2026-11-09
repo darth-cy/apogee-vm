@@ -20,7 +20,7 @@
 
 mod common;
 
-use common::{bind, circuit, discharge, fr_base, honest};
+use common::{base_layer, bind, circuit, discharge, honest};
 use constants::challenge_slot::TOY;
 use constraints::{
     CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, PolyAddress, ProducingEntry,
@@ -179,7 +179,7 @@ fn an_honest_quadratic_circuit_proves_and_verifies() {
     let artifact = balance_circuit();
     for seed in 0..4u64 {
         let columns = satisfying(0x5313_0a00 + seed);
-        let base = fr_base(&artifact, columns.clone());
+        let base = base_layer(&artifact, columns.clone());
         let (_, challenges) = bind(&artifact, &base);
         let gamma = challenges.get(TOY).expect("bind sets the toy's slot");
         let values = forward(&artifact, &base, &challenges);

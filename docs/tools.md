@@ -199,21 +199,23 @@ every guest's bytes. So `guests/` is source only: a suite that runs a guest buil
 
 `crates/transcript/src/params.rs` and the known answer in its `tests/permutation.rs` are one
 run of HorizenLabs' generator, edited at three lines ([transcript.md](spec/transcript.md) §1.2):
+line 9 sets the field, line 17 the width, and a line after 109 adds the full rounds.
 
 ```console
 $ git clone https://github.com/HorizenLabs/poseidon2 && cd poseidon2
 $ git checkout 055bde3f4782731ba5f5ce5888a440a94327eaf3
-$ git apply --unidiff-zero <<'EOF'
---- a/poseidon2_rust_params.sage
-+++ b/poseidon2_rust_params.sage
-@@ -9 +9 @@
--p = 52435875175126190479447740508185965837690552500527637822603658699938581184513 # BLS12-381
-+p = 2^64 - 59 # A64-C5
-@@ -17 +17 @@
--t = 3 # BN254/BN256, BLS12-381, Pallas, Vesta (t = 3 for sponge, t = 2 for compression)
-+t = 16 # A64-C5: rate 8, capacity 8
-@@ -109,0 +110 @@
-+R_F_FIXED += 4 # A64-C5: t/4 full rounds against round skipping (ePrint 2026/306)
+$ ed -s poseidon2_rust_params.sage <<'EOF'
+109a
+R_F_FIXED += 4 # A64-C5: t/4 full rounds against round skipping (ePrint 2026/306)
+.
+17c
+t = 16 # A64-C5: rate 8, capacity 8
+.
+9c
+p = 2^64 - 59 # A64-C5
+.
+w
+q
 EOF
 $ cat > run.sage <<'EOF'
 import sys

@@ -17,11 +17,11 @@
 
 mod common;
 
-use common::{bind, fr_base, honest, opposed_circuit, root_circuit};
+use common::{base_layer, bind, honest, opposed_circuit, root_circuit};
 use field::Fp;
 use gkr::{explain_self_check, self_check, SelfCheckError};
 
-fn fr(v: u64) -> Fp {
+fn fp(v: u64) -> Fp {
     Fp::from_u64(v)
 }
 
@@ -40,10 +40,10 @@ fn joined(lines: &[String]) -> String {
 #[test]
 fn a_committed_operand_is_named_and_valued() {
     let artifact = opposed_circuit();
-    let a: Vec<Fp> = (0..4).map(|i| fr(10 + i)).collect();
+    let a: Vec<Fp> = (0..4).map(|i| fp(10 + i)).collect();
     let mut b = a.clone();
     b[1] += Fp::ONE;
-    let base = fr_base(&artifact, vec![a, b]);
+    let base = base_layer(&artifact, vec![a, b]);
     let (values, _, _) = honest(&artifact, &base);
     let (_, challenges) = bind(&artifact, &base);
 
@@ -96,7 +96,7 @@ fn a_committed_operand_is_named_and_valued() {
 #[test]
 fn an_inner_operand_is_named_by_the_relation_that_wrote_it() {
     let artifact = root_circuit();
-    let base = fr_base(&artifact, vec![vec![fr(2), fr(2)]]);
+    let base = base_layer(&artifact, vec![vec![fp(2), fp(2)]]);
     let (values, _, _) = honest(&artifact, &base);
     let (_, challenges) = bind(&artifact, &base);
 
@@ -127,7 +127,7 @@ fn an_inner_operand_is_named_by_the_relation_that_wrote_it() {
 #[test]
 fn a_producing_gate_reports_what_the_layer_holds() {
     let artifact = root_circuit();
-    let base = fr_base(&artifact, vec![vec![fr(0), fr(1)]]);
+    let base = base_layer(&artifact, vec![vec![fp(0), fp(1)]]);
     let (mut values, _, _) = honest(&artifact, &base);
     let (_, challenges) = bind(&artifact, &base);
     assert_eq!(
@@ -139,7 +139,7 @@ fn a_producing_gate_reports_what_the_layer_holds() {
     // Replace layer 1's single column with a wrong value. `sq` is
     // `a·(a − 1)`, which is 0 on both rows of the honest base, so 7 is wrong
     // on row 0 and the producing gate is what sees it.
-    values.layers[0][0] = poly::MultilinearPoly::new(poly::PolyBacking::Fp(vec![fr(7), Fp::ZERO]));
+    values.layers[0][0] = poly::MultilinearPoly::new(poly::PolyBacking::Fp(vec![fp(7), Fp::ZERO]));
     let failure = self_check(&artifact, &values, &challenges).expect_err("layer 1 row 0 is 7");
     assert_eq!(failure.layer, 0);
     assert_eq!(failure.row, 0);
@@ -162,8 +162,8 @@ fn a_producing_gate_reports_what_the_layer_holds() {
 #[test]
 fn an_explanation_of_a_row_that_agrees_is_empty() {
     let artifact = opposed_circuit();
-    let a: Vec<Fp> = (0..4).map(|i| fr(10 + i)).collect();
-    let base = fr_base(&artifact, vec![a.clone(), a]);
+    let a: Vec<Fp> = (0..4).map(|i| fp(10 + i)).collect();
+    let base = base_layer(&artifact, vec![a.clone(), a]);
     let (values, _, _) = honest(&artifact, &base);
     let (_, challenges) = bind(&artifact, &base);
     assert_eq!(self_check(&artifact, &values, &challenges), Ok(()));
@@ -181,8 +181,8 @@ fn an_explanation_of_a_row_that_agrees_is_empty() {
 #[test]
 fn coordinates_outside_the_circuit_are_answered_not_panicked() {
     let artifact = opposed_circuit();
-    let a: Vec<Fp> = (0..4).map(|i| fr(10 + i)).collect();
-    let base = fr_base(&artifact, vec![a.clone(), a]);
+    let a: Vec<Fp> = (0..4).map(|i| fp(10 + i)).collect();
+    let base = base_layer(&artifact, vec![a.clone(), a]);
     let (values, _, _) = honest(&artifact, &base);
     let (_, challenges) = bind(&artifact, &base);
 

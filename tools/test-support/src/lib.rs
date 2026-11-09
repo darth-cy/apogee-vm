@@ -27,9 +27,8 @@ use std::sync::{Mutex, OnceLock};
 /// under it when some RNG crate changes its algorithm in a minor release.
 ///
 /// Only the raw stream lives here. Turning it into a field element is the
-/// caller's job, because every caller wants something different: rejection
-/// sampling to canonical bytes, reduction mod p, a nonzero value, or the
-/// unreduced limbs of an exponent.
+/// caller's job, because every caller wants something different: reduction
+/// mod p, a value below a bound, or a nonzero one.
 pub struct Rng(u64);
 
 impl Rng {
@@ -43,27 +42,6 @@ impl Rng {
         z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
         z ^ (z >> 31)
-    }
-
-    /// Four limbs, little-endian: a 256-bit integer, unreduced. Used as a `pow`
-    /// exponent, where reduction would defeat the point.
-    pub fn next_exp(&mut self) -> [u64; 4] {
-        [
-            self.next_u64(),
-            self.next_u64(),
-            self.next_u64(),
-            self.next_u64(),
-        ]
-    }
-
-    /// The same four limbs as bytes — a 256-bit little-endian integer, and the
-    /// raw material every caller's field-element sampler starts from.
-    pub fn next_le32(&mut self) -> [u8; 32] {
-        let mut b = [0u8; 32];
-        for (i, limb) in self.next_exp().iter().enumerate() {
-            b[8 * i..8 * i + 8].copy_from_slice(&limb.to_le_bytes());
-        }
-        b
     }
 
     /// One byte per draw. Deliberately wasteful of the stream: the committed
@@ -400,18 +378,6 @@ mod tests {
         // The two seeds the committed fixtures are generated from.
         assert_eq!(Rng::new(20260903).next_u64(), 0x2e76_1edb_4a84_3ed2);
         assert_eq!(Rng::new(20260907).next_u64(), 0xad2e_a8a7_7120_2a78);
-    }
-
-    /// `next_le32` must be exactly `next_exp` written out little-endian: the
-    /// callers that sample a field element and the callers that sample an
-    /// exponent have to be drawing from the same stream, in the same order.
-    #[test]
-    fn next_le32_is_next_exp_little_endian() {
-        let limbs = Rng::new(7).next_exp();
-        let bytes = Rng::new(7).next_le32();
-        for (i, limb) in limbs.iter().enumerate() {
-            assert_eq!(bytes[8 * i..8 * i + 8], limb.to_le_bytes());
-        }
     }
 
     /// A generator that repeats, or that ignores its seed, would silently

@@ -185,7 +185,7 @@ pub fn discharge(base: &BaseLayer, claims: &[BaseClaim]) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 /// A base of `Fp` columns, given in layout order.
-pub fn fr_base(artifact: &CircuitArtifact, columns: Vec<Vec<Fp>>) -> BaseLayer {
+pub fn base_layer(artifact: &CircuitArtifact, columns: Vec<Vec<Fp>>) -> BaseLayer {
     let committed = artifact.committed();
     assert_eq!(
         columns.len(),

@@ -3,12 +3,11 @@
 //!
 //! **Every test here is `#[ignore]`d, and runs by name with
 //! `--include-ignored --test-threads=1`** — the execution family's shard is
-//! `2^20` rows, the timestamp channel's floor, and one statement's proof peaks
-//! at about 8.6 GB, so two at once do not fit a runner, and CI does not run
-//! them. What needs no proof — the wire forms, the key's load rules, the
-//! statement's refusals, the circuit row by row — is in
-//! `crates/verifier-core/tests` and `crates/checker/tests/add_sub.rs`, and runs
-//! in ordinary CI.
+//! `2^20` rows, the timestamp channel's floor, one statement's proof peaks at
+//! about 3.9 GB, and CI does not run them. What needs no proof — the wire
+//! forms, the key's load rules, the statement's refusals, the circuit row by
+//! row — is in `crates/verifier-core/tests` and
+//! `crates/checker/tests/add_sub.rs`, and runs in ordinary CI.
 
 mod common;
 
@@ -43,10 +42,10 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
     let transitions: usize = (0..a.depth())
         .map(|k| {
             let claims = a.layer_width(k) as usize * if a.layers[k].halving { 2 } else { 1 };
-            4 + 128 * a.layer_vars(k + 1) as usize + 4 + 32 * claims
+            4 + 64 * a.layer_vars(k + 1) as usize + 4 + 16 * claims
         })
         .sum();
-    4 + 4 + 16 + 32 + (4 + 32 * a.outputs.len()) + 4 + transitions
+    4 + 4 + 16 + 16 + (4 + 16 * a.outputs.len()) + 4 + transitions
 }
 
 // ---------------------------------------------------------------------------
@@ -63,7 +62,7 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// `crates/emulator/tests/guests.rs`': the exit status and the journal, and
 /// nothing below that.)
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
+#[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn a1_the_tiny_guest_proves_and_both_shards_verify() {
     let (setup, archive, public, proofs) = proved();
     let config = &setup.program.config;
@@ -170,7 +169,7 @@ fn statement_refusal(result: Result<(), VerifyError>, what: &str) {
 /// here too. A statement carries no commitment, so there is no such twin
 /// until a commitment scheme fills the void (`docs/architecture.md` §0).
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
+#[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn a5_every_statement_twin_is_refused_as_statement() {
     let (setup, _, public, proofs) = proved();
     let vk = &setup.vk;
@@ -216,7 +215,7 @@ fn a5_every_statement_twin_is_refused_as_statement() {
 /// the add/sub shard, whose own roots are untouched, accepts it. That is why a
 /// statement is verified only when every one of its shards is.
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
+#[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn a_statement_root_that_is_not_its_proofs_is_refused_by_that_shard() {
     let (setup, _, public, proofs) = proved();
     assert_eq!((proofs[0].family, proofs[1].family), (INIT, ADD));
@@ -345,7 +344,7 @@ fn gkr_schedule(a: &constraints::CircuitArtifact) -> Vec<TranscriptEvent> {
 /// of the three exists, so no challenge here follows anything it protects
 /// (`docs/architecture.md` §0).
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
+#[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn a6_a8_every_base_claim_is_at_one_point_and_the_schedule_holds() {
     let setup = common::setup();
     let archive = common::archive(&setup.program);

@@ -6,9 +6,9 @@ page that specifies its subject; [glossary.md](glossary.md) indexes the vocabula
 
 ## 0. ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME
 
-**This repository is UNCOMMITTED, and every proof it makes is UNSOUND.** The polynomial commitment
-scheme was removed, with everything built on it, and nothing was put in its place: the void is
-deliberate, and a later commitment scheme must fill it. Until one does:
+**This repository is UNCOMMITTED, and every proof it makes is UNSOUND.** There is no polynomial
+commitment scheme: the void is deliberate, and a later commitment scheme must fill it. Until one
+does:
 
 - **No column of any shard is committed.** The verifier checks every GKR pass, every LogUp channel
   and the memory argument's arithmetic, and then takes every base-layer column value on the
@@ -50,9 +50,8 @@ $ grep -rn "UNFINISHED_" crates tools
 The base field is A64-C5, `p = 2^64 − 59`, and every challenge is an element of its quadratic
 extension ([primitives.md](spec/primitives.md) §1).
 
-**UNFINISHED: A64-C5 CHARACTERISTIC.** Apart from the void above, three integer arguments held only
-because the field they were written for was 254 bits wide, and fail at 64: the memory argument's
-timestamps, which nothing bounds ([memory.md](spec/memory.md) §4.2), `MUL_DIV`'s product identity
+**UNFINISHED: A64-C5 CHARACTERISTIC.** Apart from the void above, three integer arguments do not
+hold at `p ≈ 2^64`: the memory argument's timestamps, which nothing bounds ([memory.md](spec/memory.md) §4.2), `MUL_DIV`'s product identity
 ([mul-div.md](spec/mul-div.md) §5.1) and `SHIFT_BITWISE`'s left shift
 ([shift-bitwise.md](spec/shift-bitwise.md) §5). A commitment scheme repairs none of them; a later
 stage reshapes those circuits. Each seam is marked:
@@ -178,7 +177,7 @@ own independent oracle.
 | the memory and lookup arguments | native evaluators in `checker` over executed traces |
 | the executor | its own trace's self-check and the arguments above; there is no second executor |
 
-The suites that prove real shards need tens of GiB and run outside CI;
+The suites that prove real shards need up to 22 GB and run outside CI;
 `.github/workflows/ci.yml` lists them.
 
 ## 7. Cost

@@ -21,7 +21,7 @@ fn poly(values: Vec<Fp2>) -> MultilinearPoly {
     MultilinearPoly::new(PolyBacking::Fp2(values))
 }
 
-fn fr(v: u32) -> Fp2 {
+fn fp2(v: u32) -> Fp2 {
     ext(v as u64)
 }
 
@@ -70,7 +70,7 @@ fn tree(column: Vec<Fp2>) -> Vec<MultilinearPoly> {
 }
 
 fn hand(cols: &ToyColumns, gamma: Fp2) -> Hand {
-    let col = |v: &[u32]| -> Vec<Fp2> { v.iter().map(|x| fr(*x)).collect() };
+    let col = |v: &[u32]| -> Vec<Fp2> { v.iter().map(|x| fp2(*x)).collect() };
     let (m, a, b, c, e, s) = (
         col(&cols.m),
         col(&cols.a),

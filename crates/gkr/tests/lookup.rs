@@ -27,15 +27,15 @@ fn inner(layer: u32, offset: u32) -> PolyAddress {
 }
 
 /// A pseudo-random base element: a column's value.
-fn fr(rng: &mut Rng) -> Fp {
+fn fp(rng: &mut Rng) -> Fp {
     Fp::from_u64(rng.next_u64())
 }
 
 /// A pseudo-random `Fp2` element: a challenge or a point's coordinate.
 fn fr2(rng: &mut Rng) -> Fp2 {
     Fp2 {
-        c0: fr(rng),
-        c1: fr(rng),
+        c0: fp(rng),
+        c1: fp(rng),
     }
 }
 
@@ -170,8 +170,8 @@ fn fraction_circuit(vars: u32) -> CircuitArtifact {
 fn fractions(vars: u32, seed: u64) -> (Vec<Fp>, Vec<Fp>) {
     let mut rng = Rng::new(seed);
     let rows = 1usize << vars;
-    let p: Vec<Fp> = (0..rows).map(|_| fr(&mut rng)).collect();
-    let q: Vec<Fp> = (0..rows).map(|_| fr(&mut rng) + Fp::ONE).collect();
+    let p: Vec<Fp> = (0..rows).map(|_| fp(&mut rng)).collect();
+    let q: Vec<Fp> = (0..rows).map(|_| fp(&mut rng) + Fp::ONE).collect();
     assert!(q.iter().all(|v| *v != Fp::ZERO));
     (p, q)
 }

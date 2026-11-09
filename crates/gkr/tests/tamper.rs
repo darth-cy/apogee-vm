@@ -21,7 +21,7 @@ use gkr::{
 use poly::{eq_table, MultilinearPoly, PolyBacking};
 
 /// An integer, embedded in `Fp2`.
-fn fr(v: u32) -> Fp2 {
+fn fp2(v: u32) -> Fp2 {
     Fp::from_u64(v as u64).into()
 }
 
@@ -156,7 +156,7 @@ fn a_cancelling_violation_is_rejected() {
                 .iter()
                 .map(|a| values.base.get(*a).unwrap().get(y))
                 .collect();
-            gate_values(&artifact, 0, &lower, &[], &[fr(y as u32)], &challenges)[3]
+            gate_values(&artifact, 0, &lower, &[], &[fp2(y as u32)], &challenges)[3]
         })
         .collect();
     assert_eq!(residual[active[0]], v.into());

@@ -15,7 +15,7 @@ use field::{Fp, Fp2};
 use gkr::{eval_gate, ExternalChallenges};
 
 /// An integer as a kernel value, which is an `Fp2` element.
-fn fr(v: u64) -> Fp2 {
+fn fp2(v: u64) -> Fp2 {
     Fp::from_u64(v).into()
 }
 
@@ -53,14 +53,14 @@ fn linear() {
         constant: lit(7),
     };
     assert_eq!(
-        eval_gate(&gate, &[fr(11), fr(13), fr(17)], &ch),
-        fr(2 * 11 + 5 * 13 + 7) + g * fr(17)
+        eval_gate(&gate, &[fp2(11), fp2(13), fp2(17)], &ch),
+        fp2(2 * 11 + 5 * 13 + 7) + g * fp2(17)
     );
     let gate = GateDef::Linear {
         terms: vec![(lit(3), x(0))],
         constant: Coeff::Challenge(TOY),
     };
-    assert_eq!(eval_gate(&gate, &[fr(11)], &ch), fr(33) + g);
+    assert_eq!(eval_gate(&gate, &[fp2(11)], &ch), fp2(33) + g);
 }
 
 /// `c·x·y` with `c = 3`, and with `c = γ`. Kills M19, the kernel that drops
@@ -73,15 +73,15 @@ fn product() {
         left: x(0),
         right: x(1),
     };
-    let value = eval_gate(&gate, &[fr(11), fr(13)], &ch);
-    assert_eq!(value, fr(3 * 11 * 13));
-    assert_ne!(value, fr(11 * 13), "the coefficient is not dropped");
+    let value = eval_gate(&gate, &[fp2(11), fp2(13)], &ch);
+    assert_eq!(value, fp2(3 * 11 * 13));
+    assert_ne!(value, fp2(11 * 13), "the coefficient is not dropped");
     let gate = GateDef::Product {
         coeff: Coeff::Challenge(TOY),
         left: x(0),
         right: x(1),
     };
-    assert_eq!(eval_gate(&gate, &[fr(11), fr(13)], &ch), g * fr(143));
+    assert_eq!(eval_gate(&gate, &[fp2(11), fp2(13)], &ch), g * fp2(143));
 }
 
 /// `x·m + (1 − m)`: `x` under mask 1, the identity under mask 0, and the
@@ -93,11 +93,11 @@ fn mask_into_identity() {
         input: x(0),
         mask: x(1),
     };
-    assert_eq!(eval_gate(&gate, &[fr(11), fr(1)], &ch), fr(11));
-    assert_eq!(eval_gate(&gate, &[fr(11), fr(0)], &ch), fr(1));
+    assert_eq!(eval_gate(&gate, &[fp2(11), fp2(1)], &ch), fp2(11));
+    assert_eq!(eval_gate(&gate, &[fp2(11), fp2(0)], &ch), fp2(1));
     assert_eq!(
-        eval_gate(&gate, &[fr(11), fr(5)], &ch),
-        fr(11 * 5 + 1) - fr(5)
+        eval_gate(&gate, &[fp2(11), fp2(5)], &ch),
+        fp2(11 * 5 + 1) - fp2(5)
     );
 }
 
@@ -114,17 +114,17 @@ fn affine_product() {
         right: vec![(lit(5), x(2))],
         right_constant: lit(7),
     };
-    let value = eval_gate(&gate, &[fr(11), fr(13), fr(17)], &ch);
-    let left = fr(2 * 11 + 3) + g * fr(13);
-    assert_eq!(value, left * fr(5 * 17 + 7));
+    let value = eval_gate(&gate, &[fp2(11), fp2(13), fp2(17)], &ch);
+    let left = fp2(2 * 11 + 3) + g * fp2(13);
+    assert_eq!(value, left * fp2(5 * 17 + 7));
     assert_ne!(
         value,
-        left * fr(5 * 17 + 3),
+        left * fp2(5 * 17 + 3),
         "the right constant is its own"
     );
     assert_ne!(
         value,
-        (fr(2 * 11) + g * fr(13)) * fr(5 * 17 + 7),
+        (fp2(2 * 11) + g * fp2(13)) * fp2(5 * 17 + 7),
         "the left constant is kept"
     );
     let gate = GateDef::AffineProduct {
@@ -134,8 +134,8 @@ fn affine_product() {
         right_constant: Coeff::Challenge(TOY),
     };
     assert_eq!(
-        eval_gate(&gate, &[fr(11), fr(17)], &ch),
-        fr(2 * 11 + 3) * (fr(5 * 17) + g)
+        eval_gate(&gate, &[fp2(11), fp2(17)], &ch),
+        fp2(2 * 11 + 3) * (fp2(5 * 17) + g)
     );
 }
 
@@ -156,18 +156,18 @@ fn quadratic() {
             (lit(5), x(0), x(2)),
         ],
     };
-    let values = [11, 13, 17, 19, 23, 29, 11, 17].map(fr);
+    let values = [11, 13, 17, 19, 23, 29, 11, 17].map(fp2);
     let value = eval_gate(&gate, &values, &ch);
-    let products = fr(3 * 17 * 19 + 5 * 11 * 17) + g * fr(23 * 29);
-    assert_eq!(value, fr(7 + 2 * 11) + g * fr(13) + products);
+    let products = fp2(3 * 17 * 19 + 5 * 11 * 17) + g * fp2(23 * 29);
+    assert_eq!(value, fp2(7 + 2 * 11) + g * fp2(13) + products);
     assert_ne!(
         value,
-        fr(2 * 11) + g * fr(13) + products,
+        fp2(2 * 11) + g * fp2(13) + products,
         "the constant is kept"
     );
     assert_ne!(
         value,
-        fr(7 + 2 * 11 + 17 * 19 + 5 * 11 * 17) + g * fr(13) + g * fr(23 * 29),
+        fp2(7 + 2 * 11 + 17 * 19 + 5 * 11 * 17) + g * fp2(13) + g * fp2(23 * 29),
         "a product's coefficient is its own"
     );
 
@@ -176,19 +176,22 @@ fn quadratic() {
         linear: vec![],
         products: vec![(lit(3), x(0), x(1))],
     };
-    assert_eq!(eval_gate(&no_linear, &[fr(11), fr(13)], &ch), g + fr(429));
+    assert_eq!(
+        eval_gate(&no_linear, &[fp2(11), fp2(13)], &ch),
+        g + fp2(429)
+    );
 
     let no_products = GateDef::Quadratic {
         constant: lit(7),
         linear: vec![(lit(2), x(0))],
         products: vec![],
     };
-    assert_eq!(eval_gate(&no_products, &[fr(11)], &ch), fr(29));
+    assert_eq!(eval_gate(&no_products, &[fp2(11)], &ch), fp2(29));
 
     let constant_only = GateDef::Quadratic {
         constant: lit(7),
         linear: vec![],
         products: vec![],
     };
-    assert_eq!(eval_gate(&constant_only, &[], &ch), fr(7));
+    assert_eq!(eval_gate(&constant_only, &[], &ch), fp2(7));
 }

@@ -669,7 +669,7 @@ impl Form {
     }
 }
 
-fn fr(v: u64) -> Fp {
+fn fp(v: u64) -> Fp {
     Fp::from_u64(v)
 }
 
@@ -692,7 +692,7 @@ fn word_of(x: &[PolyAddress; BYTES]) -> Form {
 /// XOR.
 fn lo(v: PolyAddress, m: PolyAddress, s: u32) -> Form {
     let half = inv_pow2(1);
-    Form::constant(fr((1 << s) - 1) * half)
+    Form::constant(fp((1 << s) - 1) * half)
         .plus_col(half, v)
         .plus_col(-half, m)
 }
@@ -783,7 +783,7 @@ fn maj(k: usize) -> Form {
 fn round_constant(k: usize) -> Form {
     let mut out = Form::zero();
     for r in 0..f::GROUPS {
-        out = out.plus_col(fr(f::ROUND_CONSTANTS[R * r + k] as u64), group_sel(r));
+        out = out.plus_col(fp(f::ROUND_CONSTANTS[R * r + k] as u64), group_sel(r));
     }
     out
 }
@@ -836,7 +836,7 @@ fn selector_gates() -> Vec<(String, GateDef)> {
     let mut rule = Form::col(read(f::GROUP_WORD));
     let mut live = Form::col(LIVE).times(-Fp::ONE);
     for r in 0..f::GROUPS {
-        rule = rule.plus_col(-fr(r as u64), group_sel(r));
+        rule = rule.plus_col(-fp(r as u64), group_sel(r));
         live = live.plus_col(Fp::ONE, group_sel(r));
     }
     out.push(("group_rule".to_string(), rule.gate()));
@@ -988,7 +988,7 @@ fn masks(
     for b in 0..BYTES {
         out.push(xor8(
             format!("{stem}_b{b}_xor"),
-            &Form::constant(fr((1 << s) - 1)),
+            &Form::constant(fp((1 << s) - 1)),
             x[b],
             m[b],
         ));
@@ -1034,7 +1034,7 @@ fn round_lookups(k: usize, out: &mut Vec<LookupExpr>) {
     }
     out.push(xor8(
         p("bs0_mx_xor"),
-        &Form::constant(fr(3)),
+        &Form::constant(fp(3)),
         x[0],
         round_col(k, Round::Bs0Mx, 0),
     ));
@@ -1066,7 +1066,7 @@ fn round_lookups(k: usize, out: &mut Vec<LookupExpr>) {
     }
     out.push(xor8(
         p("bs1_mx_xor"),
-        &Form::constant(fr(63)),
+        &Form::constant(fp(63)),
         x[0],
         round_col(k, Round::Bs1Mx, 0),
     ));

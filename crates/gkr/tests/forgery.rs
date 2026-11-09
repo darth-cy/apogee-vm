@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{bind, discharge, fr_base, honest, opposed_circuit};
+use common::{base_layer, bind, discharge, honest, opposed_circuit};
 use constants::transcript_tags as tags;
 use constraints::PolyAddress;
 use field::{Fp, Fp2};
@@ -92,7 +92,7 @@ fn every_round_is_held_to_the_claim_it_inherits() {
 fn a_repaired_last_round_does_not_forge_an_output() {
     let artifact = opposed_circuit();
     let column: Vec<Fp> = (0..4).map(|i| Fp::from_u64(0x5313_1500 + i)).collect();
-    let base = fr_base(&artifact, vec![column.clone(), column.clone()]);
+    let base = base_layer(&artifact, vec![column.clone(), column.clone()]);
     let (values, _, result) = honest(&artifact, &base);
     discharge(&base, &result.expect("the honest run verifies")).expect("and discharges");
     let truth = &values.layers[0][0];

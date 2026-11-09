@@ -151,14 +151,14 @@ fn the_statement_descriptor_is_three_adjacent_messages() {
     );
 
     // The same three messages, written out from the definition.
-    let fr = |x: u32| Fp::from_u64(x as u64);
-    let mut vm: Vec<Fp> = config.families.iter().map(|(f, _)| fr(*f)).collect();
-    vm.extend(config.families.iter().map(|(_, h)| fr(*h)));
-    vm.push(fr(config.bytecode_size_words));
+    let fp = |x: u32| Fp::from_u64(x as u64);
+    let mut vm: Vec<Fp> = config.families.iter().map(|(f, _)| fp(*f)).collect();
+    vm.extend(config.families.iter().map(|(_, h)| fp(*h)));
+    vm.push(fp(config.bytecode_size_words));
     let mut replay = Transcript::new();
     replay.append_scalars(tags::VM_CONFIG, &vm);
-    replay.append_scalars(tags::SHARD_COUNTS, &counts.map(fr));
-    replay.append_scalars(tags::MEMORY_WINDOWS, &windows.map(fr));
+    replay.append_scalars(tags::SHARD_COUNTS, &counts.map(fp));
+    replay.append_scalars(tags::MEMORY_WINDOWS, &windows.map(fp));
     assert_eq!(tr.snapshot(), replay.snapshot());
 
     // Shard counts are per proof: changing one moves the sponge.

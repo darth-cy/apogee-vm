@@ -10,7 +10,7 @@
 //! set, so no list of shards can be short.
 //!
 //! `#[ignore]`d with the rest of the proving suites: it proves the statement
-//! first, which peaks at 8.6 GB.
+//! first, which peaks at 3.9 GB.
 
 #[path = "../../prover/tests/common/mod.rs"]
 mod common;
@@ -20,6 +20,13 @@ use std::process::Command;
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The per-shard verdict lines, `<file>: family F shard I verifies`. The
+/// statement's line and the UNFINISHED warning say "verifies" too, and end
+/// otherwise.
+fn verdicts(text: &str) -> usize {
+    text.lines().filter(|l| l.ends_with(" verifies")).count()
 }
 
 fn run(args: &[&Path], identity: &str) -> (i32, String) {
@@ -43,7 +50,7 @@ fn invoke(verb: &[&str], args: &[&Path], identity: &str) -> (i32, String) {
 }
 
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
+#[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn the_cli_verifies_the_dumped_files_and_refuses_a_flipped_bit() {
     let setup = common::setup();
     let (public, proofs) = common::streamed_shards(&setup, &common::empty_io());
@@ -73,7 +80,7 @@ fn the_cli_verifies_the_dumped_files_and_refuses_a_flipped_bit() {
     args.extend(files.iter().map(|p| p.as_path()));
     let (code, text) = run(&args, &identity);
     assert_eq!(code, 0, "{text}");
-    assert_eq!(text.matches(" verifies").count(), 5, "{text}");
+    assert_eq!(verdicts(&text), 4, "{text}");
     assert!(text.contains("the statement verifies: 4 shards"), "{text}");
 
     // Another identity than the key's: refused before any proof is read.
@@ -120,7 +127,7 @@ fn the_cli_verifies_the_dumped_files_and_refuses_a_flipped_bit() {
     for (i, one) in files.iter().enumerate() {
         let (code, text) = run(&[&key, &statement, one], &identity);
         assert_eq!(code, 1, "only proof {i}: {text}");
-        assert!(text.contains(" verifies"), "{text}");
+        assert_eq!(verdicts(&text), 1, "{text}");
         assert!(text.contains("not the statement's 4 shards"), "{text}");
         let (code, text) = run(&[&key, &statement, one, one], &identity);
         assert_eq!(code, 1, "proof {i} twice: {text}");
@@ -142,7 +149,7 @@ fn the_cli_verifies_the_dumped_files_and_refuses_a_flipped_bit() {
 /// The `block` verb over a `BlockProof` file, end to end — the same
 /// statement, proved as a block instead of as loose shards.
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
+#[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn the_cli_verifies_a_block_file() {
     use verifier_core::BlockProof;
 

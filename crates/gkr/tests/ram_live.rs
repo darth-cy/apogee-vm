@@ -16,7 +16,7 @@
 
 mod common;
 
-use common::{discharge, fr_base, honest};
+use common::{base_layer, discharge, honest};
 use constants::memory::RAM_LIVE_BIT;
 use constraints::{
     CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, Padding, PolyAddress,
@@ -33,7 +33,7 @@ use test_support::Rng;
 const LIVE: VirtualKind = VirtualKind::RamLive;
 
 /// A pseudo-random point coordinate, an `Fp2` element.
-fn fr(rng: &mut Rng) -> Fp2 {
+fn fp2(rng: &mut Rng) -> Fp2 {
     Fp2 {
         c0: Fp::from_u64(rng.next_u64()),
         c1: Fp::from_u64(rng.next_u64()),
@@ -72,7 +72,7 @@ fn the_closed_form_is_the_extension_of_the_table() {
         }
         let extension = MultilinearPoly::new(PolyBacking::Fp(table));
         for trial in 0..8 {
-            let point: Vec<Fp2> = (0..n).map(|_| fr(&mut rng)).collect();
+            let point: Vec<Fp2> = (0..n).map(|_| fp2(&mut rng)).collect();
             assert_eq!(
                 virtual_at_point(LIVE, &point),
                 extension.evaluate(&point),
@@ -212,7 +212,7 @@ fn a_circuit_reading_ram_live_proves_and_rejects_a_violation_below_the_boundary(
     // The circuit names no challenge slot.
     let none = ExternalChallenges::new();
 
-    let base = fr_base(&artifact, vec![a.clone()]);
+    let base = base_layer(&artifact, vec![a.clone()]);
     let (values, _, result) = honest(&artifact, &base);
     assert_eq!(self_check(&artifact, &values, &none), Ok(()));
     let root = a[boundary..].iter().fold(Fp::ONE, |acc, v| acc * *v);
@@ -224,7 +224,7 @@ fn a_circuit_reading_ram_live_proves_and_rejects_a_violation_below_the_boundary(
     discharge(&base, &result.expect("the honest run verifies")).expect("and discharges");
 
     a[boundary - 1] = Fp::ONE;
-    let base = fr_base(&artifact, vec![a]);
+    let base = base_layer(&artifact, vec![a]);
     let (values, _, result) = honest(&artifact, &base);
     assert_eq!(
         self_check(&artifact, &values, &none),
