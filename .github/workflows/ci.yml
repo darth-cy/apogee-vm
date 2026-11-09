@@ -51,7 +51,7 @@ jobs:
           cargo test -p prover --features debug-info --lib
 
       # Not run here: the suites that prove real shards. Each is `#[ignore]`d,
-      # needs tens of GiB, and runs by hand, one file at a time; what needs no
+      # needs up to 22 GB, and runs by hand, one file at a time; what needs no
       # proof runs in the `test` step.
       #
       # - name: the LogUp channels over the combined toy

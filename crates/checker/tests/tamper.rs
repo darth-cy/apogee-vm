@@ -5,9 +5,9 @@
 //! refuses it (`docs/spec/proof.md` §6).
 //!
 //! **`#[ignore]`d, and run by name with `--include-ignored --test-threads=1`**:
-//! the add/sub shard is `2^20` rows and a statement's proof peaks at 8.6 GB —
-//! 9.3 GB with the honest statement the harness holds beside a re-proof — and
-//! `control`'s has two execution shards of that height, 11.3 GB.
+//! the add/sub shard is `2^20` rows and a statement's proof peaks at 3.9 GB —
+//! 4.0 GB with the honest statement the harness holds beside a re-proof — and
+//! `control`'s has two execution shards of that height, 5.4 GB.
 //! The rows these tampers edit are `crates/checker/tests/add_sub.rs`'s, which
 //! runs in ordinary CI.
 //!
@@ -118,7 +118,7 @@ const IMAGE_ROW: usize = 1 << 14;
 /// event's value and its timestamp, `MemoryArgument`; a lookup multiplicity,
 /// `Lookup`.
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
+#[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn a2_a3_a4_a_semantics_a_memory_and_a_multiplicity_cell_fail_in_three_classes() {
     let setup = common::setup();
     let archive = common::archive(&setup.program);
@@ -183,7 +183,7 @@ fn a2_a3_a4_a_semantics_a_memory_and_a_multiplicity_cell_fail_in_three_classes()
 /// channel's domain, every gate and range still holding; a `next_pc` outside 32
 /// bits by the range channel.
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
+#[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn a7_the_soundness_floor_refuses_each_of_its_controls() {
     let setup = common::setup();
     let archive = common::archive(&setup.program);
@@ -256,7 +256,7 @@ fn a7_the_soundness_floor_refuses_each_of_its_controls() {
 /// which multiplies an address of 0 — change and the statement still verifies.
 /// The harness tells a harmless edit from a harmful one.
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
+#[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn a11_a_cell_nothing_reads_still_verifies() {
     let setup = common::setup();
     let archive = common::archive(&setup.program);
@@ -275,7 +275,7 @@ fn a11_a_cell_nothing_reads_still_verifies() {
 /// changed, and `x10`'s final value changed while the public exit status stays
 /// honest, are each refused as `MemoryArgument` — on both shards.
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
+#[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn a13_the_teardown_binds_the_final_values() {
     let setup = common::setup();
     let archive = common::archive(&setup.program);
@@ -342,7 +342,7 @@ fn a13_the_teardown_binds_the_final_values() {
 /// `crates/checker/tests/multiset.rs`' `consecutive_rows_are_a_cycle_apart`
 /// holds a fractional cycle to `gap_lo_pc` in the circuit.
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
+#[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn a_pc_read_less_than_a_cycle_before_its_write_is_refused() {
     let setup = common::setup();
     let archive = common::archive(&setup.program);
@@ -370,7 +370,7 @@ fn a_pc_read_less_than_a_cycle_before_its_write_is_refused() {
 /// The image column's twin is
 /// `UNFINISHED_the_image_column_moved_with_its_teardown_is_refused`.
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
+#[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn the_targets_s14_left_to_s16_are_refused() {
     let setup = common::setup();
     let archive = common::archive(&setup.program);
@@ -527,7 +527,7 @@ fn jbs_cell(address: PolyAddress, row: usize, value: Fp) -> Cell {
 /// And two cells nothing reads, on a padding row, still verify. The poisoned
 /// packed-table twin is `UNFINISHED_a_poisoned_generic_table_row_is_refused`.
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks near 10 GB"]
+#[ignore = "2^20 rows: one statement's proof peaks at 5.4 GB"]
 fn s17_a7_the_comparison_and_the_pc_are_pinned() {
     let setup = common::control_setup();
     let archive = common::control_archive(&setup.program);

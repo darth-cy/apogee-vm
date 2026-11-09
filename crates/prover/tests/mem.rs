@@ -65,7 +65,7 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// of it is `crates/emulator/tests/guests.rs`', which checks the exit status
 /// and the journal and nothing below that.
 #[test]
-#[ignore = "five 2^20-row execution shards: one statement's proof needs tens of GB"]
+#[ignore = "five 2^20-row execution shards: one statement's proof peaks at 18.1 GB"]
 fn a1_the_guest_proves_and_every_shard_verifies() {
     let (setup, archive, public, proofs) = proved();
     let config = &setup.program.config;

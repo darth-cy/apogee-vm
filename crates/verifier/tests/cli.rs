@@ -10,7 +10,7 @@
 //! set, so no list of shards can be short.
 //!
 //! `#[ignore]`d with the rest of the proving suites: it proves the statement
-//! first, which peaks at 8.6 GB.
+//! first, which peaks at 3.9 GB.
 
 #[path = "../../prover/tests/common/mod.rs"]
 mod common;
@@ -50,7 +50,7 @@ fn invoke(verb: &[&str], args: &[&Path], identity: &str) -> (i32, String) {
 }
 
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
+#[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn the_cli_verifies_the_dumped_files_and_refuses_a_flipped_bit() {
     let setup = common::setup();
     let (public, proofs) = common::streamed_shards(&setup, &common::empty_io());
@@ -149,7 +149,7 @@ fn the_cli_verifies_the_dumped_files_and_refuses_a_flipped_bit() {
 /// The `block` verb over a `BlockProof` file, end to end — the same
 /// statement, proved as a block instead of as loose shards.
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
+#[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn the_cli_verifies_a_block_file() {
     use verifier_core::BlockProof;
 

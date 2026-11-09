@@ -178,7 +178,7 @@ own independent oracle.
 | the memory and lookup arguments | native evaluators in `checker` over executed traces |
 | the executor | its own trace's self-check and the arguments above; there is no second executor |
 
-The suites that prove real shards need tens of GiB and run outside CI;
+The suites that prove real shards need up to 22 GB and run outside CI;
 `.github/workflows/ci.yml` lists them.
 
 ## 7. Cost

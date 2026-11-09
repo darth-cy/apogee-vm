@@ -58,7 +58,7 @@ fn a_circuit_inventory_carries_what_a_later_failure_is_read_against() {
 /// `set_var` is sound here on edition 2021 and this is the only test in the
 /// binary that touches the environment, so the two runs cannot race a reader.
 ///
-/// `#[ignore]`d: it proves the add/sub statement twice, about 8.6 GB a time,
+/// `#[ignore]`d: it proves the add/sub statement twice, about 3.9 GB a time,
 /// and the `deep` run adds a self-check pass per shard.
 #[test]
 #[ignore]
