@@ -5,7 +5,7 @@
 mod common;
 
 use common::{next_fp, next_fp2, pack_bits};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use poly::{MultilinearPoly, PolyBacking};
 use test_support::Rng;
 

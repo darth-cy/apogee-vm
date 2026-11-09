@@ -30,7 +30,7 @@ use constraints::memory::check_memory;
 use constraints::{
     family_circuit, shift_bitwise, CircuitArtifact, GateDef, PolyAddress, VirtualKind,
 };
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::{eval_gate, gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallenges};
 use program::lookup_tables::generic_entries;
 

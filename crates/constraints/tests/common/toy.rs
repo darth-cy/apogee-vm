@@ -28,7 +28,7 @@ use constraints::{
     ProducingEntry, Relation, ScratchSlot, VirtualKind, COEFFICIENT_ENCODING_CANONICAL_LE,
     FORMAT_VERSION,
 };
-use field_a64_c5::Fp;
+use field::Fp;
 
 /// The toy's cache-free compilation.
 pub fn toy_cache_free() -> CircuitArtifact {

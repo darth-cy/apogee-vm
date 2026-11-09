@@ -1,8 +1,8 @@
 //! The permutation, against an implementation that shares nothing with this
 //! crate.
 
-use field_a64_c5::Fp;
-use transcript_a64_c5::{poseidon2_permute, WIDTH};
+use field::Fp;
+use transcript::{poseidon2_permute, WIDTH};
 
 /// The generator's own Poseidon2 at `[0, 1, …, 15]`: `poseidon2()` in
 /// `poseidon2_rust_params.sage`, explicit matrices over Sage's `GF(p)`, printed

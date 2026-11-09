@@ -12,7 +12,7 @@ use checker::{violated_relations, WitnessRow};
 use common::*;
 use constants::challenge_slot;
 use constraints::CircuitArtifact;
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::ExternalChallenges;
 use test_support::Rng;
 

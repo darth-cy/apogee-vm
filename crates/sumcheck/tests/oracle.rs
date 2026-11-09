@@ -16,7 +16,7 @@ mod common;
 use common::{
     bound_transcript, eq_randomizers, square_gate, square_witness, wide_gate, wide_witness,
 };
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use poly::{eq_eval, MultilinearPoly};
 use sumcheck::{prove_zerocheck, verify_zerocheck, witness_digest, Gate};
 

@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 use constants::memory::{READ_ROOT, TS_BITS, WRITE_ROOT};
 use constants::{family, guest_memory};
 use constraints::PolyAddress;
-use field_a64_c5::Fp2;
+use field::Fp2;
 use gkr_verify::{
     boundary_factors, channel_holds, reconciles, verify, ExternalChallenges, GkrError,
 };

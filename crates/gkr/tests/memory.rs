@@ -25,14 +25,14 @@ use constraints::memory::{
     family_frame_artifact, frame_artifact, image_window_artifact, zero_window_artifact,
 };
 use constraints::{CircuitArtifact, VirtualKind};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::{
     boundary_factors, forward, gate_values, prove, reconciles, self_check, verify, virtual_at_row,
     window_challenges, BaseLayer, BoundaryFinals, ExternalChallenges, GkrError, SelfCheckError,
 };
 use sumcheck::{absorb_witness_digest, witness_digest};
 use test_support::Rng;
-use transcript_a64_c5::Transcript;
+use transcript::Transcript;
 
 /// The query table, by **global query id**: pc, rs1, rs2, load, ram, rd.
 /// No family holds all six.

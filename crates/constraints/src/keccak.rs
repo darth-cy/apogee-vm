@@ -67,7 +67,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use constants::{address_space, keccak as k, lookup_channel};
-use field_a64_c5::Fp;
+use field::Fp;
 
 use crate::delegation as d;
 use crate::lookup::ChannelSpec;

@@ -82,7 +82,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use constants::{address_space, lookup_channel, sha256 as f};
-use field_a64_c5::Fp;
+use field::Fp;
 
 use crate::delegation as d;
 use crate::lookup::ChannelSpec;

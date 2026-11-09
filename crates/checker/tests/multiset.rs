@@ -43,7 +43,7 @@ use constraints::memory::{
     FRAME_MIN_ADVANCE, FRAME_NAMES, FRAME_READ_ONLY, FRAME_SPACE, PC, RAM, RD, RS1,
 };
 use constraints::PolyAddress;
-use field_a64_c5::Fp;
+use field::Fp;
 use gkr::{
     boundary_factors, reconciles, self_check, BoundaryFinals, ExternalChallenges, SelfCheckError,
 };

@@ -12,10 +12,10 @@ mod common;
 
 use common::{bind, toy, toy_base, toy_columns, ToyColumns, TOY_ROWS};
 use constants::transcript_tags as tags;
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::{forward, prove, GkrProof};
 use poly::{eq_eval, MultilinearPoly, PolyBacking};
-use transcript_a64_c5::Transcript;
+use transcript::Transcript;
 
 fn poly(values: Vec<Fp2>) -> MultilinearPoly {
     MultilinearPoly::new(PolyBacking::Fp2(values))

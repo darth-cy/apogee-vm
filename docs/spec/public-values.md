@@ -84,7 +84,7 @@ every 4-aligned address below `2^32` ([memory-ops.md](memory-ops.md) §2).
 ## 5. The binding
 
 **`io_digest`** absorbs the statement's two strings in a transcript of its own
-(`transcript_a64_c5::io_digest`):
+(`transcript::io_digest`):
 
 ```text
 t ← Transcript::new()

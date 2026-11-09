@@ -26,7 +26,7 @@ constraints.workspace = true
 # one shard at a time, so the prover's loop is what decides when a column
 # exists (`docs/spec/streaming.md` §2).
 emulator.workspace = true
-field-a64-c5.workspace = true
+field.workspace = true
 gkr.workspace = true
 loader.workspace = true
 poly.workspace = true
@@ -36,7 +36,7 @@ postcard.workspace = true
 program.workspace = true
 rayon.workspace = true
 trace.workspace = true
-transcript-a64-c5.workspace = true
+transcript.workspace = true
 verifier-core.workspace = true
 
 [dev-dependencies]

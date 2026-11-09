@@ -8,7 +8,7 @@ mod common;
 use checker::{check_laws, check_padding, check_padding_identity};
 use common::*;
 use constraints::{CircuitArtifact, Coeff, GateDef};
-use field_a64_c5::Fp;
+use field::Fp;
 
 #[test]
 fn a_flipped_zero_row_verdict_is_rejected() {

@@ -23,7 +23,7 @@ use constraints::{
     CachedEntry, CircuitArtifact, Coeff, GateDef, LayerSpec, PolyAddress, ProducingEntry, Relation,
     ScratchSlot,
 };
-use field_a64_c5::Fp;
+use field::Fp;
 
 type Law = fn(&CircuitArtifact) -> Result<(), String>;
 

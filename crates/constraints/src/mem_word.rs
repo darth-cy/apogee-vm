@@ -27,7 +27,7 @@ use alloc::vec::Vec;
 
 use constants::extra_mask::mem_word as kind;
 use constants::{family, lookup_channel};
-use field_a64_c5::Fp;
+use field::Fp;
 
 use crate::lookup::{check_copowers, ChannelSpec};
 use crate::memory::{

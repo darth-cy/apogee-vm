@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use constants::lookup_channel;
 use constraints::lookup::ChannelSpec;
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
-use field_a64_c5::Fp;
+use field::Fp;
 use gkr_verify::virtual_at_row;
 use poly::{MultilinearPoly, PolyBacking};
 

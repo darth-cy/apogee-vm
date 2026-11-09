@@ -13,9 +13,9 @@ use alloc::vec::Vec;
 
 use constants::memory::TS_BITS;
 use constants::{challenge_slot, family, guest_memory, transcript_tags as tags, PROTOCOL_VERSION};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr_verify::{window_challenges, BoundaryFinals, ExternalChallenges};
-use transcript_a64_c5::{io_digest, Digest, Transcript};
+use transcript::{io_digest, Digest, Transcript};
 
 use crate::{PublicInputs, VerifyingKey};
 

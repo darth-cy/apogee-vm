@@ -28,7 +28,7 @@ use constraints::mul_div as md_circuit;
 use constraints::sha256 as sh_circuit;
 use constraints::shift_bitwise as sb_circuit;
 use constraints::PolyAddress;
-use field_a64_c5::Fp;
+use field::Fp;
 use poly::{MultilinearPoly, PolyBacking};
 use program::lookup_tables::generic_table;
 use program::FamilyId;

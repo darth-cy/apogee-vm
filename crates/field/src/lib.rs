@@ -1,458 +1,405 @@
 #![no_std]
-//! `Fr`, the BN254 scalar field.
+//! The A64-C5 field and its quadratic extension, specified in
+//! `docs/spec/primitives.md` §1:
 //!
-//! Arithmetic runs in Montgomery form over four 64-bit limbs. Montgomery form
-//! never escapes memory: [`Fr::to_bytes`] and [`Fr::from_bytes`] are the only
-//! wire path, and they are canonical (non-Montgomery) 32-byte little-endian.
+//! - [`Fp`], the integers mod `p = 2^64 − 59`: the base field, every witness
+//!   value and every gate literal;
+//! - [`Fp2`], `F_p[x]/(x^2 − 2)`: the challenge field, every transcript
+//!   challenge and every value a challenge reaches.
 //!
-//! Everything is plain stable Rust with `u128` intermediates — no carry
-//! intrinsics, no assembly, no nightly — so this crate compiles unchanged for
-//! `riscv32imac-unknown-none-elf`.
+//! `#![no_std]`, so guests and the no_std verifier core can link it.
 
-extern crate alloc;
-
-use alloc::vec::Vec;
-use core::fmt;
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-/// BN254 scalar field modulus `p`, little-endian 64-bit limbs.
-///
-/// `p = 21888242871839275222246405745257275088548364400416034343698204186575808495617`
-/// `  = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001`
-pub const FR_MODULUS: [u64; 4] = [
-    0x43e1_f593_f000_0001,
-    0x2833_e848_79b9_7091,
-    0xb850_45b6_8181_585d,
-    0x3064_4e72_e131_a029,
-];
+/// The A64-C5 prime, `2^64 − 59`.
+pub const A64_C5: u64 = 0xFFFF_FFFF_FFFF_FFC5;
 
-/// `p - 2`, little-endian 64-bit limbs: the Fermat exponent for inversion.
-pub const FR_MODULUS_MINUS_TWO: [u64; 4] = [
-    0x43e1_f593_efff_ffff,
-    0x2833_e848_79b9_7091,
-    0xb850_45b6_8181_585d,
-    0x3064_4e72_e131_a029,
-];
+/// An element of the A64-C5 field, held as its canonical representative.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fp(u64);
 
-/// Montgomery radix `R = 2^256 mod p`, little-endian 64-bit limbs.
-///
-/// `R` is also the Montgomery representation of `1`.
-pub const FR_R: [u64; 4] = [
-    0xac96_341c_4fff_fffb,
-    0x36fc_7695_9f60_cd29,
-    0x666e_a36f_7879_462e,
-    0x0e0a_77c1_9a07_df2f,
-];
+impl Fp {
+    pub const ZERO: Fp = Fp(0);
+    pub const ONE: Fp = Fp(1);
+    /// `p − 1`.
+    pub const MINUS_ONE: Fp = Fp(A64_C5 - 1);
 
-/// `R^2 mod p`, little-endian 64-bit limbs: converts a canonical value into
-/// Montgomery form via one Montgomery multiplication.
-pub const FR_R2: [u64; 4] = [
-    0x1bb8_e645_ae21_6da7,
-    0x53fe_3ab1_e35c_59e3,
-    0x8c49_833d_53bb_8085,
-    0x0216_d0b1_7f4e_44a5,
-];
+    /// `x mod p`. A `u64` is below `2p`, so `p` is subtracted at most once.
+    #[inline]
+    pub const fn from_u64(x: u64) -> Fp {
+        Fp(if x >= A64_C5 { x - A64_C5 } else { x })
+    }
 
-/// `-p^{-1} mod 2^64`, the per-limb Montgomery reduction multiplier.
-pub const FR_INV: u64 = 0xc2e1_f593_efff_ffff;
+    /// `x mod p` for any `x < 2^128`, folding the high word down by `2^64 ≡ 59`
+    /// twice. The first fold leaves `x < 60·2^64`; the second adds at most 3481
+    /// in 64 bits, so its carry, one more `2^64 ≡ 59`, lands on a sum below
+    /// 3481, and `p` is then subtracted at most once.
+    #[inline]
+    pub const fn from_u128(x: u128) -> Fp {
+        let x = (x >> 64) * 59 + (x as u64 as u128);
+        let (r, carry) = (x as u64).overflowing_add((x >> 64) as u64 * 59);
+        Fp::from_u64(r + 59 * carry as u64)
+    }
 
-/// `-1` in Montgomery form, i.e. `(p - 1) * R mod p`, which equals `p - R`.
-///
-/// Checked against `ZERO - ONE` in `tests/edge_cases.rs`.
-const MINUS_ONE_MONTGOMERY: [u64; 4] = [
-    0x974b_c177_a000_0006,
-    0xf137_71b2_da58_a367,
-    0x51e1_a247_0908_122e,
-    0x2259_d6b1_4729_c0fa,
-];
-
-/// An element of the BN254 scalar field.
-///
-/// The limbs are the Montgomery representation `x * R mod p`, little-endian,
-/// always fully reduced to `[0, p)`. That canonical representation is what
-/// makes the derived `PartialEq` correct.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Fr([u64; 4]);
-
-// ---------------------------------------------------------------------------
-// Limb primitives. Every intermediate fits in `u128` by inspection:
-// `(2^64 - 1) + (2^64 - 1)^2 + (2^64 - 1) = 2^128 - 1`.
-// ---------------------------------------------------------------------------
-
-/// `acc + a * b + carry`, split into (low limb, carry out).
-#[inline(always)]
-fn mac(acc: u64, a: u64, b: u64, carry: u64) -> (u64, u64) {
-    let t = (acc as u128) + (a as u128) * (b as u128) + (carry as u128);
-    (t as u64, (t >> 64) as u64)
-}
-
-/// `a + b + carry`, split into (low limb, carry out).
-#[inline(always)]
-fn adc(a: u64, b: u64, carry: u64) -> (u64, u64) {
-    let t = (a as u128) + (b as u128) + (carry as u128);
-    (t as u64, (t >> 64) as u64)
-}
-
-/// `a - b - borrow`, split into (low limb, borrow out).
-#[inline(always)]
-fn sbb(a: u64, b: u64, borrow: u64) -> (u64, u64) {
-    let t = (a as u128)
-        .wrapping_sub(b as u128)
-        .wrapping_sub(borrow as u128);
-    (t as u64, ((t >> 64) as u64) & 1)
-}
-
-/// Little-endian limbwise `a >= p`.
-#[inline]
-fn is_ge_modulus(a: &[u64; 4]) -> bool {
-    for i in (0..4).rev() {
-        if a[i] != FR_MODULUS[i] {
-            return a[i] > FR_MODULUS[i];
+    /// `x`, if it is canonical.
+    pub const fn from_canonical(x: u64) -> Option<Fp> {
+        if x < A64_C5 {
+            Some(Fp(x))
+        } else {
+            None
         }
     }
-    true
-}
 
-/// Subtract `p` once if `a >= p`.
-#[inline]
-fn reduce_once(a: &mut [u64; 4]) {
-    if is_ge_modulus(a) {
-        let mut borrow = 0u64;
-        for i in 0..4 {
-            let (d, b) = sbb(a[i], FR_MODULUS[i], borrow);
-            a[i] = d;
-            borrow = b;
-        }
-        debug_assert_eq!(borrow, 0, "a >= p, so a - p cannot borrow");
-    }
-}
-
-/// `(a + b) mod p` for reduced `a`, `b`.
-fn add_limbs(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
-    let mut r = [0u64; 4];
-    let mut carry = 0u64;
-    for i in 0..4 {
-        let (s, c) = adc(a[i], b[i], carry);
-        r[i] = s;
-        carry = c;
-    }
-    // p < 2^254, so a + b < 2^255 and the sum always fits in four limbs.
-    debug_assert_eq!(carry, 0, "operands must be reduced to [0, p)");
-    reduce_once(&mut r);
-    r
-}
-
-/// `(a - b) mod p` for reduced `a`, `b`.
-fn sub_limbs(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
-    let mut r = [0u64; 4];
-    let mut borrow = 0u64;
-    for i in 0..4 {
-        let (d, bw) = sbb(a[i], b[i], borrow);
-        r[i] = d;
-        borrow = bw;
-    }
-    if borrow == 1 {
-        let mut carry = 0u64;
-        for i in 0..4 {
-            let (s, c) = adc(r[i], FR_MODULUS[i], carry);
-            r[i] = s;
-            carry = c;
-        }
-    }
-    r
-}
-
-/// `-a mod p` for reduced `a`.
-fn neg_limbs(a: &[u64; 4]) -> [u64; 4] {
-    if *a == [0u64; 4] {
-        [0u64; 4]
-    } else {
-        sub_limbs(&FR_MODULUS, a)
-    }
-}
-
-/// Montgomery product `a * b * R^{-1} mod p` for reduced `a`, `b`.
-///
-/// CIOS (Koc-Acar-Kaliski) over `s = 4` limbs. With `a < p` the running
-/// accumulator stays below `2p`, and `2p < 2^255`, so it never spills past the
-/// fourth limb and one conditional subtraction reduces the result.
-fn mont_mul(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
-    let mut t = [0u64; 6];
-    for &b_i in b.iter() {
-        // t += a * b_i
-        let mut carry = 0u64;
-        for j in 0..4 {
-            let (s, c) = mac(t[j], a[j], b_i, carry);
-            t[j] = s;
-            carry = c;
-        }
-        let (s, c) = adc(t[4], carry, 0);
-        t[4] = s;
-        t[5] = c;
-
-        // t = (t + m * p) / 2^64, with m chosen so the low limb cancels.
-        let m = t[0].wrapping_mul(FR_INV);
-        let (cancelled, mut carry) = mac(t[0], m, FR_MODULUS[0], 0);
-        debug_assert_eq!(cancelled, 0, "m = t[0] * (-p^-1) must cancel limb 0");
-        for j in 1..4 {
-            let (s, c) = mac(t[j], m, FR_MODULUS[j], carry);
-            t[j - 1] = s;
-            carry = c;
-        }
-        let (s, c) = adc(t[4], carry, 0);
-        t[3] = s;
-        t[4] = t[5] + c;
-    }
-    debug_assert_eq!(t[4], 0, "CIOS accumulator stays below 2p < 2^255");
-
-    let mut r = [t[0], t[1], t[2], t[3]];
-    reduce_once(&mut r);
-    r
-}
-
-/// Montgomery form to canonical: `a * R^{-1} mod p`.
-#[inline]
-fn from_montgomery(a: &[u64; 4]) -> [u64; 4] {
-    mont_mul(a, &[1, 0, 0, 0])
-}
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-impl Fr {
-    /// The additive identity.
-    pub const ZERO: Fr = Fr([0, 0, 0, 0]);
-
-    /// The multiplicative identity.
-    pub const ONE: Fr = Fr(FR_R);
-
-    /// `p - 1`. Also the decoded-table padding sentinel.
-    pub const MINUS_ONE: Fr = Fr(MINUS_ONE_MONTGOMERY);
-
-    /// Lift a `u64`. Always in range: `2^64 < p`.
-    pub fn from_u64(x: u64) -> Fr {
-        Fr(mont_mul(&[x, 0, 0, 0], &FR_R2))
+    /// The canonical representative, in `[0, p)`.
+    #[inline]
+    pub const fn to_u64(self) -> u64 {
+        self.0
     }
 
-    /// `self * self`.
-    pub fn square(&self) -> Fr {
-        Fr(mont_mul(&self.0, &self.0))
+    /// The wire form: the canonical representative, 8 bytes little-endian.
+    pub fn to_bytes(self) -> [u8; 8] {
+        self.0.to_le_bytes()
     }
 
-    /// `self^exp`, with `exp` a 256-bit little-endian limb array.
-    ///
-    /// The exponent is a plain integer, not a field element: it is not reduced
-    /// and need not be below `p`. `x^0 == ONE` for every `x`, including zero.
-    pub fn pow(&self, exp: &[u64; 4]) -> Fr {
-        let mut acc = Fr::ONE;
-        for limb in exp.iter().rev() {
-            for bit in (0..64).rev() {
-                acc = acc.square();
-                if (limb >> bit) & 1 == 1 {
-                    acc *= self;
-                }
-            }
-        }
-        acc
+    /// The inverse of [`Fp::to_bytes`]: `None` at or above `p`, never reduced.
+    pub fn from_bytes(bytes: &[u8; 8]) -> Option<Fp> {
+        Fp::from_canonical(u64::from_le_bytes(*bytes))
     }
 
-    /// Multiplicative inverse by Fermat, `self^(p-2)`. `None` for zero.
-    pub fn inverse(&self) -> Option<Fr> {
-        if *self == Fr::ZERO {
+    /// The inverse, `None` for zero, by the extended Euclidean algorithm on
+    /// `(p, self)`: about 39 division steps for a random element, where
+    /// `self^(p − 2)` takes 63 squarings and some products in series. Row by
+    /// row `t·self ≡ r (mod p)`, and `t` alternates in sign, so its magnitude is
+    /// kept, growing to `p` and no further, and the step count's parity signs
+    /// it. The loop ends on `r = 1`, whose `|t|` is at most `p/2`: the next
+    /// row's is `p`, at least twice it.
+    pub fn inverse(self) -> Option<Fp> {
+        if self == Fp::ZERO {
             return None;
         }
-        Some(self.pow(&FR_MODULUS_MINUS_TWO))
-    }
-
-    /// Canonical (non-Montgomery) 32-byte little-endian encoding.
-    pub fn to_bytes(&self) -> [u8; 32] {
-        let c = from_montgomery(&self.0);
-        let mut out = [0u8; 32];
-        for i in 0..4 {
-            out[8 * i..8 * i + 8].copy_from_slice(&c[i].to_le_bytes());
+        let (mut r0, mut r1) = (A64_C5, self.0);
+        let (mut t0, mut t1, mut odd) = (0u64, 1u64, false);
+        while r1 != 0 {
+            let q = r0 / r1;
+            (r0, r1) = (r1, r0 - q * r1);
+            (t0, t1) = (t1, t0 + q * t1);
+            odd = !odd;
         }
+        Some(Fp(if odd { t0 } else { A64_C5 - t0 }))
+    }
+}
+
+impl Add for Fp {
+    type Output = Fp;
+
+    /// `rhs + 59 < 2^64`, and `self + rhs + 59` carries out of 64 bits exactly
+    /// when `self + rhs ≥ p`, leaving `self + rhs − p`: one 64-bit add decides,
+    /// and two coordinates' adds vectorize.
+    #[inline]
+    fn add(self, rhs: Fp) -> Fp {
+        let (t, carry) = self.0.overflowing_add(rhs.0 + 59);
+        Fp(if carry { t } else { t - 59 })
+    }
+}
+
+impl Sub for Fp {
+    type Output = Fp;
+
+    /// A borrow wraps by `2^64`; adding `p` back, modulo `2^64`, lands on
+    /// `self − rhs + p`.
+    #[inline]
+    fn sub(self, rhs: Fp) -> Fp {
+        let (d, borrow) = self.0.overflowing_sub(rhs.0);
+        Fp(if borrow { d.wrapping_add(A64_C5) } else { d })
+    }
+}
+
+impl Neg for Fp {
+    type Output = Fp;
+
+    #[inline]
+    fn neg(self) -> Fp {
+        Fp::ZERO - self
+    }
+}
+
+impl Mul for Fp {
+    type Output = Fp;
+
+    #[inline]
+    fn mul(self, rhs: Fp) -> Fp {
+        Fp::from_u128(self.0 as u128 * rhs.0 as u128)
+    }
+}
+
+/// An element `c0 + c1·x` of `F_{p^2} = F_p[x]/(x^2 − 2)`, a field because
+/// `p ≡ 5 (mod 8)` makes 2 a non-square mod `p`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fp2 {
+    pub c0: Fp,
+    pub c1: Fp,
+}
+
+impl Fp2 {
+    pub const ZERO: Fp2 = Fp2 {
+        c0: Fp::ZERO,
+        c1: Fp::ZERO,
+    };
+    pub const ONE: Fp2 = Fp2 {
+        c0: Fp::ONE,
+        c1: Fp::ZERO,
+    };
+
+    /// The wire form: `c0` then `c1`, each as [`Fp::to_bytes`].
+    pub fn to_bytes(self) -> [u8; 16] {
+        let mut out = [0u8; 16];
+        out[..8].copy_from_slice(&self.c0.to_bytes());
+        out[8..].copy_from_slice(&self.c1.to_bytes());
         out
     }
 
-    /// Decode a source-literal hex constant: `0x` followed by exactly 64
-    /// lowercase hex digits, read **big-endian**.
-    ///
-    /// This is the form constant tables are written in — the order
-    /// [`Debug`] prints, and the order upstream tables such as the Poseidon2
-    /// round constants use, so a vendored table diffs against its source by
-    /// eye. It is deliberately *not* the little-endian byte order of
-    /// [`to_bytes`], which is the wire form; a hex literal in source is a
-    /// number, not a byte string.
-    ///
-    /// `None` for anything else: a missing prefix, the wrong length, an
-    /// uppercase or non-hex digit, or a value `>= p`. There is exactly one
-    /// accepted spelling, so a constant that does not parse is a build-time
-    /// failure at its `expect`, not a silently different field element.
-    ///
-    /// [`to_bytes`]: Fr::to_bytes
-    pub fn from_hex(s: &str) -> Option<Fr> {
-        let digits = s.strip_prefix("0x")?.as_bytes();
-        if digits.len() != 64 {
-            return None;
-        }
-        let mut le = [0u8; 32];
-        for i in 0..32 {
-            let hi = hex_digit(digits[2 * i])?;
-            let lo = hex_digit(digits[2 * i + 1])?;
-            // The text is big-endian, the bytes are little-endian.
-            le[31 - i] = (hi << 4) | lo;
-        }
-        Fr::from_bytes(&le)
+    /// The inverse of [`Fp2::to_bytes`]: `None` unless both halves are canonical.
+    pub fn from_bytes(bytes: &[u8; 16]) -> Option<Fp2> {
+        let half = |i: usize| Fp::from_bytes(bytes[i..i + 8].try_into().expect("8 bytes"));
+        Some(Fp2 {
+            c0: half(0)?,
+            c1: half(8)?,
+        })
     }
 
-    /// Decode a canonical 32-byte little-endian value.
-    ///
-    /// `None` if the value is `>= p`. Non-canonical input is never silently
-    /// reduced.
-    pub fn from_bytes(b: &[u8; 32]) -> Option<Fr> {
-        let mut limbs = [0u64; 4];
-        for (limb, chunk) in limbs.iter_mut().zip(b.chunks_exact(8)) {
-            let mut w = [0u8; 8];
-            w.copy_from_slice(chunk);
-            *limb = u64::from_le_bytes(w);
-        }
-        if is_ge_modulus(&limbs) {
-            return None;
-        }
-        Some(Fr(mont_mul(&limbs, &FR_R2)))
+    /// `(c0 − c1·x) / (c0^2 − 2·c1^2)`: the norm lies in `F_p` and is zero only
+    /// at zero, 2 being a non-square. `None` for zero.
+    pub fn inverse(self) -> Option<Fp2> {
+        let n = (self.c0 * self.c0 - (self.c1 * self.c1 + self.c1 * self.c1)).inverse()?;
+        Some(Fp2 {
+            c0: self.c0 * n,
+            c1: -(self.c1 * n),
+        })
     }
 }
 
-/// One lowercase hex digit's value, or `None`.
-fn hex_digit(c: u8) -> Option<u8> {
-    match c {
-        b'0'..=b'9' => Some(c - b'0'),
-        b'a'..=b'f' => Some(c - b'a' + 10),
-        _ => None,
+/// The embedding of `F_p` in `F_{p^2}`.
+impl From<Fp> for Fp2 {
+    #[inline]
+    fn from(c0: Fp) -> Fp2 {
+        Fp2 { c0, c1: Fp::ZERO }
     }
 }
 
-/// Invert every element in place with Montgomery's trick.
-///
-/// Zero entries stay zero; they are skipped, not treated as an error.
-pub fn batch_inverse(xs: &mut [Fr]) {
-    // prefix[i] = product of the nonzero entries strictly before i.
-    let mut prefix: Vec<Fr> = Vec::with_capacity(xs.len());
-    let mut running = Fr::ONE;
-    for x in xs.iter() {
-        prefix.push(running);
-        if *x != Fr::ZERO {
-            running *= x;
-        }
-    }
+impl Add for Fp2 {
+    type Output = Fp2;
 
-    // A product of nonzero field elements is nonzero, and the empty product is
-    // ONE, so this inverse always exists.
-    let mut inv = running
-        .inverse()
-        .expect("batch_inverse: product of nonzero entries is nonzero");
-
-    for i in (0..xs.len()).rev() {
-        if xs[i] == Fr::ZERO {
-            continue;
+    #[inline]
+    fn add(self, rhs: Fp2) -> Fp2 {
+        Fp2 {
+            c0: self.c0 + rhs.c0,
+            c1: self.c1 + rhs.c1,
         }
-        // inv == 1 / (product of nonzero entries at indices <= i)
-        let next_inv = inv * xs[i];
-        xs[i] = inv * prefix[i];
-        inv = next_inv;
     }
 }
 
-// ---------------------------------------------------------------------------
-// Operators. The macro collapses six near-identical impls per operator.
-// ---------------------------------------------------------------------------
+impl Sub for Fp2 {
+    type Output = Fp2;
 
-macro_rules! impl_binop {
-    ($Op:ident, $op:ident, $OpAssign:ident, $op_assign:ident, $limbs:ident) => {
-        impl $Op<Fr> for Fr {
-            type Output = Fr;
-            fn $op(self, rhs: Fr) -> Fr {
-                Fr($limbs(&self.0, &rhs.0))
+    #[inline]
+    fn sub(self, rhs: Fp2) -> Fp2 {
+        Fp2 {
+            c0: self.c0 - rhs.c0,
+            c1: self.c1 - rhs.c1,
+        }
+    }
+}
+
+impl Neg for Fp2 {
+    type Output = Fp2;
+
+    #[inline]
+    fn neg(self) -> Fp2 {
+        Fp2 {
+            c0: -self.c0,
+            c1: -self.c1,
+        }
+    }
+}
+
+impl Mul for Fp2 {
+    type Output = Fp2;
+
+    /// `(a0 + a1·x)(b0 + b1·x) = (a0·b0 + 2·a1·b1) + (a0·b1 + a1·b0)·x`, each
+    /// coordinate summed in 128 bits by [`wide_add`] and reduced once: two
+    /// reductions where reducing each product takes four. Karatsuba's three
+    /// products would be slower: on a one-word field a product is one
+    /// instruction pair, and the sums and differences Karatsuba trades the
+    /// fourth for are modular operations of their own.
+    #[inline]
+    fn mul(self, rhs: Fp2) -> Fp2 {
+        let wide = |a: Fp, b: Fp| a.0 as u128 * b.0 as u128;
+        let t = wide(self.c1, rhs.c1);
+        Fp2 {
+            c0: Fp::from_u128(wide_add(wide_add(wide(self.c0, rhs.c0), t), t)),
+            c1: Fp::from_u128(wide_add(wide(self.c0, rhs.c1), wide(self.c1, rhs.c0))),
+        }
+    }
+}
+
+/// A sum of `Fp2` products reduced once, when it is read: each coordinate's
+/// 128-bit products are added as they come and the carries out of 128 bits
+/// counted, a carry being `2^128 ≡ 3481`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Fp2Sum {
+    c0: (u128, u64),
+    c1: (u128, u64),
+}
+
+impl Fp2Sum {
+    /// `+= a·b`, by [`Fp2`]'s schoolbook products.
+    #[inline]
+    pub fn add_product(&mut self, a: Fp2, b: Fp2) {
+        let wide = |x: Fp, y: Fp| x.0 as u128 * y.0 as u128;
+        let t = wide(a.c1, b.c1);
+        for y in [wide(a.c0, b.c0), t, t] {
+            carry_add(&mut self.c0, y);
+        }
+        for y in [wide(a.c0, b.c1), wide(a.c1, b.c0)] {
+            carry_add(&mut self.c1, y);
+        }
+    }
+
+    /// The sum mod `p`. `3481` times the carries stays below `2^64` for fewer
+    /// than `2^50` products.
+    #[inline]
+    pub fn reduce(self) -> Fp2 {
+        let r = |(s, k): (u128, u64)| Fp::from_u128(s) + Fp::from_u64(3481 * k);
+        Fp2 {
+            c0: r(self.c0),
+            c1: r(self.c1),
+        }
+    }
+}
+
+#[inline]
+fn carry_add(acc: &mut (u128, u64), y: u128) {
+    let (s, carry) = acc.0.overflowing_add(y);
+    *acc = (s, acc.1 + carry as u64);
+}
+
+/// `x + y`, as a `u128` equal to it mod `p`: a carry out of 128 bits is
+/// `2^128 ≡ 59^2 = 3481`, and adding 3481 back cannot carry again while one of
+/// the two is a product of canonical elements, at most `(p − 1)^2`.
+#[inline]
+const fn wide_add(x: u128, y: u128) -> u128 {
+    let (s, carry) = x.overflowing_add(y);
+    s + 3481 * carry as u128
+}
+
+// A base element on the right, as the embedding would give it: two base
+// products where a full one takes four.
+impl Add<Fp> for Fp2 {
+    type Output = Fp2;
+
+    #[inline]
+    fn add(self, rhs: Fp) -> Fp2 {
+        Fp2 {
+            c0: self.c0 + rhs,
+            c1: self.c1,
+        }
+    }
+}
+
+impl Sub<Fp> for Fp2 {
+    type Output = Fp2;
+
+    #[inline]
+    fn sub(self, rhs: Fp) -> Fp2 {
+        Fp2 {
+            c0: self.c0 - rhs,
+            c1: self.c1,
+        }
+    }
+}
+
+impl Mul<Fp> for Fp2 {
+    type Output = Fp2;
+
+    #[inline]
+    fn mul(self, rhs: Fp) -> Fp2 {
+        Fp2 {
+            c0: self.c0 * rhs,
+            c1: self.c1 * rhs,
+        }
+    }
+}
+
+// And on the left, as a formula writes a literal: `c·x`, `1 − x`.
+impl Add<Fp2> for Fp {
+    type Output = Fp2;
+
+    #[inline]
+    fn add(self, rhs: Fp2) -> Fp2 {
+        rhs + self
+    }
+}
+
+impl Sub<Fp2> for Fp {
+    type Output = Fp2;
+
+    #[inline]
+    fn sub(self, rhs: Fp2) -> Fp2 {
+        -rhs + self
+    }
+}
+
+impl Mul<Fp2> for Fp {
+    type Output = Fp2;
+
+    #[inline]
+    fn mul(self, rhs: Fp2) -> Fp2 {
+        rhs * self
+    }
+}
+
+macro_rules! assign {
+    ($($T:ty, $R:ty;)*) => {$(
+        impl AddAssign<$R> for $T {
+            #[inline]
+            fn add_assign(&mut self, rhs: $R) {
+                *self = *self + rhs;
             }
         }
-        impl $Op<&Fr> for Fr {
-            type Output = Fr;
-            fn $op(self, rhs: &Fr) -> Fr {
-                Fr($limbs(&self.0, &rhs.0))
+        impl SubAssign<$R> for $T {
+            #[inline]
+            fn sub_assign(&mut self, rhs: $R) {
+                *self = *self - rhs;
             }
         }
-        impl $Op<Fr> for &Fr {
-            type Output = Fr;
-            fn $op(self, rhs: Fr) -> Fr {
-                Fr($limbs(&self.0, &rhs.0))
+        impl MulAssign<$R> for $T {
+            #[inline]
+            fn mul_assign(&mut self, rhs: $R) {
+                *self = *self * rhs;
             }
         }
-        impl $Op<&Fr> for &Fr {
-            type Output = Fr;
-            fn $op(self, rhs: &Fr) -> Fr {
-                Fr($limbs(&self.0, &rhs.0))
-            }
-        }
-        impl $OpAssign<Fr> for Fr {
-            fn $op_assign(&mut self, rhs: Fr) {
-                self.0 = $limbs(&self.0, &rhs.0);
-            }
-        }
-        impl $OpAssign<&Fr> for Fr {
-            fn $op_assign(&mut self, rhs: &Fr) {
-                self.0 = $limbs(&self.0, &rhs.0);
-            }
-        }
-    };
+    )*};
 }
 
-impl_binop!(Add, add, AddAssign, add_assign, add_limbs);
-impl_binop!(Sub, sub, SubAssign, sub_assign, sub_limbs);
-impl_binop!(Mul, mul, MulAssign, mul_assign, mont_mul);
-
-impl Neg for Fr {
-    type Output = Fr;
-    fn neg(self) -> Fr {
-        Fr(neg_limbs(&self.0))
-    }
+assign! {
+    Fp, Fp;
+    Fp2, Fp2;
+    Fp2, Fp;
 }
 
-impl Neg for &Fr {
-    type Output = Fr;
-    fn neg(self) -> Fr {
-        Fr(neg_limbs(&self.0))
-    }
-}
-
-/// Prints the canonical value in big-endian hex, never the Montgomery limbs.
-impl fmt::Debug for Fr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let b = self.to_bytes();
-        write!(f, "Fr(0x")?;
-        for byte in b.iter().rev() {
-            write!(f, "{:02x}", byte)?;
-        }
-        write!(f, ")")
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Serde. Routed through the canonical byte form, so the Montgomery
-// representation never reaches an artifact.
-// ---------------------------------------------------------------------------
-
-impl serde::Serialize for Fr {
+// Serde routes through the wire form, so a non-canonical value is refused on
+// the way in. `F_{p^2}` has no serde: no serde-encoded type carries one.
+impl serde::Serialize for Fp {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         self.to_bytes().serialize(s)
     }
 }
 
-impl<'de> serde::Deserialize<'de> for Fr {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Fr, D::Error> {
-        let b = <[u8; 32] as serde::Deserialize>::deserialize(d)?;
-        Fr::from_bytes(&b).ok_or_else(|| {
-            <D::Error as serde::de::Error>::custom("non-canonical Fr encoding: value >= modulus")
+impl<'de> serde::Deserialize<'de> for Fp {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Fp, D::Error> {
+        let b = <[u8; 8] as serde::Deserialize>::deserialize(d)?;
+        Fp::from_bytes(&b).ok_or_else(|| {
+            <D::Error as serde::de::Error>::custom("non-canonical Fp encoding: value >= modulus")
         })
     }
 }

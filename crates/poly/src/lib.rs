@@ -39,7 +39,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 
 /// How a polynomial's evaluation table is stored.
 ///

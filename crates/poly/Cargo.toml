@@ -5,7 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-field-a64-c5.workspace = true
+field.workspace = true
 
 [dev-dependencies]
 test-support.workspace = true

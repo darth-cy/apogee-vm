@@ -1,3 +1,5 @@
 # transcript
 
-The BN254 Poseidon2 transcript: obsolete and linked by nothing. It goes with `crates/field`, `tools/transcript-ref` and `tools/kat-gen`'s `field` group. The protocol's transcript is `transcript-a64-c5`, which [transcript.md](../../docs/spec/transcript.md) specifies.
+Poseidon2-A64-C5, the duplex transcript over `field`, and `io_digest`.
+
+Specified in [transcript.md](../../docs/spec/transcript.md), [public-values.md](../../docs/spec/public-values.md) §5.

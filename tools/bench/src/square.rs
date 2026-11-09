@@ -2,7 +2,7 @@
 //! `u16` column and `B = A^2` a `u32` one. Both routines run on it, so the
 //! prove number and the verify comparison are measured over the same claim.
 
-use field_a64_c5::Fp;
+use field::Fp;
 use poly::{MultilinearPoly, PolyBacking};
 use sumcheck::{Gate, GateTerm, PolyAddress};
 use test_support::Rng;

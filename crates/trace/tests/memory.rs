@@ -11,7 +11,7 @@ use constraints::memory::{
     RD, RS1, RS2,
 };
 use constraints::PolyAddress;
-use field_a64_c5::Fp;
+use field::Fp;
 use isa::Instr;
 use loader::load_elf;
 use program::row_kind;

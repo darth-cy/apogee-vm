@@ -14,9 +14,9 @@ use core::fmt;
 
 use constants::transcript_tags;
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind};
-use field_a64_c5::{Fp, Fp2, Fp2Sum};
+use field::{Fp, Fp2, Fp2Sum};
 use poly::eq_eval;
-use transcript_a64_c5::Transcript;
+use transcript::Transcript;
 
 pub use sumcheck::SumcheckProof;
 

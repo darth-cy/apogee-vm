@@ -6,7 +6,7 @@ use constants::memory::{HALT_PC, PART_ADDR, PART_AS, PART_TS, PART_VAL};
 use constants::{address_space, challenge_slot};
 use constraints::memory::read_tuple;
 use constraints::MAX_TRACE_VARS;
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 
 use crate::{eval_gate, ExternalChallenges};
 

@@ -31,7 +31,7 @@ use constraints::memory::{
     frame_queries, frame_with_channels_artifact, FamilySpec, FIELD_MASK, FIELD_READ_VALUE,
 };
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
-use field_a64_c5::Fp;
+use field::Fp;
 
 /// The toy's height, and the smallest a real execution family can have.
 ///

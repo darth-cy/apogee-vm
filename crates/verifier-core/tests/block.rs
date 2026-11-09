@@ -7,7 +7,7 @@
 mod common;
 
 use common::{shell, statement, vk, ADD, INIT, JBS, ZERO};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use verifier_core::{
     check_ts_windows, BlockProof, BlockReconciliation, ShardRecord, TRIVIAL_TS_WINDOW,
 };

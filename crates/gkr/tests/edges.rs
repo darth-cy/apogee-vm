@@ -6,7 +6,7 @@
 mod common;
 
 use common::{bind, discharge, fr_base, honest, opposed_circuit, root_circuit};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::{gate_values, self_check, GkrError, SelfCheckError};
 
 fn fr(v: u64) -> Fp {

@@ -4,12 +4,12 @@
 mod common;
 
 use constants::{family, transcript_tags as tags};
-use field_a64_c5::Fp;
+use field::Fp;
 use program::{
     absorb_statement_descriptor, check_memory_windows, decode_program, decode_program_detaching,
     ProgramError, ProgramIdentity, ProgramParams, VmConfig,
 };
-use transcript_a64_c5::{Transcript, TranscriptEvent};
+use transcript::{Transcript, TranscriptEvent};
 
 fn fib_config() -> VmConfig {
     decode_program(&common::guest("fib"), &ProgramParams::defaults())

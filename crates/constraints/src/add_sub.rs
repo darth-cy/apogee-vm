@@ -22,7 +22,7 @@ use alloc::vec::Vec;
 use constants::extra_mask::add_sub_lui_auipc as kind;
 use constants::extra_mask::system_code;
 use constants::{family, lookup_channel, memory as mem};
-use field_a64_c5::Fp;
+use field::Fp;
 
 use crate::lookup::ChannelSpec;
 use crate::memory::{

@@ -15,7 +15,7 @@ use constants::{challenge_slot, family, generic_table};
 use constraints::{
     atomics, family_circuit, mem_subword, mem_word, CircuitArtifact, Coeff, GateDef, PolyAddress,
 };
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::{gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallenges};
 use poly::MultilinearPoly;
 

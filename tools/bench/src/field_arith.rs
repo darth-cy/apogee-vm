@@ -11,7 +11,7 @@
 use std::hint::black_box;
 
 use ark_ff::{Field as _, Fp2Config, Fp64, MontBackend, MontConfig, MontFp};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use test_support::Rng;
 
 use crate::timing::{best, next_fp2, ns_per_op, REPS, SEED};

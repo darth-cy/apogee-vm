@@ -33,7 +33,7 @@ use constants::extra_mask::{
     shift_bitwise as sb, system_code,
 };
 use constants::{delegation, family, guest_memory};
-use field_a64_c5::Fp;
+use field::Fp;
 use isa::{decode, Instr};
 use loader::{ProgramImage, Slot};
 use poly::{MultilinearPoly, PolyBacking};

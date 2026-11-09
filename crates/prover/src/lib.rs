@@ -86,7 +86,7 @@ mod streaming;
 use constants::family;
 use constants::transcript_tags as tags;
 use constraints::PolyAddress;
-use field_a64_c5::Fp2;
+use field::Fp2;
 use gkr::{forward, prove, BaseLayer};
 use loader::ProgramImage;
 use poly::MultilinearPoly;
@@ -95,7 +95,7 @@ use trace::{
     advice_window_count, build_boundary_finals, build_multiplicities, init_windows, plan_shards,
     TraceArchive,
 };
-use transcript_a64_c5::{Transcript, TranscriptEvent, TranscriptSnapshot};
+use transcript::{Transcript, TranscriptEvent, TranscriptSnapshot};
 use verifier_core::{
     advice_first_window, global_commit, identity_digest, shard_challenges, shard_transcript,
     window_height, BoundaryFinals, FamilyCircuit, GkrProof, PublicInputs, ShardProof, VerifyingKey,

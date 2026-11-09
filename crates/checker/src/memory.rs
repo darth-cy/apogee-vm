@@ -23,7 +23,7 @@ use constraints::memory::{
     RD,
 };
 use constraints::PolyAddress;
-use field_a64_c5::Fp;
+use field::Fp;
 use poly::{MultilinearPoly, PolyBacking};
 use trace::{MemoryEvent, MemoryEventLog};
 

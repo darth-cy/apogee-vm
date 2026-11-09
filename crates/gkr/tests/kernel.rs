@@ -11,7 +11,7 @@
 
 use constants::challenge_slot::TOY;
 use constraints::{Coeff, GateDef, PolyAddress};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::{eval_gate, ExternalChallenges};
 
 /// An integer as a kernel value, which is an `Fp2` element.

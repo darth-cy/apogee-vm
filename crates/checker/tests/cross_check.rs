@@ -23,7 +23,7 @@ use checker::{check_laws, cross_check, ReferenceRun, VerifierConstants};
 use common::*;
 use constants::challenge_slot;
 use constraints::{CachedEntry, CircuitArtifact, Coeff, GateDef, PolyAddress};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::ExternalChallenges;
 
 /// What a verifier expects of the toy: 16 rows; list 0 row-wise, width 3, one

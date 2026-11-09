@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use constants::{challenge_slot, lookup_channel};
-use field_a64_c5::Fp;
+use field::Fp;
 
 use crate::{
     CachedEntry, CircuitArtifact, Coeff, GateDef, LayerSpec, PolyAddress,

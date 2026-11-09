@@ -8,8 +8,8 @@
 use constants::family;
 use constants::transcript_tags as tags;
 use constraints::family_circuit;
-use field_a64_c5::{Fp, Fp2};
-use transcript_a64_c5::{io_digest, Transcript};
+use field::{Fp, Fp2};
+use transcript::{io_digest, Transcript};
 use verifier_core::{
     absorb_statement_descriptor, boundary_scalars, derive_global_phase, global_commit,
     identity_digest, reduce_shard, statement_shards, BoundaryFinals, GkrProof, PublicInputs,

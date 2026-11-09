@@ -6,7 +6,7 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 
 use constants::{extra_mask, family, guest_memory};
-use field_a64_c5::Fp;
+use field::Fp;
 use loader::{Segment, Slot};
 use poly::PolyBacking;
 use program::{

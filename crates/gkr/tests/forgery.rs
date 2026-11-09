@@ -9,10 +9,10 @@ mod common;
 use common::{bind, discharge, fr_base, honest, opposed_circuit};
 use constants::transcript_tags as tags;
 use constraints::PolyAddress;
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::{verify, verify_sumcheck, GkrError, GkrProof, SumcheckProof};
 use poly::eq_eval;
-use transcript_a64_c5::Transcript;
+use transcript::Transcript;
 
 fn cubic(g: &[Fp2; 4], x: Fp2) -> Fp2 {
     g[0] + x * (g[1] + x * (g[2] + x * g[3]))

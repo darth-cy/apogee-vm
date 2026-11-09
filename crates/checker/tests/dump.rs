@@ -11,7 +11,7 @@ use std::process::{Command, Output};
 use checker::dump;
 use common::*;
 use constraints::{Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
-use field_a64_c5::Fp;
+use field::Fp;
 
 #[test]
 fn the_dump_names_everything_in_the_toy() {

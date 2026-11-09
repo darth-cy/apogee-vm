@@ -12,7 +12,7 @@ mod common;
 
 use common::{toy, toy_cache_free, toy_cache_free_bytes, toy_cached_bytes};
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
-use field_a64_c5::Fp;
+use field::Fp;
 use serde::Serialize;
 
 const ENDS_EARLY: &str = "malformed circuit artifact: Hit the end of buffer, expected more data";

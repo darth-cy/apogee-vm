@@ -10,7 +10,7 @@ constants.workspace = true
 # `src/memory.rs` builds; `PolyAddress` is the key.
 constraints.workspace = true
 # `Fp`, for the x0 gadget's inverse column and a timestamp column past 32 bits.
-field-a64-c5.workspace = true
+field.workspace = true
 # `BoundaryFinals`, the register and PC finals the verifier's boundary reads.
 gkr-verify.workspace = true
 loader.workspace = true

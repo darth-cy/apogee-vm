@@ -18,7 +18,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use field_a64_c5::Fp;
+use field::Fp;
 
 use crate::{
     CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, LookupExpr, Padding, PolyAddress,

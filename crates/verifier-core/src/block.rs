@@ -16,7 +16,7 @@
 use alloc::vec::Vec;
 
 use constants::family;
-use field_a64_c5::Fp2;
+use field::Fp2;
 
 use crate::statement::{statement_shards, VmConfig};
 use crate::types::{PublicInputs, ShardProof};
@@ -269,8 +269,8 @@ mod tests {
             shard_index,
             ts_window: window,
             roots: [
-                Fp2::from(field_a64_c5::Fp::from_u64(3)),
-                Fp2::from(field_a64_c5::Fp::from_u64(5)),
+                Fp2::from(field::Fp::from_u64(3)),
+                Fp2::from(field::Fp::from_u64(5)),
             ],
         }
     }

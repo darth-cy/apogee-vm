@@ -12,7 +12,7 @@ use common::{
     corpus_backing, corrupt, data_lines, field_element, index, read_vectors, table_digest, to_ark,
     to_ark_fp, to_ark_mle, vertex,
 };
-use field_a64_c5::{Fp, Fp2, A64_C5};
+use field::{Fp, Fp2, A64_C5};
 use poly::{eq_eval, MultilinearPoly};
 use test_support::Rng;
 

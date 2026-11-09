@@ -31,7 +31,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use constants::{address_space, challenge_slot, family, lookup_channel, memory};
-use field_a64_c5::Fp;
+use field::Fp;
 
 use crate::build;
 use crate::gadgets;

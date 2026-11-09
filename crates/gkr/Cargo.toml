@@ -10,11 +10,11 @@ publish.workspace = true
 [dependencies]
 constants.workspace = true
 constraints.workspace = true
-field-a64-c5.workspace = true
+field.workspace = true
 gkr-verify.workspace = true
 poly.workspace = true
 rayon.workspace = true
-transcript-a64-c5.workspace = true
+transcript.workspace = true
 
 [dev-dependencies]
 # The tests' base-layer binding: they absorb `witness_digest` of the base

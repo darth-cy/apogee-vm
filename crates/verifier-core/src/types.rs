@@ -18,9 +18,9 @@ use constants::{generic_table, lookup_channel};
 use constraints::lookup::{check_discharge, ChannelSpec};
 use constraints::memory::check_memory;
 use constraints::{CircuitArtifact, FamilyCircuit, PolyAddress, VirtualKind};
-use field_a64_c5::Fp2;
+use field::Fp2;
 use gkr_verify::{BoundaryFinals, GkrProof, SumcheckProof};
-use transcript_a64_c5::Transcript;
+use transcript::Transcript;
 
 use crate::statement::{identity_digest, ProgramIdentity, VmConfig};
 use crate::wire::{Read, Reader, Writer};

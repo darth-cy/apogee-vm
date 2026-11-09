@@ -1,7 +1,7 @@
 //! The field against Rust's own `u128` remainder, which shares nothing with
 //! this crate.
 
-use field_a64_c5::{Fp, Fp2, Fp2Sum, A64_C5};
+use field::{Fp, Fp2, Fp2Sum, A64_C5};
 use test_support::Rng;
 
 /// The values a `2^64 − 59` reduction gets wrong first, then a seeded random

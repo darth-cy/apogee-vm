@@ -8,7 +8,7 @@ publish.workspace = true
 [dependencies]
 # `challenge_slot::NAMES`: the slots a coefficient may name.
 constants.workspace = true
-field-a64-c5.workspace = true
+field.workspace = true
 # The artifact's one wire form. Both featureless, as everywhere in the
 # workspace: writing goes through `to_extend` into a plain `Vec`, reading
 # through the two hand-written visitors in `src/wire.rs`.

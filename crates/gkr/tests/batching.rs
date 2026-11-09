@@ -8,7 +8,7 @@ use common::{bind, output_claims, toy, toy_base, toy_columns};
 use constants::transcript_tags as tags;
 use constraints::CircuitArtifact;
 use gkr::{forward, prove, verify};
-use transcript_a64_c5::TranscriptEvent::{self, Absorb, Challenge};
+use transcript::TranscriptEvent::{self, Absorb, Challenge};
 
 /// The toy's schedule written out: after the binding (the digest's 8 lanes)
 /// and the external challenge, the outputs (the two roots), then the four

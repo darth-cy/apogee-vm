@@ -7,7 +7,7 @@
 // does not have.
 #![allow(unexpected_cfgs)]
 
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use poly::{MultilinearPoly, PolyBacking};
 use test_support::{hex_to_bytes, sha256, to_hex, Rng};
 

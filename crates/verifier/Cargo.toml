@@ -16,7 +16,7 @@ verifier-core.workspace = true
 constants.workspace = true
 # The loader's unit test builds a key over the registry's circuits.
 constraints.workspace = true
-field-a64-c5.workspace = true
+field.workspace = true
 prover.workspace = true
 emulator.workspace = true
 loader.workspace = true

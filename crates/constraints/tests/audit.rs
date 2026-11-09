@@ -48,7 +48,7 @@ fn wire_tag(g: &GateDef) -> u8 {
 
 /// One gate of every variant, in wire-tag order.
 fn one_of_each() -> [GateDef; VARIANTS] {
-    let one = Coeff::Literal(field_a64_c5::Fp::ONE);
+    let one = Coeff::Literal(field::Fp::ONE);
     let x = PolyAddress::Witness(0);
     let y = PolyAddress::Witness(1);
     [

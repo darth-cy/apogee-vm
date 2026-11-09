@@ -9,7 +9,7 @@
 
 mod common;
 
-use field_a64_c5::Fp;
+use field::Fp;
 use program::lookup_tables::{
     generic_entries, generic_table, zero_entry, AND_BASE, AND_ROWS, GENERIC_ROWS, GENERIC_WIDTH,
     SHIFT_BASE, SHIFT_ROWS, SIGN_BASE, SIGN_ROWS,

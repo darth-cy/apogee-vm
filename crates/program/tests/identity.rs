@@ -14,10 +14,10 @@
 mod common;
 
 use constants::{family, transcript_tags as tags};
-use field_a64_c5::Fp;
+use field::Fp;
 use loader::{load_elf, ProgramImage, Slot};
 use program::{decode_program, program_identity, ProgramIdentity, ProgramParams};
-use transcript_a64_c5::Transcript;
+use transcript::Transcript;
 
 fn identity_of(image: &ProgramImage, params: &ProgramParams) -> ProgramIdentity {
     let (tables, config) = decode_program(image, params).unwrap();

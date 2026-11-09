@@ -15,7 +15,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use constants::{generic_table, lookup_channel};
-use field_a64_c5::Fp;
+use field::Fp;
 
 use crate::{Coeff, GateDef, LookupExpr, PolyAddress};
 

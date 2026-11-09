@@ -27,7 +27,7 @@
 
 use constants::challenge_slot;
 use constraints::{Coeff, PolyAddress, VirtualKind};
-use field_a64_c5::Fp;
+use field::Fp;
 
 mod lookup_toy;
 mod toy;

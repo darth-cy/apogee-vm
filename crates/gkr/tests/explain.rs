@@ -18,7 +18,7 @@
 mod common;
 
 use common::{bind, fr_base, honest, opposed_circuit, root_circuit};
-use field_a64_c5::Fp;
+use field::Fp;
 use gkr::{explain_self_check, self_check, SelfCheckError};
 
 fn fr(v: u64) -> Fp {

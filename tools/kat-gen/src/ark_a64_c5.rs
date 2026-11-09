@@ -2,7 +2,7 @@
 //! field over the A64-C5 prime `p = 2^64 − 59`, derived here from the decimal
 //! modulus with `ark-ff`'s own `MontConfig`, and its quadratic extension
 //! `F_p[x]/(x^2 − 2)` from `ark-ff`'s own `Fp2Config`, so they share no code
-//! and no constant with `crates/field-a64-c5`.
+//! and no constant with `crates/field`.
 
 // `MontConfig`'s expansion names arkworks' own `asm` feature, which this crate
 // does not have.
