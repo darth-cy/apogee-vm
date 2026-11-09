@@ -111,7 +111,7 @@ proves, and as a **flat relation list** over `M`, `W`, `S`, `V` and `scratch`, w
 checks read ([circuits.md](circuits.md) §3). Law 4 makes them one constraint set. In wire order:
 
 ```text
-CircuitArtifact = (format_version = 1, coefficient_encoding = 0, trace_vars ≤ 30,
+CircuitArtifact = (format_version = 2, coefficient_encoding = 0, trace_vars ≤ 30,
                    memory, witness, setup: [name], virtuals: [(VirtualKind, name)],
                    layers: [LayerSpec], relations: [Relation], lookups: [LookupExpr],
                    scratch: [(name, L{k}[j])], outputs: [L{N}[j]],
@@ -150,7 +150,7 @@ GateDef      (tag u8, split u32, coefficients [Coeff], operands [PolyAddress] in
   6 TreeCross         split 0  —                             p, q
 ```
 
-`CircuitArtifact::from_bytes` refuses a `format_version` other than 1 before decoding the rest,
+`CircuitArtifact::from_bytes` refuses a `format_version` other than 2 before decoding the rest,
 postcard not being self-describing; refuses an unknown tag, a nonzero unused field, a gate with
 counts its shape lacks and a non-canonical `Fp`; re-encodes and compares, as postcard admits
 overlong varints and trailing bytes; never panics or reserves what a declared length asks; and

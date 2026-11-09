@@ -21,7 +21,7 @@ fn the_dump_names_everything_in_the_toy() {
         let has_line = |line: &str| lines.contains(&line);
         let header = [
             "circuit artifact",
-            "  format version        1",
+            "  format version        2",
             "  coefficient encoding  0 (every Fp canonical 8-byte little-endian)",
             "  trace length          2^4 rows",
             "  depth                 6 gate lists",

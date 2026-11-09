@@ -1537,15 +1537,15 @@ fn trace_vars_above_thirty_is_refused() {
     assert_malformed(&a, "trace_vars 31 is above 30");
 }
 
-/// The first two words of the artifact are 1 and 0, and nothing else: a format
-/// version of 0 or 2 and a coefficient encoding of 1 are each refused.
+/// The first two words of the artifact are 2 and 0, and nothing else: a format
+/// version of 1 or 3 and a coefficient encoding of 1 are each refused.
 #[test]
 fn a_wrong_format_version_or_coefficient_encoding_is_refused() {
-    assert_eq!(constraints::FORMAT_VERSION, 1);
-    for version in [0, 2] {
+    assert_eq!(constraints::FORMAT_VERSION, 2);
+    for version in [1, 3] {
         let mut a = toy();
         a.format_version = version;
-        assert_malformed(&a, &format!("format version {version}, expected 1"));
+        assert_malformed(&a, &format!("format version {version}, expected 2"));
     }
 
     let mut a = toy();

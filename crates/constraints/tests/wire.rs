@@ -157,16 +157,16 @@ fn a_trailing_byte_is_refused() {
 }
 
 /// A varint written longer than it needs to be is refused. The leading
-/// `format_version`, 1, is re-encoded as `0x81 0x00`: postcard reads that as 1,
+/// `format_version`, 2, is re-encoded as `0x82 0x00`: postcard reads that as 2,
 /// so the artifact decodes to the toy, and only the canonical comparison stands
 /// between the reader and two byte strings for one artifact.
 #[test]
 fn an_overlong_varint_is_refused() {
     let bytes = toy_cached_bytes();
-    assert_eq!(bytes[0], 0x01, "the file starts with format_version 1");
-    let overlong = [&[0x81u8, 0x00][..], &bytes[1..]].concat();
+    assert_eq!(bytes[0], 0x02, "the file starts with format_version 2");
+    let overlong = [&[0x82u8, 0x00][..], &bytes[1..]].concat();
 
-    assert_eq!(postcard::from_bytes::<u32>(&[0x81, 0x00]), Ok(1));
+    assert_eq!(postcard::from_bytes::<u32>(&[0x82, 0x00]), Ok(2));
     assert_eq!(
         postcard::from_bytes::<CircuitArtifact>(&overlong).as_ref(),
         Ok(&toy())
@@ -178,26 +178,26 @@ fn an_overlong_varint_is_refused() {
 }
 
 /// The format version is read first, and no other version is decoded. The
-/// cached toy's bytes with their first word 2, or 128 (two varint bytes), are
-/// refused naming the version, where under 1 they decode to the toy; and so is
-/// a format-0 file, whose lookup element has no selector, holding one lookup
-/// `(name, channel, tuple)`.
+/// cached toy's bytes with their first word 1, BN254's format, or 128 (two
+/// varint bytes), are refused naming the version, where under 2 they decode to
+/// the toy; and so is a format-0 file, whose lookup element has no selector,
+/// holding one lookup `(name, channel, tuple)`.
 ///
 /// Kills a reader that checks the version only after decoding the rest: that
 /// reader takes the format-0 lookup's tuple length for a selector, misreads
 /// the gate after it, and refuses the file as a malformed gate rather than as
 /// format 0.
 #[test]
-fn a_format_version_other_than_one_is_refused() {
+fn a_format_version_other_than_two_is_refused() {
     let bytes = toy_cached_bytes();
     assert_eq!(CircuitArtifact::from_bytes(&bytes), Ok(toy()));
     let refused = |version: u32| {
         Err(format!(
-            "malformed circuit artifact: format version {version}, but this reader reads 1 only"
+            "malformed circuit artifact: format version {version}, but this reader reads 2 only"
         ))
     };
-    let two = [&[2u8][..], &bytes[1..]].concat();
-    assert_eq!(CircuitArtifact::from_bytes(&two), refused(2));
+    let one = [&[1u8][..], &bytes[1..]].concat();
+    assert_eq!(CircuitArtifact::from_bytes(&one), refused(1));
     let wide = [&[0x80u8, 0x01][..], &bytes[1..]].concat();
     assert_eq!(postcard::from_bytes::<u32>(&[0x80, 0x01]), Ok(128));
     assert_eq!(CircuitArtifact::from_bytes(&wide), refused(128));
@@ -258,11 +258,11 @@ fn a_length_prefix_claiming_two_to_the_32_is_refused() {
     let huge = encode(&(1u64 << 32));
     assert_eq!(huge, [0x80, 0x80, 0x80, 0x80, 0x10]);
 
-    // format_version 1, coefficient_encoding 0, trace_vars 4, then the memory
+    // format_version 2, coefficient_encoding 0, trace_vars 4, then the memory
     // layout's length.
     let bytes = toy_cached_bytes();
-    assert_eq!(&bytes[..4], &[1, 0, 4, 1], "the toy has one memory column");
-    let claim = [&[1u8, 0, 4][..], &huge].concat();
+    assert_eq!(&bytes[..4], &[2, 0, 4, 1], "the toy has one memory column");
+    let claim = [&[2u8, 0, 4][..], &huge].concat();
     assert_eq!(CircuitArtifact::from_bytes(&claim), Err(ENDS_EARLY.into()));
 
     // tag 0, split 0, one coefficient, then 2^32 operands.
