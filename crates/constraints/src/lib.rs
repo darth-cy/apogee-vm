@@ -40,9 +40,8 @@ mod wire;
 pub use laws::ConstraintError;
 
 /// The artifact format this crate reads and writes. The first word of every
-/// artifact. 2, whose field elements are A64-C5's 8 bytes where format 1's
-/// were BN254's 32; a reader refuses every other version before it decodes
-/// anything after it.
+/// artifact. 2, whose field elements are A64-C5's 8 bytes; a reader refuses
+/// every other version before it decodes anything after it.
 pub const FORMAT_VERSION: u32 = 2;
 
 /// The one coefficient encoding: every `Fp` is its canonical 8-byte

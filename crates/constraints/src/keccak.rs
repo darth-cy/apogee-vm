@@ -236,7 +236,7 @@ pub fn base_room_hi() -> PolyAddress {
 /// Twenty-four boolean columns, one degree-1 gate pinning the frame's round
 /// word to them and one holding their sum to `live`, which is what makes the
 /// round `[0, 24)` **structurally** and supplies the round constant as a
-/// literal (`m_limb{k}_rule`'s pattern in `mod_mul`).
+/// literal.
 pub fn round_sel(r: usize) -> PolyAddress {
     w(round_sel_block() + r)
 }
@@ -474,8 +474,7 @@ fn rotl_byte(
 /// The round selector, the round constant it names, and the frame word it is
 /// pinned to.
 ///
-/// `one_round_a_live_row` is load-bearing and not decorative, for
-/// `mod_mul::one_modulus_a_live_row`'s reason at its sharpest: the codes here
+/// `one_round_a_live_row` is load-bearing and not decorative: the codes here
 /// are `0..24`, so **every** pair sums to another round's word — `1 + 2 = 3` —
 /// and without it a row could claim two rounds and XOR two round constants
 /// into lane `(0,0)`.

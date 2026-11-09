@@ -178,9 +178,8 @@ fn an_overlong_varint_is_refused() {
 }
 
 /// The format version is read first, and no other version is decoded. The
-/// cached toy's bytes with their first word 1, BN254's format, or 128 (two
-/// varint bytes), are refused naming the version, where under 2 they decode to
-/// the toy; and so is a format-0 file, whose lookup element has no selector,
+/// cached toy's bytes with their first word 1 or 128 (two varint bytes) are
+/// refused naming the version, where under 2 they decode to the toy; and so is a format-0 file, whose lookup element has no selector,
 /// holding one lookup `(name, channel, tuple)`.
 ///
 /// Kills a reader that checks the version only after decoding the rest: that
