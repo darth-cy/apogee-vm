@@ -10,7 +10,7 @@
 
 use alloc::vec::Vec;
 
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 
 /// An encoder: bytes appended in order.
 pub struct Writer {

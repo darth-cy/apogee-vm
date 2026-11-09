@@ -9,7 +9,7 @@ use constraints::{
     CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, Padding, PolyAddress,
     ProducingEntry, Relation, ScratchSlot, COEFFICIENT_ENCODING_CANONICAL_LE, FORMAT_VERSION,
 };
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::{
     forward, prove, verify, BaseClaim, BaseLayer, ExternalChallenges, GkrError, GkrProof,
     LayerValues,
@@ -17,7 +17,7 @@ use gkr::{
 use poly::{MultilinearPoly, PolyBacking};
 use sumcheck::{absorb_witness_digest, witness_digest};
 use test_support::Rng;
-use transcript_a64_c5::Transcript;
+use transcript::Transcript;
 
 #[path = "../../../constraints/tests/common/toy.rs"]
 mod toy;

@@ -12,8 +12,8 @@ constants.workspace = true
 # `FamilyCircuit`, the registry a key's circuits are held to, and the rules a
 # key's load runs: `validate`, `check_memory`, `check_discharge`.
 constraints.workspace = true
-field-a64-c5.workspace = true
+field.workspace = true
 # `verify`, the boundary, the window challenge, the LogUp slots and root check.
 gkr-verify.workspace = true
 poly.workspace = true
-transcript-a64-c5.workspace = true
+transcript.workspace = true

@@ -18,7 +18,7 @@ use prover::{
     statement_inputs, ProverSetup, ProvingContext,
 };
 use trace::TraceArchive;
-use transcript_a64_c5::TranscriptEvent::{self, Absorb, Challenge};
+use transcript::TranscriptEvent::{self, Absorb, Challenge};
 use verifier::{verify_shard, PublicInputs, ShardProof, VerifyError};
 use verifier_core::{global_commit, reduce_shard, statement_shards};
 
@@ -176,7 +176,7 @@ fn a5_every_statement_twin_is_refused_as_statement() {
     let vk = &setup.vk;
     for proof in &proofs {
         let mut k = vk.clone();
-        k.identity.0[0] += field_a64_c5::Fp::ONE;
+        k.identity.0[0] += field::Fp::ONE;
         statement_refusal(verify_shard(&k, proof, &public), "identity");
 
         let mut p = public.clone();
@@ -220,7 +220,7 @@ fn a5_every_statement_twin_is_refused_as_statement() {
 fn a_statement_root_that_is_not_its_proofs_is_refused_by_that_shard() {
     let (setup, _, public, proofs) = proved();
     assert_eq!((proofs[0].family, proofs[1].family), (INIT, ADD));
-    let seven = field_a64_c5::Fp::from_u64(7);
+    let seven = field::Fp::from_u64(7);
     let mut forged = public.clone();
     let [read, write] = forged.memory_roots[0];
     forged.memory_roots[0] = [read * seven, write * seven];

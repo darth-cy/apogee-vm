@@ -95,7 +95,7 @@ pub struct PhaseTiming {
 }
 
 /// An execution's **public values**: the public input window's payload and the
-/// journal's (`docs/spec/public-values.md`). `transcript_a64_c5::io_digest(&input,
+/// journal's (`docs/spec/public-values.md`). `transcript::io_digest(&input,
 /// &output)` is the public I/O digest, and the two windows are what bind it to
 /// the execution.
 #[derive(Clone, Debug, PartialEq, Eq)]

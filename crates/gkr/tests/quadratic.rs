@@ -26,7 +26,7 @@ use constraints::{
     CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, PolyAddress, ProducingEntry,
     Relation,
 };
-use field_a64_c5::Fp;
+use field::Fp;
 use gkr::{forward, self_check};
 use test_support::Rng;
 

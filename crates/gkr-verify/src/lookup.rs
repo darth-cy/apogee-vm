@@ -5,7 +5,7 @@
 
 use constants::{challenge_slot, lookup_channel};
 use constraints::CircuitArtifact;
-use field_a64_c5::Fp2;
+use field::Fp2;
 
 use crate::ExternalChallenges;
 

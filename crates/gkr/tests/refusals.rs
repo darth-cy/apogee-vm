@@ -7,7 +7,7 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::ExternalChallenges;
 
 /// Run `f`, which must panic, and return its message.

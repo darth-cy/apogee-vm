@@ -3,7 +3,7 @@
 //!
 //! [`tape`] turns a `Transcript`'s event log into one line per message. The log
 //! records a message's **tag and payload length**, never its values
-//! (`crates/transcript-a64-c5`), so a tape is a statement about the *script* a
+//! (`crates/transcript`), so a tape is a statement about the *script* a
 //! transcript ran, which is exactly what the order is about.
 //!
 //! [`expected_global_tape`] writes that order out from the statement's shape
@@ -24,7 +24,7 @@
 //! join the order between G6 and G7, and here.
 
 use constants::transcript_tags as tags;
-use transcript_a64_c5::TranscriptEvent;
+use transcript::TranscriptEvent;
 use verifier_core::{global_commit, PublicInputs, VerifyingKey};
 
 /// `tag`'s name, or `"?"` for a number no tag has. `constants` holds the

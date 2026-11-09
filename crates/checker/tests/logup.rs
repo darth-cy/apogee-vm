@@ -32,14 +32,14 @@ use constraints::lookup::ChannelSpec;
 use constraints::{CircuitArtifact, PolyAddress};
 use emulator::trace_run;
 use emulator::GuestIo;
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::{channel_holds, insert_lookup_challenges, BaseLayer, LayerValues};
 use loader::load_elf;
 use poly::{MultilinearPoly, PolyBacking};
 use program::lookup_tables::{generic_table, GENERIC_WIDTH};
 use program::{decode_program, lookup_tuple, ProgramParams};
 use trace::build_multiplicities;
-use transcript_a64_c5::Transcript;
+use transcript::Transcript;
 
 /// The toy's height, `common/lookup_toy.rs`' `TRACE_VARS`.
 const VARS: u32 = 20;
@@ -129,7 +129,7 @@ struct Toy {
     live: usize,
     /// The shard transcript after `g` and `β` are drawn: what a proof of this
     /// shard starts from.
-    seeded: transcript_a64_c5::TranscriptSnapshot,
+    seeded: transcript::TranscriptSnapshot,
 }
 
 fn toy() -> Toy {

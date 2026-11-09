@@ -3,7 +3,7 @@
 Every challenge in the protocol is drawn from a Poseidon2 duplex sponge over the A64-C5 field
 through a typed message layer. This page specifies the permutation and where its parameters come
 from, the sponge, the framing and every tag, and §5 states what the construction claims.
-Implementation: `crates/transcript-a64-c5`, `#![no_std]`, over `crates/field-a64-c5`
+Implementation: `crates/transcript`, `#![no_std]`, over `crates/field`
 ([primitives.md](primitives.md) §1).
 
 ## 1. Poseidon2-A64-C5
@@ -23,7 +23,7 @@ its 2-adicity is 2 (§5.2).
 | rounds | `R_F = 12` full rounds, 6 before and 6 after `R_P = 42` partial rounds: 234 S-boxes |
 | external layer | `M_E = circ(2·M4, M4, M4, M4)` over four 4-lane blocks, `M4 = [[5,7,1,3],[4,6,1,1],[1,3,5,7],[1,1,4,6]]` |
 | internal layer | `M_I = J + diag(μ − 1)`: `μ_i` on the diagonal, 1 everywhere else |
-| constants | 234 round constants and the 16 `μ_i − 1`, `crates/transcript-a64-c5/src/params.rs` |
+| constants | 234 round constants and the 16 `μ_i − 1`, `crates/transcript/src/params.rs` |
 
 ```text
 E(s): s_b ← M4·s_b + Σ_j M4·s_j  for each 4-lane block b        = M_E · s

@@ -62,7 +62,7 @@ use std::time::Instant;
 
 use constants::{family, lookup_channel};
 use constraints::FamilyCircuit;
-use field_a64_c5::Fp2;
+use field::Fp2;
 use program::FamilyId;
 
 /// How much the log says. Ordered: a line at level `L` is emitted when the

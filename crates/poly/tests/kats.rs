@@ -10,7 +10,7 @@
 mod common;
 
 use common::{corrupt, data_lines, field_element, index, read_vectors, vertex, Line};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use poly::{eq_eval, eq_table, MultilinearPoly, PolyBacking};
 
 const KATS_PATH: &str = "tests/vectors/poly_kats.txt";

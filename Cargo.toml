@@ -2,8 +2,8 @@
 resolver = "2"
 members = [
     "crates/constants",
-    "crates/field-a64-c5",
-    "crates/transcript-a64-c5",
+    "crates/field",
+    "crates/transcript",
     "crates/poly",
     "crates/sumcheck",
     "crates/loader",
@@ -37,8 +37,8 @@ publish = false
 
 [workspace.dependencies]
 constants = { path = "crates/constants" }
-field-a64-c5 = { path = "crates/field-a64-c5" }
-transcript-a64-c5 = { path = "crates/transcript-a64-c5" }
+field = { path = "crates/field" }
+transcript = { path = "crates/transcript" }
 poly = { path = "crates/poly" }
 sumcheck = { path = "crates/sumcheck" }
 loader = { path = "crates/loader" }
@@ -65,8 +65,8 @@ test-support = { path = "tools/test-support" }
 # async, no channels.
 rayon = "1"
 
-# `default-features = false` keeps serde `no_std`, which `constants` and
-# `field-a64-c5` must stay for the guest target. This is not a cargo feature of ours: the
+# `default-features = false` keeps serde `no_std`, which `constants` and `field`
+# must stay for the guest target. This is not a cargo feature of ours: the
 # workspace still has exactly one build configuration.
 serde = { version = "1", default-features = false }
 

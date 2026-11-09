@@ -18,7 +18,7 @@
 mod common;
 
 use constants::family;
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use prover::{
     global_commit_phase, prove_shard, prove_shard_columns, public_inputs, shard_columns,
     statement_inputs, ProverSetup, ProvingContext,

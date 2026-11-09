@@ -4,7 +4,7 @@ The A64-C5 field and its quadratic extension, multilinear polynomials and the ze
 encoding of a field element (§1) and the polynomial index convention (§2) are defined here.
 
 - All of it is this repository's code: concrete types, no field trait, no `unsafe`, assembly or
-  intrinsics. `field-a64-c5`, `poly` and `sumcheck` are `#![no_std]` and build for the guest
+  intrinsics. `field`, `poly` and `sumcheck` are `#![no_std]` and build for the guest
   target.
 - The field is tested against Rust's own `u128` arithmetic; `poly` against arkworks over the same
   two fields, live and through vectors `tools/kat-gen` generates. arkworks is a test oracle only.
@@ -43,7 +43,7 @@ Two types, never mixed implicitly:
 | `Fp` | the canonical value as 8 little-endian bytes: `Fp::to_bytes`. `Fp::from_bytes` is `None` for a value `≥ p` and never reduces; serde goes through both | artifacts, statements, keys |
 | `Fp2` | `c0` then `c1`, each as `Fp`'s 8 bytes: 16 bytes, `Fp2::to_bytes` and `Fp2::from_bytes` | proofs, statements |
 
-`crates/field-a64-c5`'s `tests/arithmetic.rs` holds `+`, `−`, `×`, negation, inversion and both
+`crates/field`'s `tests/arithmetic.rs` holds `+`, `−`, `×`, negation, inversion and both
 reductions to Rust's own `u128` remainder, `F_{p^2}`'s product to the schoolbook rule mod `p`, and
 2 to a non-square by Euler's criterion. The transcript's permutation is over `Fp`
 ([transcript.md](transcript.md) §1).

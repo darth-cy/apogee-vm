@@ -31,7 +31,7 @@
 //! `constants::generic_table::SHIFT_COPOWER_BITS`.
 
 use constants::generic_table;
-use field_a64_c5::Fp;
+use field::Fp;
 use poly::{MultilinearPoly, PolyBacking};
 
 /// The channel's tuple width: a key and two values, which the AND table and

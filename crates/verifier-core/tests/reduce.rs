@@ -8,9 +8,9 @@ mod common;
 
 use common::{shell, statement, vk, ADD, INIT, ZERO};
 use constants::transcript_tags as tags;
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr_verify::SumcheckProof;
-use transcript_a64_c5::TranscriptEvent::{Absorb, Challenge};
+use transcript::TranscriptEvent::{Absorb, Challenge};
 use verifier_core::{
     derive_global_phase, global_commit, memory_slots, reduce_shard, shard_challenges,
     shard_transcript, statement_shards, verify_global_memory, VerifyError, TRIVIAL_TS_WINDOW,
@@ -164,7 +164,7 @@ fn g_is_the_first_lookup_squeeze_and_beta_the_second() {
         c1: Fp::from_u64(70),
     };
     let (_, g, beta) = shard_transcript(digest, ADD, 3, TRIVIAL_TS_WINDOW);
-    let mut t = transcript_a64_c5::Transcript::new();
+    let mut t = transcript::Transcript::new();
     t.append_scalars(
         tags::SHARD_SEED,
         &[

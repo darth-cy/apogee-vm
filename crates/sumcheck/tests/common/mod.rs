@@ -4,11 +4,11 @@
 #![allow(dead_code)]
 
 use constants::transcript_tags;
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use poly::{MultilinearPoly, PolyBacking};
 use sumcheck::{absorb_witness_digest, Gate, GateTerm, PolyAddress, SumcheckClaim};
 use test_support::Rng;
-use transcript_a64_c5::{Digest, Transcript};
+use transcript::{Digest, Transcript};
 
 /// A fresh transcript with one witness digest bound to it. Both the prover and
 /// the verifier start here. The digest is a parameter rather than being taken

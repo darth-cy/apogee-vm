@@ -16,7 +16,7 @@ use constraints::lookup::{
 };
 use constraints::memory::{frame_queries, frame_with_channels_artifact, FamilySpec};
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
-use field_a64_c5::Fp;
+use field::Fp;
 
 /// The toy's family, height and mask width, as `common/lookup_toy.rs` fixes them.
 const FAMILY: u32 = family::JUMP_BRANCH_SLT;

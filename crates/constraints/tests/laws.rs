@@ -24,7 +24,7 @@ use constraints::{
     LookupExpr, Padding, PolyAddress, ProducingEntry, Relation, ScratchSlot, VirtualKind,
     COEFFICIENT_ENCODING_CANONICAL_LE, FORMAT_VERSION,
 };
-use field_a64_c5::Fp;
+use field::Fp;
 use std::time::{Duration, Instant};
 
 fn linear(terms: &[(Coeff, PolyAddress)], constant: Coeff) -> GateDef {

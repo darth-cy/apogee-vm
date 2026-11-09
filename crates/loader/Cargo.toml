@@ -10,8 +10,8 @@ constants.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
-# The public I/O digest lives in `transcript-a64-c5`; the fib fixture's public
+# The public I/O digest lives in `transcript`; the fib fixture's public
 # input and journal are here, so the test that digests them is here too.
-transcript-a64-c5.workspace = true
+transcript.workspace = true
 postcard.workspace = true
 test-support.workspace = true

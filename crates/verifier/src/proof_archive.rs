@@ -229,7 +229,7 @@ mod tests {
                 pc_ts: 0,
                 reg_values: [0; 31],
             },
-            memory_roots: vec![[field_a64_c5::Fp2::ONE, field_a64_c5::Fp2::ONE]; 3],
+            memory_roots: vec![[field::Fp2::ONE, field::Fp2::ONE]; 3],
         };
         // Three shells, because `BlockProof::from_bytes` requires one proof and
         // one root pair per shard and the statement
@@ -239,7 +239,7 @@ mod tests {
             family,
             shard_index: 0,
             ts_window: [0, 0],
-            global_digest: field_a64_c5::Fp2::ZERO,
+            global_digest: field::Fp2::ZERO,
             outputs: vec![],
             gkr: GkrProof { layers: vec![] },
         };

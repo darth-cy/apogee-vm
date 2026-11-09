@@ -8,7 +8,7 @@ use constraints::{
     CircuitArtifact, Coeff, GateDef, LayerSpec, Padding, PolyAddress, ProducingEntry, Relation,
     ScratchSlot, VirtualKind, COEFFICIENT_ENCODING_CANONICAL_LE, FORMAT_VERSION,
 };
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::{
     channel_holds, forward, insert_lookup_challenges, prove, self_check, verify, virtual_at_point,
     virtual_at_row, BaseLayer, ExternalChallenges, GkrError,
@@ -16,7 +16,7 @@ use gkr::{
 use poly::{MultilinearPoly, PolyBacking};
 use sumcheck::{absorb_witness_digest, witness_digest};
 use test_support::Rng;
-use transcript_a64_c5::Transcript;
+use transcript::Transcript;
 
 fn lit(v: u64) -> Coeff {
     Coeff::Literal(Fp::from_u64(v))

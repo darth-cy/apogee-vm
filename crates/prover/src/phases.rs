@@ -8,7 +8,7 @@ use std::time::Instant;
 use gkr::BaseLayer;
 use rayon::prelude::*;
 use trace::{plan_shards, Phase, PhaseTiming, ShardPlan, TraceArchive};
-use transcript_a64_c5::{Transcript, TranscriptSnapshot};
+use transcript::{Transcript, TranscriptSnapshot};
 use verifier_core::wire::{Read, Reader, Writer};
 use verifier_core::{read_gkr, statement_shards, write_gkr, BlockProof, PublicInputs, ShardProof};
 
@@ -374,7 +374,7 @@ pub fn finish(archive: &TraceArchive) -> Result<(PublicInputs, Vec<ShardProof>),
 #[cfg(test)]
 mod tests {
     use super::*;
-    use field_a64_c5::{Fp, Fp2};
+    use field::{Fp, Fp2};
     use verifier_core::BoundaryFinals;
 
     fn global() -> GlobalCommitState {

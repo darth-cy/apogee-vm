@@ -13,7 +13,7 @@ use common::{
 };
 use constants::{challenge_slot, transcript_tags};
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::{
     forward, gate_values, self_check, verify, ExternalChallenges, GkrError, LayerValues,
     SelfCheckError,

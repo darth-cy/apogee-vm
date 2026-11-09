@@ -12,7 +12,7 @@
 #![allow(dead_code)]
 
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use test_support::Rng;
 
 #[path = "../../../constraints/tests/common/lookup_toy.rs"]
@@ -60,7 +60,7 @@ pub fn add_booleanity(a: &mut CircuitArtifact, x: PolyAddress, name: &str) {
     let gate = GateDef::Quadratic {
         constant: lit(0),
         linear: vec![(lit(1), x)],
-        products: vec![(Coeff::Literal(-field_a64_c5::Fp::ONE), x, x)],
+        products: vec![(Coeff::Literal(-field::Fp::ONE), x, x)],
     };
     a.layers[0].enforcing.push(constraints::EnforcingEntry {
         relation: a.relations.len() as u32,
@@ -230,7 +230,7 @@ pub const FAMILY_NAMES: [&str; 7] = [
     "mem_subword",
     "atomics",
 ];
-use transcript_a64_c5::Transcript;
+use transcript::Transcript;
 
 /// Every family's height: the init families' `h`, and tall enough for every
 /// instruction table of every guest these suites trace.

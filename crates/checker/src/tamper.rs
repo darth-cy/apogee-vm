@@ -26,7 +26,7 @@ use std::mem::discriminant;
 use std::slice;
 
 use constraints::PolyAddress;
-use field_a64_c5::Fp;
+use field::Fp;
 use gkr_verify::BoundaryFinals;
 use poly::{MultilinearPoly, PolyBacking};
 use program::FamilyId;

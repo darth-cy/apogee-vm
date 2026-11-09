@@ -35,11 +35,11 @@ use constraints::{
     ProducingEntry, Relation, ScratchSlot, VirtualKind, COEFFICIENT_ENCODING_CANONICAL_LE,
     FORMAT_VERSION,
 };
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::{forward, prove, self_check, verify, BaseLayer, ExternalChallenges, LayerValues};
 use poly::{MultilinearPoly, PolyBacking};
 use test_support::Rng;
-use transcript_a64_c5::Transcript;
+use transcript::Transcript;
 
 use crate::timing::{ms, next_fp2, Best, REPS, SEED};
 

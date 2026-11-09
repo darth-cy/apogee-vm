@@ -55,7 +55,7 @@ pub fn run() {
     let mut best = Best::new();
     for _ in 0..REPS {
         let mut working = inst.columns();
-        let mut t = transcript_a64_c5::Transcript::new();
+        let mut t = transcript::Transcript::new();
         sumcheck::absorb_witness_digest(&mut t, &digest);
         let start = Instant::now();
         let proof = sumcheck::prove_zerocheck(&inst.gate, &mut working, &mut t);

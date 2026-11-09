@@ -10,13 +10,13 @@ use common::{
     square_witness_with_bumped_b, square_witness_with_row, wide_gate, wide_witness,
     wide_witness_with_bumped_e, wide_witness_with_row,
 };
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use poly::{eq_table, MultilinearPoly, PolyBacking};
 use sumcheck::{
     prove_zerocheck, verify_zerocheck, witness_digest, Gate, SumcheckClaim, SumcheckError,
     SumcheckProof,
 };
-use transcript_a64_c5::Digest;
+use transcript::Digest;
 
 /// Prove over `columns` on a transcript bound to `digest`, and check the proof
 /// on a *fresh* transcript bound to the same digest. Returns the proof and the

@@ -4,7 +4,7 @@
 mod common;
 
 use common::{next_fp, next_fp2, vertex};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use poly::{eq_eval, eq_table, MultilinearPoly, PolyBacking};
 use test_support::Rng;
 

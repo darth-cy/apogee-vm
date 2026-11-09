@@ -1,14 +1,11 @@
 [package]
-name = "transcript-a64-c5"
+name = "field"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-constants.workspace = true
-field-a64-c5.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
 test-support.workspace = true
-postcard.workspace = true

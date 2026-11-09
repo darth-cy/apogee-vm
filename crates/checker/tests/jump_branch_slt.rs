@@ -30,7 +30,7 @@ use constraints::gadgets::{comparison_equation, Comparison};
 use constraints::lookup::{check_discharge, ChannelSpec};
 use constraints::memory::check_memory;
 use constraints::{family_circuit, jump_branch_slt, CircuitArtifact, PolyAddress, VirtualKind};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::{eval_gate, gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallenges};
 use isa::Instr as Isa;
 use program::lookup_tables::generic_entries;

@@ -23,7 +23,7 @@ use constraints::{
     ProducingEntry, Relation, ScratchSlot, VirtualKind, COEFFICIENT_ENCODING_CANONICAL_LE,
     FORMAT_VERSION,
 };
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::{
     self_check, virtual_at_point, virtual_at_row, ExternalChallenges, GkrError, SelfCheckError,
 };

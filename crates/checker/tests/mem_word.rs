@@ -31,7 +31,7 @@ use constants::{challenge_slot, family, lookup_channel};
 use constraints::lookup::{check_discharge, ChannelSpec};
 use constraints::memory::check_memory;
 use constraints::{family_circuit, mem_word, CircuitArtifact, GateDef, PolyAddress, VirtualKind};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::{eval_gate, gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallenges};
 
 const VARS: u32 = 20;

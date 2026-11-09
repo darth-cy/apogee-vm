@@ -59,9 +59,9 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use constants::transcript_tags;
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use poly::{eq_eval, eq_table, MultilinearPoly, PolyBacking};
-use transcript_a64_c5::{Digest, Transcript};
+use transcript::{Digest, Transcript};
 
 // ---------------------------------------------------------------------------
 // Gates

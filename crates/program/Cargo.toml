@@ -7,7 +7,7 @@ publish.workspace = true
 [dependencies]
 # FamilyId, the extra-mask bits, the defaults, the identity tags, the RAM window.
 constants.workspace = true
-field-a64-c5.workspace = true
+field.workspace = true
 isa.workspace = true
 # `ProgramImage` is the input; `load_elf` is never called here.
 loader.workspace = true
@@ -19,4 +19,4 @@ verifier-core.workspace = true
 
 [dev-dependencies]
 test-support.workspace = true
-transcript-a64-c5.workspace = true
+transcript.workspace = true

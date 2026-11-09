@@ -14,7 +14,7 @@ use constraints::memory::{
     RD,
 };
 use constraints::PolyAddress;
-use field_a64_c5::Fp;
+use field::Fp;
 use gkr_verify::BoundaryFinals;
 use loader::ProgramImage;
 use poly::{MultilinearPoly, PolyBacking};

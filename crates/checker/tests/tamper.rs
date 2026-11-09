@@ -31,7 +31,7 @@ use constraints::memory::{
     FIELD_READ_VALUE, FIELD_WRITE_VALUE,
 };
 use constraints::PolyAddress;
-use field_a64_c5::Fp;
+use field::Fp;
 use prover::{shard_columns, ProverSetup};
 use trace::{Role, TraceArchive};
 use verifier::VerifyError;

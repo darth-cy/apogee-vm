@@ -116,7 +116,7 @@ fn main() {
   the prover chose ([public-values.md](spec/public-values.md) §6).
 
 `digest` is a collision-resistant hash the guest links — a Poseidon2 sponge over
-`crates/transcript-a64-c5`, say. The SDK carries none, and the VM has
+`crates/transcript`, say. The SDK carries none, and the VM has
 no precompile: every operation is RV32IMAC code in the guest, proved row by row.
 [ecall-abi.md](spec/ecall-abi.md) §6 lists the SDK.
 

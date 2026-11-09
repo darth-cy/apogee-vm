@@ -1,6 +1,6 @@
 #![no_std]
-//! The Poseidon2 duplex transcript over the A64-C5 field of `field-a64-c5`,
-//! specified in `docs/spec/transcript.md`:
+//! The Poseidon2 duplex transcript over the A64-C5 field, specified in
+//! `docs/spec/transcript.md`:
 //!
 //! - the Poseidon2-A64-C5 permutation (§1);
 //! - Chiesa–Orrù's overwrite duplex, rate 8 and capacity 8, keyed by
@@ -12,7 +12,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 
 mod params;
 
@@ -114,7 +114,8 @@ pub fn poseidon2_permute(state: &mut [Fp; WIDTH]) {
 // ---------------------------------------------------------------------------
 
 /// The protocol identifier, packed seven bytes to a lane into the capacity of
-/// every fresh sponge. It changes whenever this construction does.
+/// every fresh sponge. It names the construction, not the crate, and changes
+/// whenever the construction does.
 pub const PROTOCOL_ID: &[u8] = b"apogee-vm/transcript-a64-c5/v1";
 
 const _: () = assert!(PROTOCOL_ID.len() <= 7 * (WIDTH - RATE));

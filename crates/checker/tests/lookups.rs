@@ -16,7 +16,7 @@ use checker::{
 use common::*;
 use constants::{challenge_slot, lookup_channel, memory::RAM_LIVE_BIT};
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 
 const S0: PolyAddress = PolyAddress::Setup(0);
 const LIVE: PolyAddress = PolyAddress::Virtual(VirtualKind::RamLive);

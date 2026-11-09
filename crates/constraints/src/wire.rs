@@ -17,7 +17,7 @@ use core::marker::PhantomData;
 use serde::de::{Deserialize, Deserializer, Error as _, SeqAccess, Visitor};
 use serde::{Serialize, Serializer};
 
-use field_a64_c5::Fp;
+use field::Fp;
 
 use crate::{
     CachedEntry, CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, LookupExpr, Padding,

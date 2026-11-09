@@ -22,7 +22,7 @@ use constants::memory::{READ_ROOT, WRITE_ROOT};
 use constants::{challenge_slot, lookup_channel};
 use constraints::lookup::ChannelSpec;
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind, CATALOGUE};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr::{
     eval_gate, forward, gate_values, insert_lookup_challenges, virtual_at_row, BaseLayer,
     ExternalChallenges, LayerValues,

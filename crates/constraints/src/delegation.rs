@@ -28,7 +28,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use constants::{challenge_slot, guest_memory, lookup_channel, memory as mem};
-use field_a64_c5::Fp;
+use field::Fp;
 
 use crate::{Coeff, GateDef, LookupExpr, PolyAddress};
 

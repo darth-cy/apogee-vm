@@ -6,7 +6,7 @@ mod common;
 
 use common::{jbs_vk, shell, statement, vk, ADD, JBS};
 use constants::family;
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr_verify::{GkrProof, SumcheckProof};
 use verifier_core::{identity_digest, PublicInputs, ShardProof, VerifyingKey, VmConfig};
 

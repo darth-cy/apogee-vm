@@ -1,6 +1,6 @@
 //! The public I/O digest over a real guest's recorded public values.
 //!
-//! `crates/transcript-a64-c5/tests/transcript.rs` is where the digest's
+//! `crates/transcript/tests/transcript.rs` is where the digest's
 //! sensitivity properties are proven. This is the other half: the public input
 //! and the journal `guests/fib` actually has, digested, and digested again.
 //!
@@ -10,7 +10,7 @@
 mod common;
 
 use test_support::hex_to_bytes;
-use transcript_a64_c5::io_digest;
+use transcript::io_digest;
 
 /// The two streams the committed record holds.
 fn fib_streams() -> (Vec<u8>, Vec<u8>) {

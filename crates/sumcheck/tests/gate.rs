@@ -9,7 +9,7 @@
 mod common;
 
 use common::{square_gate, wide_gate};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use sumcheck::{Gate, GateError, GateTerm, PolyAddress};
 
 /// An integer as a gate input, which is an `Fp2` value.

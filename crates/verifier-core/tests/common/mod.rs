@@ -12,7 +12,7 @@
 
 use constants::family;
 use constraints::family_circuit;
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use gkr_verify::{BoundaryFinals, GkrProof};
 use verifier_core::{
     global_commit, identity_digest, PublicInputs, ShardProof, VerifyingKey, VmConfig,

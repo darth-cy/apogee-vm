@@ -139,8 +139,7 @@ shard's columns (§0); each shard's transcript is seeded from its final state
 - **What a verifier must obtain itself.** The program identity. A key loads under whatever identity
   its own contents give, so a key for another program is refused only by comparing identities; the
   `verifier` CLI makes that comparison, and `host::verify` does not ([proof.md](spec/proof.md) §1).
-- **Trusted code.** Soundness is the verifier's alone: `constants`, `field-a64-c5`,
-  `transcript-a64-c5`, `poly`,
+- **Trusted code.** Soundness is the verifier's alone: `constants`, `field`, `transcript`, `poly`,
   `sumcheck`, `gkr-verify`, `verifier-core`, `verifier`, and `constraints` — the circuits are part of
   the statement, and a missing gate is a soundness bug. Computing an identity from an ELF trusts
   `loader`, `isa` and `program`. `prover`, `emulator`, `trace` and `host` are untrusted: the prover

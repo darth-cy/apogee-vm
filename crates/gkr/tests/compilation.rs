@@ -8,7 +8,7 @@ mod common;
 
 use common::{discharge, honest, toy, toy_base, toy_cache_free, toy_columns};
 use constraints::{CachedEntry, Coeff, ConstraintError, GateDef, PolyAddress};
-use field_a64_c5::Fp;
+use field::Fp;
 
 #[test]
 fn cached_and_cache_free_are_one_circuit() {

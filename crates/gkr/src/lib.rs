@@ -29,9 +29,9 @@ use rayon::prelude::*;
 
 use constants::transcript_tags;
 use constraints::{CircuitArtifact, PolyAddress, VirtualKind};
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use poly::{eq_table, MultilinearPoly, PolyBacking};
-use transcript_a64_c5::Transcript;
+use transcript::Transcript;
 
 pub use gkr_verify::*;
 

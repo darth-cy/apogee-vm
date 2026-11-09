@@ -18,9 +18,9 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use constants::transcript_tags;
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 use sumcheck::SumcheckProof;
-use transcript_a64_c5::{Digest, Transcript};
+use transcript::{Digest, Transcript};
 
 use crate::square::Square;
 use crate::timing::{ms, Best, REPS};

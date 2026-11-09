@@ -7,10 +7,10 @@ publish.workspace = true
 [dependencies]
 test-support.workspace = true
 constants.workspace = true
-field-a64-c5.workspace = true
+field.workspace = true
 poly.workspace = true
 sumcheck.workspace = true
-transcript-a64-c5.workspace = true
+transcript.workspace = true
 constraints.workspace = true
 gkr.workspace = true
 

@@ -18,7 +18,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
-use field_a64_c5::Fp;
+use field::Fp;
 
 pub mod add_sub;
 pub mod atomics;

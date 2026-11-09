@@ -197,7 +197,7 @@ every guest's bytes. So `guests/` is source only: a suite that runs a guest buil
 
 ## 8. The transcript's generator
 
-`crates/transcript-a64-c5/src/params.rs` and the known answer in its `tests/permutation.rs` are one
+`crates/transcript/src/params.rs` and the known answer in its `tests/permutation.rs` are one
 run of HorizenLabs' generator, edited at three lines ([transcript.md](spec/transcript.md) §1.2):
 
 ```console

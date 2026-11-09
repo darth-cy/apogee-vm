@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use field_a64_c5::{Fp, Fp2};
+use field::{Fp, Fp2};
 
 use test_support::Rng;
 
