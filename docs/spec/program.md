@@ -2,9 +2,8 @@
 
 How a guest binary becomes the static, verifier-known description of a program. `crates/loader`
 reads an ELF into a `ProgramImage`, `crates/isa` decodes its instructions, and `crates/program`
-routes them into per-family decoded tables, derives the `VmConfig` and digests it as the **program
-identity**, which is meant to commit to all of it and today commits to none of the code
-(**UNFINISHED**, §8). Every step is a pure function of its input.
+routes them into per-family decoded tables, derives the `VmConfig`, commits the setup columns and
+digests it all as the **program identity** (§8). Every step is a pure function of its input.
 
 ## 1. Loading
 
@@ -110,8 +109,8 @@ family's mask (§6):
 `program::decode_program(image, params)` decodes every `Instruction` slot — a word `isa::decode`
 refuses fails the program, reachable or not (`NotAllOpcodesSupported`) — and builds a table for
 each family of the config. An instruction family's columns are setup columns, which each cycle's
-decoder lookup reads ([lookup.md](lookup.md) §10) and a commitment scheme is meant to commit
-(**UNFINISHED**, §8); other families' tables have none.
+decoder lookup reads ([lookup.md](lookup.md) §10) and the identity commits (§8); other families'
+tables have none.
 
 - **One row per halfword, absolute.** Row `i` is pc `2i`, and a table has exactly its family's
   height `h` (§7).
@@ -197,28 +196,27 @@ A digest, `ProgramIdentity`, on the wire its 8 lanes' canonical bytes in order, 
 | 1 | `PROGRAM_IDENTITY` | `[code_version]`: `constants::family::CODE_VERSION`, 0, the only one derivation builds (`UnsupportedCodeVersion`) |
 | 2 | `VM_CONFIG` | §7's |
 | 3 | `PROGRAM_ENTRY` | `[entry_pc]` |
-| — | — | **UNFINISHED**: one commitment list per family of the config, its setup commitments, absent |
+| 4 | `SETUP_COMMITMENT` | once per family of the config, in its order: its setup commitment's payloads, empty for a family with none |
 
-**ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A family's setup columns are an
-instruction family's decoded-table columns in tuple order, and `INIT_TEARDOWN`'s **image column**
-(`program::image_init_column`), row `y` being `image.initial_word(4y)` over RAM window 0. They are
-meant to be committed and the commitments digested here, a verifying key carrying the lists and
-every shard opening its setup columns against them, which is what would tie the tables a proof
-reads to the identity ([proof.md](proof.md) §3). There is no commitment scheme, so none of that
-exists.
+A family's **setup columns** (`program::setup_columns`) are an instruction family's decoded-table
+columns in tuple order, or `INIT_TEARDOWN`'s **image column** (`program::image_init_column`), row
+`y` being `image.initial_word(4y)` over RAM window 0; then, for a family that reads the generic
+channel, the packed generic table's 3 columns ([lookup.md](lookup.md) §9). They are committed by
+Akita under the family's opening schedule (`program::setup_openers`, [pcs.md](pcs.md) §3), the key
+carries the commitments, and every shard opens its setup columns against its family's
+([proof.md](proof.md) §3, §5), which ties the tables a proof reads to the identity. Computing an
+identity commits every setup column, so it needs every family's circuit: `program_identity` refuses
+a config with a family no circuit proves at its height (`NoCircuit`).
 
 **It binds** the entry pc; the family set, every height, `bytecode_size_words` and the code
-version. One ELF at two settings of the heights has two identities. It is meant to bind every
-instruction the sweep found, with its pc, length, operands and kind, and that no other pc holds
-one, and every file byte of the image (`.text`, `.rodata`, `.data`). **UNFINISHED**: it binds none
-of them, so two programs with one config and one entry pc share an identity;
-`crates/program/tests/identity.rs`' `UNFINISHED_every_code_and_image_byte_moves_the_identity` is
-that property, `#[ignore]`d until a commitment scheme restores it.
+version; every instruction the sweep found, with its pc, length, operands and kind, and that no
+other pc holds one; every file byte of the image (`.text`, `.rodata`, `.data`); and the generic
+table. One ELF at two settings of the heights has two identities.
+`crates/program/tests/identity.rs`' `every_code_and_image_byte_moves_the_identity` holds an
+instruction word, a `.rodata` byte and a `.data` byte to it.
 
 **It does not bind**:
 
-- the generic lookup table, which a commitment scheme is meant to commit into every key
-  (**UNFINISHED**, [proof.md](proof.md) §3);
 - the circuits, which a key's load holds to the registry ([proof.md](proof.md) §7);
 - anything an execution chooses: its input, advice, shard counts, window list;
 - memory past a segment's file bytes (`.bss`, the heap and the stack): `mem_len` enters nothing,

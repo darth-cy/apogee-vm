@@ -38,9 +38,8 @@ lists (the halving ones are `n`), inner columns, artifact bytes, and a shard pro
 | 10 | `PUBLIC_OUTPUT` | 12 | 2 | 0 | 0 | 0 | — | 1 | 26 | 1,714 | 5,976 |
 | 11 | `ADVICE_WINDOWS` | 22 | 3 | 0 | 0 | 0 | — | 1 | 46 | 2,839 | 17,912 |
 
-**UNFINISHED** ([proof.md](proof.md) §3): a proof's bytes are its GKR pass and outputs alone; the
-witness commitments and the opening a commitment scheme adds are not counted, because they are
-not there.
+The bytes are the GKR pass and outputs; the witness commitment and the opening come on top
+([proof.md](proof.md) §9, [pcs.md](pcs.md) §7).
 
 **Heights.** The registry returns `None` above `MAX_TRACE_VARS` = 30, and below the floor
 [lookup.md](lookup.md) §3 derives from the family's channels: 19 with `TIMESTAMP`, else 16 with
@@ -119,13 +118,12 @@ They do not re-implement `check_memory`, the copower rule ([lookup.md](lookup.md
 **`checker::TamperHarness`** re-proves a statement with witness cells or boundary scalars changed,
 as an honest prover would prove the changed witness — each channel's multiplicities recounted
 unless one is what changed or the changed tuple is in no table, a fresh global commit phase where
-the boundary moved, every shard re-proved — then verifies a shard or the block and asserts the
-refusal's class (a `Lookup`'s channel too), or that a change breaking nothing verifies. It relies
-on the prover checking nothing ([gkr.md](gkr.md) §5) and runs on the archived path
-([streaming.md](streaming.md) §6). **UNFINISHED** ([proof.md](proof.md) §3): a changed `M` column
-is meant to be recommitted in that fresh phase, and a twin only an opening could refuse — a setup
-column moved, a generic-table row poisoned — is an `#[ignore]`d `UNFINISHED_*` test, because it
-verifies today.
+the boundary or a memory column moved, the changed memory columns recommitted in it, every shard
+re-proved — then verifies a shard or the block and asserts the refusal's class (a `Lookup`'s
+channel too), or that a change breaking nothing verifies. A setup column cannot be recommitted, the
+key fixing it, so a twin that moves one — the image column, a generic-table row — is refused by the
+opening, `Opening`. It relies on the prover checking nothing ([gkr.md](gkr.md) §5) and runs on the
+archived path ([streaming.md](streaming.md) §6).
 
 **A dump** (`checker::dump`, CLI in [tools.md](../tools.md) §4) prints the columns by address and
 name, each list's gates in [gkr.md](gkr.md) §1's template with their relations, the flat relations

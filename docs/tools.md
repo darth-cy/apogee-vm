@@ -150,8 +150,7 @@ identity. `<name>` is the ELF's stem; `--out` defaults to the working directory.
 
 `tables` prints the `VmConfig`, each instruction's pc, `next_pc`, family, mnemonic and decoded
 fields, and the program identity, at `ProgramParams::defaults()` ([program.md](spec/program.md)
-§8). **UNFINISHED** ([architecture.md](architecture.md) §0): that identity binds none of the
-listing it prints.
+§8), which commits every column it lists.
 
 ## 6. The verifier CLI
 
@@ -168,7 +167,7 @@ statement's shards, each once, in any order; the second verifies a `BlockProof` 
 `verify_block`, as an archive's `.vk`, `.public` and `.block` ([proof.md](spec/proof.md) §9). Exit
 0 when all verifies, 1 naming the first file refused or a wrong shard set, 2 on usage or a
 malformed identity. **Every run prints a warning to stderr that a proof which verifies is
-UNSOUND**: there is no commitment scheme ([architecture.md](architecture.md) §0).
+UNSOUND**: three arguments fail at A64-C5's characteristic ([architecture.md](architecture.md) §0).
 
 ## 7. kat-gen and the committed vectors
 

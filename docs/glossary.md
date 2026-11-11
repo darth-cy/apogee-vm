@@ -17,12 +17,12 @@ the literature fixes (GKR, LogUp, RISC-V) are not listed.
 | canonical form | an element as its value below the modulus: an `Fp` in 8 bytes little-endian, an `Fp2` as its two coordinates' | [primitives.md §1](spec/primitives.md) |
 | challenge slot | a gate coefficient's challenge: drawn, or derived by the verifier | [gkr.md §3, §5](spec/gkr.md) |
 | channel | one LogUp identity over a shard's lookups into one table | [lookup.md §1](spec/lookup.md) |
-| column claims | `ColumnClaims`: every committed column's base claim at one point, which nothing opens | [proof.md §5](spec/proof.md) |
-| commitment void, UNFINISHED | every place a commitment or an opening belongs and none is: every proof is unsound | [architecture.md §0](architecture.md), [proof.md §3](spec/proof.md) |
+| column claims | every committed column's base claim at one point, which the shard's opening opens | [proof.md §5](spec/proof.md) |
+| commitment, opening | Akita's commitment to one group of columns — `M`, `W` or `S` — and the one proof of every claim on a shard's groups | [pcs.md](spec/pcs.md), [proof.md §3, §5](spec/proof.md) |
 | copower | `x < p` as `x·2^32/p < 2^32`, void without a direct bound | [lookup.md §11](spec/lookup.md) |
 | cycle-owning | the execution families 0–6, whose time windows are ordered | [proof.md §8](spec/proof.md) |
 | decoded table | an instruction family's setup columns: row `i` is pc `2i` | [program.md §5](spec/program.md) |
-| discharge | the rule that each lookup is one leaf of its tree; `verifier::discharge`, which drops the column claims unchecked | [lookup.md §11](spec/lookup.md), [proof.md §5](spec/proof.md) |
+| discharge | the rule that each lookup is one leaf of its tree | [lookup.md §11](spec/lookup.md) |
 | enforcing, producing | a gate vanishing on every row; one writing the next layer | [gkr.md §1](spec/gkr.md) |
 | extra mask, kind, kind bit | `family_extra_mask` = `1 << kind`, a kind being a mnemonic's index; `b_k` its bit | [program.md §6](spec/program.md) |
 | family | a circuit and the rows it proves: instructions (0–6) or memory locations | [circuits.md §1](spec/circuits.md) |

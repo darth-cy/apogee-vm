@@ -25,9 +25,7 @@ at `outputs[WRITE_ROOT = 1]` (`constants::memory`), before any channel's roots
 ([lookup.md](lookup.md) §6). All tuples of a statement form one multiset, over `REG`, `RAM` and
 `PC`.
 
-> **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The argument below is only sound
-> if every tuple is fixed before the challenges, and no column is committed, so none is (§6.1,
-> [proof.md](proof.md) §3).
+The argument below is sound only because every tuple is fixed before the challenges (§6.1).
 
 ## 2. An execution family's memory subtree
 
@@ -185,9 +183,8 @@ WC = γ_M + RAM + α_addr·4h·w        gkr_verify::window_challenges
 
 `w` is `verifier_core::shard_window`'s: 0 for `INIT_TEARDOWN`, the list's `i`-th id for
 `ZERO_WINDOWS` shard `i`, 2 and 3 for the public pair, `N + i` for advice shard `i`. An init column
-is `S` where program identity is meant to bind it and `M` where it is one execution's, meant to be
-committed before the challenges (§6.1); **UNFINISHED**, neither is bound. A window shard has no
-inactive rows.
+is `S` where program identity binds it and `M` where it is one execution's, committed before the
+challenges (§6.1). A window shard has no inactive rows.
 
 ### 3.4 The columns a prover fills
 
@@ -305,13 +302,11 @@ the final read. With a free final pc every prefix of an execution would balance.
 
 The four challenges are squeezed once per statement, at the end of the global transcript
 ([proof.md](proof.md) §2 is the schedule), after everything a tuple or the reconciliation reads is
-meant to be fixed, because what is chosen after them can be solved for:
+fixed, because what is chosen after them can be solved for:
 
-- **UNFINISHED**: every shard's `M` commitments, every column a leaf may read but `S` and `V` (§8).
-  They are absent ([proof.md](proof.md) §3), so a prover chooses every `M` column after the
-  challenges, and the argument is **UNSOUND**;
-- program identity, fixing `entry_pc` and meant to fix the image column (§6.2); the generic
-  table's `S` columns are meant to be fixed by the key's commitments, and are not;
+- every shard's `M` commitment, fixing every column a leaf may read but `S` and `V` (§8);
+- program identity, fixing `entry_pc` and every setup column, the image column (§6.2) and the
+  generic table's among them;
 - the shard counts and `MEMORY_WINDOWS`, the zero-window ids, fixing every window shard's
   addresses through `WC`: a list chosen afterwards is a union over up to `2^(N − 1)` lists,
   `2^127` at `h = 2^22` and no bound at all at `2^20`;
@@ -324,12 +319,11 @@ The roots are not absorbed: each shard's GKR proof binds its own.
 ### 6.2 The image column and the entry pc
 
 Program identity ([program.md](program.md) §8 is the recipe) binds `entry_pc`, under
-`PROGRAM_ENTRY`. It is meant to bind `INIT_TEARDOWN`'s one setup commitment, the image column's,
-too, and the `INIT_TEARDOWN` shard's opening to take `S[0]`'s commitment from the verifying key, so
-that the column a proof reads is the image's ([proof.md](proof.md) §5, §7). **UNFINISHED**
-([proof.md](proof.md) §3): neither exists, so a statement over another image, with a trace
-consistent with that image, verifies — `checker`'s
-`UNFINISHED_the_image_column_moved_with_its_teardown_is_refused` is that twin. Without `entry_pc`
+`PROGRAM_ENTRY`, and `INIT_TEARDOWN`'s one setup commitment, the image column's, under
+`SETUP_COMMITMENT`; the `INIT_TEARDOWN` shard's opening takes `S[0]`'s commitment from the
+verifying key, so the column a proof reads is the image's ([proof.md](proof.md) §5, §7). A
+statement over another image, with a trace consistent with that image, is refused by that opening
+— `checker`'s `the_image_column_moved_with_its_teardown_is_refused` is the twin. Without `entry_pc`
 in identity, a key carrying the registered identity beside another entry pc would verify an
 execution starting elsewhere. Identity binds nothing an execution chooses: no shard count, window
 list, public or advice word.
@@ -363,18 +357,15 @@ bound ([lookup.md](lookup.md) §1, §3). Every circuit bounds a value one way:
 
 It runs beside `CircuitArtifact::validate`, whose laws it assumes, wherever a memory artifact is
 built (`constraints::memory`'s assembly panics on a refusal) and in `VerifyingKey::check`. A `W`
-column is meant to be committed in a shard's own transcript, after the memory challenges, so a
-tuple or root over one is chosen after them and balances any trace. `M` columns are meant to
-precede the challenges and `V` columns are closed forms; `S` columns are admitted because they are
-meant to precede them too, bound by identity or, for the generic table, by the key (§6.1).
-**UNFINISHED** ([proof.md](proof.md) §3): the rules still hold every circuit's structure, but no
-column precedes the challenges.
+column is committed in a shard's own transcript, after the memory challenges, so a tuple or root
+over one would be chosen after them and balance any trace. `M` columns precede the challenges and
+`V` columns are closed forms; `S` columns are admitted because they precede them too, bound by
+identity (§6.1).
 
 ## 9. What the argument rests on
 
 Both sides of §4.2 are products of linear forms in `(γ_M, α_addr, α_ts, α_val)`, one per distinct
-tuple, every tuple meant to be fixed before those are drawn (§6.1, §8) — **UNFINISHED**: none is,
-so none of what follows holds yet ([proof.md](proof.md) §3). By Schwartz–Zippel they agree on
+tuple, every tuple fixed before those are drawn (§6.1, §8). By Schwartz–Zippel they agree on
 unequal multisets with probability at most `N/|Fp2| = N/p^2`, below `2^−66` at `N < 2^62` (§4.2),
 and on equal ones §4.2's count gives — **UNFINISHED** at A64-C5's characteristic, which leaves it a
 premise (§4.2):
@@ -387,8 +378,7 @@ premise (§4.2):
   with no init; the gap forbids it.
 - **Consistency per address**: on its one path every read returns the write before it, and the
   final tuple holds the last.
-- **Initial values**: the image's, by §3.4's refusal and §6.2's opening of `S[0]` (**UNFINISHED**,
-  absent); 0 in every
+- **Initial values**: the image's, by §3.4's refusal and §6.2's opening of `S[0]`; 0 in every
   zero window and the journal; the statement's input in its window
   ([public-values.md](public-values.md) §5). Advice is bound to nothing by design
   ([public-values.md](public-values.md) §6).

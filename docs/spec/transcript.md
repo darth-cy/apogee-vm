@@ -126,12 +126,13 @@ chunks) or
 
 ## 4. Tags
 
-`Tag = u64`: `constants::transcript_tags`, 23 tags numbered from 1 to 24 and named by
+`Tag = u64`: `constants::transcript_tags`, 29 tags numbered from 1 to 30 and named by
 `transcript_tags::NAMES[tag − 1]`; 0 is not a tag, and 13 is retired, never to be reassigned.
 Kinds: **S** scalars, `Fp` or `Fp2` (†† marks `Fp2`, two lanes a value), **B** bytes, **C**
 challenge. Where: G1–G9 and the shard transcript are
 [proof.md](proof.md) §2, §4; identity [program.md](program.md) §8; GKR [gkr.md](gkr.md) §5;
-`io_digest` [public-values.md](public-values.md) §5. † marks a tag on no proof path.
+`io_digest` [public-values.md](public-values.md) §5; the opening [pcs.md](pcs.md) §7. † marks a
+tag on no proof path.
 
 | tag | | | where |
 | --- | --- | --- | --- |
@@ -159,9 +160,12 @@ challenge. Where: G1–G9 and the shard transcript are
 | 22 | `GLOBAL_STATE_DIGEST` | C | G9 |
 | 23 | `SHARD_SEED` | S | shard: `[digest.c0, digest.c1, family, index]` |
 | 24 | `SHARD_TS_WINDOW` | S | shard: `[start, end]` |
-
-**ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** No tag absorbs a commitment, because
-there is none ([proof.md](proof.md) §3). A commitment scheme's messages take new numbers from 25.
+| 25 | `SETUP_COMMITMENT` | S | identity: one family's setup commitment, its payloads |
+| 26 | `MEMORY_COMMITMENT` | S | G6a: one statement shard's memory commitment |
+| 27 | `WITNESS_COMMITMENT` | S | shard, S2a: the shard's witness commitment |
+| 28 | `PCS_MESSAGE` | S, S †† | the opening: every prover message |
+| 29 | `PCS_CHALLENGE` | C | the opening: every challenge |
+| 30 | `PCS_DIGEST` | S | a terminal digest's own sponge |
 
 ## 5. Security
 
