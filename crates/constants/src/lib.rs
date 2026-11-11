@@ -142,6 +142,33 @@ pub mod transcript_tags {
     /// the seed. `docs/spec/proof.md` §4.
     pub const SHARD_TS_WINDOW: u64 = 24;
 
+    /// Scalars. One family's setup-column commitment, its slices' payloads in
+    /// order: the program-identity sponge's messages after [`PROGRAM_ENTRY`],
+    /// one per config family in its order. `docs/spec/program.md` §8.
+    pub const SETUP_COMMITMENT: u64 = 25;
+
+    /// Scalars. One statement shard's memory-column commitment, its slices'
+    /// payloads in order, absorbed between G6 and G7 in statement order.
+    /// `docs/spec/proof.md` §2.
+    pub const MEMORY_COMMITMENT: u64 = 26;
+
+    /// Scalars. The shard's witness-column commitment, multiplicities
+    /// included, between S2 and S3. `docs/spec/proof.md` §4.
+    pub const WITNESS_COMMITMENT: u64 = 27;
+
+    /// Scalars or extension elements. Every prover message of an opening:
+    /// payloads, partials, round polynomials, claims, nonces, the response.
+    /// The roles are separated by their fixed position in the opening's
+    /// script, as [`SUMCHECK_CHALLENGE`]'s are. `docs/spec/pcs.md` §7.
+    pub const PCS_MESSAGE: u64 = 28;
+
+    /// Challenge. Every challenge of an opening, by position.
+    pub const PCS_CHALLENGE: u64 = 29;
+
+    /// Scalars. The coefficients the terminal's last-block digest commits,
+    /// inside that digest's own sponge. `docs/spec/pcs.md` §7.
+    pub const PCS_DIGEST: u64 = 30;
+
     /// Every tag's name, indexed by `tag - 1`. **Documentation, never
     /// semantics**, as `challenge_slot::NAMES` is: the number is the tag, and
     /// nothing reads a name to decide anything. `checker::tape` renders a
@@ -150,7 +177,7 @@ pub mod transcript_tags {
     ///
     /// One entry per tag above, and `"RETIRED"` at the retired 13. The lookup
     /// itself lives in `checker::tape`.
-    pub const NAMES: [&str; 24] = [
+    pub const NAMES: [&str; 30] = [
         "PROTOCOL_SUITE",
         "PUBLIC_INPUTS",
         "SUMCHECK_ROUND",
@@ -175,6 +202,12 @@ pub mod transcript_tags {
         "GLOBAL_STATE_DIGEST",
         "SHARD_SEED",
         "SHARD_TS_WINDOW",
+        "SETUP_COMMITMENT",
+        "MEMORY_COMMITMENT",
+        "WITNESS_COMMITMENT",
+        "PCS_MESSAGE",
+        "PCS_CHALLENGE",
+        "PCS_DIGEST",
     ];
 }
 

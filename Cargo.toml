@@ -14,6 +14,8 @@ members = [
     "crates/constraints",
     "crates/gkr-verify",
     "crates/gkr",
+    "crates/pcs-verify",
+    "crates/pcs",
     "crates/checker",
     "crates/verifier-core",
     "crates/verifier",
@@ -49,6 +51,8 @@ emulator = { path = "crates/emulator" }
 constraints = { path = "crates/constraints" }
 gkr-verify = { path = "crates/gkr-verify" }
 gkr = { path = "crates/gkr" }
+pcs-verify = { path = "crates/pcs-verify" }
+pcs = { path = "crates/pcs" }
 checker = { path = "crates/checker" }
 verifier-core = { path = "crates/verifier-core" }
 verifier = { path = "crates/verifier" }

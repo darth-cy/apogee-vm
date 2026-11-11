@@ -1,0 +1,19 @@
+[package]
+name = "pcs"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The prover half of the Akita polynomial commitment scheme: commitments and
+# openings. `std`, because it splits its work over rayon; the verifier half is
+# `crates/pcs-verify`, and this crate re-exports it.
+[dependencies]
+constants.workspace = true
+field.workspace = true
+poly.workspace = true
+pcs-verify.workspace = true
+rayon.workspace = true
+transcript.workspace = true
+
+[dev-dependencies]
+test-support.workspace = true
