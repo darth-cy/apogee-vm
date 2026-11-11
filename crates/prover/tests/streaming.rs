@@ -7,10 +7,8 @@
 //! challenge is a function of the statement and the shard's own columns, so
 //! the worker count cannot reach one — and that is the claim here.
 //!
-//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** Pass 1 is
-//! where each shard's `M` columns are meant to be committed as the shard fills,
-//! and G1–G9 to absorb the ordered list. Nothing is committed
-//! (`docs/architecture.md` §0).
+//! Pass 1 commits each shard's `M` columns as the shard fills, and the global
+//! transcript absorbs the ordered list before the memory challenges.
 //!
 //! # What holds the streamed block
 //!

@@ -37,15 +37,26 @@ fn proved() -> (ProverSetup, TraceArchive, PublicInputs, Vec<ShardProof>) {
 }
 
 /// The byte length a proof of `artifact` has: `docs/spec/proof.md` §9's
-/// layout, every count read off the circuit.
-fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
+/// layout, every count read off the circuit and its opening schedule, but the
+/// opening's, whose Rice-coded response is as long as it codes.
+fn proof_bytes(a: &constraints::CircuitArtifact, p: &ShardProof) -> usize {
     let transitions: usize = (0..a.depth())
         .map(|k| {
             let claims = a.layer_width(k) as usize * if a.layers[k].halving { 2 } else { 1 };
             4 + 64 * a.layer_vars(k + 1) as usize + 4 + 16 * claims
         })
         .sum();
-    4 + 4 + 16 + 16 + (4 + 16 * a.outputs.len()) + 4 + transitions
+    let (slices, len) = verifier_core::opening_schedule(a).commitment_shape(a.witness.len());
+    let mut opening = verifier_core::wire::Writer::new();
+    verifier_core::write_opening(&mut opening, &p.opening);
+    4 + 4
+        + 16
+        + 16
+        + (4 + slices * (4 + 8 * len))
+        + (4 + 16 * a.outputs.len())
+        + 4
+        + transitions
+        + opening.bytes.len()
 }
 
 // ---------------------------------------------------------------------------
@@ -144,7 +155,7 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
         }
         assert_eq!(proof.gkr.layers[0].final_evals.len(), a.committed().len());
         assert_eq!(proof.outputs.len(), 2 + 2 * circuit.channels.len());
-        assert_eq!(proof.to_bytes().len(), proof_bytes(a));
+        assert_eq!(proof.to_bytes().len(), proof_bytes(a, proof));
     }
 }
 
@@ -163,11 +174,7 @@ fn statement_refusal(result: Result<(), VerifyError>, what: &str) {
 /// another program identity, another public I/O digest, another static
 /// `VmConfig`, other shard counts and other public inputs altogether — each
 /// refused as `Statement`, for every shard.
-///
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A statement
-/// whose memory commitments are swapped or replaced is meant to be refused
-/// here too. A statement carries no commitment, so there is no such twin
-/// until a commitment scheme fills the void (`docs/architecture.md` §0).
+/// So is a statement whose memory commitments are swapped or replaced.
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn a5_every_statement_twin_is_refused_as_statement() {
@@ -198,9 +205,15 @@ fn a5_every_statement_twin_is_refused_as_statement() {
         p.memory_roots.insert(1, p.memory_roots[0]);
         statement_refusal(verify_shard(vk, proof, &p), "a zero-window shard added");
 
-        // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The
-        // memory-commitment twins — two swapped, one replaced — belong here
-        // (`docs/architecture.md` §0).
+        let mut p = public.clone();
+        p.memory_commitments.swap(0, 1);
+        statement_refusal(
+            verify_shard(vk, proof, &p),
+            "two memory commitments swapped",
+        );
+        let mut p = public.clone();
+        p.memory_commitments[1].0[0][0] += field::Fp::ONE;
+        statement_refusal(verify_shard(vk, proof, &p), "a memory commitment replaced");
 
         let mut p = public.clone();
         p.input = vec![0, 0, 0, 0];
@@ -331,18 +344,13 @@ fn gkr_schedule(a: &constraints::CircuitArtifact) -> Vec<TranscriptEvent> {
     events
 }
 
-/// On every shard's real transcript: the seed and the window first, then `g`
-/// and `β`, then the GKR schedule with at most one outstanding point after
-/// each batch, top to bottom, and nothing after it. Every base claim is at one
-/// point — the prover asserts it, and the verifier's reduction re-derives the
-/// same point — and the global transcript draws nothing before the boundary.
-///
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The schedule
-/// is meant to absorb each shard's witness commitments before `g` and `β`, every
-/// statement shard's memory commitments before the memory challenges, and to
-/// end in one batched opening of every committed column at that one point. None
-/// of the three exists, so no challenge here follows anything it protects
-/// (`docs/architecture.md` §0).
+/// On every shard's real transcript: the seed, the window and the witness
+/// commitment first, then `g` and `β`, then the GKR schedule with at most one
+/// outstanding point after each batch, top to bottom, and the opening after
+/// it. Every base claim is at one point — the prover asserts it, and the
+/// verifier's reduction re-derives the same point and opens there — and the
+/// global transcript draws nothing before the boundary, which follows every
+/// shard's memory commitment.
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn a6_a8_every_base_claim_is_at_one_point_and_the_schedule_holds() {
@@ -384,7 +392,7 @@ fn a6_a8_every_base_claim_is_at_one_point_and_the_schedule_holds() {
         let a = &setup.vk.circuit(family).unwrap().artifact;
 
         assert_eq!(
-            log[..4],
+            log[..5],
             [
                 Absorb {
                     tag: tags::SHARD_SEED,
@@ -393,6 +401,10 @@ fn a6_a8_every_base_claim_is_at_one_point_and_the_schedule_holds() {
                 Absorb {
                     tag: tags::SHARD_TS_WINDOW,
                     n: 2
+                },
+                Absorb {
+                    tag: tags::WITNESS_COMMITMENT,
+                    n: proof.witness_commitment.0.concat().len()
                 },
                 Challenge {
                     tag: tags::LOOKUP_CHALLENGE
@@ -403,7 +415,7 @@ fn a6_a8_every_base_claim_is_at_one_point_and_the_schedule_holds() {
             ]
         );
         assert_eq!(
-            log[4],
+            log[5],
             Absorb {
                 tag: tags::GKR_OUTPUTS,
                 n: 2 * a.outputs.len()
@@ -414,22 +426,23 @@ fn a6_a8_every_base_claim_is_at_one_point_and_the_schedule_holds() {
         // outputs, then per transition from the top the batch, every round's
         // cubic and challenge, the claims, and a halving transition's child
         // challenge.
-        assert_eq!(log[4..=last_gkr], gkr_schedule(a)[..], "the GKR schedule");
-        // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The
-        // opening of every committed column at the pass's point belongs after
-        // the GKR pass, and nothing is there (`docs/architecture.md` §0).
-        assert_eq!(last_gkr + 1, log.len(), "nothing follows the GKR pass");
+        assert_eq!(log[5..=last_gkr], gkr_schedule(a)[..], "the GKR schedule");
+        // The opening, after the pass and nothing else.
+        let pcs_tags = [tags::PCS_MESSAGE, tags::PCS_CHALLENGE, tags::PCS_DIGEST];
+        assert!(last_gkr + 1 < log.len(), "the opening follows the GKR pass");
+        assert!(
+            log[last_gkr + 1..].iter().all(|e| match e {
+                Absorb { tag, .. } | Challenge { tag } => pcs_tags.contains(tag),
+            }),
+            "only the opening follows the GKR pass"
+        );
         proofs.push(proof);
     }
 
     // The verifier re-derives the one point every base claim is at.
     let public = public_inputs(&global, &proofs);
     for proof in &proofs {
-        let claim = reduce_shard(&setup.vk, proof, &public).expect("the honest shard reduces");
-        let a = &setup.vk.circuit(proof.family).unwrap().artifact;
-        assert_eq!(claim.point.len(), a.trace_vars as usize);
-        assert_eq!(claim.values, proof.gkr.layers[0].final_evals);
-        assert_eq!(claim.columns, a.committed());
+        assert_eq!(reduce_shard(&setup.vk, proof, &public), Ok(()));
         assert_eq!(verify_shard(&setup.vk, proof, &public), Ok(()));
     }
     // And `prove_shard`, the per-shard entry point, is these same steps.

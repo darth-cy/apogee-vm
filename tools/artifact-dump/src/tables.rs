@@ -26,7 +26,9 @@ pub fn render(elf: &[u8], source_label: &str, params: &ProgramParams) -> Result<
         load_elf(elf).map_err(|e| format!("{source_label}: the loader refused it: {e:?}"))?;
     let (tables, config) =
         decode_program(&image, params).map_err(|e| format!("{source_label}: {e}"))?;
-    let identity = to_hex(&program_identity(&image, &tables, &config).to_bytes());
+    let identity =
+        program_identity(&image, &tables, &config).map_err(|e| format!("{source_label}: {e}"))?;
+    let identity = to_hex(&identity.to_bytes());
 
     let mut out = String::new();
     let _ = write!(
@@ -41,13 +43,10 @@ pub fn render(elf: &[u8], source_label: &str, params: &ProgramParams) -> Result<
          program identity  {identity}\n\
          \n\
          The identity is a digest, 8 Fp lanes canonical little-endian: the code\n\
-         version, the VmConfig and the entry point, digested by the recipe in\n\
-         docs/spec/program.md section 8.\n\
-         \n\
-         ALARM - UNFINISHED - WARNING - TODO: NO COMMITMENT SCHEME. The identity is\n\
-         meant to commit to every column below and to the image's words in RAM\n\
-         window 0. With no commitment scheme it binds neither, so two programs with\n\
-         one VmConfig and one entry point share it (docs/architecture.md section 0).\n",
+         version, the VmConfig, the entry point and every family's setup\n\
+         commitment -- every column below, the image's words in RAM window 0 and\n\
+         the packed generic table -- digested by the recipe in\n\
+         docs/spec/program.md section 8.\n",
         to_hex(&sha256(elf)),
         tables.code_version,
         config.bytecode_size_words,

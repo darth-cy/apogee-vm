@@ -1,12 +1,11 @@
 //! The proof-side types: `PublicInputs`, `ShardProof`, `VerifyingKey`,
-//! `VerifyError`, and the column claims the core hands its wrapper. Their byte
-//! layouts are `docs/spec/proof.md` §9, and a key's load rules §7.2.
+//! `VerifyError`, and the shape of a family's opening. Their byte layouts are
+//! `docs/spec/proof.md` §9, and a key's load rules §7.2.
 //!
-//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** None of these
-//! types carries a commitment: not the statement's memory columns, not a proof's
-//! witness columns, not the key's setup columns, and no proof carries an
-//! opening. Each is a void a commitment scheme must fill
-//! (`docs/architecture.md` §0).
+//! Every committed column is committed by Akita (`docs/spec/pcs.md`), in three
+//! groups whose commitments three different parties carry: a statement shard's
+//! `M` columns in the statement, its `W` columns in its proof, and its family's
+//! `S` columns in the key.
 
 use alloc::format;
 use alloc::string::String;
@@ -18,9 +17,10 @@ use constants::{generic_table, lookup_channel};
 use constraints::lookup::{check_discharge, ChannelSpec};
 use constraints::memory::check_memory;
 use constraints::{CircuitArtifact, FamilyCircuit, PolyAddress, VirtualKind};
-use field::Fp2;
+use field::{Fp, Fp2};
 use gkr_verify::{BoundaryFinals, GkrProof, SumcheckProof};
-use transcript::Transcript;
+use pcs_verify::proof::{Fold, Stage, Tensor, Terminal};
+use pcs_verify::{setup_need, Commitment, Schedule, Setup};
 
 use crate::statement::{identity_digest, ProgramIdentity, VmConfig};
 use crate::wire::{Read, Reader, Writer};
@@ -46,6 +46,8 @@ pub enum VerifyError {
     /// The memory argument: the shard's roots, the boundary, the exit status
     /// or the reconciliation.
     MemoryArgument(&'static str),
+    /// The opening of the shard's committed columns at the GKR pass's point.
+    Opening(&'static str),
 }
 
 impl fmt::Display for VerifyError {
@@ -65,6 +67,7 @@ impl fmt::Display for VerifyError {
                     .unwrap_or("?")
             ),
             VerifyError::MemoryArgument(why) => write!(f, "memory argument: {why}"),
+            VerifyError::Opening(why) => write!(f, "opening: {why}"),
         }
     }
 }
@@ -75,13 +78,9 @@ impl fmt::Display for VerifyError {
 
 /// What a statement is about, `docs/spec/proof.md` §1.1: the two public
 /// payloads and the exit status the outside world asserts, then the record the
-/// prover's global phase fixed — every shard's roots, the boundary, the counts
-/// and the window list. Every shard of a statement is verified against one
-/// `PublicInputs`.
-///
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The record
-/// is meant to carry every statement shard's memory-column commitments, between
-/// `boundary` and `memory_roots`; it carries none (`docs/architecture.md` §0).
+/// prover's global phase fixed — every shard's memory commitment and roots, the
+/// boundary, the counts and the window list. Every shard of a statement is
+/// verified against one `PublicInputs`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicInputs {
     pub input: Vec<u8>,
@@ -90,6 +89,8 @@ pub struct PublicInputs {
     pub shard_counts: Vec<u32>,
     pub windows: Vec<u32>,
     pub boundary: BoundaryFinals,
+    /// Per shard, in statement order, the commitment to its `M` columns.
+    pub memory_commitments: Vec<Commitment>,
     /// Per shard, in statement order, `[read_root, write_root]`.
     pub memory_roots: Vec<[Fp2; 2]>,
 }
@@ -104,6 +105,10 @@ impl PublicInputs {
         w.u32s(&self.windows);
         for x in crate::statement::boundary_scalars(&self.boundary) {
             w.fp(x);
+        }
+        w.count(self.memory_commitments.len());
+        for c in &self.memory_commitments {
+            write_commitment(&mut w, c);
         }
         w.count(self.memory_roots.len());
         for [read, write] in &self.memory_roots {
@@ -141,6 +146,10 @@ impl PublicInputs {
             *v = u32::try_from(r.fp()?.to_u64())
                 .map_err(|_| "a boundary value is not below 2^32")?;
         }
+        let commitments = r.count(4)?;
+        let memory_commitments = (0..commitments)
+            .map(|_| read_commitment(&mut r))
+            .collect::<Read<Vec<_>>>()?;
         let roots = r.count(32)?;
         let memory_roots = (0..roots)
             .map(|_| Ok([r.fp2()?, r.fp2()?]))
@@ -153,6 +162,7 @@ impl PublicInputs {
             shard_counts,
             windows,
             boundary,
+            memory_commitments,
             memory_roots,
         })
     }
@@ -164,11 +174,6 @@ impl PublicInputs {
 
 /// One shard's proof, `docs/spec/proof.md` §4 and §9. Its lengths are
 /// fixed by the key's circuit for `family`.
-///
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A shard's
-/// proof is meant to carry its `W` columns' commitments, after
-/// `global_digest`, and the opening of every committed column at the GKR
-/// pass's point, after `gkr`. It carries neither (`docs/architecture.md` §0).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShardProof {
     pub family: u32,
@@ -178,10 +183,15 @@ pub struct ShardProof {
     pub ts_window: [u64; 2],
     /// The global state digest the prover seeded this shard with.
     pub global_digest: Fp2,
+    /// The commitment to the shard's `W` columns, multiplicities included.
+    pub witness_commitment: Commitment,
     /// The top layer: one value per output-map entry, in its order.
     pub outputs: Vec<Fp2>,
     /// One sumcheck per gate list, transition 0 first.
     pub gkr: GkrProof,
+    /// Every committed column — `M`, `W`, `S` — opened at the GKR pass's
+    /// point.
+    pub opening: pcs_verify::Proof,
 }
 
 impl ShardProof {
@@ -192,8 +202,10 @@ impl ShardProof {
         w.u64(self.ts_window[0]);
         w.u64(self.ts_window[1]);
         w.fp2(self.global_digest);
+        write_commitment(&mut w, &self.witness_commitment);
         w.fp2s(&self.outputs);
         write_gkr(&mut w, &self.gkr);
+        write_opening(&mut w, &self.opening);
         w.bytes
     }
 
@@ -203,16 +215,20 @@ impl ShardProof {
         let shard_index = r.u32()?;
         let ts_window = [r.u64()?, r.u64()?];
         let global_digest = r.fp2()?;
+        let witness_commitment = read_commitment(&mut r)?;
         let outputs = r.fp2s()?;
         let gkr = read_gkr(&mut r)?;
+        let opening = read_opening(&mut r)?;
         r.finish()?;
         Ok(ShardProof {
             family,
             shard_index,
             ts_window,
             global_digest,
+            witness_commitment,
             outputs,
             gkr,
+            opening,
         })
     }
 }
@@ -250,6 +266,198 @@ pub fn read_gkr(r: &mut Reader) -> Read<GkrProof> {
     Ok(GkrProof { layers: out })
 }
 
+/// A commitment on the wire: its payloads, each a list of `Fp`.
+pub fn write_commitment(w: &mut Writer, c: &Commitment) {
+    write_lists(w, &c.0);
+}
+
+/// [`write_commitment`]'s reader.
+pub fn read_commitment(r: &mut Reader) -> Read<Commitment> {
+    Ok(Commitment(read_lists(r)?))
+}
+
+fn write_lists(w: &mut Writer, xs: &[Vec<Fp>]) {
+    w.count(xs.len());
+    for x in xs {
+        w.fps(x);
+    }
+}
+
+fn read_lists(r: &mut Reader) -> Read<Vec<Vec<Fp>>> {
+    let n = r.count(4)?;
+    (0..n).map(|_| r.fps()).collect()
+}
+
+fn write_rounds(w: &mut Writer, rounds: &[Vec<Fp2>]) {
+    w.count(rounds.len());
+    for round in rounds {
+        w.fp2s(round);
+    }
+}
+
+fn read_rounds(r: &mut Reader) -> Read<Vec<Vec<Fp2>>> {
+    let n = r.count(4)?;
+    (0..n).map(|_| r.fp2s()).collect()
+}
+
+fn write_tensor(w: &mut Writer, t: &Tensor) {
+    w.fp2(t.partials[0]);
+    w.fp2(t.partials[1]);
+    write_rounds(w, &t.rounds);
+}
+
+fn read_tensor(r: &mut Reader) -> Read<Tensor> {
+    Ok(Tensor {
+        partials: [r.fp2()?, r.fp2()?],
+        rounds: read_rounds(r)?,
+    })
+}
+
+fn write_digest(w: &mut Writer, d: &[Fp; 8]) {
+    for x in d {
+        w.fp(*x);
+    }
+}
+
+fn read_digest(r: &mut Reader) -> Read<[Fp; 8]> {
+    let mut d = [Fp::ZERO; 8];
+    for x in d.iter_mut() {
+        *x = r.fp()?;
+    }
+    Ok(d)
+}
+
+/// An opening on the wire, `docs/spec/proof.md` §9: per fold its messages in
+/// transcript order, each optional one after a presence byte, then the
+/// terminal's. Every length is the schedule's, which the opening's verifier
+/// checks; the reader holds a count to the bytes left and nothing more.
+pub fn write_opening(w: &mut Writer, p: &pcs_verify::Proof) {
+    w.count(p.folds.len());
+    for f in &p.folds {
+        w.flag(f.tensor.is_some());
+        if let Some(t) = &f.tensor {
+            write_tensor(w, t);
+        }
+        w.fps(&f.opening);
+        w.u32(f.nonce);
+        write_lists(w, &f.successor);
+        w.flag(f.digest.is_some());
+        if let Some(d) = &f.digest {
+            write_digest(w, d);
+        }
+        w.flag(f.norm.is_some());
+        if let Some(x) = f.norm {
+            w.fp(x);
+        }
+        w.count(f.range.len());
+        for stage in &f.range {
+            write_rounds(w, &stage.rounds);
+            w.fp2s(&stage.claims);
+        }
+        w.flag(f.response_at.is_some());
+        if let Some(x) = f.response_at {
+            w.fp2(x);
+        }
+        write_rounds(w, &f.fused);
+        w.fp2(f.value);
+    }
+    let t = &p.terminal;
+    write_tensor(w, &t.tensor);
+    write_lists(w, &t.partials);
+    write_digest(w, &t.digest);
+    w.u32(t.nonce);
+    w.bytes(&t.response);
+}
+
+/// [`write_opening`]'s reader.
+pub fn read_opening(r: &mut Reader) -> Read<pcs_verify::Proof> {
+    // A fold's fixed part: five presence bytes and counts, the nonce, the value.
+    let n = r.count(4 * 5 + 4 + 16)?;
+    let mut folds = Vec::new();
+    for _ in 0..n {
+        let tensor = if r.flag()? {
+            Some(read_tensor(r)?)
+        } else {
+            None
+        };
+        let opening = r.fps()?;
+        let nonce = r.u32()?;
+        let successor = read_lists(r)?;
+        let digest = if r.flag()? {
+            Some(read_digest(r)?)
+        } else {
+            None
+        };
+        let norm = if r.flag()? { Some(r.fp()?) } else { None };
+        let stages = r.count(8)?;
+        let range = (0..stages)
+            .map(|_| {
+                Ok(Stage {
+                    rounds: read_rounds(r)?,
+                    claims: r.fp2s()?,
+                })
+            })
+            .collect::<Read<Vec<_>>>()?;
+        let response_at = if r.flag()? { Some(r.fp2()?) } else { None };
+        let fused = read_rounds(r)?;
+        let value = r.fp2()?;
+        folds.push(Fold {
+            tensor,
+            opening,
+            nonce,
+            successor,
+            digest,
+            norm,
+            range,
+            response_at,
+            fused,
+            value,
+        });
+    }
+    let terminal = Terminal {
+        tensor: read_tensor(r)?,
+        partials: read_lists(r)?,
+        digest: read_digest(r)?,
+        nonce: r.u32()?,
+        response: r.bytes()?.to_vec(),
+    };
+    Ok(pcs_verify::Proof { folds, terminal })
+}
+
+// ---------------------------------------------------------------------------
+// The opening's shape
+// ---------------------------------------------------------------------------
+
+/// A family's committed groups in layout order — `M`, `W`, `S` — as column
+/// counts. A group of no column has an empty commitment and no part in the
+/// opening. `docs/spec/proof.md` §5.
+pub fn committed_groups(artifact: &CircuitArtifact) -> [usize; 3] {
+    [
+        artifact.memory.len(),
+        artifact.witness.len(),
+        artifact.setup.len(),
+    ]
+}
+
+/// The schedule every shard of a family is committed and opened under:
+/// Akita's over the circuit's nonempty groups at its trace height.
+pub fn opening_schedule(artifact: &CircuitArtifact) -> Schedule {
+    let groups: Vec<usize> = committed_groups(artifact)
+        .into_iter()
+        .filter(|&c| c > 0)
+        .collect();
+    Schedule::new(artifact.trace_vars, &groups)
+}
+
+/// The setup prefix every family's opening reads: the longest any one needs.
+pub fn pcs_setup_len(circuits: &[FamilyCircuit]) -> usize {
+    circuits
+        .iter()
+        .map(|c| setup_need(&opening_schedule(&c.artifact)))
+        .max()
+        .unwrap_or(0)
+}
+
 // ---------------------------------------------------------------------------
 // VerifyingKey
 // ---------------------------------------------------------------------------
@@ -257,21 +465,22 @@ pub fn read_gkr(r: &mut Reader) -> Read<GkrProof> {
 /// Everything `verify_shard` needs beyond a proof and its public inputs,
 /// `docs/spec/proof.md` §7. A key comes from a channel the prover does
 /// not control, and a verifier compares its `identity` with a registered one.
-///
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A key is
-/// meant to carry, after `identity`, one list of setup-column commitments per
-/// config family — which identity digests — and the packed generic table's
-/// commitments, with whatever public parameters the commitment scheme's verifier
-/// reads. It carries none: nothing ties a shard's setup columns, the decoded
-/// tables and the image among them, to the key (`docs/architecture.md` §0).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifyingKey {
     pub code_version: u32,
     pub config: VmConfig,
     pub entry_pc: u32,
     pub identity: ProgramIdentity,
+    /// One per config family, in its order: the commitment to the family's
+    /// `S` columns — its decoded table, the image column, the packed generic
+    /// table — which the identity digests. Empty for a family with none.
+    pub setup_commitments: Vec<Commitment>,
     /// One per config family, in its order.
     pub circuits: Vec<FamilyCircuit>,
+    /// Akita's public setup, [`pcs_setup_len`] of the circuits: a function of
+    /// them and a constant seed, so it is not on the wire, and
+    /// [`VerifyingKey::from_bytes`] expands it once the key has loaded.
+    pub pcs: Setup,
 }
 
 /// An address a channel spec names: tag 0 `M`, 1 `W`, 2 `S`, 3 `V`, then the
@@ -331,6 +540,10 @@ impl VerifyingKey {
         w.bytes(&self.config.to_bytes());
         w.u32(self.entry_pc);
         w.raw(&self.identity.to_bytes());
+        w.count(self.setup_commitments.len());
+        for c in &self.setup_commitments {
+            write_commitment(&mut w, c);
+        }
         w.count(self.circuits.len());
         for c in &self.circuits {
             w.u32(c.family);
@@ -348,13 +561,14 @@ impl VerifyingKey {
         w.bytes
     }
 
-    /// Decode, then [`VerifyingKey::check`].
+    /// Decode, then [`VerifyingKey::check`], then expand the setup.
     pub fn from_bytes(bytes: &[u8]) -> Result<VerifyingKey, String> {
-        let key = Self::decode(bytes).map_err(String::from)?;
+        let mut key = Self::decode(bytes).map_err(String::from)?;
         if key.to_bytes() != bytes {
             return Err("the key is not the canonical encoding of itself".into());
         }
         key.check()?;
+        key.pcs = Setup::expand(pcs_setup_len(&key.circuits));
         Ok(key)
     }
 
@@ -365,6 +579,10 @@ impl VerifyingKey {
         let entry_pc = r.u32()?;
         let identity = ProgramIdentity::from_bytes(r.take(64)?.try_into().expect("64 bytes"))
             .ok_or("a field element is not canonical")?;
+        let lists = r.count(4)?;
+        let setup_commitments = (0..lists)
+            .map(|_| read_commitment(&mut r))
+            .collect::<Read<Vec<_>>>()?;
         let n = r.count(12)?;
         let mut circuits = Vec::new();
         for _ in 0..n {
@@ -398,12 +616,14 @@ impl VerifyingKey {
             config,
             entry_pc,
             identity,
+            setup_commitments,
             circuits,
+            pcs: Setup(Vec::new()),
         })
     }
 
     /// The load rules of `docs/spec/proof.md` §7.2. Run once, where a key is
-    /// built or loaded.
+    /// built or loaded. The setup is derived, not loaded, and not read here.
     pub fn check(&self) -> Result<(), String> {
         if VmConfig::from_bytes(&self.config.to_bytes()).as_ref() != Some(&self.config) {
             return Err("the key's VmConfig is not one a program derives".into());
@@ -416,18 +636,24 @@ impl VerifyingKey {
             ));
         }
         let families = &self.config.families;
-        // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The key's
-        // setup-commitment lists, one per config family, are counted against
-        // the config HERE, and digested into the identity just below, once a
-        // commitment scheme exists (`docs/architecture.md` §0).
-        let identity = identity_digest(self.code_version, &self.config, self.entry_pc);
+        if self.setup_commitments.len() != families.len() {
+            return Err("the key has not one setup commitment per config family".into());
+        }
+        let identity = identity_digest(
+            self.code_version,
+            &self.config,
+            self.entry_pc,
+            &self.setup_commitments,
+        );
         if identity != self.identity {
-            return Err("the identity is not the digest of the key's config and entry pc".into());
+            return Err(
+                "the identity is not the digest of the key's config, entry pc and setup".into(),
+            );
         }
         if self.circuits.len() != families.len() {
             return Err("the key has not one circuit per config family".into());
         }
-        for (c, (family, height)) in self.circuits.iter().zip(families) {
+        for (i, (c, (family, height))) in self.circuits.iter().zip(families).enumerate() {
             let name = format!("family {family}");
             if c.family != *family {
                 return Err(format!(
@@ -443,6 +669,12 @@ impl VerifyingKey {
                 return Err(format!("{name}: the circuit is not the protocol's"));
             }
             c.artifact.validate().map_err(|e| format!("{name}: {e}"))?;
+            let schedule = opening_schedule(&c.artifact);
+            if !schedule.fits(&self.setup_commitments[i], c.artifact.setup.len()) {
+                return Err(format!(
+                    "{name}: the setup commitment is not its setup columns' shape"
+                ));
+            }
             check_memory(&c.artifact).map_err(|e| format!("{name}: {e}"))?;
             check_discharge(&c.artifact, &c.channels).map_err(|e| format!("{name}: {e}"))?;
             // The registry's own consistency, which no key can break once its
@@ -474,27 +706,4 @@ impl VerifyingKey {
         }
         Ok(())
     }
-}
-
-// ---------------------------------------------------------------------------
-// The column claims
-// ---------------------------------------------------------------------------
-
-/// What `reduce_shard` leaves: every committed column's claimed value at the one
-/// point the GKR pass ends on, and the shard transcript a discharge would run
-/// in. `docs/spec/proof.md` §5.
-///
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** These are the
-/// claims a commitment scheme's opening must prove against the shard's committed
-/// columns — `M` from the statement, `W` from the proof, `S` from the key.
-/// Nothing proves them: every verifier entry point drops them, so the values are
-/// whatever the prover said and a shard's proof is **UNSOUND**
-/// (`docs/architecture.md` §0).
-pub struct ColumnClaims {
-    /// The committed columns, in layout order: `M`, `W`, `S`.
-    pub columns: Vec<PolyAddress>,
-    pub point: Vec<Fp2>,
-    /// One per column, in the same order.
-    pub values: Vec<Fp2>,
-    pub transcript: Transcript,
 }

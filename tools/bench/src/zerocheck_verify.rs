@@ -10,7 +10,7 @@
 //! Two things stay outside both timed regions, and both are named in the
 //! output. Proving and the witness digest are the prover's cost, not the
 //! verifier's. And discharging the claim `verify_zerocheck` returns — opening
-//! `final_evals` against a commitment — is a commitment scheme's job and is not
+//! `final_evals` against a commitment — is the opening's job and is not
 //! measured here, so the sumcheck number is a floor, not a whole verifier's
 //! cost.
 

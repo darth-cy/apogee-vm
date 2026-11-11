@@ -229,6 +229,7 @@ mod tests {
                 pc_ts: 0,
                 reg_values: [0; 31],
             },
+            memory_commitments: crate::tests::memory_zeros(),
             memory_roots: vec![[field::Fp2::ONE, field::Fp2::ONE]; 3],
         };
         // Three shells, because `BlockProof::from_bytes` requires one proof and
@@ -240,8 +241,10 @@ mod tests {
             shard_index: 0,
             ts_window: [0, 0],
             global_digest: field::Fp2::ZERO,
+            witness_commitment: verifier_core::Commitment(vec![]),
             outputs: vec![],
             gkr: GkrProof { layers: vec![] },
+            opening: Default::default(),
         };
         let block = BlockProof {
             config: vk.config.clone(),

@@ -9,14 +9,10 @@
 //! channel's multiplicity column is itself tampered or its recount is
 //! impossible — a tuple its table does not hold — in which case that channel
 //! keeps its honest counts and every other channel is still recounted; a
-//! boundary change runs a new global commit phase; and every shard of the new
-//! statement is proved again.
-//!
-//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A memory
-//! column's change is meant to be recommitted in that new global phase, which
-//! moves every challenge. Nothing is committed, so a tampered `M` cell leaves
-//! the global transcript as it was, and a twin whose refusal rests on a
-//! commitment cannot be refused here at all (`docs/architecture.md` §0).
+//! tampered `M` cell's shard is recommitted and a boundary change made, each in
+//! a new global commit phase, which moves every challenge; and every shard of
+//! the new statement is proved again. A tampered `S` cell cannot be
+//! recommitted — the key fixes it — so its shard's opening is what refuses it.
 //! So the proof that reaches the verifier is the best one the tampered witness
 //! has, and the class of the check that refuses it is the class of what the
 //! tamper broke (`docs/spec/proof.md` §6). A tamper that breaks nothing
@@ -31,8 +27,8 @@ use gkr_verify::BoundaryFinals;
 use poly::{MultilinearPoly, PolyBacking};
 use program::FamilyId;
 use prover::{
-    global_commit_phase, prove_shard_columns, public_inputs, shard_columns, statement_inputs,
-    GlobalCommitState, ProverSetup, ProvingContext, StatementInputs,
+    global_commit_phase, memory_commitment_of, prove_shard_columns, public_inputs, shard_columns,
+    statement_inputs, GlobalCommitState, ProverSetup, ProvingContext, StatementInputs,
 };
 use trace::{build_multiplicities, TraceArchive};
 use verifier::{verify_block, verify_shard, PublicInputs, ShardProof, VerifyError};
@@ -188,9 +184,6 @@ impl<'a> TamperHarness<'a> {
     /// The statement re-proved with `tamper` applied: every shard's proof, in
     /// statement order, and the public inputs they were proved against.
     fn reprove(&self, tamper: &Tamper) -> (Vec<ShardProof>, PublicInputs) {
-        // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. A tampered
-        // `M` cell is meant to reach the global transcript through its shard's
-        // recommitted memory columns; with none, only the boundary does.
         let (_, proofs, public) = if let Some(b) = tamper.boundary {
             let mut inputs = self.inputs.clone();
             inputs.boundary = b;
@@ -226,75 +219,112 @@ fn position(shards: &[(FamilyId, u32)], shard: (FamilyId, u32)) -> usize {
 }
 
 /// Every shard of the statement `inputs` describes, proved with `cells`
-/// applied; with `recommit` false, `honest` is reused for the global state and
-/// for every shard no cell names.
+/// applied; with `recommit` false and no `M` cell among them, `honest` is
+/// reused for the global state and for every shard no cell names.
 fn prove_all(
     setup: &ProverSetup,
     archive: &TraceArchive,
     inputs: &StatementInputs,
     cells: &[Cell],
-    recommit: bool,
+    mut recommit: bool,
     honest: Option<(GlobalCommitState, Vec<ShardProof>)>,
 ) -> (GlobalCommitState, Vec<ShardProof>, PublicInputs) {
+    let shards = statement_shards(&setup.vk.config, &inputs.shard_counts);
+    // The tampered shards' columns; a shard whose `M` columns moved is
+    // recommitted in the statement.
+    let mut inputs = inputs.clone();
+    let tampered: Vec<Option<Vec<(PolyAddress, MultilinearPoly)>>> = shards
+        .iter()
+        .enumerate()
+        .map(|(at, &(family, index))| {
+            let mine: Vec<&Cell> = cells
+                .iter()
+                .filter(|c| (c.family, c.shard) == (family, index))
+                .collect();
+            if mine.is_empty() {
+                return None;
+            }
+            let columns = tampered_columns(setup, archive, &inputs.windows, (family, index), &mine);
+            if mine
+                .iter()
+                .any(|c| matches!(c.address, PolyAddress::Memory(_)))
+            {
+                inputs.memory_commitments[at] =
+                    memory_commitment_of(setup, family, columns.clone());
+                recommit = true;
+            }
+            Some(columns)
+        })
+        .collect();
     let (global, old) = match (recommit, honest) {
         (false, Some((global, proofs))) => (global, Some(proofs)),
-        _ => (global_commit_phase(&setup.vk, inputs), None),
+        _ => (global_commit_phase(&setup.vk, &inputs), None),
     };
     let ctx = ProvingContext {
         setup,
         global: global.clone(),
     };
-    let shards = statement_shards(&setup.vk.config, &inputs.shard_counts);
     let mut proofs = Vec::new();
-    for (at, &(family, index)) in shards.iter().enumerate() {
-        let mine: Vec<&Cell> = cells
-            .iter()
-            .filter(|c| (c.family, c.shard) == (family, index))
-            .collect();
-        if let (Some(old), true) = (&old, mine.is_empty()) {
-            proofs.push(old[at].clone());
-            continue;
-        }
-        let mut columns = shard_columns(setup, archive, family, index, &inputs.windows)
-            .unwrap_or_else(|e| panic!("{e}"));
-        for c in &mine {
-            let column = columns
-                .iter_mut()
-                .find(|(a, _)| *a == c.address)
-                .unwrap_or_else(|| panic!("shard ({family}, {index}) has no {}", c.address));
-            column.1 = with_cell(&column.1, c.row, c.value);
-        }
-        let circuit = &setup
-            .families
-            .iter()
-            .find(|f| f.family == family)
-            .expect("a registered family")
-            .circuit;
-        // The honest prover's recount over the tampered columns, one channel at
-        // a time: a channel whose counts are the tamper keeps them, and one
-        // whose table does not hold a tampered tuple has no count and keeps its
-        // honest one — neither stops another channel's recount.
-        for spec in &circuit.channels {
-            if mine.is_empty() || mine.iter().any(|c| c.address == spec.multiplicity) {
+    for ((at, &(family, index)), columns) in shards.iter().enumerate().zip(tampered) {
+        let columns = match (columns, &old) {
+            (Some(columns), _) => columns,
+            (None, Some(old)) => {
+                proofs.push(old[at].clone());
                 continue;
             }
-            let Ok(recount) =
-                build_multiplicities(&circuit.artifact, &columns, slice::from_ref(spec))
-            else {
-                continue;
-            };
-            for (address, column) in recount {
-                let slot = columns
-                    .iter_mut()
-                    .find(|(a, _)| *a == address)
-                    .expect("a count");
-                slot.1 = column;
-            }
-        }
+            (None, None) => shard_columns(setup, archive, family, index, &inputs.windows)
+                .unwrap_or_else(|e| panic!("{e}")),
+        };
         proofs.push(prove_shard_columns(&ctx, family, index, columns).0);
     }
     let public = public_inputs(&global, &proofs);
     (global, proofs, public)
+}
+
+/// Shard `(family, index)`'s honest columns with `mine` written into them, and
+/// its channels recounted as the honest prover would: a channel whose counts
+/// are the tamper keeps them, and one whose table does not hold a tampered
+/// tuple has no count and keeps its honest one — neither stops another
+/// channel's recount.
+fn tampered_columns(
+    setup: &ProverSetup,
+    archive: &TraceArchive,
+    windows: &[u32],
+    (family, index): (FamilyId, u32),
+    mine: &[&Cell],
+) -> Vec<(PolyAddress, MultilinearPoly)> {
+    let mut columns =
+        shard_columns(setup, archive, family, index, windows).unwrap_or_else(|e| panic!("{e}"));
+    for c in mine {
+        let column = columns
+            .iter_mut()
+            .find(|(a, _)| *a == c.address)
+            .unwrap_or_else(|| panic!("shard ({family}, {index}) has no {}", c.address));
+        column.1 = with_cell(&column.1, c.row, c.value);
+    }
+    let circuit = &setup
+        .families
+        .iter()
+        .find(|f| f.family == family)
+        .expect("a registered family")
+        .circuit;
+    for spec in &circuit.channels {
+        if mine.iter().any(|c| c.address == spec.multiplicity) {
+            continue;
+        }
+        let Ok(recount) = build_multiplicities(&circuit.artifact, &columns, slice::from_ref(spec))
+        else {
+            continue;
+        };
+        for (address, column) in recount {
+            let slot = columns
+                .iter_mut()
+                .find(|(a, _)| *a == address)
+                .expect("a count");
+            slot.1 = column;
+        }
+    }
+    columns
 }
 
 #[cfg(test)]

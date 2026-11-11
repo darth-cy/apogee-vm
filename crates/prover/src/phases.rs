@@ -10,13 +10,16 @@ use rayon::prelude::*;
 use trace::{plan_shards, Phase, PhaseTiming, ShardPlan, TraceArchive};
 use transcript::{Transcript, TranscriptSnapshot};
 use verifier_core::wire::{Read, Reader, Writer};
-use verifier_core::{read_gkr, statement_shards, write_gkr, BlockProof, PublicInputs, ShardProof};
+use verifier_core::{
+    read_commitment, read_gkr, statement_shards, write_commitment, write_gkr, BlockProof,
+    PublicInputs, ShardProof,
+};
 
 #[cfg(feature = "debug-info")]
 use crate::debug;
 use crate::{
-    global_commit_phase, public_inputs, shard_columns, statement_inputs, GlobalCommitState,
-    ProverError, ProverSetup, ProvingContext, ShardGkr,
+    commitment_of, global_commit_phase, public_inputs, shard_columns, statement_inputs,
+    GlobalCommitState, ProverError, ProverSetup, ProvingContext, ShardGkr,
 };
 
 /// A transcript snapshot's fixed size under `postcard`, its wire form
@@ -81,6 +84,7 @@ fn encode_gkrs(shards: &[ShardGkr]) -> Vec<u8> {
         w.u32(s.index);
         w.u64(s.ts_window[0]);
         w.u64(s.ts_window[1]);
+        write_commitment(&mut w, &s.witness_commitment);
         w.fp2s(&s.outputs);
         write_gkr(&mut w, &s.gkr);
         w.fp2s(&s.point);
@@ -97,6 +101,7 @@ fn decode_gkrs(bytes: &[u8]) -> Read<Vec<ShardGkr>> {
         let family = r.u32()?;
         let index = r.u32()?;
         let ts_window = [r.u64()?, r.u64()?];
+        let witness_commitment = read_commitment(&mut r)?;
         let outputs = r.fp2s()?;
         let gkr = read_gkr(&mut r)?;
         let point = r.fp2s()?;
@@ -105,6 +110,7 @@ fn decode_gkrs(bytes: &[u8]) -> Read<Vec<ShardGkr>> {
             family,
             index,
             ts_window,
+            witness_commitment,
             outputs,
             gkr,
             point,
@@ -249,8 +255,10 @@ pub fn advance(
                 shards
                     .par_iter()
                     .map(|&(family, index)| {
-                        base(read_only, (family, index))
-                            .map(|base| ctx.gkr_part(family, index, &base))
+                        base(read_only, (family, index)).map(|base| {
+                            let witness = setup.commit_group(family, &base, 1);
+                            ctx.gkr_part(family, index, &base, &commitment_of(witness.as_ref()))
+                        })
                     })
                     .collect(),
             )?;
@@ -279,14 +287,22 @@ pub fn advance(
         }
         None => {
             let since = Instant::now();
-            // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The
-            // opening region: each shard's columns rebuilt from the archive and
-            // opened HERE, in parallel. With nothing to open, a proof is its GKR
-            // pass alone (`docs/architecture.md` §0).
-            let proofs: Vec<ShardProof> = gkrs
-                .into_par_iter()
-                .map(|gkr| ctx.proof_part(gkr).0)
-                .collect();
+            // The opening region: each shard's columns rebuilt from the archive,
+            // its `M` and `W` commitments' openers recomputed from them, and the
+            // shard opened, in parallel.
+            let read_only: &TraceArchive = archive;
+            let proofs = first_error(
+                gkrs.into_par_iter()
+                    .map(|gkr| {
+                        let base = base(read_only, (gkr.family, gkr.index))?;
+                        let memory = setup.commit_group(gkr.family, &base, 0);
+                        let witness = setup.commit_group(gkr.family, &base, 1);
+                        Ok(ctx
+                            .proof_part(gkr, &base, memory.as_ref(), witness.as_ref())
+                            .0)
+                    })
+                    .collect(),
+            )?;
             dlog!(Phase, "apogee block    proofs done shards={}", proofs.len());
             let mut w = Writer::new();
             encode_proofs(&mut w, &proofs);
@@ -389,6 +405,7 @@ mod tests {
                 pc_ts: 4,
                 reg_values: [0; 31],
             },
+            memory_commitments: vec![verifier_core::Commitment(vec![vec![Fp::ONE; 16]; 2])],
             memory_roots: vec![],
         };
         let mut t = Transcript::new();

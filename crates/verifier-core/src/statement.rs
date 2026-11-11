@@ -15,7 +15,8 @@ use constants::memory::TS_BITS;
 use constants::{challenge_slot, family, guest_memory, transcript_tags as tags, PROTOCOL_VERSION};
 use field::{Fp, Fp2};
 use gkr_verify::{window_challenges, BoundaryFinals, ExternalChallenges};
-use transcript::{io_digest, Digest, Transcript};
+use pcs_verify::Commitment;
+use transcript::{io_digest, Digest, Tag, Transcript};
 
 use crate::{PublicInputs, VerifyingKey};
 
@@ -328,25 +329,34 @@ impl ProgramIdentity {
 /// 1. `PROGRAM_IDENTITY`: `code_version`, one scalar;
 /// 2. `VM_CONFIG`: the family ids, their heights, `bytecode_size_words`;
 /// 3. `PROGRAM_ENTRY`: `entry_pc`, one scalar;
-/// 4. `digest()`, which is the identity.
+/// 4. `SETUP_COMMITMENT`, once per family of `config` in its order: the
+///    commitment to its setup columns — the decoded table, `INIT_TEARDOWN`'s
+///    image column, the packed generic table — empty for a family with none;
+/// 5. `digest()`, which is the identity.
 ///
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** Between steps
-/// 3 and 4 belongs one commitment list per family of `config`: the setup
-/// columns' commitments — each instruction family's decoded table and
-/// `INIT_TEARDOWN`'s image column. Nothing is absorbed there, so this identity
-/// binds the config and the entry pc and **nothing of the program's code or
-/// image**: two programs with one config and one entry pc share it. A later
-/// commitment scheme must commit the setup columns, put the lists in the key
-/// and absorb them here (`docs/architecture.md` §0).
-pub fn identity_digest(code_version: u32, config: &VmConfig, entry_pc: u32) -> ProgramIdentity {
+/// So the identity binds every instruction and every image word: they are
+/// setup columns.
+pub fn identity_digest(
+    code_version: u32,
+    config: &VmConfig,
+    entry_pc: u32,
+    setup_commitments: &[Commitment],
+) -> ProgramIdentity {
     let mut tr = Transcript::new();
     tr.append_scalar(tags::PROGRAM_IDENTITY, Fp::from_u64(code_version as u64));
     absorb_vm_config(&mut tr, config);
     tr.append_scalar(tags::PROGRAM_ENTRY, Fp::from_u64(entry_pc as u64));
-    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The setup
-    // columns' commitments, one list per family, are absorbed here once a
-    // commitment scheme exists. Until then the identity binds no code.
+    for c in setup_commitments {
+        absorb_commitment(&mut tr, tags::SETUP_COMMITMENT, c);
+    }
     ProgramIdentity(tr.digest())
+}
+
+/// A commitment as one typed message: its payloads, concatenated in slice
+/// order. Their count and lengths are the schedule's, which the opening holds
+/// them to.
+pub fn absorb_commitment(t: &mut Transcript, tag: Tag, c: &Commitment) {
+    t.append_scalars(tag, &c.0.concat());
 }
 
 // ---------------------------------------------------------------------------
@@ -416,14 +426,8 @@ pub struct GlobalTranscript {
 /// each shard's own proof, and `exit_status`, bound only by step 10b,
 /// `verify_global_memory`, which holds it to `x10`'s final value in the
 /// boundary absorbed here. A caller that skips step 10b has not bound the
-/// status.
-///
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The memory
-/// challenges are meant to follow every shard's memory-column commitments, so
-/// that no `M` column can be chosen after them. No commitment is absorbed, so a
-/// prover may pick the `M` columns after seeing `γ_M, α_addr, α_ts, α_val`, and
-/// the memory argument is **UNSOUND** until a commitment scheme fills the gap
-/// marked below (`docs/architecture.md` §0).
+/// status. Every shard's memory commitment precedes the memory challenges, so
+/// no `M` column can be chosen after them.
 ///
 /// `statement` must be consistent with `vk`: one shard count per config family.
 /// The verifier checks that first and refuses as `Statement`; a broken one here
@@ -446,11 +450,9 @@ pub(crate) fn global_transcript(
         tags::PUBLIC_INPUTS,
         &io_digest(&statement.input, &statement.output),
     );
-    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. Every statement
-    // shard's `M` commitments are absorbed HERE, in statement order, before the
-    // boundary and the memory challenges. Nothing is: the memory columns are
-    // bound to nothing and the memory argument is unsound until a commitment
-    // scheme fills this void (`docs/architecture.md` §0).
+    for c in &statement.memory_commitments {
+        absorb_commitment(&mut t, tags::MEMORY_COMMITMENT, c);
+    }
     t.append_scalars(
         tags::MEMORY_BOUNDARY,
         &boundary_scalars(&statement.boundary),
@@ -469,19 +471,15 @@ pub(crate) fn global_transcript(
 }
 
 /// A shard transcript through its lookup challenges, `docs/spec/proof.md`
-/// §4: the seed, the time window, then `g` and `β`. Returns the transcript and
-/// the two challenges.
-///
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** `g` and `β`
-/// are meant to follow the shard's witness commitments, multiplicities
-/// included. None is absorbed, so the `W` columns are bound to nothing and the
-/// lookup arguments are **UNSOUND** until a commitment scheme fills the gap
-/// marked below (`docs/architecture.md` §0).
+/// §4: the seed, the time window, the commitment to the shard's `W` columns,
+/// multiplicities included, then `g` and `β`. Returns the transcript and the
+/// two challenges.
 pub fn shard_transcript(
     digest: Fp2,
     family: u32,
     index: u32,
     ts_window: [u64; 2],
+    witness: &Commitment,
 ) -> (Transcript, Fp2, Fp2) {
     let mut t = Transcript::new();
     t.append_scalars(
@@ -497,10 +495,7 @@ pub fn shard_transcript(
         tags::SHARD_TS_WINDOW,
         &[Fp::from_u64(ts_window[0]), Fp::from_u64(ts_window[1])],
     );
-    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The shard's `W`
-    // commitments are absorbed HERE, before `g` and `β`. Nothing is: the
-    // witness and multiplicity columns are bound to nothing until a commitment
-    // scheme fills this void (`docs/architecture.md` §0).
+    absorb_commitment(&mut t, tags::WITNESS_COMMITMENT, witness);
     let g = t.challenge(tags::LOOKUP_CHALLENGE);
     let beta = t.challenge(tags::LOOKUP_CHALLENGE);
     (t, g, beta)

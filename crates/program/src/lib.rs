@@ -1,11 +1,6 @@
 //! Preprocessing: a [`ProgramImage`] in, the per-family decoded tables, the
-//! [`VmConfig`] they derive, and the [`ProgramIdentity`].
-//!
-//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** Identity is
-//! meant to commit to the tables, to the image's words in RAM window 0 and to
-//! the entry pc. With no commitment scheme it digests the config and the entry
-//! pc alone, so it **does not identify a program's code**
-//! (`docs/architecture.md` §0, [`program_identity`]).
+//! [`VmConfig`] they derive, the setup columns' commitments, and the
+//! [`ProgramIdentity`] that digests them.
 //!
 //! `docs/spec/program.md` §4–§8 specifies the table shape, the extra-mask
 //! encoding, the family list with its pc-claiming rule, the digest recipe and
@@ -36,7 +31,9 @@ use constants::{delegation, family, guest_memory};
 use field::Fp;
 use isa::{decode, Instr};
 use loader::{ProgramImage, Slot};
+use pcs::{commit, Commitment, Opener, Setup, Source};
 use poly::{MultilinearPoly, PolyBacking};
+use verifier_core::{opening_schedule, FamilyCircuit};
 
 /// A family's number: an index into `constants::family`'s table.
 pub type FamilyId = u32;
@@ -404,6 +401,9 @@ pub enum ProgramError {
     /// A declaration record at `addr` names an ecall number no delegation
     /// family answers: the guest and this preprocessor disagree on the ABI.
     UnknownDelegation { addr: u32, number: u32 },
+    /// No circuit proves `family` at `height`, so no key commits its setup
+    /// columns.
+    NoCircuit { family: FamilyId, height: u32 },
 }
 
 impl fmt::Display for ProgramError {
@@ -449,6 +449,11 @@ impl fmt::Display for ProgramError {
                 f,
                 "the declaration record at {addr:#x} names ecall {number:#x}, which no \
                  delegation family answers"
+            ),
+            ProgramError::NoCircuit { family, height } => write!(
+                f,
+                "no circuit proves {} at height {height}",
+                family_name(family)
             ),
         }
     }
@@ -857,9 +862,7 @@ pub fn check_memory_windows(
 
 /// RAM window 0's initial words, the image column: row `y` is
 /// `image.initial_word(4y)`, `height` rows, `height` being `INIT_TEARDOWN`'s.
-/// It is that family's one setup column, which program identity is meant to
-/// commit — **UNFINISHED**: nothing commits it (`docs/architecture.md` §0).
-/// `docs/spec/memory.md` §3.4.
+/// It is that family's one setup column. `docs/spec/memory.md` §3.4.
 ///
 /// `U32`-backed: a word is 32 bits, and nothing narrower holds every image.
 pub fn image_init_column(image: &ProgramImage, height: u32) -> MultilinearPoly {
@@ -867,24 +870,89 @@ pub fn image_init_column(image: &ProgramImage, height: u32) -> MultilinearPoly {
     MultilinearPoly::new(PolyBacking::U32(words))
 }
 
+/// A family's setup columns in `S` order, as its fill lays them out: its
+/// decoded table's columns in lookup-tuple order or `INIT_TEARDOWN`'s
+/// [`image_init_column`], then the packed generic table for a family that
+/// reads it (`docs/spec/lookup.md` §9).
+pub fn setup_columns(
+    image: &ProgramImage,
+    tables: &DecodedTables,
+    circuit: &FamilyCircuit,
+) -> Vec<MultilinearPoly> {
+    let vars = circuit.artifact.trace_vars;
+    let mut out: Vec<MultilinearPoly> = if circuit.family == family::INIT_TEARDOWN {
+        vec![image_init_column(image, 1 << vars)]
+    } else {
+        tables.family(circuit.family).map_or(Vec::new(), |t| {
+            (0..t.columns.len()).map(|j| t.column_poly(j)).collect()
+        })
+    };
+    if circuit.reads_generic_table() {
+        out.extend(lookup_tables::generic_table(vars));
+    }
+    assert_eq!(
+        out.len(),
+        circuit.artifact.setup.len(),
+        "{}: the setup columns are the circuit's",
+        family_name(circuit.family)
+    );
+    out
+}
+
+/// Every family's setup columns committed at its opening schedule's root
+/// under `pcs`, in `circuits`' order: the opener the prover keeps, or `None`
+/// for a family with no setup column.
+pub fn setup_openers(
+    image: &ProgramImage,
+    tables: &DecodedTables,
+    circuits: &[FamilyCircuit],
+    pcs: &Setup,
+) -> Vec<Option<Opener>> {
+    circuits
+        .iter()
+        .map(|c| {
+            let columns = setup_columns(image, tables, c);
+            let refs: Vec<&MultilinearPoly> = columns.iter().collect();
+            let root = &opening_schedule(&c.artifact).levels[0];
+            (!refs.is_empty()).then(|| commit(&pcs.0, root, &Source::Columns(&refs)))
+        })
+        .collect()
+}
+
+/// A setup opener's commitment; a family with no setup column has the empty
+/// one.
+pub fn setup_commitment(opener: Option<&Opener>) -> Commitment {
+    opener.map_or(Commitment(Vec::new()), |o| o.commitment.clone())
+}
+
 /// The program's identity, `docs/spec/program.md` §8:
 /// `verifier_core::identity_digest` over the code version, the static
-/// `VmConfig` and the entry pc.
-///
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** Identity is
-/// meant to digest every family's **setup-column commitments** as well — each
-/// instruction family's decoded-table columns in lookup-tuple order and
-/// `INIT_TEARDOWN`'s [`image_init_column`] — and so to bind every instruction
-/// and every file byte of the image. Without a commitment scheme there is
-/// nothing to digest: this identity binds the config and the entry pc and
-/// **nothing of `tables` or of the image's bytes**. Two programs with one config
-/// and one entry pc share it. A later commitment scheme must commit the setup
-/// columns HERE and carry the lists in the verifying key
-/// (`docs/architecture.md` §0).
+/// `VmConfig`, the entry pc and every family's setup commitment — so it binds
+/// every instruction and every file byte of the image. Commits every setup
+/// column to compute them.
 pub fn program_identity(
     image: &ProgramImage,
     tables: &DecodedTables,
     config: &VmConfig,
-) -> ProgramIdentity {
-    verifier_core::identity_digest(tables.code_version, config, image.entry)
+) -> Result<ProgramIdentity, ProgramError> {
+    let circuits = config
+        .families
+        .iter()
+        .map(|&(family, height)| {
+            config
+                .circuit(family, height.trailing_zeros())
+                .ok_or(ProgramError::NoCircuit { family, height })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let pcs = pcs::expand_setup(verifier_core::pcs_setup_len(&circuits));
+    let commitments: Vec<Commitment> = setup_openers(image, tables, &circuits, &pcs)
+        .iter()
+        .map(|o| setup_commitment(o.as_ref()))
+        .collect();
+    Ok(verifier_core::identity_digest(
+        tables.code_version,
+        config,
+        image.entry,
+        &commitments,
+    ))
 }

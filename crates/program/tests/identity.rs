@@ -1,15 +1,7 @@
 //! Program identity: determinism, the recipe of `docs/spec/program.md` §8,
-//! and sensitivity.
-//!
-//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** Identity is
-//! meant to commit to the program's setup columns — every decoded table and the
-//! image column — and with no commitment scheme it digests the code version,
-//! the `VmConfig` and the entry pc alone. What it binds today is held below; what
-//! it is meant to bind and does not, every instruction word and every
-//! file-backed image byte, is held by
-//! `UNFINISHED_every_code_and_image_byte_moves_the_identity`, which is
-//! `#[ignore]`d until a commitment scheme fills the void
-//! (`docs/architecture.md` §0).
+//! and sensitivity — to the code version, the `VmConfig` and the entry pc, and
+//! through the setup commitments to every instruction word and every
+//! file-backed image byte.
 
 mod common;
 
@@ -19,9 +11,22 @@ use loader::{load_elf, ProgramImage, Slot};
 use program::{decode_program, program_identity, ProgramIdentity, ProgramParams};
 use transcript::Transcript;
 
+/// The smallest menu heights every family has a circuit at: identity commits
+/// each family's setup columns under its circuit's opening schedule, and a
+/// cycle-owning family's timestamp channel has a floor of `2^19`.
+fn provable() -> ProgramParams {
+    let mut params = common::smallest();
+    for (f, h) in params.heights.iter_mut().enumerate() {
+        if family::CYCLE_OWNING[f] {
+            *h = 1 << 20;
+        }
+    }
+    params
+}
+
 fn identity_of(image: &ProgramImage, params: &ProgramParams) -> ProgramIdentity {
     let (tables, config) = decode_program(image, params).unwrap();
-    program_identity(image, &tables, &config)
+    program_identity(image, &tables, &config).unwrap()
 }
 
 /// `image` with the file-backed byte at `addr` flipped. The byte must be one,
@@ -56,12 +61,13 @@ fn fib_at_the_defaults_is_deterministic() {
 }
 
 /// The digest is exactly the documented recipe, rebuilt here message by
-/// message: `PROGRAM_IDENTITY`, `VM_CONFIG`, `PROGRAM_ENTRY`, then
-/// `digest()`. Fails if a message moved or one were added.
+/// message: `PROGRAM_IDENTITY`, `VM_CONFIG`, `PROGRAM_ENTRY`, one
+/// `SETUP_COMMITMENT` per family, then `digest()`. Fails if a message moved or
+/// one were added.
 #[test]
 fn the_identity_is_the_documented_recipe() {
     let image = common::guest("fib");
-    let (tables, config) = decode_program(&image, &common::smallest()).unwrap();
+    let (tables, config) = decode_program(&image, &provable()).unwrap();
 
     let fp = |x: u32| Fp::from_u64(x as u64);
     let mut tr = Transcript::new();
@@ -71,9 +77,19 @@ fn the_identity_is_the_documented_recipe() {
     vm.push(fp(config.bytecode_size_words));
     tr.append_scalars(tags::VM_CONFIG, &vm);
     tr.append_scalar(tags::PROGRAM_ENTRY, fp(image.entry));
+    let circuits: Vec<_> = config
+        .families
+        .iter()
+        .map(|&(f, h)| config.circuit(f, h.trailing_zeros()).unwrap())
+        .collect();
+    let pcs = pcs::expand_setup(verifier_core::pcs_setup_len(&circuits));
+    for opener in program::setup_openers(&image, &tables, &circuits, &pcs) {
+        let c = program::setup_commitment(opener.as_ref());
+        tr.append_scalars(tags::SETUP_COMMITMENT, &c.0.concat());
+    }
     assert_eq!(
         ProgramIdentity(tr.digest()),
-        program_identity(&image, &tables, &config)
+        program_identity(&image, &tables, &config).unwrap()
     );
 }
 
@@ -82,7 +98,7 @@ fn the_identity_is_the_documented_recipe() {
 #[test]
 fn every_digested_input_moves_the_identity() {
     let image = common::guest("fib");
-    let params = common::smallest();
+    let params = provable();
     let base = identity_of(&image, &params);
 
     // The entry pc, moved to the next instruction: tables and image unchanged.
@@ -99,7 +115,7 @@ fn every_digested_input_moves_the_identity() {
     assert_ne!(identity_of(&image, &ceiling), base, "bytecode_size_words");
 
     let mut taller = params;
-    taller.heights[family::MEM_WORD as usize] = 1 << 18;
+    taller.heights[family::MEM_WORD as usize] = 1 << 22;
     assert_ne!(identity_of(&image, &taller), base, "one height");
 
     // Removing a family from the set: not something derivation will do for a
@@ -108,24 +124,19 @@ fn every_digested_input_moves_the_identity() {
     tables.families.retain(|t| t.family != family::MUL_DIV);
     config.families.retain(|(f, _)| *f != family::MUL_DIV);
     assert_ne!(
-        program_identity(&image, &tables, &config),
+        program_identity(&image, &tables, &config).unwrap(),
         base,
         "one family"
     );
 }
 
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** What identity
-/// is for: one instruction word, one `.rodata` byte and one `.data` byte each
-/// move it. None does today, because nothing commits the decoded tables or the
-/// image column, and this test fails. It is held here, disabled, as the property
-/// a commitment scheme must restore (`docs/architecture.md` §0).
+/// What identity is for: one instruction word, one `.rodata` byte and one
+/// `.data` byte each move it, through the commitments to the decoded tables
+/// and the image column.
 #[test]
-#[ignore = "UNFINISHED: identity commits no setup column until a commitment scheme exists \
-            (docs/architecture.md §0)"]
-#[allow(non_snake_case)]
-fn UNFINISHED_every_code_and_image_byte_moves_the_identity() {
+fn every_code_and_image_byte_moves_the_identity() {
     let image = common::guest("fib");
-    let params = common::smallest();
+    let params = provable();
     let base = identity_of(&image, &params);
 
     // One instruction word: the low immediate bit of the first 32-bit addi.
@@ -179,8 +190,8 @@ fn a_segment_without_file_bytes_does_not_move_the_identity_by_its_size() {
     reservation.mem_len -= 0x1000;
     assert_ne!(resized, image);
     assert_eq!(
-        identity_of(&resized, &common::smallest()),
-        identity_of(&image, &common::smallest())
+        identity_of(&resized, &provable()),
+        identity_of(&image, &provable())
     );
 }
 
@@ -191,7 +202,7 @@ fn a_segment_without_file_bytes_does_not_move_the_identity_by_its_size() {
 fn a_rebuilt_guest_has_the_same_identity() {
     let a = common::build("fib", "identity-a");
     let b = common::build("fib", "identity-b");
-    let ia = identity_of(&load_elf(&a).unwrap(), &common::smallest());
-    let ib = identity_of(&load_elf(&b).unwrap(), &common::smallest());
+    let ia = identity_of(&load_elf(&a).unwrap(), &provable());
+    let ib = identity_of(&load_elf(&b).unwrap(), &provable());
     assert_eq!(ia, ib, "two clean builds");
 }

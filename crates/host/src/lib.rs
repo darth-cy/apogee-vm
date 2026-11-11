@@ -1,10 +1,5 @@
 //! The host SDK: a guest ELF and its inputs in, a `BlockProof` out.
 //!
-//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A block this
-//! SDK proves binds none of its columns, so one that [`verify`] accepts is
-//! **UNSOUND** evidence of the execution until a commitment scheme fills the
-//! voids marked `UNFINISHED` (`docs/architecture.md` §0).
-//!
 //! # What is here, and what is not
 //!
 //! [`prove`] and [`verify`] are **convenience wrappers and nothing more**.
@@ -150,10 +145,6 @@ pub fn prove(setup: &ProverSetup, io: &GuestIo, max_in_flight: usize) -> Result<
 /// against a value from a channel the prover does not control. That is one
 /// comparison and the caller writes it, exactly as the `verifier` CLI makes it
 /// a separate argument.
-///
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** An `Ok` here
-/// is **UNSOUND**: nothing commits the columns, so the verifier accepts the
-/// prover's word for every value (`docs/architecture.md` §0).
 pub fn verify(vk: &VerifyingKey, block: &BlockProof) -> Result<(), VerifyError> {
     verifier::verify_block(vk, block, block.statement())
 }

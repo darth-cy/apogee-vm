@@ -1,12 +1,5 @@
-//! Shard and block verification: `verifier_core`'s checks, then the discharge
-//! of each shard's column claims. `docs/spec/proof.md` §6 specifies it.
-//!
-//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The discharge
-//! is empty: there is no commitment to open the column claims against, so
-//! [`verify_shard`] and [`verify_block`] accept every column value the prover
-//! states. A proof that verifies here is **UNSOUND** — it shows a GKR pass over
-//! values of the prover's choosing — until a commitment scheme's verifier fills
-//! [`discharge`] (`docs/architecture.md` §0).
+//! Shard and block verification: `verifier_core`'s checks, each shard's
+//! opening among them. `docs/spec/proof.md` §6 specifies it.
 //!
 //! This crate is the core's thin `std` wrapper and holds nothing else of the
 //! protocol. The `verifier` binary is the CLI.
@@ -21,7 +14,7 @@
 pub mod proof_archive;
 
 use verifier_core::{
-    check_ts_windows, derive_global_phase, verify_global_memory, verify_shard_local, ColumnClaims,
+    check_ts_windows, derive_global_phase, verify_global_memory, verify_shard_local,
 };
 
 pub use verifier_core::{
@@ -44,9 +37,8 @@ pub fn verify_shard(
     public: &PublicInputs,
 ) -> Result<(), VerifyError> {
     let global = derive_global_phase(vk, public)?;
-    let claims = verify_shard_local(vk, &global, proof, public)?;
-    verify_global_memory(vk, &global, public)?;
-    discharge(claims)
+    verify_shard_local(vk, &global, proof, public)?;
+    verify_global_memory(vk, &global, public)
 }
 
 /// Verify a whole block: **the one block verification path**, and the same
@@ -64,9 +56,10 @@ pub fn verify_shard(
 ///    read/write root product across every shard of every family
 ///    (`verify_global_memory`, step 10b). It reads the statement and no
 ///    proof, so it is one check for the block, not one per shard;
-/// 6. every shard through `verify_shard_local` and [`discharge`]: its circuit,
-///    its channels' roots (step 9), and its own roots held to the statement's
-///    entry for it (step 10a), which is what puts it in check 5's product.
+/// 6. every shard through `verify_shard_local`: its circuit, its channels'
+///    roots (step 9), its own roots held to the statement's entry for it
+///    (step 10a), which is what puts it in check 5's product, and its opening
+///    (step 11).
 ///
 /// A family in the config with zero shards this execution is valid and has no
 /// record; omitting a shard whose cycles ran is caught by check 5, because its
@@ -101,20 +94,8 @@ pub fn verify_block(
     verify_global_memory(vk, &global, public)?;
     // 6. Every shard, by the one per-shard path.
     for shard in &proof.shards {
-        discharge(verify_shard_local(vk, &global, shard, public)?)?;
+        verify_shard_local(vk, &global, shard, public)?;
     }
-    Ok(())
-}
-
-/// Step 12: the opening of every committed column at the claims' point, in the
-/// shard transcript the claims carry.
-///
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** There is no
-/// opening to check, so the claims are dropped HERE, unchecked, and a shard that
-/// reaches this line is accepted on the prover's word for every column value. A
-/// commitment scheme's verifier belongs in this function
-/// (`docs/architecture.md` §0).
-fn discharge(_claims: ColumnClaims) -> Result<(), VerifyError> {
     Ok(())
 }
 
@@ -128,11 +109,34 @@ pub fn load_verifying_key(bytes: &[u8]) -> Result<VerifyingKey, String> {
 mod tests {
     use super::*;
 
+    /// A commitment of group `g` — 0, 1, 2 for `M`, `W`, `S` — of family
+    /// `f`'s columns' shape at `2^vars` rows, every lane zero.
+    pub(crate) fn zeros(f: u32, vars: u32, g: usize) -> verifier_core::Commitment {
+        let circuit = constraints::family_circuit(f, vars).unwrap();
+        let columns = verifier_core::committed_groups(&circuit.artifact)[g];
+        let (slices, len) =
+            verifier_core::opening_schedule(&circuit.artifact).commitment_shape(columns);
+        verifier_core::Commitment(vec![vec![field::Fp::ZERO; len]; slices])
+    }
+
+    /// The memory commitments of `statement`'s three shards — the window-0
+    /// one and the two public windows' — in statement order.
+    pub(crate) fn memory_zeros() -> Vec<verifier_core::Commitment> {
+        use constants::family;
+        let public = family::PUBLIC_WINDOW_HEIGHT.trailing_zeros();
+        vec![
+            zeros(family::INIT_TEARDOWN, 16, 0),
+            zeros(family::PUBLIC_INPUT, public, 0),
+            zeros(family::PUBLIC_OUTPUT, public, 0),
+        ]
+    }
+
     /// A key over the registry's circuits: `JUMP_BRANCH_SLT` at `2^20` and the
-    /// two RAM window families at `2^16`.
+    /// two RAM window families at `2^16`, its setup commitments of their shape
+    /// and its setup empty — no shard here reaches an opening.
     pub(crate) fn key() -> VerifyingKey {
         use constants::family;
-        use verifier_core::{identity_digest, VmConfig};
+        use verifier_core::{identity_digest, Setup, VmConfig};
 
         let config = VmConfig {
             families: vec![
@@ -147,16 +151,23 @@ mod tests {
             ],
             bytecode_size_words: 1 << 20,
         };
+        let setup_commitments: Vec<_> = config
+            .families
+            .iter()
+            .map(|(f, h)| zeros(*f, h.trailing_zeros(), 2))
+            .collect();
         VerifyingKey {
             code_version: family::CODE_VERSION,
             entry_pc: 0x1_0000,
-            identity: identity_digest(family::CODE_VERSION, &config, 0x1_0000),
+            identity: identity_digest(family::CODE_VERSION, &config, 0x1_0000, &setup_commitments),
             config: config.clone(),
+            setup_commitments,
             circuits: config
                 .families
                 .iter()
                 .map(|(f, h)| constraints::family_circuit(*f, h.trailing_zeros()).unwrap())
                 .collect(),
+            pcs: Setup(vec![]),
         }
     }
 
@@ -190,6 +201,7 @@ mod tests {
             shard_counts: vec![0, 1, 0, 1, 1, 0],
             windows: vec![],
             boundary,
+            memory_commitments: memory_zeros(),
             memory_roots: vec![[field::Fp2::ONE, field::Fp2::ONE]; 3],
         };
         let shell = ShardProof {
@@ -197,8 +209,10 @@ mod tests {
             shard_index: 0,
             ts_window: [0, 0],
             global_digest: field::Fp2::ZERO,
+            witness_commitment: verifier_core::Commitment(vec![]),
             outputs: vec![],
             gkr: GkrProof { layers: vec![] },
+            opening: Default::default(),
         };
         let public_shell = |f: u32| ShardProof {
             family: f,

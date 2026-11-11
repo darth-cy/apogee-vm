@@ -5,17 +5,9 @@
 //! `docs/spec/proof.md` specifies it. The core holds statement binding
 //! (the `VmConfig`, its descriptor and window rules, the identity digest, the
 //! global transcript), the shard transcript's replay, the GKR claim chain
-//! through `gkr-verify`, the LogUp root checks, and the memory argument's
-//! reconciliation; [`reduce_shard`] runs them in order and returns the column
-//! claims.
-//!
-//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The protocol
-//! this crate verifies is **UNCOMMITTED** and therefore **UNSOUND**: no column
-//! a GKR pass reduces to is committed, the transcripts absorb no commitment
-//! before the challenges that depend on one, the identity binds no code, and
-//! the [`ColumnClaims`] every shard ends in are discharged by nothing. Every
-//! place a commitment belongs is marked `UNFINISHED` in this crate; a later
-//! commitment scheme must fill each one (`docs/architecture.md` §0).
+//! through `gkr-verify`, the LogUp root checks, the memory argument's
+//! reconciliation, and the opening of every committed column through
+//! `pcs-verify`; [`reduce_shard`] runs them in order.
 
 extern crate alloc;
 
@@ -30,16 +22,19 @@ pub use reduce::{
     derive_global_phase, reduce_shard, verify_global_memory, verify_shard_local, GlobalChallenges,
 };
 pub use statement::{
-    absorb_statement_descriptor, advice_first_window, boundary_scalars, check_memory_windows,
-    global_commit, identity_digest, memory_slots, public_io_words, shard_challenges,
-    shard_transcript, shard_window, statement_shards, window_height, GlobalTranscript,
-    ProgramIdentity, VmConfig, TRIVIAL_TS_WINDOW,
+    absorb_commitment, absorb_statement_descriptor, advice_first_window, boundary_scalars,
+    check_memory_windows, global_commit, identity_digest, memory_slots, public_io_words,
+    shard_challenges, shard_transcript, shard_window, statement_shards, window_height,
+    GlobalTranscript, ProgramIdentity, VmConfig, TRIVIAL_TS_WINDOW,
 };
 pub use types::{
-    read_gkr, write_gkr, ColumnClaims, PublicInputs, ShardProof, VerifyError, VerifyingKey,
+    committed_groups, opening_schedule, pcs_setup_len, read_commitment, read_gkr, read_opening,
+    write_commitment, write_gkr, write_opening, PublicInputs, ShardProof, VerifyError,
+    VerifyingKey,
 };
 
 // The types a key and a proof are built from, so a caller needs no second
 // dependency to name them.
 pub use constraints::FamilyCircuit;
 pub use gkr_verify::{BoundaryFinals, GkrProof};
+pub use pcs_verify::{Commitment, Setup};

@@ -160,10 +160,9 @@ pub fn honest(
     (values, proof, result)
 }
 
-/// The discharge an opening of the base columns would do: every base claim
-/// against the column it names, evaluated directly. A test stands in for a
-/// commitment scheme this way; the protocol has none yet
-/// (`docs/architecture.md` §0).
+/// The discharge an opening of the base columns does: every base claim
+/// against the column it names, evaluated directly. A test of the engine
+/// alone stands in for the protocol's opening (`docs/spec/pcs.md`) this way.
 pub fn discharge(base: &BaseLayer, claims: &[BaseClaim]) -> Result<(), String> {
     for claim in claims {
         let column = base

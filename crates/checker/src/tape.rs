@@ -15,17 +15,14 @@
 //! [`check_global_tape`] runs the real phase and diffs the two, naming the
 //! first line that differs.
 //!
-//! The order is `docs/spec/proof.md` §2's, G1 to G9.
-//!
-//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The order has
-//! no commitment message: nothing of any shard's columns is absorbed before the
-//! memory challenges, so this tape passing says nothing about binding. When a
-//! commitment scheme fills the void (`docs/architecture.md` §0), its messages
-//! join the order between G6 and G7, and here.
+//! The order is `docs/spec/proof.md` §2's, G1 to G9, with every statement
+//! shard's memory commitment between G6 and G7.
 
 use constants::transcript_tags as tags;
 use transcript::TranscriptEvent;
-use verifier_core::{global_commit, PublicInputs, VerifyingKey};
+use verifier_core::{
+    global_commit, opening_schedule, statement_shards, PublicInputs, VerifyingKey,
+};
 
 /// `tag`'s name, or `"?"` for a number no tag has. `constants` holds the
 /// table and no logic, so the lookup is here.
@@ -71,7 +68,7 @@ pub fn global_tape(vk: &VerifyingKey, statement: &PublicInputs) -> Vec<String> {
 /// | G4 | `absorb MEMORY_WINDOWS w` — `ZERO_WINDOWS`' window ids |
 /// | G5 | `absorb PROGRAM_IDENTITY 8` — the identity, a digest of 8 lanes |
 /// | G6 | `absorb PUBLIC_INPUTS 8` — the I/O digest's 8 lanes |
-/// | — | **UNFINISHED**: the shards' memory-column commitments, absent |
+/// | — | `absorb MEMORY_COMMITMENT n`, once per statement shard in statement order — `n` its family's `M` commitment's lanes |
 /// | G7 | `absorb MEMORY_BOUNDARY 64` |
 /// | G8 | `squeeze MEMORY_CHALLENGE` ×4 |
 /// | G9 | `squeeze GLOBAL_STATE_DIGEST` |
@@ -87,9 +84,15 @@ pub fn expected_global_tape(vk: &VerifyingKey, statement: &PublicInputs) -> Vec<
     // A digest is the sponge's whole rate, 8 lanes.
     absorb(tags::PROGRAM_IDENTITY, 8);
     absorb(tags::PUBLIC_INPUTS, 8);
-    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The shards'
-    // memory-column commitments belong here, and no line is expected for them
-    // because none is absorbed (`docs/architecture.md` §0).
+    // A commitment's lanes are its schedule's: one payload per slice.
+    for (family, _) in statement_shards(&vk.config, &statement.shard_counts) {
+        let artifact = &vk
+            .circuit(family)
+            .expect("a config family's circuit")
+            .artifact;
+        let (slices, len) = opening_schedule(artifact).commitment_shape(artifact.memory.len());
+        absorb(tags::MEMORY_COMMITMENT, slices * len);
+    }
     absorb(tags::MEMORY_BOUNDARY, 64);
     for _ in 0..4 {
         lines.push(format!("squeeze {}", name(tags::MEMORY_CHALLENGE)));

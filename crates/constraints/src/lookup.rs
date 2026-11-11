@@ -284,8 +284,8 @@ pub(crate) fn channel_trees(
             lookup_channel::MAX_TUPLE
         );
         // The multiplicity is the shard's own witness, which must be bound
-        // before `g` and `β` are drawn (`docs/spec/lookup.md` §2 and §7; with
-        // no commitment scheme nothing binds it yet). A setup column is fixed
+        // before `g` and `β` are drawn (`docs/spec/lookup.md` §2 and §7): the
+        // shard's witness commitment binds it. A setup column is fixed
         // at key generation and a memory column belongs to the multiset
         // argument; either would be a count the channel's own witness does not
         // carry.
