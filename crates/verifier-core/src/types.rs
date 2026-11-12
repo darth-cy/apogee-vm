@@ -354,10 +354,6 @@ pub fn write_opening(w: &mut Writer, p: &pcs_verify::Proof) {
             write_rounds(w, &stage.rounds);
             w.fp2s(&stage.claims);
         }
-        w.flag(f.response_at.is_some());
-        if let Some(x) = f.response_at {
-            w.fp2(x);
-        }
         write_rounds(w, &f.fused);
         w.fp2(f.value);
     }
@@ -371,8 +367,9 @@ pub fn write_opening(w: &mut Writer, p: &pcs_verify::Proof) {
 
 /// [`write_opening`]'s reader.
 pub fn read_opening(r: &mut Reader) -> Read<pcs_verify::Proof> {
-    // A fold's fixed part: five presence bytes and counts, the nonce, the value.
-    let n = r.count(4 * 5 + 4 + 16)?;
+    // A fold's fixed part: three presence bytes, four counts, the nonce, the
+    // value.
+    let n = r.count(3 + 4 * 4 + 4 + 16)?;
     let mut folds = Vec::new();
     for _ in 0..n {
         let tensor = if r.flag()? {
@@ -398,7 +395,6 @@ pub fn read_opening(r: &mut Reader) -> Read<pcs_verify::Proof> {
                 })
             })
             .collect::<Read<Vec<_>>>()?;
-        let response_at = if r.flag()? { Some(r.fp2()?) } else { None };
         let fused = read_rounds(r)?;
         let value = r.fp2()?;
         folds.push(Fold {
@@ -409,7 +405,6 @@ pub fn read_opening(r: &mut Reader) -> Read<pcs_verify::Proof> {
             digest,
             norm,
             range,
-            response_at,
             fused,
             value,
         });

@@ -322,7 +322,7 @@ Commitment     list<list<Fp>>                      one payload per outer slice
 Opening        folds list<Fold>, terminal Terminal                         pcs.md §7
 Fold           tensor opt<Tensor>, opening list<Fp>, nonce u32, successor list<list<Fp>>,
                digest opt<Fp[8]>, norm opt<Fp>, range list<(rounds Rounds, claims list<Fp2>)>,
-               response_at opt<Fp2>, fused Rounds, value Fp2
+               fused Rounds, value Fp2
 Tensor         partials Fp2[2], rounds Rounds
 Terminal       tensor Tensor, partials list<list<Fp>>, digest Fp[8], nonce u32, response bytes
 Rounds         list<list<Fp2>>

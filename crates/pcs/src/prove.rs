@@ -494,7 +494,7 @@ fn fold(
     let tau0 = challenges(t, mu);
     let tau1 = challenges(t, log2_ceil(rows));
     let response: Option<Vec<i64>> = l.s_max.map(|_| z.iter().flatten().copied().collect());
-    let (range_stages, norm, r_virt, response_at) = range(t, l, &w, mu, &tau0, response.as_deref());
+    let (range_stages, norm, r_virt) = range(t, l, &w, mu, &tau0, response.as_deref());
     let eta_norm = if l.s_max.is_some() {
         t.challenge(PCS_CHALLENGE)
     } else {
@@ -565,7 +565,6 @@ fn fold(
             digest: digest_msg,
             norm,
             range: range_stages,
-            response_at,
             fused,
             value,
         },
@@ -606,8 +605,8 @@ fn tensor(t: &mut Transcript, w: &[i8], r: &[Fp2]) -> (Tensor, Vec<Fp2>, Fp2, Fp
 }
 
 /// The digit range tree over `w` (paper §6.1), the norm fused into its last
-/// stage on the Euclidean route (§6.2). Returns the stages, the norm claim,
-/// `r_virt` and `z̃_int(r_virt)`.
+/// stage on the Euclidean route (§6.2). Returns the stages, the norm claim
+/// and `r_virt`; `z̃_int(r_virt)` is the last stage's second claim.
 fn range(
     t: &mut Transcript,
     l: &Level,
@@ -615,7 +614,7 @@ fn range(
     mu: usize,
     tau0: &[Fp2],
     response: Option<&[i64]>,
-) -> (Vec<Stage>, Option<Fp>, Vec<Fp2>, Option<Fp2>) {
+) -> (Vec<Stage>, Option<Fp>, Vec<Fp2>) {
     let fans = tree(l.log_b);
     let counts = levels(l.log_b);
     let half = 1i16 << (l.log_b - 1);
@@ -698,7 +697,7 @@ fn range(
         let claims: Vec<Fp2> = tables.iter().map(|tb| tb.get(0)).collect();
         t.append_ext(PCS_MESSAGE, &claims);
         if last {
-            out = Some((next.clone(), claims.get(1).copied()));
+            out = Some(next.clone());
         }
         stages.push(Stage {
             rounds,
@@ -706,8 +705,8 @@ fn range(
         });
         point = next;
     }
-    let (r_virt, z_at) = out.expect("a range tree has a stage");
-    (stages, norm, r_virt, z_at)
+    let r_virt = out.expect("a range tree has a stage");
+    (stages, norm, r_virt)
 }
 
 /// The terminal's inner state `t'_λ = A_T·s'_λ` of the trace-packed blocks of `w`.

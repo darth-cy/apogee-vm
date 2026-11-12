@@ -24,7 +24,8 @@ pub struct Tensor {
 }
 
 /// One stage of the digit range tree (paper §6.1): its rounds, then the claims
-/// it leaves — the next level's node values, or at the leaves `s̃(r_virt)`.
+/// it leaves — the next level's node values, or at the leaves `s̃(r_virt)`
+/// and, on the Euclidean route, `z̃_int(r_virt)` (paper (91)).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stage {
     pub rounds: Vec<Round>,
@@ -47,8 +48,6 @@ pub struct Fold {
     /// The squared response norm, on the Euclidean route (paper (83)).
     pub norm: Option<Fp>,
     pub range: Vec<Stage>,
-    /// On the Euclidean route, `z̃_int(r_virt)` (paper (91)).
-    pub response_at: Option<Fp2>,
     pub fused: Vec<Round>,
     /// `w̃(r₂)`, the claim passed on.
     pub value: Fp2,
