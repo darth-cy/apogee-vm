@@ -154,5 +154,8 @@ order; its wire form is [proof.md](proof.md) §9's `Opening`.
 `q ≡ 5 (mod 8)` has no deep roots of unity, so `A·s` is computed exactly: a CRT-NTT over two
 62-bit primes `k·2^20 + 1`, whose product, about `2^124`, exceeds every such integer product, lifted
 and reduced mod `q` (`pcs::ntt`). The outer and compression maps' products, over digits, are
-schoolbook in `i128`, their high halves the quotients of §4. The sumcheck prover (`pcs::sumcheck`)
-keeps a table in small integers until its first binding and `eq(τ, ·)` as two half tables.
+schoolbook in `i128`, their high halves the quotients of §4. A root column's source digits are
+read by its backing, a bit or a byte one digit and a word split by masks, and the inner images and
+the root response skip every zero digit plane; a challenge term rotates a plane as two runs, cut
+at the negacyclic wrap. The sumcheck prover (`pcs::sumcheck`) keeps a table in small integers
+until its first binding and `eq(τ, ·)` as two half tables.

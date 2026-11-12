@@ -3,7 +3,7 @@
 //! them. `docs/spec/pcs.md` §3.
 
 use field::Fp;
-use pcs_verify::params::{Level, Method, D_C, D_F1, D_F2, Q_BITS};
+use pcs_verify::params::{Level, Method, D_C, D_F1, D_F2, Q_BITS, ROOT_DIGITS, ROOT_LOG};
 use pcs_verify::relation::{slice_width, view};
 use pcs_verify::ring::{digits, fp, full_digits, lift, trace_pack};
 use pcs_verify::Commitment;
@@ -67,23 +67,113 @@ impl Source<'_> {
         }
     }
 
-    /// The source digits of ring element `r`: `src_digits` planes of `d_A`
-    /// (paper §4.5, `s_i = G⁻¹(f_i)` or the identity).
-    pub fn digits(&self, l: &Level, r: usize) -> Vec<Vec<i64>> {
-        let ring = self.ring(l, r);
-        if l.src_log == 0 {
-            return vec![ring.into_iter().map(|x| x as i64).collect()];
-        }
-        let mut planes = vec![vec![0i64; l.d_a]; l.src_digits];
-        let mut ds = vec![0i32; l.src_digits];
-        for (k, &v) in ring.iter().enumerate() {
-            let x = lift(Fp::from_u64(v as u64), l.src_log, l.src_digits);
-            digits(x, l.src_log, l.src_digits, &mut ds);
-            for (p, &d) in planes.iter_mut().zip(&ds) {
-                p[k] = d as i64;
+    /// The source digits of ring element `r` into `out` (paper §4.5,
+    /// `s_i = G⁻¹(f_i)` or the identity), its zero planes marked.
+    ///
+    /// A root column's entries are read by backing: a bit or a byte is its own
+    /// single digit, a 16- or 32-bit word splits by masks into two or three,
+    /// and a field element is lifted and split by [`digits`]. An all-zero run
+    /// of bits, 32-bit words or field elements is marked zero unsplit.
+    pub fn digits_into(&self, l: &Level, r: usize, out: &mut Digits) {
+        let d = l.d_a;
+        out.live = 0;
+        let Source::Columns(cs) = self else {
+            assert_eq!(l.src_log, 0, "a witness is its own source digits");
+            let ring = self.ring(l, r);
+            for (o, &v) in out.coefs.iter_mut().zip(&ring) {
+                *o = v as i64;
             }
+            out.live = ring.iter().any(|&v| v != 0) as u32;
+            return;
+        };
+        assert!(
+            (l.src_log, l.src_digits) == (ROOT_LOG, ROOT_DIGITS),
+            "a root column splits into the root's source digits"
+        );
+        let per = cs[0].len() / d;
+        let Some(c) = cs.get(r / per) else {
+            return;
+        };
+        let start = (r % per) * d;
+        let (p0, rest) = out.coefs.split_at_mut(d);
+        let (p1, rest) = rest.split_at_mut(d);
+        let (p2, p3) = rest.split_at_mut(d);
+        // [`digits`]' balanced digit of a word, `((v + 2^15) mod 2^16) − 2^15`.
+        const HALF: i64 = 1 << (ROOT_LOG - 1);
+        const MASK: i64 = (1 << ROOT_LOG) - 1;
+        let low = |v: i64| ((v + HALF) & MASK) - HALF;
+        let mut nonzero = [0i64; 4];
+        match c.backing() {
+            PolyBacking::U1(limbs, _) => {
+                let limbs = &limbs[start / 64..(start + d) / 64];
+                if limbs.iter().all(|&w| w == 0) {
+                    return;
+                }
+                for (k, o) in p0.iter_mut().enumerate() {
+                    *o = ((limbs[k / 64] >> (k % 64)) & 1) as i64;
+                }
+                nonzero[0] = 1;
+            }
+            PolyBacking::U8(v) => {
+                for (o, &x) in p0.iter_mut().zip(&v[start..start + d]) {
+                    *o = x as i64;
+                    nonzero[0] |= *o;
+                }
+            }
+            PolyBacking::U16(v) => {
+                for (k, &x) in v[start..start + d].iter().enumerate() {
+                    let x = x as i64;
+                    let d0 = low(x);
+                    p0[k] = d0;
+                    p1[k] = (x - d0) >> ROOT_LOG;
+                    nonzero[0] |= p0[k];
+                    nonzero[1] |= p1[k];
+                }
+            }
+            PolyBacking::U32(v) => {
+                let v = &v[start..start + d];
+                if v.iter().all(|&x| x == 0) {
+                    return;
+                }
+                for (k, &x) in v.iter().enumerate() {
+                    let x = x as i64;
+                    let d0 = low(x);
+                    let x1 = (x - d0) >> ROOT_LOG;
+                    let d1 = low(x1);
+                    p0[k] = d0;
+                    p1[k] = d1;
+                    // The carry out of the second digit: 0 or 1, as at 2^32 − 1.
+                    p2[k] = (x1 - d1) >> ROOT_LOG;
+                    nonzero[0] |= d0;
+                    nonzero[1] |= d1;
+                    nonzero[2] |= p2[k];
+                }
+            }
+            PolyBacking::Fp(v) => {
+                let v = &v[start..start + d];
+                if v.iter().all(|&x| x == Fp::ZERO) {
+                    return;
+                }
+                let mut ds = [0i32; ROOT_DIGITS];
+                for (k, x) in v.iter().enumerate() {
+                    digits(
+                        lift(*x, ROOT_LOG, ROOT_DIGITS),
+                        ROOT_LOG,
+                        ROOT_DIGITS,
+                        &mut ds,
+                    );
+                    let [d0, d1, d2, d3] = ds.map(i64::from);
+                    (p0[k], p1[k], p2[k], p3[k]) = (d0, d1, d2, d3);
+                    for (n, dv) in nonzero.iter_mut().zip([d0, d1, d2, d3]) {
+                        *n |= dv;
+                    }
+                }
+            }
+            PolyBacking::Fp2(_) => panic!("a committed column is a base table"),
         }
-        planes
+        for (i, &n) in nonzero.iter().enumerate() {
+            out.live |= ((n != 0) as u32) << i;
+        }
     }
 
     /// Ring element `r`'s coefficients as field elements.
@@ -98,6 +188,34 @@ impl Source<'_> {
                 }
             })
             .collect()
+    }
+}
+
+/// One ring element's source digits: `src_digits` planes of `d_A`
+/// coefficients, plane `i` at `[i·d_A, (i + 1)·d_A)`, and which of them are
+/// nonzero. A plane whose bit is clear in `live` is zero, whatever `coefs`
+/// holds there: the buffer is refilled for every ring element.
+pub struct Digits {
+    coefs: Vec<i64>,
+    live: u32,
+    d: usize,
+}
+
+impl Digits {
+    pub fn new(l: &Level) -> Digits {
+        Digits {
+            coefs: vec![0; l.src_digits * l.d_a],
+            live: 0,
+            d: l.d_a,
+        }
+    }
+
+    /// The nonzero planes and their indices.
+    pub fn planes(&self) -> impl Iterator<Item = (usize, &[i64])> {
+        self.coefs
+            .chunks(self.d)
+            .enumerate()
+            .filter(|(i, _)| (self.live >> i) & 1 == 1)
     }
 }
 
@@ -265,11 +383,10 @@ pub fn inner_images(setup: &[Fp], l: &Level, src: &Source, blocks: usize) -> Vec
         .into_par_iter()
         .map(|lam| {
             let mut acc: Vec<_> = (0..l.n_a).map(|_| crt.zero()).collect();
+            let mut ds = Digits::new(l);
             for x in 0..l.m {
-                for (lc, plane) in src.digits(l, lam * l.m + x).iter().enumerate() {
-                    if plane.iter().all(|&v| v == 0) {
-                        continue;
-                    }
+                src.digits_into(l, lam * l.m + x, &mut ds);
+                for (lc, plane) in ds.planes() {
                     let s = crt.of_ints(plane);
                     for (ai, acc) in acc.iter_mut().enumerate() {
                         crt.mul_acc(acc, &a[ai * m_a + l.src_digits * x + lc], &s);

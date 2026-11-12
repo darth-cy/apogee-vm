@@ -21,7 +21,8 @@ use rayon::prelude::*;
 use transcript::Transcript;
 
 use crate::commit::{
-    commit, compress, full_field_digits, image_digits, inner_images, outer_product, Opener, Source,
+    commit, compress, full_field_digits, image_digits, inner_images, outer_product, Digits, Opener,
+    Source,
 };
 use crate::ntt::Crt;
 use crate::sumcheck::{prove as sumcheck, Table};
@@ -90,17 +91,28 @@ struct Next {
     successor: Successor,
 }
 
-/// `acc += ι(c)·x` over integers in `Z[X]/(X^d + 1)`.
+/// `acc += ι(c)·x` over integers in `Z[X]/(X^d + 1)`. Each term is a rotation
+/// by `pos·stride`, cut at the wrap into two runs: the entries that stay land
+/// `shift` higher, the ones that wrap land `d` lower, negated.
 fn sparse_ints(c: &Sparse, stride: usize, x: &[i64], acc: &mut [i64]) {
     let d = x.len();
     for (&p, &v) in c.pos.iter().zip(&c.coef) {
         let shift = p as usize * stride;
-        for (j, &y) in x.iter().enumerate() {
-            let k = j + shift;
-            if k < d {
-                acc[k] += v as i64 * y;
-            } else {
-                acc[k - d] -= v as i64 * y;
+        let (stay, wrap) = x.split_at(d - shift);
+        let (low, high) = acc.split_at_mut(shift);
+        let v = v as i64;
+        match v {
+            1 => {
+                high.iter_mut().zip(stay).for_each(|(o, &y)| *o += y);
+                low.iter_mut().zip(wrap).for_each(|(o, &y)| *o -= y);
+            }
+            -1 => {
+                high.iter_mut().zip(stay).for_each(|(o, &y)| *o -= y);
+                low.iter_mut().zip(wrap).for_each(|(o, &y)| *o += y);
+            }
+            _ => {
+                high.iter_mut().zip(stay).for_each(|(o, &y)| *o += v * y);
+                low.iter_mut().zip(wrap).for_each(|(o, &y)| *o -= v * y);
             }
         }
     }
@@ -288,9 +300,11 @@ fn fold(
                 .into_par_iter()
                 .flat_map(|x| {
                     let mut acc = vec![vec![0i64; l.d_a]; l.src_digits];
+                    let mut ds = Digits::new(l);
                     for (lam, c) in chal.iter().enumerate() {
                         let (g, b) = locate(lam);
-                        for (lc, plane) in inputs[g].1.digits(l, b * l.m + x).iter().enumerate() {
+                        inputs[g].1.digits_into(l, b * l.m + x, &mut ds);
+                        for (lc, plane) in ds.planes() {
                             sparse_ints(c, l.stride(), plane, &mut acc[lc]);
                         }
                     }
@@ -797,8 +811,12 @@ fn terminal(t: &mut Transcript, tm: &TerminalParams, point: &[Fp2], w: &[i8]) ->
                 .into_par_iter()
                 .flat_map(|x| {
                     let mut acc = vec![0i64; d];
+                    let mut ds = Digits::new(&l);
                     for (lam, c) in chal.iter().enumerate() {
-                        sparse_ints(c, 1, &src.digits(&l, lam * tm.m + x)[0], &mut acc);
+                        src.digits_into(&l, lam * tm.m + x, &mut ds);
+                        for (_, plane) in ds.planes() {
+                            sparse_ints(c, 1, plane, &mut acc);
+                        }
                     }
                     acc
                 })
