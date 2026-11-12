@@ -56,8 +56,6 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::PUBLIC_INPUT,
     family::PUBLIC_OUTPUT,
     family::ADVICE_WINDOWS,
-    family::KECCAK_F,
-    family::SHA256_COMP,
 ];
 
 /// The delegation family that answers ecall `number`, or `None`. The registry
@@ -103,8 +101,6 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::PUBLIC_INPUT => "PUBLIC_INPUT",
         family::PUBLIC_OUTPUT => "PUBLIC_OUTPUT",
         family::ADVICE_WINDOWS => "ADVICE_WINDOWS",
-        family::KECCAK_F => "KECCAK_F",
-        family::SHA256_COMP => "SHA256_COMP",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -243,9 +239,7 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::ZERO_WINDOWS
         | family::PUBLIC_INPUT
         | family::PUBLIC_OUTPUT
-        | family::ADVICE_WINDOWS
-        | family::KECCAK_F
-        | family::SHA256_COMP => &[],
+        | family::ADVICE_WINDOWS => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }

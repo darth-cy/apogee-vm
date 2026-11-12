@@ -26,14 +26,12 @@ Every number this VM implements.
 | Number | Constant | Class | What |
 | --- | --- | --- | --- |
 | 93 | `EXIT` | deterministic | end the execution with status `a0`, the statement's exit status; nonzero is a failed execution, still provable |
-| 0x0507 | `PRECOMPILE_KECCAK_F` | deterministic | one keccak-f[1600] round over the `KECCAK_F` frame at `a0`, in place; `a0` is 0 after |
-| 0x0508 | `PRECOMPILE_SHA256_COMP` | deterministic | four SHA-256 rounds over the `SHA256_COMP` frame at `a0`, in place; `a0` is 0 after |
 
 A class says who chooses the result. **deterministic**: a function of the guest's own state, which
 a circuit proves. **advice**: chosen by the prover; no number has it. A proof admits `EXIT` alone:
-`ADD_SUB_LUI_AUIPC` holds every ecall row's `a7` to 93 ([add-sub.md](add-sub.md)). The two
-delegation calls execute, and their families' circuits exist, but **UNFINISHED**: no ecall row
-requests them yet (`constants::delegation`).
+`ADD_SUB_LUI_AUIPC` holds every ecall row's `a7` to 93 ([add-sub.md](add-sub.md)). A delegation
+call is a number `constants::delegation::TYPES` registers, its frame at `a0`; **UNFINISHED**: none
+is registered, and no ecall row requests one yet.
 
 ## 3. Retired numbers
 
@@ -41,6 +39,8 @@ requests them yet (`constants::delegation`).
 | --- | --- | --- |
 | 63 | none | POSIX `read(fd, buf, len)` |
 | 64 | none | POSIX `write(fd, buf, len)` |
+| 0x0507 | none | a delegation call: one keccak-f[1600] round over a frame at `a0` |
+| 0x0508 | none | a delegation call: four SHA-256 compression rounds over a frame at `a0` |
 
 A number is assigned once. A retired one is never reassigned and answers `-ENOSYS` (§4): given a
 second meaning, it would run an old binary to a plausible wrong answer.
@@ -110,8 +110,8 @@ makes them true:
 
 ## 6. The guest-sdk surface
 
-`crates/guest-sdk` is the guest's runtime. Only `exit` and the two delegation shims issue an
-ecall; the rest is loads and stores.
+`crates/guest-sdk` is the guest's runtime. Only `exit` issues an ecall (a delegation's shim would
+too, and none is registered); the rest is loads and stores.
 
 | Item | What |
 | --- | --- |
@@ -122,7 +122,5 @@ ecall; the rest is loads and stores.
 | `journal()` | what has been committed |
 | `advice()` | the advice payload, its length clamped to the region; bound by nothing, so the guest checks it |
 | `exit(code)` | `EXIT`; publishes nothing beyond what was committed |
-| `keccak_f(lanes)` | keccak-f[1600] in place: 24 `PRECOMPILE_KECCAK_F` calls on one frame; exits 72 on a nonzero answer |
-| `sha256_compress(state, block)` | one SHA-256 compression into `state`: 16 `PRECOMPILE_SHA256_COMP` calls, then the feed-forward; exits 72 likewise |
 | allocator | bumps up from `__heap_start`, never frees; exits 71 when a block would end above `__stack_top − STACK_RESERVE` or the live `sp` |
 | panic handler | exits 101 and writes nothing: a panicking guest is provable, having published what it committed |
