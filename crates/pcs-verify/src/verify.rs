@@ -273,6 +273,11 @@ fn range(t: &mut Transcript, l: &Level, f: &Fold, tau0: &[Fp2]) -> Result<RangeO
                 claim += zeta * norm;
             }
         }
+        // Every stage sums over the witness's cube, `τ₀`'s variables.
+        check(
+            st.rounds.len() == tau0.len(),
+            "a range stage has the wrong rounds",
+        )?;
         let degree = (fan + 1).max(2);
         let (next, fin) = rounds(t, &st.rounds, degree, claim)?;
         let want = if last {
