@@ -25,7 +25,7 @@ use crate::commit::{
     Source,
 };
 use crate::ntt::Crt;
-use crate::sumcheck::{prove as sumcheck, Table};
+use crate::sumcheck::{first_round, prove as sumcheck, Table, Vals};
 
 /// Open: prove that the columns the `groups` commit — each an opener and its
 /// source columns, all of `2^point.len()` entries — take `values` at `point`,
@@ -565,7 +565,7 @@ fn fold(
         Table::ext(0, m),
         Table::ext(lay.c1.start, bin),
     ];
-    let (fused, r2) = sumcheck(t, mu, &mut tables, Some(&r_virt), 3, false, |e, v| {
+    let (fused, r2) = sumcheck(t, mu, &mut tables, Some(&r_virt), 3, false, None, |e, v| {
         v[0] * v[1] + (e * gamma + v[2]) * v[0] * (v[0] + Fp2::ONE)
     });
     let value = tables[0].get(0);
@@ -610,7 +610,7 @@ fn tensor(t: &mut Transcript, w: &[i8], r: &[Fp2]) -> (Tensor, Vec<Fp2>, Fp2, Fp
         })
         .collect();
     let mut tables = vec![Table::ext(0, a), Table::ext(0, fbar)];
-    let (rounds, rho) = sumcheck(t, r.len() - 1, &mut tables, None, 2, false, |_, v| {
+    let (rounds, rho) = sumcheck(t, r.len() - 1, &mut tables, None, 2, false, None, |_, v| {
         v[0] * v[1]
     });
     let theta = tables[0].get(0);
@@ -697,17 +697,35 @@ fn range(
         let dense = !(last && i == 0);
         let degree = (fan + 1).max(2);
         let norm_term = last && response.is_some();
-        let (rounds, next) = sumcheck(t, mu, &mut tables, Some(&point), degree, dense, |e, v| {
-            let mut acc = if last {
-                e * leaf_sum(v[0], fan, lambda)
-            } else {
-                e * node_sum(v, fan, lambda)
+        // A one-stage tree's leaves read `s` itself, which takes only the
+        // values `j(j+1)`: its round 0 is the leaf product once per pair class.
+        let first = (last && i == 0 && !norm_term).then(|| {
+            let alphabet: Vec<i16> = (0..half).map(|j| j * (j + 1)).collect();
+            let Vals::Small(s) = &tables[0].vals else {
+                unreachable!("the leaves are small")
             };
-            if norm_term {
-                acc += zeta * v[1] * v[1];
-            }
-            acc
+            first_round(s, &point, &alphabet, degree, |v| leaf_sum(v, fan, lambda))
         });
+        let (rounds, next) = sumcheck(
+            t,
+            mu,
+            &mut tables,
+            Some(&point),
+            degree,
+            dense,
+            first,
+            |e, v| {
+                let mut acc = if last {
+                    e * leaf_sum(v[0], fan, lambda)
+                } else {
+                    e * node_sum(v, fan, lambda)
+                };
+                if norm_term {
+                    acc += zeta * v[1] * v[1];
+                }
+                acc
+            },
+        );
         let claims: Vec<Fp2> = tables.iter().map(|tb| tb.get(0)).collect();
         t.append_ext(PCS_MESSAGE, &claims);
         if last {
