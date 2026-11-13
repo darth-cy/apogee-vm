@@ -25,7 +25,7 @@ use crate::commit::{
     Source,
 };
 use crate::ntt::Crt;
-use crate::sumcheck::{first_round, prove as sumcheck, Table, Vals};
+use crate::sumcheck::{prove as sumcheck, prove_packed, Table};
 
 /// Open: prove that the columns the `groups` commit — each an opener and its
 /// source columns, all of `2^point.len()` entries — take `values` at `point`,
@@ -593,7 +593,7 @@ fn fold(
         Table::ext(0, m),
         Table::ext(lay.c1.start, bin),
     ];
-    let (fused, r2) = sumcheck(t, mu, &mut tables, Some(&r_virt), 3, false, None, |e, v| {
+    let (fused, r2) = sumcheck(t, mu, &mut tables, Some(&r_virt), 3, false, |e, v| {
         v[0] * v[1] + (e * gamma + v[2]) * v[0] * (v[0] + Fp2::ONE)
     });
     let value = tables[0].get(0);
@@ -638,7 +638,7 @@ fn tensor(t: &mut Transcript, w: &[i8], r: &[Fp2]) -> (Tensor, Vec<Fp2>, Fp2, Fp
         })
         .collect();
     let mut tables = vec![Table::ext(0, a), Table::ext(0, fbar)];
-    let (rounds, rho) = sumcheck(t, r.len() - 1, &mut tables, None, 2, false, None, |_, v| {
+    let (rounds, rho) = sumcheck(t, r.len() - 1, &mut tables, None, 2, false, |_, v| {
         v[0] * v[1]
     });
     let theta = tables[0].get(0);
@@ -673,6 +673,32 @@ fn range(
         }
         acc
     };
+    // A one-stage tree's leaves read `s` itself, and `s` takes the four values
+    // `j(j+1)`, `j < 4`: its sumcheck runs on the digits' 2-bit letters,
+    // `j` for `w = j` or `−1 − j`, and builds its first table after four rounds.
+    if let ([fan], None) = (fans.as_slice(), response) {
+        let letter = |x: i8| match x {
+            0..=3 => x as u16,
+            -4..=-1 => (-1 - x) as u16,
+            _ => panic!("a digit outside b⋆'s interval"),
+        };
+        let codes: Vec<u16> = w
+            .par_chunks(8)
+            .map(|o| {
+                o.iter()
+                    .enumerate()
+                    .fold(0, |c, (k, &x)| c | letter(x) << (2 * k))
+            })
+            .collect();
+        let letters = core::array::from_fn(|j| Fp2::from(fp((j * (j + 1)) as i64)));
+        let degree = fan + 1;
+        let (rounds, r_virt, s) = prove_packed(t, mu, &codes, tau0, letters, degree, |v| {
+            leaf_sum(v, *fan, Fp2::ONE)
+        });
+        t.append_ext(PCS_MESSAGE, &[s]);
+        let claims = vec![s];
+        return (vec![Stage { rounds, claims }], None, r_virt);
+    }
     let mut point = tau0.to_vec();
     let mut stages = Vec::new();
     let mut norm = None;
@@ -725,35 +751,17 @@ fn range(
         let dense = !(last && i == 0);
         let degree = (fan + 1).max(2);
         let norm_term = last && response.is_some();
-        // A one-stage tree's leaves read `s` itself, which takes only the
-        // values `j(j+1)`: its round 0 is the leaf product once per pair class.
-        let first = (last && i == 0 && !norm_term).then(|| {
-            let alphabet: Vec<i16> = (0..half).map(|j| j * (j + 1)).collect();
-            let Vals::Small(s) = &tables[0].vals else {
-                unreachable!("the leaves are small")
+        let (rounds, next) = sumcheck(t, mu, &mut tables, Some(&point), degree, dense, |e, v| {
+            let mut acc = if last {
+                e * leaf_sum(v[0], fan, lambda)
+            } else {
+                e * node_sum(v, fan, lambda)
             };
-            first_round(s, &point, &alphabet, degree, |v| leaf_sum(v, fan, lambda))
+            if norm_term {
+                acc += zeta * v[1] * v[1];
+            }
+            acc
         });
-        let (rounds, next) = sumcheck(
-            t,
-            mu,
-            &mut tables,
-            Some(&point),
-            degree,
-            dense,
-            first,
-            |e, v| {
-                let mut acc = if last {
-                    e * leaf_sum(v[0], fan, lambda)
-                } else {
-                    e * node_sum(v, fan, lambda)
-                };
-                if norm_term {
-                    acc += zeta * v[1] * v[1];
-                }
-                acc
-            },
-        );
         let claims: Vec<Fp2> = tables.iter().map(|tb| tb.get(0)).collect();
         t.append_ext(PCS_MESSAGE, &claims);
         if last {

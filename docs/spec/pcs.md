@@ -158,6 +158,7 @@ schoolbook in `i128`, their high halves the quotients of §4. A root column's so
 read by its backing, a bit or a byte one digit and a word split by masks, and the inner images and
 the root response skip every zero digit plane; a challenge term rotates a plane as two runs, cut
 at the negacyclic wrap. The sumcheck prover (`pcs::sumcheck`) keeps a table in small integers
-until its first binding and `eq(τ, ·)` as two half tables, and a one-stage range tree's first
-round evaluates the leaf product once per class of pair `(s(2p), s(2p+1))`, weighted by the
-class's summed `eq`.
+until its first binding and `eq(τ, ·)` as two half tables. A one-stage range tree's sumcheck runs
+its first four rounds on the digits' 2-bit letters: rounds 0 to 2 evaluate the leaf product once per
+class of pair, weighted by the class's summed `eq`, round 3 binds each octet by lookup, and only
+then is a table built, one entry per sixteen digits.

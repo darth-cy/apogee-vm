@@ -98,85 +98,11 @@ impl SplitEq {
     }
 }
 
-/// `eq(τ_j, X) = (1 − τ_j)(1 − X) + τ_j·X` at the integer `x`.
-fn eq_at_int(tj: Fp2, x: usize) -> Fp2 {
-    let xe = fp(x as i64);
-    (Fp2::ONE - tj) * (Fp2::ONE - Fp2::from(xe)) + tj * xe
-}
-
-/// Round 0 of [`prove`] for `Σ_x eq(τ, x)·h(s(x))`, one small table `s` from
-/// 0 whose every entry is in `alphabet`, and `h(0) = 0`: each pair
-/// `(s(2p), s(2p+1))` is one of `|alphabet|²` classes, so the round is
-/// `eq(τ₀, X)·Σ_c W_c·h(a_c + X·(b_c − a_c))`, `W_c` the class's summed
-/// `eq(τ[1..], p)`, and `h` runs once per class and point rather than once per
-/// pair and point. Its evaluations at `0, 1, …, degree`, which [`prove`]
-/// takes as `first`; they are the ones its own round 0 would compute.
-pub fn first_round(
-    s: &[i16],
-    tau: &[Fp2],
-    alphabet: &[i16],
-    degree: usize,
-    h: impl Fn(Fp2) -> Fp2,
-) -> Vec<Fp2> {
-    debug_assert_eq!(h(Fp2::ZERO), Fp2::ZERO, "the pairs past s are skipped");
-    let k = alphabet.len();
-    let mut class = vec![u8::MAX; *alphabet.iter().max().expect("a letter") as usize + 1];
-    for (c, &a) in alphabet.iter().enumerate() {
-        class[a as usize] = c as u8;
-    }
-    let at = |i: usize| match class.get(s.get(i).map_or(0, |&v| v as usize)) {
-        Some(&c) if c != u8::MAX => c as usize,
-        _ => panic!("a table entry outside the alphabet"),
-    };
-    // `eq(τ[1..], p) = lo(p mod 2^bits)·hi(p >> bits)`: sum the low factor by
-    // class within each run of one high index, then weigh the run by it.
-    let rest = SplitEq::new(&tau[1..]);
-    let run = 1usize << rest.bits;
-    let pairs = s.len().div_ceil(2);
-    let mass = (0..pairs.div_ceil(run))
-        .into_par_iter()
-        .fold(
-            || vec![Fp2::ZERO; k * k],
-            |mut acc, hi| {
-                let mut part = vec![Fp2::ZERO; k * k];
-                for p in hi * run..((hi + 1) * run).min(pairs) {
-                    part[at(2 * p) * k + at(2 * p + 1)] += rest.lo[p - hi * run];
-                }
-                for (a, x) in acc.iter_mut().zip(part) {
-                    *a += rest.hi[hi] * x;
-                }
-                acc
-            },
-        )
-        .reduce(
-            || vec![Fp2::ZERO; k * k],
-            |mut a, b| {
-                for (x, y) in a.iter_mut().zip(b) {
-                    *x += y;
-                }
-                a
-            },
-        );
-    (0..=degree)
-        .map(|x| {
-            let xe = Fp2::from(fp(x as i64));
-            let sum = mass.iter().enumerate().fold(Fp2::ZERO, |acc, (c, &w)| {
-                let (a, b) = (alphabet[c / k] as i64, alphabet[c % k] as i64);
-                acc + w * h(Fp2::from(fp(a)) + xe * fp(b - a))
-            });
-            eq_at_int(tau[0], x) * sum
-        })
-        .collect()
-}
-
 /// Prove `Σ_{x ∈ {0,1}^μ} f(e(x), tables(x)) = claim`, `e(x) = eq(τ, x)` when
 /// `tau` is given and 1 otherwise; `f` applies `e` to whichever terms carry
 /// it. With `dense` false, pairs outside every table's window are skipped,
-/// which is sound only where `f` vanishes at all-zero tables. `first`, when
-/// given, is round 0's evaluations at `0, 1, …, degree`, computed by the
-/// caller ([`first_round`]). Returns the rounds and the point; the tables end
-/// bound, each value at `get(0)`.
-#[allow(clippy::too_many_arguments)]
+/// which is sound only where `f` vanishes at all-zero tables. Returns the
+/// rounds and the point; the tables end bound, each value at `get(0)`.
 pub fn prove(
     t: &mut Transcript,
     mu: usize,
@@ -184,7 +110,6 @@ pub fn prove(
     tau: Option<&[Fp2]>,
     degree: usize,
     dense: bool,
-    mut first: Option<Vec<Fp2>>,
     f: impl Fn(Fp2, &[Fp2]) -> Fp2 + Sync,
 ) -> (Vec<Round>, Vec<Fp2>) {
     let n = tables.len();
@@ -196,55 +121,62 @@ pub fn prove(
     let mut point = Vec::with_capacity(mu);
     let mut prefix = Fp2::ONE;
     for j in 0..mu {
+        let pairs = 1usize << (mu - j - 1);
+        let (lo, hi) = if dense {
+            (0, pairs)
+        } else {
+            let lo = tables.iter().map(|tb| tb.start / 2).min().unwrap_or(0);
+            let hi = tables
+                .iter()
+                .map(|tb| (tb.start + tb.len()).div_ceil(2))
+                .max()
+                .unwrap_or(0)
+                .min(pairs);
+            (lo.min(hi), hi)
+        };
+        let rest = tau.map(|tau| SplitEq::new(&tau[j + 1..]));
         let tj = tau.map(|tau| tau[j]);
-        let g = first.take().unwrap_or_else(|| {
-            let pairs = 1usize << (mu - j - 1);
-            let (lo, hi) = if dense {
-                (0, pairs)
-            } else {
-                let lo = tables.iter().map(|tb| tb.start / 2).min().unwrap_or(0);
-                let hi = tables
-                    .iter()
-                    .map(|tb| (tb.start + tb.len()).div_ceil(2))
-                    .max()
-                    .unwrap_or(0)
-                    .min(pairs);
-                (lo.min(hi), hi)
-            };
-            let rest = tau.map(|tau| SplitEq::new(&tau[j + 1..]));
-            (lo..hi)
-                .into_par_iter()
-                .fold(
-                    || vec![Fp2::ZERO; degree + 1],
-                    |mut acc, p| {
-                        let e_rest = rest.as_ref().map_or(Fp2::ONE, |s| s.at(p));
-                        let mut v = [Fp2::ZERO; MAX_TABLES];
-                        let mut d = [Fp2::ZERO; MAX_TABLES];
-                        for (i, tb) in tables.iter().enumerate() {
-                            v[i] = tb.get(2 * p);
-                            d[i] = tb.get(2 * p + 1) - v[i];
-                        }
-                        let (v, d) = (&mut v[..n], &d[..n]);
-                        for (x, slot) in acc.iter_mut().enumerate() {
-                            let e = tj.map_or(Fp2::ONE, |tj| prefix * eq_at_int(tj, x) * e_rest);
-                            *slot += f(e, v);
-                            for (vi, &di) in v.iter_mut().zip(d) {
-                                *vi += di;
+        let g: Vec<Fp2> = (lo..hi)
+            .into_par_iter()
+            .fold(
+                || vec![Fp2::ZERO; degree + 1],
+                |mut acc, p| {
+                    let e_rest = rest.as_ref().map_or(Fp2::ONE, |s| s.at(p));
+                    let mut v = [Fp2::ZERO; MAX_TABLES];
+                    let mut d = [Fp2::ZERO; MAX_TABLES];
+                    for (i, tb) in tables.iter().enumerate() {
+                        v[i] = tb.get(2 * p);
+                        d[i] = tb.get(2 * p + 1) - v[i];
+                    }
+                    let (v, d) = (&mut v[..n], &d[..n]);
+                    for (x, slot) in acc.iter_mut().enumerate() {
+                        let e = match tj {
+                            Some(tj) => {
+                                let xe = fp(x as i64);
+                                // eq(τ_j, X) = (1 − τ_j)(1 − X) + τ_j·X.
+                                prefix
+                                    * ((Fp2::ONE - tj) * (Fp2::ONE - Fp2::from(xe)) + tj * xe)
+                                    * e_rest
                             }
+                            None => Fp2::ONE,
+                        };
+                        *slot += f(e, v);
+                        for (vi, &di) in v.iter_mut().zip(d) {
+                            *vi += di;
                         }
-                        acc
-                    },
-                )
-                .reduce(
-                    || vec![Fp2::ZERO; degree + 1],
-                    |mut a, b| {
-                        for (x, y) in a.iter_mut().zip(b) {
-                            *x += y;
-                        }
-                        a
-                    },
-                )
-        });
+                    }
+                    acc
+                },
+            )
+            .reduce(
+                || vec![Fp2::ZERO; degree + 1],
+                |mut a, b| {
+                    for (x, y) in a.iter_mut().zip(b) {
+                        *x += y;
+                    }
+                    a
+                },
+            );
         let round: Round = core::iter::once(g[0])
             .chain(g[2..].iter().copied())
             .collect();
@@ -259,4 +191,179 @@ pub fn prove(
         point.push(r);
     }
     (rounds, point)
+}
+
+/// The rounds [`prove_packed`] runs on its packed letters before it binds a
+/// table: one entry per sixteen of the original's.
+const PACKED_ROUNDS: usize = 4;
+
+/// `eq(τ_j, X) = (1 − τ_j)(1 − X) + τ_j·X` at the integer `x`.
+fn eq_at_int(tj: Fp2, x: usize) -> Fp2 {
+    let xe = fp(x as i64);
+    (Fp2::ONE - tj) * (Fp2::ONE - Fp2::from(xe)) + tj * xe
+}
+
+/// `Σ_c w_c·h(a_c + X·(b_c − a_c))` at `X = 0, 1, …, degree`, class `c` the
+/// line from `bound[c mod k]` to `bound[c / k]`, `k = |bound|`.
+fn class_sums(
+    w: &[Fp2],
+    bound: &[Fp2],
+    degree: usize,
+    h: &(impl Fn(Fp2) -> Fp2 + Sync),
+) -> Vec<Fp2> {
+    let k = bound.len();
+    (0..=degree)
+        .map(|x| {
+            let xe = Fp2::from(fp(x as i64));
+            w.par_iter()
+                .enumerate()
+                .filter(|(_, &wc)| wc != Fp2::ZERO)
+                .map(|(c, &wc)| {
+                    let (a, b) = (bound[c % k], bound[c / k]);
+                    wc * h(a + xe * (b - a))
+                })
+                .reduce(|| Fp2::ZERO, |x, y| x + y)
+        })
+        .collect()
+}
+
+/// The table one round binds a table of `bound`'s classes into: class
+/// `c = lo + k·hi` takes `bound[lo] + r·(bound[hi] − bound[lo])`.
+fn bind_classes(bound: &[Fp2], r: Fp2) -> Vec<Fp2> {
+    let k = bound.len();
+    (0..k * k)
+        .map(|c| bound[c % k] + r * (bound[c / k] - bound[c % k]))
+        .collect()
+}
+
+/// [`prove`] for `Σ_x eq(τ, x)·h(s(x))` over a table `s` whose every entry is
+/// one of four `letters`, given as its 2-bit letter indices packed eight to a
+/// `u16` (entry `8i + t` at bits `2t`) and letter 0 past the end; `letters[0]`
+/// and `h(0)` are zero. Returns the rounds, the point and `s` bound there:
+/// those [`prove`] returns over `s` itself, dense off.
+///
+/// The first four rounds bind no table. At round `j < 3` a pair spans
+/// `2^(j+1)` entries, one of `4^(2^(j+1))` classes (16, 256, 65536), so the
+/// round runs `h` once per class and point, weighed by the class's summed
+/// `eq(τ[j+1..], p)`; every class mass is a sum over the octets' masses, one
+/// pass over the codes. At round 3 a pair is two octets, each bound by a
+/// lookup. Only then is a table built, one entry per sixteen of `s`'s.
+pub fn prove_packed(
+    t: &mut Transcript,
+    mu: usize,
+    codes: &[u16],
+    tau: &[Fp2],
+    letters: [Fp2; 4],
+    degree: usize,
+    h: impl Fn(Fp2) -> Fp2 + Sync,
+) -> (Vec<Round>, Vec<Fp2>, Fp2) {
+    assert!(mu >= PACKED_ROUNDS, "a packed table spans sixteen entries");
+    assert!(codes.len() <= 1 << (mu - 3), "the codes fit the cube");
+    debug_assert_eq!((letters[0], h(Fp2::ZERO)), (Fp2::ZERO, Fp2::ZERO));
+    // Octet q's mass, `eq(τ[3..], q)`, by code. A round-0 pair is the octet's
+    // `u`-th pair of entries, weighed `eq(τ[1..3], u)·eq(τ[3..], q)`, and a
+    // round-1 pair its `v`-th half, `eq(τ[2], v)·eq(τ[3..], q)`.
+    let octet = SplitEq::new(&tau[3..]);
+    let run = codes.len().div_ceil(rayon::current_num_threads()).max(1);
+    let w2 = codes
+        .par_chunks(run)
+        .enumerate()
+        .map(|(i, cs)| {
+            let mut acc = vec![Fp2::ZERO; 1 << 16];
+            for (k, &c) in cs.iter().enumerate() {
+                acc[c as usize] += octet.at(i * run + k);
+            }
+            acc
+        })
+        .reduce(
+            || vec![Fp2::ZERO; 1 << 16],
+            |mut a, b| {
+                a.iter_mut().zip(b).for_each(|(x, y)| *x += y);
+                a
+            },
+        );
+    let (pair, half) = (eq_table(&tau[1..3]), eq_table(&tau[2..3]));
+    let (mut w0, mut w1) = (vec![Fp2::ZERO; 16], vec![Fp2::ZERO; 256]);
+    for (c, &m) in w2.iter().enumerate().filter(|(_, &m)| m != Fp2::ZERO) {
+        for (u, &e) in pair.iter().enumerate() {
+            w0[(c >> (4 * u)) & 0xf] += e * m;
+        }
+        for (v, &e) in half.iter().enumerate() {
+            w1[(c >> (8 * v)) & 0xff] += e * m;
+        }
+    }
+    let mut rounds = Vec::with_capacity(mu);
+    let mut point = Vec::with_capacity(mu);
+    let mut prefix = Fp2::ONE;
+    let mut bound = letters.to_vec();
+    let mut absorb = |j: usize, sums: Vec<Fp2>, rounds: &mut Vec<Round>, point: &mut Vec<Fp2>| {
+        let g: Vec<Fp2> = sums
+            .iter()
+            .enumerate()
+            .map(|(x, &s)| prefix * eq_at_int(tau[j], x) * s)
+            .collect();
+        let round: Round = core::iter::once(g[0])
+            .chain(g[2..].iter().copied())
+            .collect();
+        let r = absorb_round(t, &round);
+        prefix *= (Fp2::ONE - tau[j]) * (Fp2::ONE - r) + tau[j] * r;
+        rounds.push(round);
+        point.push(r);
+        r
+    };
+    for (j, w) in [w0, w1, w2].iter().enumerate() {
+        let r = absorb(
+            j,
+            class_sums(w, &bound, degree, &h),
+            &mut rounds,
+            &mut point,
+        );
+        bound = bind_classes(&bound, r);
+    }
+    // Round 3: octets 2p and 2p + 1, each its code's bound value.
+    let octet_at = |i: usize| bound[codes.get(i).map_or(0, |&c| c as usize)];
+    let pairs = codes.len().div_ceil(2);
+    let rest = SplitEq::new(&tau[PACKED_ROUNDS..]);
+    let sums = (0..pairs)
+        .into_par_iter()
+        .fold(
+            || vec![Fp2::ZERO; degree + 1],
+            |mut acc, p| {
+                let (a, b) = (octet_at(2 * p), octet_at(2 * p + 1));
+                let (e, d) = (rest.at(p), b - a);
+                let mut v = a;
+                for slot in acc.iter_mut() {
+                    *slot += e * h(v);
+                    v += d;
+                }
+                acc
+            },
+        )
+        .reduce(
+            || vec![Fp2::ZERO; degree + 1],
+            |mut a, b| {
+                a.iter_mut().zip(b).for_each(|(x, y)| *x += y);
+                a
+            },
+        );
+    let r = absorb(3, sums, &mut rounds, &mut point);
+    let mut tables = [Table::ext(
+        0,
+        (0..pairs)
+            .into_par_iter()
+            .map(|p| octet_at(2 * p) + r * (octet_at(2 * p + 1) - octet_at(2 * p)))
+            .collect(),
+    )];
+    let (more, at) = prove(
+        t,
+        mu - PACKED_ROUNDS,
+        &mut tables,
+        Some(&tau[PACKED_ROUNDS..]),
+        degree,
+        false,
+        |e, v| prefix * e * h(v[0]),
+    );
+    rounds.extend(more);
+    point.extend(at);
+    (rounds, point, tables[0].get(0))
 }
