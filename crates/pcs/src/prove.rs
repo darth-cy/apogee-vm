@@ -399,23 +399,47 @@ fn fold(
                 crt.of_ints(&v)
             })
             .collect();
+        // A row's terms split across threads too: the root has one row.
         let rows: Vec<Vec<Fp>> = (0..l.n_a)
             .into_par_iter()
             .map(|a| {
-                let mut acc = crt.zero();
-                for (xp, zs) in zspec.iter().enumerate() {
-                    crt.mul_acc(
-                        &mut acc,
-                        &crt.of_field(&pad(view(setup, m_a, d, a, xp))),
-                        zs,
+                let acc = zspec
+                    .par_iter()
+                    .enumerate()
+                    .fold(
+                        || crt.zero(),
+                        |mut acc, (xp, zs)| {
+                            let a_x = crt.of_field(&pad(view(setup, m_a, d, a, xp)));
+                            crt.mul_acc(&mut acc, &a_x, zs);
+                            acc
+                        },
+                    )
+                    .reduce(
+                        || crt.zero(),
+                        |mut x, y| {
+                            crt.add(&mut x, &y);
+                            x
+                        },
                     );
-                }
+                let high = chal
+                    .par_iter()
+                    .enumerate()
+                    .fold(
+                        || vec![Fp::ZERO; d],
+                        |mut q, (lam, c)| {
+                            sparse_high(c, l.stride(), &blocks_of(lam)[a * d..(a + 1) * d], &mut q);
+                            q
+                        },
+                    )
+                    .reduce(
+                        || vec![Fp::ZERO; d],
+                        |mut x, y| {
+                            x.iter_mut().zip(y).for_each(|(x, y)| *x += y);
+                            x
+                        },
+                    );
                 let full = crt.back(acc);
-                let mut q: Vec<Fp> = full[d..].iter().map(|&x| -x).collect();
-                for (lam, c) in chal.iter().enumerate() {
-                    sparse_high(c, l.stride(), &blocks_of(lam)[a * d..(a + 1) * d], &mut q);
-                }
-                q
+                full[d..].iter().zip(high).map(|(&x, h)| h - x).collect()
             })
             .collect();
         rows.concat()

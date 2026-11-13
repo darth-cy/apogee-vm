@@ -261,6 +261,13 @@ impl Crt {
         }
     }
 
+    /// `acc += b`.
+    pub fn add(&self, acc: &mut Spectrum, b: &Spectrum) {
+        for (pl, (o, y)) in self.plans.iter().zip(acc.iter_mut().zip(b)) {
+            o.iter_mut().zip(y).for_each(|(o, &y)| *o = pl.f.add(*o, y));
+        }
+    }
+
     /// Back to coefficients: the exact integers, centered, reduced mod `q`.
     pub fn back(&self, mut s: Spectrum) -> Vec<Fp> {
         for (pl, v) in self.plans.iter().zip(s.iter_mut()) {
