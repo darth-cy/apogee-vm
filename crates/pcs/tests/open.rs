@@ -14,17 +14,83 @@ fn fp2(rng: &mut test_support::Rng) -> Fp2 {
     }
 }
 
-/// `cols` columns of `2^n` entries, cycling through the backings a shard
-/// holds: bits, bytes, words and full field elements.
-fn columns(rng: &mut test_support::Rng, n: u32, cols: usize) -> Vec<MultilinearPoly> {
-    (0..cols)
+/// Every other entry a word on a balanced base-`2^16` digit carry, the rest
+/// random.
+fn word(rng: &mut test_support::Rng, i: usize) -> u32 {
+    const CARRIES: [u32; 8] = [
+        0x7fff,
+        0x8000,
+        0xffff,
+        0x1_8000,
+        0x7fff_8000,
+        0xffff_7fff,
+        0xffff_8000,
+        u32::MAX,
+    ];
+    if i.is_multiple_of(2) {
+        CARRIES[i / 2 % CARRIES.len()]
+    } else {
+        rng.next_u64() as u32
+    }
+}
+
+/// Columns `first..first + cols` of `2^n` entries, column `c` of the `c`th
+/// backing a shard holds, the most digit planes first: field elements, 32-
+/// and 16-bit words on their carries, bytes, packed bits, and a setup column's
+/// `MINUS_ONE` padding. Every other ring of `d` entries is zero, offset by
+/// column, so the root's scratch digits meet a nonzero ring and then a zero
+/// one in both the commitment's order and the response's, and the response's
+/// meet a backing of fewer digit planes after a wider one.
+fn columns(
+    rng: &mut test_support::Rng,
+    n: u32,
+    d: usize,
+    first: usize,
+    cols: usize,
+) -> Vec<MultilinearPoly> {
+    let len = 1usize << n;
+    (first..first + cols)
         .map(|c| {
-            let len = 1usize << n;
-            let backing = match c % 4 {
-                0 => PolyBacking::U8((0..len).map(|_| rng.next_u64() as u8).collect()),
-                1 => PolyBacking::U32((0..len).map(|_| rng.next_u64() as u32).collect()),
-                2 => PolyBacking::Fp((0..len).map(|_| Fp::from_u64(rng.next_u64())).collect()),
-                _ => PolyBacking::U16((0..len).map(|_| rng.next_u64() as u16).collect()),
+            let zero = |i: usize| (i / d + c) % 2 == 1;
+            let backing = match c % 6 {
+                0 => PolyBacking::Fp(
+                    (0..len)
+                        .map(|i| match zero(i) {
+                            true => Fp::ZERO,
+                            false => Fp::from_u64(rng.next_u64()),
+                        })
+                        .collect(),
+                ),
+                1 => PolyBacking::U32(
+                    (0..len)
+                        .map(|i| if zero(i) { 0 } else { word(rng, i) })
+                        .collect(),
+                ),
+                2 => PolyBacking::U16(
+                    (0..len)
+                        .map(|i| if zero(i) { 0 } else { word(rng, i) as u16 })
+                        .collect(),
+                ),
+                3 => PolyBacking::U8(
+                    (0..len)
+                        .map(|i| if zero(i) { 0 } else { rng.next_u64() as u8 })
+                        .collect(),
+                ),
+                4 => {
+                    let mut limbs = vec![0u64; len / 64];
+                    for i in (0..len).filter(|&i| !zero(i) && !rng.next_u64().is_multiple_of(3)) {
+                        limbs[i / 64] |= 1 << (i % 64);
+                    }
+                    PolyBacking::U1(limbs, len)
+                }
+                _ => PolyBacking::Fp(
+                    (0..len)
+                        .map(|i| match i < len / 3 {
+                            true => Fp::from_u64(rng.next_u64() % 4096),
+                            false => Fp::MINUS_ONE,
+                        })
+                        .collect(),
+                ),
             };
             MultilinearPoly::new(backing)
         })
@@ -43,7 +109,15 @@ fn case(seed: u64, n: u32, groups: &[usize]) -> Case {
     let mut rng = test_support::Rng::new(seed);
     let schedule = Schedule::new(n, groups);
     let setup = setup_prefix(setup_need(&schedule));
-    let cols: Vec<Vec<MultilinearPoly>> = groups.iter().map(|&g| columns(&mut rng, n, g)).collect();
+    let d = schedule.levels[0].d_a;
+    let mut first = 0;
+    let cols: Vec<Vec<MultilinearPoly>> = groups
+        .iter()
+        .map(|&g| {
+            first += g;
+            columns(&mut rng, n, d, first - g, g)
+        })
+        .collect();
     let openers = cols
         .iter()
         .map(|g| {
@@ -102,7 +176,7 @@ fn check(
 
 #[test]
 fn an_honest_opening_verifies_and_a_false_value_does_not() {
-    let c = case(1, 12, &[2, 1]);
+    let c = case(1, 12, &[4, 2]);
     let proof = prove(&c);
     let commitments: Vec<Commitment> = c.openers.iter().map(|o| o.commitment.clone()).collect();
     assert_eq!(check(&c, &commitments, &c.values, &proof), Ok(()));
@@ -125,8 +199,8 @@ fn an_honest_opening_verifies_and_a_false_value_does_not() {
 /// trees, and the terminal.
 #[test]
 fn a_full_schedule_verifies() {
-    let c = case(2, 16, &[2, 1]);
-    let s = Schedule::new(16, &[2, 1]);
+    let c = case(2, 16, &[4, 2]);
+    let s = Schedule::new(16, &[4, 2]);
     assert!(s
         .levels
         .iter()
@@ -142,7 +216,7 @@ fn a_full_schedule_verifies() {
 /// refused.
 #[test]
 fn every_proof_field_is_bound() {
-    let c = case(3, 12, &[2, 1]);
+    let c = case(3, 12, &[4, 2]);
     let proof = prove(&c);
     let commitments: Vec<Commitment> = c.openers.iter().map(|o| o.commitment.clone()).collect();
     let refused = |p: &pcs::Proof| check(&c, &commitments, &c.values, p).is_err();
