@@ -4,61 +4,25 @@ Apogee proves executions of RV32IMAC programs. This page is the system end to en
 states, how one is made and checked, what it assumes and where it stops. Each paragraph names the
 page that specifies its subject; [glossary.md](glossary.md) indexes the vocabulary.
 
-## 0. ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME
+## 0. ALARM — UNFINISHED — WARNING — TODO: A64-C5 CHARACTERISTIC
 
-**This repository is UNCOMMITTED, and every proof it makes is UNSOUND.** There is no polynomial
-commitment scheme: the void is deliberate, and a later commitment scheme must fill it. Until one
-does:
-
-- **No column of any shard is committed.** The verifier checks every GKR pass, every LogUp channel
-  and the memory argument's arithmetic, and then takes every base-layer column value on the
-  prover's word: the claims `verifier_core::reduce_shard` returns are dropped unchecked in
-  `verifier::discharge`.
-- **No challenge binds a column.** The memory challenges are drawn with no shard's memory columns
-  absorbed, and each shard's lookup challenges `g` and `β` with none of its witness columns, so a
-  prover may choose its columns after the challenges. The memory and lookup arguments are unsound.
-- **The program identity binds no code.** It digests the code version, the `VmConfig` and the entry
-  pc ([program.md](spec/program.md) §8). Nothing commits the decoded tables, the image column or the
-  generic lookup table, so two programs with one config and one entry pc share an identity.
-- **Nothing carries a commitment.** The verifying key has no setup commitments, the statement no
-  memory commitments, and a shard proof neither witness commitments nor an opening.
-
-Every place a commitment or an opening belongs is marked in the code, and every test of a property
-only a commitment scheme can restore is `#[ignore]`d with an `UNFINISHED` reason and named
-`UNFINISHED_*`:
-
-```console
-$ grep -rn "NO COMMITMENT SCHEME" crates tools
-$ grep -rn "UNFINISHED_" crates tools
-```
-
-| where | what belongs there |
-| --- | --- |
-| `verifier_core::identity_digest` | each family's setup-column commitments, digested into the identity |
-| `verifier_core::global_transcript` | every statement shard's memory-column commitments, before the boundary and the memory challenges |
-| `verifier_core::shard_transcript` | the shard's witness commitments, multiplicities included, before `g` and `β` |
-| `verifier_core::derive_global_phase`, step 3 | each shard's memory commitment list, held to its family's memory width |
-| `verifier_core::reduce_shard` and `ColumnClaims` | the commitments every column claim is opened against |
-| `verifier::discharge` | the commitment scheme's verifier: one opening of every committed column at the claims' point |
-| `VerifyingKey`, `PublicInputs`, `ShardProof` | the fields that carry the commitments and the opening |
-| `prover::ProverSetup::new` | committing the setup columns |
-| `prover::statement_inputs`, `prover::global_commit_phase` | committing every shard's memory columns |
-| `prover`'s `gkr_part` and `proof_part`, `phases.rs` | committing the witness columns; the opening |
-| `prover::streaming`, pass 1 and pass 2 | committing each shard's memory columns as it fills; opening them |
-| `checker::TamperHarness` | re-committing a tampered memory column |
-
-The base field is A64-C5, `p = 2^64 − 59`, and every challenge is an element of its quadratic
-extension ([primitives.md](spec/primitives.md) §1).
-
-**UNFINISHED: A64-C5 CHARACTERISTIC.** Apart from the void above, three integer arguments do not
-hold at `p ≈ 2^64`: the memory argument's timestamps, which nothing bounds ([memory.md](spec/memory.md) §4.2), `MUL_DIV`'s product identity
+**Every proof this repository makes is UNSOUND.** The base field is A64-C5, `p = 2^64 − 59`, and
+every challenge is an element of its quadratic extension ([primitives.md](spec/primitives.md) §1).
+Three integer arguments do not hold at `p ≈ 2^64`: the memory argument's timestamps, which nothing
+bounds ([memory.md](spec/memory.md) §4.2), `MUL_DIV`'s product identity
 ([mul-div.md](spec/mul-div.md) §5.1) and `SHIFT_BITWISE`'s left shift
-([shift-bitwise.md](spec/shift-bitwise.md) §5). A commitment scheme repairs none of them; a later
-stage reshapes those circuits. Each seam is marked:
+([shift-bitwise.md](spec/shift-bitwise.md) §5). A later stage reshapes those circuits. Each seam is
+marked:
 
 ```console
 $ grep -rn "A64-C5 CHARACTERISTIC" crates
 ```
+
+Every committed column is committed, and every claim on one opened, by Akita
+([pcs.md](spec/pcs.md)): the setup columns in the key, digested into the identity; each shard's
+memory columns in the statement, before the memory challenges; its witness columns in its proof,
+before its lookup challenges ([proof.md](spec/proof.md) §3). The suites that prove a statement are
+`#[ignore]`d for their cost, and run by name.
 
 ## 1. What a proof states
 
@@ -66,22 +30,23 @@ A verifier holds two things it does not take from the prover's word, one of them
 prover does not control ([proof.md](spec/proof.md) §1, §3):
 
 - the **program identity**, a digest of eight field elements: of the code version, the program's
-  `VmConfig` — the circuit families it uses and their heights — and its entry pc
-  ([program.md](spec/program.md) §8). **UNFINISHED** (§0): it is meant to commit the program's
-  instruction tables and initial memory image too, and does not;
-- a **verifying key**: that config and each family's circuit. Loading it recomputes the identity
-  from its own contents and holds its circuits to the registry's bytes ([proof.md](spec/proof.md)
-  §7).
+  `VmConfig` — the circuit families it uses and their heights — its entry pc, and the commitments
+  to its instruction tables, its initial memory image and the generic lookup table
+  ([program.md](spec/program.md) §8);
+- a **verifying key**: that config, those commitments and each family's circuit. Loading it
+  recomputes the identity from its own contents and holds its circuits to the registry's bytes
+  ([proof.md](spec/proof.md) §7).
 
 The proof's **statement**, `PublicInputs`, carries the public input bytes, the public output bytes
 (the **journal**), the exit status, and the record of the execution's shape — shard counts, memory
-windows, the final registers and pc, and every shard's memory roots ([proof.md](spec/proof.md) §1).
+windows, the final registers and pc, and every shard's memory commitment and roots
+([proof.md](spec/proof.md) §1).
 
 A proof that verifies is meant to establish that the program of that identity, started at its entry
 pc over its image, with the public input in its input window and some advice of the prover's
 choosing, executes instruction by instruction to `EXIT` with that status, having written that
-journal. **Until a commitment scheme exists it establishes nothing** (§0). Nothing is claimed of the
-advice, and nothing is hidden: no proof is blinded.
+journal — **UNFINISHED** (§0). Nothing is claimed of the advice, and nothing is hidden: no proof is
+blinded.
 
 ## 2. From a binary to a proof
 
@@ -100,8 +65,8 @@ advice, and nothing is hidden: no proof is blinded.
    shard is the unit of proving ([circuits.md](spec/circuits.md) §1).
 4. **A shard's proof.** The family's GKR circuit is run backward from its outputs to its base
    columns, a sumcheck a layer ([gkr.md](spec/gkr.md)), ending on one point at which every base
-   column is claimed ([proof.md](spec/proof.md) §5). **UNFINISHED** (§0): no column is committed
-   and no claim is opened.
+   column is claimed, and every claim is opened at once against the columns' commitments
+   ([proof.md](spec/proof.md) §5, [pcs.md](spec/pcs.md)).
 5. **The block.** A `BlockProof` is the statement and its shard proofs. `verify_block` runs the
    global transcript once, each shard's checks, and once the memory reconciliation over every
    shard's roots ([proof.md](spec/proof.md) §6).
@@ -112,14 +77,14 @@ prove each shard as it fills. Its memory is bounded by the shards in flight, not
 
 ## 3. How soundness composes
 
-**None of this is sound until a commitment scheme exists** (§0). Each shard's GKR pass ties its
-circuit's outputs to its base columns' claimed values, and nothing ties those values to anything. On
-top of that, these arguments are meant to span the execution:
+Each shard's GKR pass ties its circuit's outputs to its base columns' claimed values, and its
+opening ties those to the committed columns. On top of that, these arguments span the execution —
+**UNFINISHED** where §0 says:
 
 | claim | carried by | |
 | --- | --- | --- |
 | every row obeys its instruction | the family circuit's enforcing gates, zero on every row | the family pages, [circuits.md](spec/circuits.md) |
-| a row's instruction is the program's at its pc | a lookup of the row's pc and fields in the family's decoded table, which the identity is meant to commit | [lookup.md](spec/lookup.md) §10 |
+| a row's instruction is the program's at its pc | a lookup of the row's pc and fields in the family's decoded table, which the identity commits | [lookup.md](spec/lookup.md) §10 |
 | every read returns the last write | one multiset over all shards: an access reads a tuple `(space, address, timestamp, value)` and writes one with a later timestamp; the verifier multiplies every shard's read and write roots against boundary factors for the registers and the pc | [memory.md](spec/memory.md) |
 | the rows are one path from the entry pc to the exit, in program order | the pc is a cell of that multiset: a row reads its pc and writes the next one at least four timestamps later, so shard order, cycle uniqueness and continuity need no other argument | [memory.md](spec/memory.md) §5, §9 |
 | a value is in range, a sign, a byte-wise AND | LogUp channels over range tables and the generic table | [lookup.md](spec/lookup.md) |
@@ -127,21 +92,21 @@ top of that, these arguments are meant to span the execution:
 
 Challenges come from a Poseidon2 duplex transcript over A64-C5, each an element of its quadratic
 extension ([transcript.md](spec/transcript.md)). The
-global transcript absorbs the whole statement before the memory challenges exist, but none of a
-shard's columns (§0); each shard's transcript is seeded from its final state
-([proof.md](spec/proof.md) §2, §4).
+global transcript absorbs the whole statement, every shard's memory commitment among it, before the
+memory challenges exist; each shard's transcript is seeded from its final state and absorbs the
+shard's witness commitment before its lookup challenges ([proof.md](spec/proof.md) §2, §4).
 
 ## 4. What it assumes
 
-- **Cryptography.** Poseidon2 as a random oracle for Fiat–Shamir. There is no commitment scheme,
-  so there is no soundness for any other assumption to carry (§0).
+- **Cryptography.** Poseidon2 as a random oracle for Fiat–Shamir, and Module-SIS at 128 bits of
+  quantum Core-SVP security for Akita's binding ([pcs.md](spec/pcs.md) §6).
 - **What a verifier must obtain itself.** The program identity. A key loads under whatever identity
   its own contents give, so a key for another program is refused only by comparing identities; the
   `verifier` CLI makes that comparison, and `host::verify` does not ([proof.md](spec/proof.md) §1).
 - **Trusted code.** Soundness is the verifier's alone: `constants`, `field`, `transcript`, `poly`,
-  `sumcheck`, `gkr-verify`, `verifier-core`, `verifier`, and `constraints` — the circuits are part of
+  `sumcheck`, `gkr-verify`, `pcs-verify`, `verifier-core`, `verifier`, and `constraints` — the circuits are part of
   the statement, and a missing gate is a soundness bug. Computing an identity from an ELF trusts
-  `loader`, `isa` and `program`. `prover`, `emulator`, `trace` and `host` are untrusted: the prover
+  `loader`, `isa`, `program` and `pcs`. `prover`, `emulator`, `trace` and `host` are untrusted: the prover
   validates nothing, and a wrong input costs an honest prover a proof that fails.
 - **Nothing is constant-time** ([primitives.md](spec/primitives.md)). No proof is zero-knowledge, so
   proving keeps nothing secret.
@@ -150,7 +115,7 @@ shard's columns (§0); each shard's transcript is seeded from its final state
 
 | | |
 | --- | --- |
-| **unsound** | there is no commitment scheme, and three arguments fail at A64-C5's characteristic (§0) |
+| **unsound** | three arguments fail at A64-C5's characteristic (§0) |
 | not zero-knowledge | no blinding in GKR |
 | advice is unbound | a guest checks it against something a proof binds ([public-values.md](spec/public-values.md) §6) |
 | public values | at most 16,380 bytes each of input and journal ([public-values.md](spec/public-values.md) §9) |

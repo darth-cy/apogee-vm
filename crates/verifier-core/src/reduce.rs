@@ -1,12 +1,6 @@
-//! `reduce_shard`: a shard proof reduced to the column claims a commitment
-//! scheme would discharge, or refused. `docs/spec/proof.md` §6, steps 1 to 11,
-//! in order.
-//!
-//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** Nothing
-//! discharges the claims step 11 returns: no column is committed, so none can be
-//! opened, and a verification that passes every step here has checked a GKR pass
-//! over values the prover chose. Proofs are **UNSOUND** until a commitment
-//! scheme fills the voids this crate marks (`docs/architecture.md` §0).
+//! `reduce_shard`: a shard proof reduced to its column claims and the claims
+//! opened, or the proof refused. `docs/spec/proof.md` §6, steps 1 to 11, in
+//! order.
 //!
 //! The steps are split at the fork in three public parts, so a block pays for
 //! everything that depends on the statement alone once instead of once per
@@ -25,13 +19,16 @@ use field::Fp2;
 use gkr_verify::{
     boundary_factors, channel_holds, reconciles, verify, ExternalChallenges, GkrError,
 };
+use pcs_verify::Commitment;
 use poly::{MultilinearPoly, PolyBacking};
 
 use crate::statement::{
     check_memory_windows, global_commit, public_io_words, shard_challenges, shard_transcript,
     statement_shards,
 };
-use crate::types::{ColumnClaims, PublicInputs, ShardProof, VerifyError, VerifyingKey};
+use crate::types::{
+    committed_groups, opening_schedule, PublicInputs, ShardProof, VerifyError, VerifyingKey,
+};
 
 /// `x10`'s position in `BoundaryFinals::reg_values`, which starts at `x1`.
 const EXIT_STATUS_REGISTER: usize = 10 - 1;
@@ -93,16 +90,40 @@ pub fn derive_global_phase(
         return Err(statement("the public output is longer than its window"));
     }
 
-    // 3. One root pair per statement shard. The total is bounded before
+    // 3. One root pair and one memory commitment per statement shard, the
+    //    commitment of its family's `M` shape. The total is bounded before
     //    anything is built from the counts.
-    //
-    //    ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. Each
-    //    statement shard's `M` commitment list, its family's memory width, is
-    //    held to the key HERE once a commitment scheme exists; the statement
-    //    carries none (`docs/architecture.md` §0).
     let total: u64 = public.shard_counts.iter().map(|c| *c as u64).sum();
     if total != public.memory_roots.len() as u64 {
         return Err(statement("the statement has not one root pair per shard"));
+    }
+    if total != public.memory_commitments.len() as u64 {
+        return Err(statement(
+            "the statement has not one memory commitment per shard",
+        ));
+    }
+    let schedules: Vec<_> = vk
+        .circuits
+        .iter()
+        .map(|c| {
+            (
+                c.family,
+                opening_schedule(&c.artifact),
+                c.artifact.memory.len(),
+            )
+        })
+        .collect();
+    let shards = statement_shards(config, &public.shard_counts);
+    for ((family, _), c) in shards.iter().zip(&public.memory_commitments) {
+        let (_, schedule, columns) = schedules
+            .iter()
+            .find(|(f, ..)| f == family)
+            .expect("a statement shard's family is a config family");
+        if !schedule.fits(c, *columns) {
+            return Err(statement(
+                "a memory commitment is not its family's memory columns' shape",
+            ));
+        }
     }
 
     let global = global_commit(vk, public);
@@ -115,7 +136,7 @@ pub fn derive_global_phase(
 /// One shard against a statement whose global phase is already derived,
 /// `docs/spec/proof.md` §6 steps 4 to 11: its time window, its seeding,
 /// its shape, its circuit, its channels and the memory argument's **shard
-/// half**, then the column claims nothing yet discharges.
+/// half**, then the opening of its column claims.
 ///
 /// **Not a whole verification on its own.** The memory argument's other half —
 /// the boundary and the read/write root product over every shard — depends on
@@ -132,7 +153,7 @@ pub fn verify_shard_local(
     global: &GlobalChallenges,
     proof: &ShardProof,
     public: &PublicInputs,
-) -> Result<ColumnClaims, VerifyError> {
+) -> Result<(), VerifyError> {
     let statement = VerifyError::Statement;
     let config = &vk.config;
     let shards = statement_shards(config, &public.shard_counts);
@@ -168,10 +189,12 @@ pub fn verify_shard_local(
         .expect("a statement shard's family is a config family");
     let circuit = &vk.circuits[family_index];
     let artifact = &circuit.artifact;
-    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The proof's `W`
-    // commitments, the circuit's witness width, are held to it HERE once a
-    // commitment scheme exists; the proof carries none (`docs/architecture.md`
-    // §0).
+    let schedule = opening_schedule(artifact);
+    if !schedule.fits(&proof.witness_commitment, artifact.witness.len()) {
+        return Err(malformed(
+            "the witness commitment is not the circuit's witness columns' shape",
+        ));
+    }
     if proof.outputs.len() != artifact.outputs.len() {
         return Err(malformed("the outputs are not the circuit's output map"));
     }
@@ -182,6 +205,7 @@ pub fn verify_shard_local(
         proof.family,
         proof.shard_index,
         proof.ts_window,
+        &proof.witness_commitment,
     );
     let challenges: ExternalChallenges = shard_challenges(
         circuit,
@@ -282,24 +306,26 @@ pub fn verify_shard_local(
         }
     }
 
-    // 11. The claims a commitment scheme must discharge: every committed
-    //     column's value at `point`, in layout order `M`, `W`, `S`.
-    //
-    //     ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. HERE the
-    //     columns' commitments — `M` from the statement, `W` from the proof, `S`
-    //     from the key, and the generic table's for a family that reads it —
-    //     are gathered and the claims opened against them in the shard
-    //     transcript `t`. None exists: the claims below are returned and
-    //     checked by NOTHING, so the values are whatever the prover said
-    //     (`docs/architecture.md` §0).
-    let columns = artifact.committed();
+    // 11. The opening: every committed column's value at `point`, in layout
+    //     order `M`, `W`, `S`, opened in the shard transcript against the
+    //     statement's, the proof's and the key's commitments — a group of no
+    //     column being no part of it.
+    let memory_commitment = public.memory_commitments.get(position).ok_or(statement(
+        "the statement has not one memory commitment per shard",
+    ))?;
+    let commitments = [
+        memory_commitment,
+        &proof.witness_commitment,
+        &vk.setup_commitments[family_index],
+    ];
+    let groups: Vec<(&Commitment, usize)> = commitments
+        .into_iter()
+        .zip(committed_groups(artifact))
+        .filter(|(_, columns)| *columns > 0)
+        .collect();
     let values: Vec<Fp2> = claims.iter().map(|c| c.value).collect();
-    Ok(ColumnClaims {
-        columns,
-        point,
-        values,
-        transcript: t,
-    })
+    pcs_verify::verify(&mut t, &vk.pcs.0, &groups, &point, &values, &proof.opening)
+        .map_err(VerifyError::Opening)
 }
 
 /// The memory argument's **statement half**, `docs/spec/proof.md` §6
@@ -347,26 +373,22 @@ pub fn verify_global_memory(
     Ok(())
 }
 
-/// Reduce `proof` to its column claims, or refuse it with the class of the
-/// first check that fails, `docs/spec/proof.md` §6.
+/// Verify `proof`, or refuse it with the class of the first check that
+/// fails, `docs/spec/proof.md` §6.
 ///
-/// The one no_std entry point for a single shard. `verifier::verify_shard` is
-/// this and nothing more — **UNFINISHED**: the opening that should follow it
-/// does not exist (`docs/architecture.md` §0). A block runs the three parts
-/// instead, with [`verify_shard_local`] per shard. `vk` has passed its load
+/// The one no_std entry point for a single shard; `verifier::verify_shard` is
+/// this and nothing more. A block runs the three parts instead, with
+/// [`verify_shard_local`] per shard. `vk` has passed its load
 /// (`VerifyingKey::check`); nothing `proof` or `public` carries makes this
 /// panic.
 pub fn reduce_shard(
     vk: &VerifyingKey,
     proof: &ShardProof,
     public: &PublicInputs,
-) -> Result<ColumnClaims, VerifyError> {
+) -> Result<(), VerifyError> {
     let global = derive_global_phase(vk, public)?;
-    let claim = verify_shard_local(vk, &global, proof, public)?;
-    // Step 10b, at step 10's place in the order: step 11 builds the claims and
-    // cannot fail, so running the statement half after it returns gives the
-    // same first failure, with the same class and the same message, as running
-    // it before step 11.
-    verify_global_memory(vk, &global, public)?;
-    Ok(claim)
+    verify_shard_local(vk, &global, proof, public)?;
+    // Step 10b, after step 11 rather than at step 10's place: a proof that
+    // fails both is refused here with step 11's class instead of 10b's.
+    verify_global_memory(vk, &global, public)
 }

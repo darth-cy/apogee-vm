@@ -36,14 +36,11 @@ of a shard's lookups on it as one identity over the shard's rows `y`:
 
 `g` and `β` are **shard-local**: the shard's transcript draws them, in that order under the tag
 `LOOKUP_CHALLENGE` (20), right after the shard's seed and time window ([proof.md](proof.md) §4).
-Every column a channel reads is meant to be fixed before either challenge exists: the shard's
-witness commitments, multiplicities included, absorbed just before them, the `M` columns committed
-in the global transcript the shard is seeded from, and the `S` columns bound by identity or the
-key.
-
-> **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** None of them is fixed: no column
-> is committed ([proof.md](proof.md) §3), so a prover chooses every column after `g` and `β`, and
-> every channel is **UNSOUND** — `checker`'s `tests/logup.rs` rebalances one outright.
+Every column a channel reads is fixed before either challenge exists: the shard's witness
+commitment, multiplicities included, absorbed just before them, the `M` columns committed in the
+global transcript the shard is seeded from, and the `S` columns bound by identity through the key
+([proof.md](proof.md) §3). Without that order a prover could choose a column after `g` and `β`, and
+`checker`'s `tests/logup.rs` rebalances a channel outright that way.
 
 `β^0` is the literal 1, so a one-column tuple names no slot. A gate coefficient is one literal or
 one slot ([gkr.md](gkr.md) §3), so each higher power is a slot of its own, computed by the verifier
@@ -151,9 +148,8 @@ Each channel has one multiplicity column, a committed `W` column; a circuit's ar
 columns, in channel order. Row `t` counts the (row, lookup) pairs of the shard whose gated tuple is
 table row `t`'s, switched-off rows included. A tuple at several table rows is credited to the
 lowest; every other copy holds 0 and contributes `0/(T + g)`. The count is over raw gated tuples,
-the column being meant to be committed before `g` and `β` exist (**UNFINISHED**, §2;
-`trace::build_multiplicities`, which refuses a tuple no table row holds: the honest prover cannot
-balance it).
+the column committed before `g` and `β` exist (§2; `trace::build_multiplicities`, which refuses a
+tuple no table row holds: the honest prover cannot balance it).
 
 No gate or range check constrains the column, and soundness needs none. If a gated tuple `v` is in
 no table row, the left side of §1's identity, as a rational function of `g`, has a pole at `−v`
@@ -171,8 +167,8 @@ failure is `VerifyError::Lookup { channel }`. The GKR pass absorbs the pair befo
 challenge and proves it ([gkr.md](gkr.md) §5). `den` is the product of every leaf denominator, and
 `num = 0` means the sum vanishes only where `den ≠ 0`: one leaf `(0, 0)` — a table row whose
 `T + g` vanishes, counted 0 — makes the root `(0, 0)` whatever the other leaves hold. With `g`
-drawn after the columns — which with no commitment it is not (§2) — that has probability at most
-fractions/`|Fp2|`, and `den ≠ 0` makes it a refusal.
+drawn after the columns (§2) that has probability at most fractions/`|Fp2|`, and `den ≠ 0` makes it
+a refusal.
 
 ## 9. The generic table
 
@@ -196,20 +192,16 @@ the factor 2 ([shift-bitwise.md](shift-bitwise.md) §4). 131,105 rows in all (`G
 
 The table is zero past its entries, so over `2^n` rows it is the same three columns for every
 `n ≥ 18` (`GENERIC_LOG_HEIGHT`). A circuit that reads `GENERIC` names the table as its three setup
-columns after the family's own (`FamilyCircuit::reads_generic_table`); program identity does not
-digest it.
-
-**ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The table is meant to be committed
-once into every verifying key, whether or not a family reads the channel, and every shard's
-opening to check its three setup columns against those commitments. There are none
-([proof.md](proof.md) §3), so nothing binds the table a proof reads — `checker`'s
-`UNFINISHED_a_poisoned_generic_table_row_is_refused` is that twin.
+columns after the family's own (`FamilyCircuit::reads_generic_table`), and the family's setup
+commitment commits them with the rest, so program identity digests the table once for every
+family that reads it ([program.md](program.md) §8). Every shard's opening checks its three columns
+against that commitment — `checker`'s `a_poisoned_generic_table_row_is_refused` is the twin.
 
 ## 10. The decoder channel
 
 The `DECODER` table is the family's decoded table, `program::lookup_tuple(family)`'s columns, as its
-first setup columns at its height, row `i` holding pc `2i` ([program.md](program.md) §5); program
-identity is meant to commit them, and does not (**UNFINISHED**, [program.md](program.md) §8). Each
+first setup columns at its height, row `i` holding pc `2i` ([program.md](program.md) §5), which
+program identity commits ([program.md](program.md) §8). Each
 execution family makes one lookup on it,
 `imm` absent for `MUL_DIV` and `ATOMICS`:
 
@@ -257,7 +249,7 @@ under the same selector.
 ## 12. What it rests on
 
 - **Every gated tuple is a table row**: §1's identity over challenges drawn after every column it
-  reads — **UNFINISHED**, they are not (§2) — boolean selectors (§2), both root conditions (§8) and
+  reads (§2), boolean selectors (§2), both root conditions (§8) and
   the GKR pass. The error is at most
   fractions/`|Fp2|` for `g`, plus looked-up tuples × table rows × (width − 1)/`|Fp2|` for a `β`
   collision, which only the decoder and generic channels have: below `2^−79` a shard at every menu
@@ -266,9 +258,9 @@ under the same selector.
   the `+ 1` (§9), and its family's bound on the key (§4).
 - **A switched-off row costs nothing**: its neutral tuple is a table row the multiplicity counts
   (§4).
-- **The table is the intended one**: the verifier's own closed form (§3), or a table meant to be
-  bound by identity or by the key, as trustworthy as the channel the verifier took that from
-  ([program.md](program.md) §8) — **UNFINISHED**, neither binds one (§9).
+- **The table is the intended one**: the verifier's own closed form (§3), or a table bound by
+  identity through the key, as trustworthy as the channel the verifier took that from
+  ([program.md](program.md) §8).
 - **Every declared obligation is discharged**: the discharge rule over the registry's specs (§11).
 
 The channel does not check the multiplicity column (§7), a key's bound (§4), or that a committed

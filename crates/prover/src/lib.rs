@@ -12,13 +12,10 @@
 //! advance                 all of it over an archive, filling its phase sections, resumable
 //! ```
 //!
-//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The prover
-//! commits nothing: not the setup columns the key should carry, not each
-//! shard's `M` columns the global phase should absorb, not its `W` columns, and
-//! it opens nothing. A block it produces verifies, and proves nothing about the
-//! columns it was made from. Every place a commitment or an opening belongs is
-//! marked `UNFINISHED` here; a later commitment scheme must fill each one
-//! (`docs/architecture.md` §0).
+//! Every committed column is committed by Akita (`crates/pcs`): the setup
+//! columns once, in the key; each shard's `M` columns in the statement, before
+//! the memory challenges; its `W` columns in its proof, before its lookup
+//! challenges; and all three groups opened at once at the GKR pass's point.
 //!
 //! The prover checks nothing a verifier does not: a malformed input costs the
 //! honest prover a panic or a proof that fails (`docs/spec/gkr.md` §5.1). What
@@ -89,17 +86,20 @@ use constraints::PolyAddress;
 use field::Fp2;
 use gkr::{forward, prove, BaseLayer};
 use loader::ProgramImage;
+use pcs::{Commitment, Opener, Source};
 use poly::MultilinearPoly;
-use program::{DecodedTables, FamilyId};
+use program::{setup_commitment, setup_openers, DecodedTables, FamilyId};
+use rayon::prelude::*;
 use trace::{
     advice_window_count, build_boundary_finals, build_multiplicities, init_windows, plan_shards,
     TraceArchive,
 };
 use transcript::{Transcript, TranscriptEvent, TranscriptSnapshot};
 use verifier_core::{
-    advice_first_window, global_commit, identity_digest, shard_challenges, shard_transcript,
-    window_height, BoundaryFinals, FamilyCircuit, GkrProof, PublicInputs, ShardProof, VerifyingKey,
-    VmConfig, TRIVIAL_TS_WINDOW,
+    advice_first_window, committed_groups, global_commit, identity_digest, opening_schedule,
+    pcs_setup_len, shard_challenges, shard_transcript, statement_shards, window_height,
+    BoundaryFinals, FamilyCircuit, GkrProof, PublicInputs, ShardProof, VerifyingKey, VmConfig,
+    TRIVIAL_TS_WINDOW,
 };
 
 pub use fill::{family_fill, Fill, ShardRows, ShardSource};
@@ -185,16 +185,21 @@ pub fn register(config: &VmConfig) -> Result<Vec<FamilyRegistration>, ProverErro
 }
 
 /// Everything proving one program needs that no execution changes: the
-/// program, its registered families and its verifying key.
+/// program, its registered families, its verifying key, and the openers of
+/// the key's setup commitments.
 pub struct ProverSetup {
     pub program: Program,
     pub families: Vec<FamilyRegistration>,
     pub vk: VerifyingKey,
+    /// One per config family, in its order; `None` for a family with no setup
+    /// column.
+    pub setup_openers: Vec<Option<Opener>>,
 }
 
 impl ProverSetup {
     /// Register every family of `program`'s config and build its verifying
-    /// key: the identity and every circuit, held to the key's own load rules
+    /// key: every circuit, the setup columns' commitments and the identity
+    /// that digests them, held to the key's own load rules
     /// (`docs/spec/proof.md` §7.2) before it is returned.
     pub fn new(program: Program) -> Result<ProverSetup, ProverError> {
         let families = register(&program.config)?;
@@ -232,19 +237,27 @@ impl ProverSetup {
                 );
             }
         });
-        // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. HERE the
-        // setup columns — each instruction family's decoded table, the image
-        // column, the generic table — are committed, the lists put in the key
-        // and digested into its identity, with whatever public parameters the
-        // scheme's verifier reads. None is: the key binds no code
-        // (`docs/architecture.md` §0).
         let code_version = program.tables.code_version;
+        let circuits: Vec<FamilyCircuit> = families.iter().map(|f| f.circuit.clone()).collect();
+        let pcs = pcs::expand_setup(pcs_setup_len(&circuits));
+        let setup_openers = setup_openers(&program.image, &program.tables, &circuits, &pcs);
+        let setup_commitments: Vec<Commitment> = setup_openers
+            .iter()
+            .map(|o| setup_commitment(o.as_ref()))
+            .collect();
         let vk = VerifyingKey {
             code_version,
             config: program.config.clone(),
             entry_pc: program.image.entry,
-            identity: identity_digest(code_version, &program.config, program.image.entry),
-            circuits: families.iter().map(|f| f.circuit.clone()).collect(),
+            identity: identity_digest(
+                code_version,
+                &program.config,
+                program.image.entry,
+                &setup_commitments,
+            ),
+            setup_commitments,
+            circuits,
+            pcs,
         };
         vk.check().map_err(ProverError::Key)?;
         // Identity in full, not truncated: it is the value the `verifier` CLI
@@ -260,15 +273,55 @@ impl ProverSetup {
             program,
             families,
             vk,
+            setup_openers,
         })
     }
 
     fn registration(&self, family: FamilyId) -> &FamilyRegistration {
+        &self.families[self.position(family)]
+    }
+
+    /// `family`'s place in the config.
+    fn position(&self, family: FamilyId) -> usize {
         self.families
             .iter()
-            .find(|f| f.family == family)
+            .position(|f| f.family == family)
             .unwrap_or_else(|| panic!("family {family} is not registered for this program"))
     }
+
+    /// Group `g` — 0, 1, 2 for `M`, `W`, `S` — of a shard's columns, committed
+    /// at its family's schedule root, or `None` for an empty group.
+    fn commit_group(&self, family: FamilyId, base: &BaseLayer, g: usize) -> Option<Opener> {
+        let artifact = &self.registration(family).circuit.artifact;
+        let columns = group(artifact, base, g);
+        let root = &opening_schedule(artifact).levels[0];
+        (!columns.is_empty()).then(|| pcs::commit(&self.vk.pcs.0, root, &Source::Columns(&columns)))
+    }
+}
+
+/// Group `g` of a shard's committed columns, in address order: what a group's
+/// commitment commits and its opening opens.
+fn group<'a>(
+    artifact: &constraints::CircuitArtifact,
+    base: &'a BaseLayer,
+    g: usize,
+) -> Vec<&'a MultilinearPoly> {
+    let address = [
+        PolyAddress::Memory,
+        PolyAddress::Witness,
+        PolyAddress::Setup,
+    ][g];
+    (0..committed_groups(artifact)[g] as u32)
+        .map(|i| {
+            base.get(address(i))
+                .unwrap_or_else(|| panic!("the shard has no column {}", address(i)))
+        })
+        .collect()
+}
+
+/// An opener's commitment, or the empty one of an empty group.
+fn commitment_of(opener: Option<&Opener>) -> Commitment {
+    setup_commitment(opener)
 }
 
 // ---------------------------------------------------------------------------
@@ -276,12 +329,8 @@ impl ProverSetup {
 // ---------------------------------------------------------------------------
 
 /// What the global commit phase takes: the statement descriptor, the public
-/// streams and result, and the boundary.
-///
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** It is meant to
-/// carry every shard's `M` columns too, for the global phase to commit before
-/// the memory challenges; with nothing to commit them with, it carries none
-/// (`docs/architecture.md` §0).
+/// streams and result, the boundary, and every statement shard's memory
+/// commitment.
 #[derive(Clone, Debug)]
 pub struct StatementInputs {
     pub input: Vec<u8>,
@@ -290,6 +339,8 @@ pub struct StatementInputs {
     pub shard_counts: Vec<u32>,
     pub windows: Vec<u32>,
     pub boundary: BoundaryFinals,
+    /// Per statement shard, in statement order.
+    pub memory_commitments: Vec<Commitment>,
 }
 
 /// What the global commit phase yields, and every shard's proof starts from:
@@ -390,10 +441,18 @@ pub fn statement_inputs(
             archive.io_streams().output.len()
         );
     }
-    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. HERE every
-    // statement shard's `M` columns are filled — `shard_columns` restricted to
-    // `M` — for the global phase to commit. With nothing to commit them with
-    // they are not built (`docs/architecture.md` §0).
+    // Every statement shard's `M` columns, filled and committed, each in its
+    // own rayon task.
+    let shards = statement_shards(config, &counts);
+    let memory_commitments = shards
+        .par_iter()
+        .map(|&(family, index)| {
+            let source = shard_source(setup, archive, family, index, &windows)?;
+            memory_commitment(setup, family, &source)
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
     let io = archive.io_streams();
     Ok(StatementInputs {
         input: io.input.clone(),
@@ -402,18 +461,43 @@ pub fn statement_inputs(
         shard_counts: counts,
         windows,
         boundary,
+        memory_commitments,
     })
 }
 
+/// The commitment to a shard's `M` columns, from its fill's source: what the
+/// global transcript absorbs for it (`docs/spec/proof.md` §2).
+pub(crate) fn memory_commitment(
+    setup: &ProverSetup,
+    family: FamilyId,
+    source: &ShardSource,
+) -> Result<Commitment, ProverError> {
+    let columns = (setup.registration(family).fill)(source).map_err(ProverError::Trace)?;
+    Ok(memory_commitment_of(setup, family, columns))
+}
+
+/// The commitment to the `M` columns among a shard's `columns`, honest or
+/// not: the statement's entry for a shard of these columns.
+pub fn memory_commitment_of(
+    setup: &ProverSetup,
+    family: FamilyId,
+    columns: Vec<(PolyAddress, MultilinearPoly)>,
+) -> Commitment {
+    let memory: Vec<_> = columns
+        .into_iter()
+        .filter(|(a, _)| matches!(a, PolyAddress::Memory(_)))
+        .collect();
+    commitment_of(
+        setup
+            .commit_group(family, &BaseLayer::new(memory), 0)
+            .as_ref(),
+    )
+}
+
 /// The global commit phase, `docs/spec/proof.md` §2: the global transcript
-/// over the statement. Shard-count generic: `inputs` holds any number of
+/// over the statement, every shard's memory commitment absorbed before the
+/// memory challenges. Shard-count generic: `inputs` holds any number of
 /// shards per family.
-///
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The phase is
-/// meant to commit every shard's memory columns first and put the commitments
-/// in the statement, which the transcript absorbs before the memory challenges.
-/// It commits nothing, so the challenges are drawn over columns nothing fixes
-/// (`docs/architecture.md` §0).
 pub fn global_commit_phase(vk: &VerifyingKey, inputs: &StatementInputs) -> GlobalCommitState {
     let statement = PublicInputs {
         input: inputs.input.clone(),
@@ -422,6 +506,7 @@ pub fn global_commit_phase(vk: &VerifyingKey, inputs: &StatementInputs) -> Globa
         shard_counts: inputs.shard_counts.clone(),
         windows: inputs.windows.clone(),
         boundary: inputs.boundary,
+        memory_commitments: inputs.memory_commitments.clone(),
         memory_roots: Vec::new(),
     };
     global_commit_of(vk, statement)
@@ -563,12 +648,13 @@ fn ts_window(family: FamilyId, base: &BaseLayer) -> [u64; 2] {
     [ts(cycle(0)), ts(top).saturating_add(4)]
 }
 
-/// A shard after its GKR proof: what an opening would need, and the live shard
-/// transcript. `docs/spec/streaming.md` §6's `PostGkr` entry.
+/// A shard after its GKR proof: what its opening needs but its columns, and
+/// the live shard transcript. `docs/spec/streaming.md` §6's `PostGkr` entry.
 pub(crate) struct ShardGkr {
     pub(crate) family: FamilyId,
     pub(crate) index: u32,
     pub(crate) ts_window: [u64; 2],
+    pub(crate) witness_commitment: Commitment,
     pub(crate) outputs: Vec<Fp2>,
     pub(crate) gkr: GkrProof,
     /// The base claims' one point.
@@ -587,11 +673,18 @@ impl ProvingContext<'_> {
             .unwrap_or_else(|| panic!("the statement has no shard ({family}, {index})"))
     }
 
-    /// The shard's steps, `docs/spec/proof.md` §4: seed the transcript, draw
-    /// the lookup challenges, run the forward pass and the GKR proof. The base
-    /// claims' one point is read back by replaying the schedule over the proof,
-    /// which checks nothing: a tampered witness still gets its proof.
-    pub(crate) fn gkr_part(&self, family: FamilyId, index: u32, base: &BaseLayer) -> ShardGkr {
+    /// The shard's steps, `docs/spec/proof.md` §4: seed the transcript with
+    /// the shard's `witness` commitment, draw the lookup challenges, run the
+    /// forward pass and the GKR proof. The base claims' one point is read back
+    /// by replaying the schedule over the proof, which checks nothing: a
+    /// tampered witness still gets its proof.
+    pub(crate) fn gkr_part(
+        &self,
+        family: FamilyId,
+        index: u32,
+        base: &BaseLayer,
+        witness: &Commitment,
+    ) -> ShardGkr {
         let reg = self.setup.registration(family);
         let artifact = &reg.circuit.artifact;
         // The begin line, before any work, and **the one line the whole log is
@@ -616,13 +709,9 @@ impl ProvingContext<'_> {
         // build has neither the binding nor the `Instant::now` behind it.
         #[cfg(feature = "debug-info")]
         let clock = debug::Clock::start();
-        // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. HERE the
-        // shard's `W` columns, multiplicities included, are committed, the
-        // commitments put in the proof and absorbed by `shard_transcript` before
-        // `g` and `β`. None is: the witness is bound to nothing
-        // (`docs/architecture.md` §0).
         let ts_window = ts_window(family, base);
-        let (mut t, g, beta) = shard_transcript(self.global.digest, family, index, ts_window);
+        let (mut t, g, beta) =
+            shard_transcript(self.global.digest, family, index, ts_window, witness);
         let challenges = shard_challenges(
             &reg.circuit,
             index,
@@ -769,6 +858,7 @@ impl ProvingContext<'_> {
             family,
             index,
             ts_window,
+            witness_commitment: witness.clone(),
             outputs,
             gkr,
             point,
@@ -776,37 +866,63 @@ impl ProvingContext<'_> {
         }
     }
 
-    /// The shard's proof, and the shard transcript's event log.
-    ///
-    /// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** This is
-    /// where the shard's one batched opening belongs (`docs/spec/proof.md` §5):
-    /// every committed column — `M`, `W` and `S`, in layout order — opened at
-    /// `point` in the live shard transcript, against the statement's, the
-    /// proof's and the key's commitments, and the opening put in the proof. With
-    /// no commitment scheme nothing is opened, the proof carries the GKR pass
-    /// alone, and its base claims are checked by nothing
-    /// (`docs/architecture.md` §0).
-    pub(crate) fn proof_part(&self, shard: ShardGkr) -> (ShardProof, Vec<TranscriptEvent>) {
+    /// The shard's proof, and the shard transcript's event log: the shard's
+    /// one opening (`docs/spec/proof.md` §5) — every committed column, `M`,
+    /// `W` and `S` in layout order, opened at `point` in the live shard
+    /// transcript — from its columns `base` and the openers of its `memory`
+    /// and `witness` commitments; the setup's are the key's.
+    pub(crate) fn proof_part(
+        &self,
+        shard: ShardGkr,
+        base: &BaseLayer,
+        memory: Option<&Opener>,
+        witness: Option<&Opener>,
+    ) -> (ShardProof, Vec<TranscriptEvent>) {
         let ShardGkr {
             family,
             index,
             ts_window,
+            witness_commitment,
             outputs,
             gkr,
             point,
-            transcript,
+            mut transcript,
         } = shard;
-        // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The
-        // opening of every committed column at `point`, in `transcript`, goes
-        // HERE.
-        let _ = &point;
+        let artifact = &self.setup.registration(family).circuit.artifact;
+        let setup = self.setup.setup_openers[self.setup.position(family)].as_ref();
+        let columns: [Vec<&MultilinearPoly>; 3] =
+            core::array::from_fn(|g| group(artifact, base, g));
+        let groups: Vec<(&Opener, Source)> = [memory, witness, setup]
+            .into_iter()
+            .zip(&columns)
+            .filter_map(|(opener, columns)| {
+                assert_eq!(
+                    opener.is_some(),
+                    !columns.is_empty(),
+                    "an opener per nonempty group"
+                );
+                opener.map(|o| (o, Source::Columns(columns)))
+            })
+            .collect();
+        // Layer 0 is row-wise, so its final evaluations are the base claims, one
+        // per committed column in layout order (`gkr_verify::verify`).
+        let values = &gkr.layers[0].final_evals;
+        let opening = pcs::open(
+            &mut transcript,
+            &self.setup.vk.pcs.0,
+            &groups,
+            &point,
+            values,
+        );
         let proof = ShardProof {
             family,
             shard_index: index,
             ts_window,
             global_digest: self.global.digest,
+            witness_commitment,
             outputs,
             gkr,
+            opening,
         };
         dlog!(
             Phase,
@@ -871,7 +987,8 @@ pub fn prove_shard(
 /// [`prove_shard`] over columns the caller supplies — the honest ones from
 /// [`shard_columns`], or a tampered copy — with the shard transcript's event
 /// log. The prover checks nothing about them: a wrong column makes a proof the
-/// verifier refuses.
+/// verifier refuses, a wrong `M` column one whose opening fails against the
+/// statement's commitment.
 pub fn prove_shard_columns(
     ctx: &ProvingContext,
     family: FamilyId,
@@ -879,6 +996,8 @@ pub fn prove_shard_columns(
     columns: Vec<(PolyAddress, MultilinearPoly)>,
 ) -> (ShardProof, Vec<TranscriptEvent>) {
     let base = BaseLayer::new(columns);
-    let gkr = ctx.gkr_part(family, shard_idx, &base);
-    ctx.proof_part(gkr)
+    let memory = ctx.setup.commit_group(family, &base, 0);
+    let witness = ctx.setup.commit_group(family, &base, 1);
+    let gkr = ctx.gkr_part(family, shard_idx, &base, &commitment_of(witness.as_ref()));
+    ctx.proof_part(gkr, &base, memory.as_ref(), witness.as_ref())
 }

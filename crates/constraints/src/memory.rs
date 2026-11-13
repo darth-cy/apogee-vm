@@ -665,8 +665,8 @@ pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact {
 /// `INIT_TEARDOWN`'s init column is `S[0]` instead, a setup column of the
 /// program's. One execution's public values and one execution's advice have no
 /// business in every execution's setup, so theirs is `M`, fixed in the global
-/// phase before the memory challenges are squeezed — once a commitment scheme
-/// binds `M` there; until then nothing does (`docs/architecture.md` §0).
+/// phase before the memory challenges are squeezed by the shard's memory
+/// commitment.
 ///
 /// Validated and held to [`check_memory`]; panics if either refuses it.
 pub fn value_window_artifact(trace_vars: u32) -> CircuitArtifact {

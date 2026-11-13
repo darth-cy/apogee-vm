@@ -86,10 +86,7 @@ enum Gating {
 
 fn gating(channel: u32) -> Gating {
     match channel {
-        // `XOR8`'s row 0 is `(0, 0, 0)`, and `0 ^ 0 = 0` is a real entry.
-        lookup_channel::TIMESTAMP | lookup_channel::RANGE16 | lookup_channel::XOR8 => {
-            Gating::NoOffset
-        }
+        lookup_channel::TIMESTAMP | lookup_channel::RANGE16 => Gating::NoOffset,
         lookup_channel::GENERIC => Gating::ZeroEntry,
         lookup_channel::DECODER => Gating::MinusOne,
         other => panic!("channel {other} is not in constants::lookup_channel"),
@@ -284,8 +281,8 @@ pub(crate) fn channel_trees(
             lookup_channel::MAX_TUPLE
         );
         // The multiplicity is the shard's own witness, which must be bound
-        // before `g` and `β` are drawn (`docs/spec/lookup.md` §2 and §7; with
-        // no commitment scheme nothing binds it yet). A setup column is fixed
+        // before `g` and `β` are drawn (`docs/spec/lookup.md` §2 and §7): the
+        // shard's witness commitment binds it. A setup column is fixed
         // at key generation and a memory column belongs to the multiset
         // argument; either would be a count the channel's own witness does not
         // carry.
@@ -352,27 +349,14 @@ pub fn range_table(channel: u32) -> Option<VirtualKind> {
 /// `n` variables holds `[0, 2^min(bits, n))`, so below `bits` variables it is a
 /// narrower range than the channel declares, and `channel_trees` refuses it.
 ///
-/// `XOR8`'s is 16, its two key bytes: below that its virtual table holds only
-/// part of the 65,536 triples.
-///
-/// A table channel of setup columns has 0: its table is a setup column of the
-/// circuit's own height, whatever that height is.
+/// A table channel's is 0: its table is a setup column of the circuit's own
+/// height, whatever that height is.
 pub fn table_vars(channel: u32) -> u32 {
-    match channel {
-        lookup_channel::XOR8 => 16,
-        _ if lookup_channel::IS_RANGE[channel as usize] => lookup_channel::BITS[channel as usize],
-        _ => 0,
+    if lookup_channel::IS_RANGE[channel as usize] {
+        lookup_channel::BITS[channel as usize]
+    } else {
+        0
     }
-}
-
-/// The `XOR8` channel's table, in tuple order: `(a, b, a ^ b)`, closed forms
-/// of the row index.
-pub fn xor8_table() -> Vec<PolyAddress> {
-    vec![
-        PolyAddress::Virtual(VirtualKind::Xor8A),
-        PolyAddress::Virtual(VirtualKind::Xor8B),
-        PolyAddress::Virtual(VirtualKind::Xor8Out),
-    ]
 }
 
 /// Every lookup of `artifact` is discharged by exactly one gate-list-0 column,

@@ -142,7 +142,6 @@ fn every_committed_guest_renders_and_the_listing_is_the_tables() {
         let page = render(&elf, name, &params).unwrap();
         let (tables, _) = decode_program(&load_elf(&elf).unwrap(), &params).unwrap();
         check_listing(&page, &elf, &tables);
-        assert!(page.contains("ALARM - UNFINISHED"), "{name}");
     }
 }
 
@@ -202,7 +201,7 @@ fn the_identity_line_is_the_program_identity() {
     let page = render(&elf, "fib", &ProgramParams::defaults()).unwrap();
     let image = load_elf(&elf).unwrap();
     let (tables, config) = decode_program(&image, &ProgramParams::defaults()).unwrap();
-    let identity = program::program_identity(&image, &tables, &config);
+    let identity = program::program_identity(&image, &tables, &config).unwrap();
     assert!(
         page.contains(&format!(
             "program identity  {}",

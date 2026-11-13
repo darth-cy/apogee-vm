@@ -11,10 +11,24 @@ use constraints::family_circuit;
 use field::{Fp, Fp2};
 use transcript::{io_digest, Transcript};
 use verifier_core::{
-    absorb_statement_descriptor, boundary_scalars, derive_global_phase, global_commit,
-    identity_digest, reduce_shard, statement_shards, BoundaryFinals, GkrProof, PublicInputs,
+    absorb_commitment, absorb_statement_descriptor, boundary_scalars, committed_groups,
+    derive_global_phase, global_commit, identity_digest, opening_schedule, reduce_shard,
+    statement_shards, BoundaryFinals, Commitment, FamilyCircuit, GkrProof, PublicInputs, Setup,
     ShardProof, VerifyError, VerifyingKey, VmConfig, TRIVIAL_TS_WINDOW,
 };
+
+/// A commitment of group `g` — 0, 1, 2 for `M`, `W`, `S` — of `circuit`'s
+/// columns' shape, every lane zero: a tape carries lengths, never values.
+fn zeros(circuit: &FamilyCircuit, g: usize) -> Commitment {
+    let columns = committed_groups(&circuit.artifact)[g];
+    let (slices, len) = opening_schedule(&circuit.artifact).commitment_shape(columns);
+    Commitment(vec![vec![Fp::ZERO; len]; slices])
+}
+
+/// The memory commitment of a shard of `vk`'s `family`.
+fn memory(vk: &VerifyingKey, family: u32) -> Commitment {
+    zeros(vk.circuit(family).expect("a config family"), 0)
+}
 
 /// The two-shard statement's shape: add/sub in two shards, jump/branch/slt in
 /// one, `INIT_TEARDOWN` in one, `ZERO_WINDOWS` in none, the two public value
@@ -38,6 +52,7 @@ fn key_and_statement() -> (VerifyingKey, PublicInputs) {
         .iter()
         .map(|(f, h)| family_circuit(*f, h.trailing_zeros()).expect("a registered family"))
         .collect();
+    let setup_commitments: Vec<Commitment> = circuits.iter().map(|c| zeros(c, 2)).collect();
     let entry_pc = 0x1_0000;
     let mut boundary = BoundaryFinals {
         reg_ts: [0; 32],
@@ -45,22 +60,29 @@ fn key_and_statement() -> (VerifyingKey, PublicInputs) {
         reg_values: [0; 31],
     };
     boundary.reg_values[9] = 2;
-    let statement = PublicInputs {
+    let vk = VerifyingKey {
+        code_version: family::CODE_VERSION,
+        entry_pc,
+        identity: identity_digest(family::CODE_VERSION, &config, entry_pc, &setup_commitments),
+        config,
+        setup_commitments,
+        circuits,
+        pcs: Setup(Vec::new()),
+    };
+    let mut statement = PublicInputs {
         input: Vec::new(),
         output: Vec::new(),
         exit_status: 2,
         shard_counts: vec![2, 1, 1, 0, 1, 1, 0],
         windows: Vec::new(),
         boundary,
+        memory_commitments: Vec::new(),
         memory_roots: vec![[Fp2::ZERO; 2]; 6],
     };
-    let vk = VerifyingKey {
-        code_version: family::CODE_VERSION,
-        entry_pc,
-        identity: identity_digest(family::CODE_VERSION, &config, entry_pc),
-        config,
-        circuits,
-    };
+    statement.memory_commitments = statement_shards(&vk.config, &statement.shard_counts)
+        .iter()
+        .map(|(f, _)| memory(&vk, *f))
+        .collect();
     (vk, statement)
 }
 
@@ -69,16 +91,13 @@ fn key_and_statement() -> (VerifyingKey, PublicInputs) {
 fn the_global_tape_is_the_pre_fork_order() {
     let (vk, statement) = key_and_statement();
     checker::check_global_tape(&vk, &statement).expect("the phase keeps the pre-fork order");
-    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. Between
-    // `PUBLIC_INPUTS` and `MEMORY_BOUNDARY` belongs every statement shard's
-    // memory-column commitment list. Nothing is there, so the tape binds no
-    // column (`docs/architecture.md` §0).
 }
 
 /// The expectation is a function of the statement's shape, not a constant: a
-/// changed window list moves both tapes together, and the phase still keeps
-/// the order. A changed shard count moves neither, the counts being one
-/// message of one scalar per family whatever their values.
+/// changed window list or shard count moves both tapes together, and the phase
+/// still keeps the order. A shard more is one memory commitment more; the
+/// counts themselves are one message of one scalar per family whatever their
+/// values.
 #[test]
 fn the_expected_tape_follows_the_statement_shape() {
     let (vk, base) = key_and_statement();
@@ -87,14 +106,24 @@ fn the_expected_tape_follows_the_statement_shape() {
     let mut three = base.clone();
     three.shard_counts[0] = 3;
     three.memory_roots.push([Fp2::ZERO; 2]);
+    three
+        .memory_commitments
+        .insert(1, memory(&vk, family::ADD_SUB_LUI_AUIPC));
     let grown = checker::expected_global_tape(&vk, &three);
-    assert_eq!(grown, baseline, "a count is a value, not a shape");
+    assert_eq!(
+        grown.len(),
+        baseline.len() + 1,
+        "one memory commitment more"
+    );
     assert_eq!(checker::global_tape(&vk, &three), grown);
 
     let mut windowed = base.clone();
     windowed.shard_counts[3] = 1;
     windowed.windows = vec![7];
     windowed.memory_roots.push([Fp2::ZERO; 2]);
+    windowed
+        .memory_commitments
+        .insert(1, memory(&vk, family::ZERO_WINDOWS));
     let with_window = checker::expected_global_tape(&vk, &windowed);
     assert!(with_window.contains(&"absorb MEMORY_WINDOWS 1".to_string()));
     assert_eq!(checker::global_tape(&vk, &windowed), with_window);
@@ -128,6 +157,9 @@ fn swapped_global_commit(vk: &VerifyingKey, statement: &PublicInputs) -> Transcr
     let io = io_digest(&statement.input, &statement.output);
     t.append_scalars(tags::PUBLIC_INPUTS, &io);
     t.append_scalars(tags::PROGRAM_IDENTITY, &vk.identity.0);
+    for c in &statement.memory_commitments {
+        absorb_commitment(&mut t, tags::MEMORY_COMMITMENT, c);
+    }
     t.append_scalars(
         tags::MEMORY_BOUNDARY,
         &boundary_scalars(&statement.boundary),
@@ -172,8 +204,10 @@ fn swapping_two_absorptions_is_caught_and_changes_every_challenge() {
         shard_index: 0,
         ts_window: TRIVIAL_TS_WINDOW,
         global_digest: digest,
+        witness_commitment: Commitment(Vec::new()),
         outputs: Vec::new(),
         gkr: GkrProof { layers: vec![] },
+        opening: Default::default(),
     };
     assert_eq!(
         reduce_shard(&vk, &proof, &statement).err(),

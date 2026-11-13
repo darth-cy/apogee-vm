@@ -15,5 +15,8 @@ constraints.workspace = true
 field.workspace = true
 # `verify`, the boundary, the window challenge, the LogUp slots and root check.
 gkr-verify.workspace = true
+# Akita's verifier: the commitments a key, a statement and a shard proof
+# carry, and step 12, the opening of every committed column.
+pcs-verify.workspace = true
 poly.workspace = true
 transcript.workspace = true

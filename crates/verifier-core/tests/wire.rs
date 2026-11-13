@@ -8,7 +8,15 @@ use common::{jbs_vk, shell, statement, vk, ADD, JBS};
 use constants::family;
 use field::{Fp, Fp2};
 use gkr_verify::{GkrProof, SumcheckProof};
-use verifier_core::{identity_digest, PublicInputs, ShardProof, VerifyingKey, VmConfig};
+use verifier_core::{
+    identity_digest, pcs_setup_len, Commitment, PublicInputs, Setup, ShardProof, VerifyingKey,
+    VmConfig,
+};
+
+/// A commitment's bytes: its count, then each payload's count and lanes.
+fn commitment_bytes(c: &Commitment) -> usize {
+    4 + c.0.iter().map(|p| 4 + 8 * p.len()).sum::<usize>()
+}
 
 /// An integer, embedded in `Fp2`.
 fn x(v: u64) -> Fp2 {
@@ -55,8 +63,17 @@ fn every_value_round_trips_byte_for_byte() {
     for key in [vk(), jbs_vk()] {
         assert_eq!(key.check(), Ok(()));
         let bytes = key.to_bytes();
-        assert_eq!(VerifyingKey::from_bytes(&bytes), Ok(key.clone()));
-        assert_eq!(VerifyingKey::from_bytes(&bytes).unwrap().to_bytes(), bytes);
+        // The setup is not on the wire: the loader expands it.
+        let back = VerifyingKey::from_bytes(&bytes).expect("the key loads");
+        assert_eq!(back.pcs, Setup::expand(pcs_setup_len(&key.circuits)));
+        assert_eq!(
+            VerifyingKey {
+                pcs: key.pcs.clone(),
+                ..back.clone()
+            },
+            key
+        );
+        assert_eq!(back.to_bytes(), bytes);
     }
 }
 
@@ -71,15 +88,20 @@ fn the_layouts_are_the_specs() {
     assert_eq!(u32_at(4), 0);
     assert_eq!((u64_at(8), u64_at(16)), (0, 1 << 38));
     assert_eq!(&b[24..40], &proof.global_digest.to_bytes());
-    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The shard's
-    // witness commitments belong after the digest and its opening after the
-    // GKR transitions; the proof carries neither (`docs/architecture.md` §0).
-    let outputs = 40;
+    // The witness commitment: its slice count, then each payload.
+    let w = &proof.witness_commitment;
+    assert_eq!(u32_at(40) as usize, w.0.len());
+    assert_eq!(u32_at(44) as usize, w.0[0].len());
+    let outputs = 40 + commitment_bytes(w);
     assert_eq!(u32_at(outputs), 2);
     let gkr = outputs + 4 + 2 * 16;
     assert_eq!(u32_at(gkr), 2, "two transitions");
     assert_eq!(u32_at(gkr + 4), 1, "transition 0's one round");
-    assert_eq!(b.len(), gkr + 4 + (4 + 4 * 16 + 4 + 2 * 16) + (4 + 4 + 16));
+    // The opening, empty: no fold, then the terminal — its tensor's partials
+    // and rounds, its partials, digest, nonce and response.
+    let opening = gkr + 4 + (4 + 4 * 16 + 4 + 2 * 16) + (4 + 4 + 16);
+    assert_eq!(u32_at(opening), 0, "no fold");
+    assert_eq!(b.len(), opening + 4 + (2 * 16 + 4) + 4 + 8 * 8 + 4 + 4);
 
     let public = statement();
     let b = public.to_bytes();
@@ -92,15 +114,24 @@ fn the_layouts_are_the_specs() {
         &b[boundary + 8 * 42..boundary + 8 * 43],
         &Fp::from_u64(42).to_bytes()
     );
-    // Four shards' root pairs of two 16-byte `Fp2` values: the init window,
-    // add/sub, and the two public windows.
-    assert_eq!(b.len(), boundary + 64 * 8 + 4 + 4 * 32);
+    // Four shards' memory commitments, then their root pairs of two 16-byte
+    // `Fp2` values: the init window, add/sub, and the two public windows.
+    let commitments = boundary + 64 * 8;
+    assert_eq!(
+        u32::from_le_bytes(b[commitments..commitments + 4].try_into().unwrap()),
+        4
+    );
+    let roots = commitments
+        + 4
+        + public
+            .memory_commitments
+            .iter()
+            .map(commitment_bytes)
+            .sum::<usize>();
+    assert_eq!(b.len(), roots + 4 + 4 * 32);
 
-    // The key: the header up to the circuits, then the circuits.
-    //
-    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. The setup
-    // lists and the generic table's commitments belong between the identity
-    // and the circuits; the key carries none (`docs/architecture.md` §0).
+    // The key: the header up to the setup commitments, one per family, then
+    // the circuits.
     let key = jbs_vk();
     let b = key.to_bytes();
     let u32_at = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
@@ -112,6 +143,16 @@ fn the_layouts_are_the_specs() {
     assert_eq!(u32_at(at), 0x1_0000, "the entry pc");
     assert_eq!(&b[at + 4..at + 68], &key.identity.to_bytes());
     at += 68;
+    assert_eq!(
+        u32_at(at),
+        key.config.families.len() as u32,
+        "one setup commitment per family"
+    );
+    at += 4 + key
+        .setup_commitments
+        .iter()
+        .map(commitment_bytes)
+        .sum::<usize>();
     assert_eq!(
         u32_at(at),
         key.config.families.len() as u32,
@@ -154,7 +195,7 @@ fn the_readers_refuse_rather_than_panic() {
     long.push(0);
     assert_eq!(ShardProof::from_bytes(&long), Err("bytes follow the value"));
 
-    // A count far past the bytes: the outputs' count.
+    // A count far past the bytes: the witness commitment's.
     let mut huge = proof.clone();
     huge[40..44].copy_from_slice(&u32::MAX.to_le_bytes());
     assert_eq!(
@@ -287,8 +328,15 @@ fn a_key_that_breaks_a_load_rule_is_refused() {
     // family has no circuit below 2^19.
     let mut k = honest.clone();
     k.config.families[0].1 = 1 << 18;
-    k.identity = identity_digest(k.code_version, &k.config, k.entry_pc);
+    k.identity = identity_digest(k.code_version, &k.config, k.entry_pc, &k.setup_commitments);
     cases.push(("no circuit proves it at height", k));
+    let mut k = honest.clone();
+    k.setup_commitments.pop();
+    cases.push(("not one setup commitment per config family", k));
+    let mut k = honest.clone();
+    k.setup_commitments[0].0.pop();
+    k.identity = identity_digest(k.code_version, &k.config, k.entry_pc, &k.setup_commitments);
+    cases.push(("the setup commitment is not its setup columns' shape", k));
     let mut k = honest.clone();
     k.config.families[1].1 = 1 << 18;
     cases.push(("not one a program derives", k));
@@ -313,7 +361,7 @@ fn a_key_that_breaks_a_load_rule_is_refused() {
         },
         bytecode_size_words: 1 << 20,
     };
-    k.identity = identity_digest(k.code_version, &k.config, k.entry_pc);
+    k.identity = identity_digest(k.code_version, &k.config, k.entry_pc, &k.setup_commitments);
     let e = k.check().unwrap_err();
     assert!(
         e.contains("the key's circuits are not its config's families"),

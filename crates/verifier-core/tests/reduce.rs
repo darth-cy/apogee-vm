@@ -12,8 +12,9 @@ use field::{Fp, Fp2};
 use gkr_verify::SumcheckProof;
 use transcript::TranscriptEvent::{Absorb, Challenge};
 use verifier_core::{
-    derive_global_phase, global_commit, memory_slots, reduce_shard, shard_challenges,
-    shard_transcript, statement_shards, verify_global_memory, VerifyError, TRIVIAL_TS_WINDOW,
+    derive_global_phase, global_commit, identity_digest, memory_slots, reduce_shard,
+    shard_challenges, shard_transcript, statement_shards, verify_global_memory, Commitment,
+    VerifyError, TRIVIAL_TS_WINDOW,
 };
 
 fn refusal(
@@ -28,8 +29,8 @@ fn refusal(
 }
 
 /// G1 to G9, event for event: the suite, the descriptor's three messages, the
-/// identity's 8 lanes, the I/O digest's 8 lanes, the boundary, four memory
-/// challenges, the digest.
+/// identity's 8 lanes, the I/O digest's 8 lanes, every shard's memory
+/// commitment, the boundary, four memory challenges, the digest.
 #[test]
 fn the_global_transcript_is_the_frozen_order() {
     let (key, public) = (vk(), statement());
@@ -45,12 +46,12 @@ fn the_global_transcript_is_the_frozen_order() {
         absorb(tags::MEMORY_WINDOWS, 0),
         absorb(tags::PROGRAM_IDENTITY, 8),
         absorb(tags::PUBLIC_INPUTS, 8),
-        // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. Every
-        // statement shard's memory-column commitments belong HERE, before the
-        // boundary and the challenges, and none is absorbed
-        // (`docs/architecture.md` §0).
-        absorb(tags::MEMORY_BOUNDARY, 64),
     ];
+    // One message per statement shard, in statement order: its payloads.
+    for c in &public.memory_commitments {
+        want.push(absorb(tags::MEMORY_COMMITMENT, c.0.concat().len()));
+    }
+    want.push(absorb(tags::MEMORY_BOUNDARY, 64));
     want.extend(
         [Challenge {
             tag: tags::MEMORY_CHALLENGE,
@@ -84,6 +85,7 @@ fn the_global_transcript_is_the_frozen_order() {
         p.windows.push(1);
     }));
     assert!(moved(|p| p.windows.push(1)));
+    assert!(moved(|p| p.memory_commitments[1].0[0][0] += Fp::ONE));
     assert!(!moved(|p| p.memory_roots[0][0] += Fp2::ONE));
     assert!(!moved(|p| p.exit_status += 1));
     let mut k = vk();
@@ -91,30 +93,39 @@ fn the_global_transcript_is_the_frozen_order() {
     assert_ne!(global_commit(&k, &public).digest, digest);
 }
 
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The generic
-/// table is meant to be bound into every challenge of the statement and of
-/// every shard seeded from it — through the key's commitments to its three
-/// columns — so that a key whose table moved is another statement. Nothing
-/// commits the table: a key names none, and a key over a family that reads it
-/// draws the same schedule as one over a family that does not. This is held
-/// here, disabled, as the property a commitment scheme must restore
-/// (`docs/architecture.md` §0).
+/// The setup commitments — a family's decoded table, the image column and the
+/// generic table among their columns — are bound into every challenge of the
+/// statement and so of every shard seeded from it: a key whose setup
+/// commitment moved has another identity, and is another statement.
 #[test]
-#[ignore = "UNFINISHED: the key commits no generic table until a commitment scheme exists \
-            (docs/architecture.md §0)"]
-#[allow(non_snake_case)]
-fn UNFINISHED_the_generic_table_is_bound_into_every_challenge() {
-    todo!("UNFINISHED: no commitment scheme commits the generic table (docs/architecture.md §0)")
+fn the_setup_commitments_are_bound_into_every_challenge() {
+    let (key, public) = (vk(), statement());
+    let honest = global_commit(&key, &public);
+    for i in [0, 1] {
+        let mut k = vk();
+        k.setup_commitments[i].0[0][0] += Fp::ONE;
+        k.identity = identity_digest(k.code_version, &k.config, k.entry_pc, &k.setup_commitments);
+        assert_ne!(
+            k.identity, key.identity,
+            "family {i}'s setup moves the identity"
+        );
+        let moved = global_commit(&k, &public);
+        assert_ne!(moved.memory, honest.memory);
+        assert_ne!(moved.digest, honest.digest);
+    }
 }
 
-/// S1 to S2, then `g` and `β`: the seed, the window, the two challenges.
-///
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The shard's
-/// witness commitments, multiplicities included, belong between the window and
-/// `g`, and none is absorbed (`docs/architecture.md` §0).
+/// The shard's witness commitment: one shaped like a single compressed slice.
+fn witness() -> Commitment {
+    Commitment(vec![vec![Fp::from_u64(3); 16]])
+}
+
+/// S1 to S3, then `g` and `β`: the seed, the window, the witness commitment,
+/// the two challenges.
 #[test]
 fn a_shard_transcript_starts_with_its_seed_and_its_window() {
-    let (t, g, beta) = shard_transcript(Fp2::from(Fp::from_u64(7)), ADD, 0, TRIVIAL_TS_WINDOW);
+    let w = witness();
+    let (t, g, beta) = shard_transcript(Fp2::from(Fp::from_u64(7)), ADD, 0, TRIVIAL_TS_WINDOW, &w);
     assert_ne!(g, beta);
     assert_eq!(
         t.event_log(),
@@ -126,6 +137,10 @@ fn a_shard_transcript_starts_with_its_seed_and_its_window() {
             Absorb {
                 tag: tags::SHARD_TS_WINDOW,
                 n: 2
+            },
+            Absorb {
+                tag: tags::WITNESS_COMMITMENT,
+                n: 16
             },
             Challenge {
                 tag: tags::LOOKUP_CHALLENGE
@@ -145,25 +160,30 @@ fn a_shard_transcript_starts_with_its_seed_and_its_window() {
         ADD,
         0,
         TRIVIAL_TS_WINDOW,
+        &w,
     );
-    let (_, g2, _) = shard_transcript(Fp2::from(Fp::from_u64(8)), ADD, 0, TRIVIAL_TS_WINDOW);
-    let (_, g3, _) = shard_transcript(Fp2::from(Fp::from_u64(7)), INIT, 0, TRIVIAL_TS_WINDOW);
-    let (_, g4, _) = shard_transcript(Fp2::from(Fp::from_u64(7)), ADD, 1, TRIVIAL_TS_WINDOW);
-    let (_, g5, _) = shard_transcript(Fp2::from(Fp::from_u64(7)), ADD, 0, [0, 4]);
-    for other in [g1, g2, g3, g4, g5] {
+    let seven = Fp2::from(Fp::from_u64(7));
+    let (_, g2, _) = shard_transcript(Fp2::from(Fp::from_u64(8)), ADD, 0, TRIVIAL_TS_WINDOW, &w);
+    let (_, g3, _) = shard_transcript(seven, INIT, 0, TRIVIAL_TS_WINDOW, &w);
+    let (_, g4, _) = shard_transcript(seven, ADD, 1, TRIVIAL_TS_WINDOW, &w);
+    let (_, g5, _) = shard_transcript(seven, ADD, 0, [0, 4], &w);
+    let mut other_w = witness();
+    other_w.0[0][15] += Fp::ONE;
+    let (_, g6, _) = shard_transcript(seven, ADD, 0, TRIVIAL_TS_WINDOW, &other_w);
+    for other in [g1, g2, g3, g4, g5, g6] {
         assert_ne!(other, g);
     }
 }
 
 /// `g` then `β`: the first and the second `LOOKUP_CHALLENGE` squeeze after
-/// the seed and the window, replayed by hand.
+/// the seed, the window and the witness commitment, replayed by hand.
 #[test]
 fn g_is_the_first_lookup_squeeze_and_beta_the_second() {
     let digest = Fp2 {
         c0: Fp::from_u64(7),
         c1: Fp::from_u64(70),
     };
-    let (_, g, beta) = shard_transcript(digest, ADD, 3, TRIVIAL_TS_WINDOW);
+    let (_, g, beta) = shard_transcript(digest, ADD, 3, TRIVIAL_TS_WINDOW, &witness());
     let mut t = transcript::Transcript::new();
     t.append_scalars(
         tags::SHARD_SEED,
@@ -175,6 +195,7 @@ fn g_is_the_first_lookup_squeeze_and_beta_the_second() {
         ],
     );
     t.append_scalars(tags::SHARD_TS_WINDOW, &[Fp::ZERO, Fp::from_u64(1 << 38)]);
+    t.append_scalars(tags::WITNESS_COMMITMENT, &[Fp::from_u64(3); 16]);
     assert_eq!(g, t.challenge(tags::LOOKUP_CHALLENGE));
     assert_eq!(beta, t.challenge(tags::LOOKUP_CHALLENGE));
 }
@@ -314,6 +335,22 @@ fn a_statement_the_key_does_not_describe_is_refused_as_statement() {
     let mut p = honest.clone();
     p.memory_roots.pop();
     cases.push(("not one root pair per shard", key.clone(), p, proof.clone()));
+    let mut p = honest.clone();
+    p.memory_commitments.pop();
+    cases.push((
+        "not one memory commitment per shard",
+        key.clone(),
+        p,
+        proof.clone(),
+    ));
+    let mut p = honest.clone();
+    p.memory_commitments[1].0[0].pop();
+    cases.push((
+        "not its family's memory columns' shape",
+        key.clone(),
+        p,
+        proof.clone(),
+    ));
     // Step 4: a window is `[start, end)` inside the clock. Which
     // windows a block admits is `check_ts_windows`, which needs every shard.
     let mut q = proof.clone();
@@ -373,6 +410,9 @@ fn a_proof_shaped_wrong_is_refused_as_malformed() {
     let mut q = honest.clone();
     q.family = 3;
     cases.push(("a shard the statement does not have", q));
+    let mut q = honest.clone();
+    q.witness_commitment.0.pop();
+    cases.push(("the circuit's witness columns' shape", q));
     let mut q = honest.clone();
     q.outputs.push(Fp2::ZERO);
     cases.push(("the outputs are not the circuit's output map", q));

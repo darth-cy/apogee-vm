@@ -71,9 +71,8 @@ the window's initial contents, and an unwritten journal is empty.
 
 The circuits are [memory.md](memory.md) §3.3's. `PUBLIC_OUTPUT`'s is `ZERO_WINDOWS`' byte for
 byte, whose init leaf writes the literal 0, so no column holds an initial journal (§5).
-`PUBLIC_INPUT`'s and `ADVICE_WINDOWS`' initial values are `M[2]`, one execution's values, meant
-to be committed before the memory challenges (**UNFINISHED**, [proof.md](proof.md) §3) and bound
-by no program identity.
+`PUBLIC_INPUT`'s and `ADVICE_WINDOWS`' initial values are `M[2]`, one execution's values,
+committed before the memory challenges ([proof.md](proof.md) §3) and bound by no program identity.
 
 All three regions' tuples carry `constants::address_space::RAM`; which family initializes an
 address is what makes a word public, advice or heap. A space of their own would need an
@@ -108,11 +107,9 @@ first access, and `PUBLIC_OUTPUT`'s `M[1]` its value at the end.
 base claims, which share one point `u` and each name a column, the verifier takes the one on
 `M[2]` (`PUBLIC_INPUT`) or `M[1]` (`PUBLIC_OUTPUT`), refusing its absence as `Malformed`, and
 compares it with its own evaluation at `u` of the multilinear extension of `public_io_words(input)`
-or `public_io_words(output)`. A mismatch is `MemoryArgument`; the shard's opening is meant to
-hold the claim to the committed column. Column and string are meant to be fixed before `u` is
-drawn, so that a column other than the window passes with probability at most `12/|Fp2|`.
-**UNFINISHED** ([proof.md](proof.md) §3): there is no opening and no commitment, so the claim is
-held to nothing and the column to nothing either.
+or `public_io_words(output)`. A mismatch is `MemoryArgument`; the shard's opening holds the claim
+to the committed column (step 11). Column and string are both fixed before `u` is drawn, so a
+column other than the window passes with probability at most `12/|Fp2|`.
 
 `PUBLIC_INPUT`'s teardown is free: a guest may overwrite its input. `PUBLIC_OUTPUT` has no init
 column, and that is the point: with one, a prover could place the journal there at timestamp 0 and
@@ -120,13 +117,12 @@ the teardown would match without the guest storing a byte.
 
 ### 5.1 The argument, stated plainly
 
-G6 fixes `input` and `output` before any challenge, and the window columns are meant to be fixed
-there too. Step 10c says the columns are those strings' windows; the multiset says they are the
+G6 fixes `input` and `output` before any challenge, and G6a the window columns. Step 10c says the
+columns are those strings' windows; the multiset says they are the
 execution's first values in the input window and its last values in the journal window. So the
 guest found the statement's input in its input window, and the statement's output is what its
 stores left in the journal window. That rests on no cooperation, hash or register convention of the
-guest's, and says nothing about advice. **UNFINISHED** ([proof.md](proof.md) §3): no window column
-is committed, so the argument does not hold yet.
+guest's, and says nothing about advice.
 
 ## 6. Advice
 

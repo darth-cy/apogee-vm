@@ -4,8 +4,8 @@ From an empty crate to a proof: write a guest, build it, export and check its `P
 what the VM will prove of it, and prove a run. Commands run from the repository root unless a step
 changes directory.
 
-> **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A proof made today is **UNSOUND**
-> and an identity binds none of a program's code ([architecture.md](architecture.md) §0).
+> **ALARM — UNFINISHED — WARNING — TODO: A64-C5 CHARACTERISTIC.** A proof made today is **UNSOUND**
+> ([architecture.md](architecture.md) §0).
 
 ## 1. Before you start
 
@@ -251,9 +251,8 @@ This prints, at `ProgramParams::defaults()`, the `VmConfig` the image derives �
 height, live rows and decoded columns, a window family claiming no pc — then each instruction's
 pc, `next_pc`, family, mnemonic and fields ([program.md](spec/program.md) §4–§7), and the
 **program identity** at those parameters, the value a verifier registers from a channel of its own
-([program.md](spec/program.md) §8). **UNFINISHED** ([architecture.md](architecture.md) §0): it
-moves with the entry, the families the code needs and any height, and with no byte of the code.
-Derivation refuses, naming the pc or size:
+([program.md](spec/program.md) §8): it moves with the entry, the families the code needs, any
+height and every byte of the code and the image. Derivation refuses, naming the pc or size:
 
 - `Not all opcodes supported: pc=…`: a word outside RV32IMA, such as a CSR access in assembly;
 - `TableTooShort`: code past a family's reach, `pc ≤ 2h − 4`, which is 1.9375 MiB of code at `2^20`
@@ -300,7 +299,7 @@ assert_eq!(proven.exit_code, 0);
 ```
 
 The block's statement carries the public input, the journal and the exit status. **ALARM —
-UNFINISHED**: a block that verifies proves nothing until a commitment scheme exists
+UNFINISHED**: a block that verifies is not yet evidence of its execution
 ([architecture.md](architecture.md) §0). A family with rows costs at least a whole shard of its
 height, so a short run wastes less at smaller heights: `2^20` is an instruction family's floor
 ([lookup.md](spec/lookup.md) §3), and each choice of heights is its own identity. A shard's cost is

@@ -4,9 +4,6 @@ How one execution becomes a `BlockProof`: the guest runs twice, and a fixed numb
 prove its shards as the executor fills them. The block is [proof.md](proof.md)'s, and its bytes do
 not depend on the schedule; this page fixes when each column exists, and so what a proof costs.
 
-> **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** Pass 1 commits nothing and pass 2
-> opens nothing, so a streamed block is **UNSOUND** ([proof.md](proof.md) §3).
-
 ## 1. The prover, and what it costs
 
 `prover::prove_block_streaming(setup, io, max_in_flight)` proves every block: `host::prove` wraps
@@ -30,37 +27,35 @@ of its rows are live. `gkr::forward` holds every inner layer as `Fp2` elements,
 ```text
 pass 1                                       pass 2
   execute; for each shard as it fills:         execute again; for each shard as it fills:
-    drop it unbuilt (UNFINISHED: commit          fill every column, prove the shard,
-    its M columns, below)                        keep the proof, drop the rest
-  at exit: the statement, then G1–G9           at exit: the window families' shards
-                                               the statement's roots, the BlockProof
+    fill it, commit its M columns,               fill every column, commit M and W,
+    keep the commitment, drop the rest           prove and open the shard, keep the proof
+  at exit: the window shards' M commitments,   at exit: the window families' shards
+    the statement, then G1–G9                  the statement's roots, the BlockProof
 ```
 
 Each pass drives a fresh `emulator::StreamingRun`, which hands over a family's buffer as a
 `ShardChunk` the moment it reaches the family's height (§4); the workers of §5 take the chunks.
 
-**Pass 1** runs the execution to its end. At exit it derives the window list, shard counts and
-boundary from the final state (§3), asserts the cut equals `trace::plan_shards`, and runs G1–G9
-([proof.md](proof.md) §2).
-
-**ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** Pass 1 is meant to commit each
-shard's `M` columns as the shard fills — its family's fill with them moved out and no
-multiplicities — and the window families' shards at exit, and to put the commitments in statement
-order for the global transcript to absorb. A commitment reads no transcript, so only its place in
-the absorbed order would matter, not when it was computed. Nothing is committed: each filled shard
-is dropped unbuilt.
+**Pass 1** runs the execution to its end, the worker that claims a filled shard running its
+family's fill and committing the `M` columns among it (`prover::memory_commitment_of`), no
+multiplicities built. At exit it derives the window list, shard counts and boundary from the final
+state (§3), asserts the cut equals `trace::plan_shards`, commits the window families' shards over
+the final state in batches of at most `max_in_flight`, puts every commitment in statement order and
+runs G1–G9 ([proof.md](proof.md) §2). A commitment reads no transcript, so only its place in the
+absorbed order matters, not when it was computed.
 
 **Pass 2** re-executes. The emulator is a pure function of `(image, io)`, with no clock,
 randomness or threads, so it cuts the same shards; pass 2 asserts that its `CycleProfile`,
 `Execution`, window list and boundary are pass 1's. Each shard gets every column, multiplicities
-included, and `prover::prove_shard_columns`: the shard transcript and the GKR proof
-([proof.md](proof.md) §4). Proofs go to their statement positions, and `prover::public_inputs`
-copies each shard's two memory roots into the statement.
+included, and `prover::prove_shard_columns`: its `M` and `W` columns committed again, the shard
+transcript, the GKR proof and the opening ([proof.md](proof.md) §4, §5). Proofs go to their
+statement positions, and `prover::public_inputs` copies each shard's two memory roots into the
+statement.
 
-**Nothing holds pass 2's columns to pass 1's.** A shard's opening is meant to take its `M`
-commitments from the statement, pass 1's, and its polynomials from pass 2's columns, so columns
-that differed would give an opening the verifier refuses. There is no opening
-([proof.md](proof.md) §5), so pass 2's columns are bound to nothing.
+**The opening holds pass 2's columns to pass 1's.** A shard's opening takes its `M` commitment
+from the statement, pass 1's, and its polynomials from pass 2's columns, so columns that differed
+would give an opening the verifier refuses. Pass 2 recommits the `M` columns rather than keep pass
+1's openers, which would grow with the shard count.
 
 ## 3. What survives an execution
 
@@ -145,27 +140,27 @@ shards claimed or batched at once in either pass.
 `emulator::trace_run` keeps a whole execution, every buffer and the `MemoryEventLog`, and
 `trace::TraceArchive::from_execution` holds it ([execution-trace.md](execution-trace.md) §11).
 The per-shard component reads one through `ShardSource::archived`, with the same fills and shard
-proving: `prover::statement_inputs` (counts, windows, boundary), `global_commit_phase`,
+proving: `prover::statement_inputs` (counts, windows, boundary, every shard's memory commitment), `global_commit_phase`,
 `shard_columns`, `prove_shard`, `prove_shard_columns` and `public_inputs`.
 `checker::TamperHarness` is built on it ([circuits.md](circuits.md) §3): it writes changed cells
 into shards' columns, re-runs the global commit phase where a tamper moves the boundary, and
 re-proves, which needs an execution held still and read twice. Streaming has no such seam: pass 2
 rebuilds, by re-executing, the columns pass 1 read, so a cell changed in either pass would
-contradict the other. **UNFINISHED** ([proof.md](proof.md) §3): a changed `M` column is meant to
-be recommitted in that fresh global phase, which would move every challenge; nothing is committed,
-so it moves none.
+contradict the other. A changed `M` column is recommitted in that fresh global phase, which moves
+every challenge.
 
 `prover::prove_block(setup, archive, plan)`, `advance(setup, archive, until)` and
 `finish(archive)` prove a block from an archive; nothing outside `crates/prover/src/phases.rs`
 calls them. `prove_block` refuses a plan that is not `plan_shards` of the archive's profile.
 `advance` fills the archive's four later phase sections in order, timing each, and decodes any it
 already holds, so an imported archive resumes; a stopped streaming run starts again. No column is
-stored: a phase rebuilds them from the archive. The sections, in [proof.md](proof.md) §9's
+stored: a phase rebuilds them from the archive, and recommits a shard's groups to open them. The
+sections, in [proof.md](proof.md) §9's
 encodings, each refusing a byte too many or too few:
 
 | section | content |
 | --- | --- |
-| `PostCommit` | the statement's `PublicInputs` bytes, without roots; the global transcript after G9 as its `postcard` snapshot ([transcript.md](transcript.md) §3); the four memory challenges; the digest |
-| `PostGkr` | per shard, in statement order: family `u32`, index `u32`, `ts_start` and `ts_end` `u64`, the outputs, the GKR proof, the base claims' point, the shard transcript's snapshot after the GKR proof |
-| `PostOpening` | each shard's `ShardProof` bytes: the section an opening is meant to fill, and with none (**UNFINISHED**, [proof.md](proof.md) §3) a proof is its GKR pass alone |
+| `PostCommit` | the statement's `PublicInputs` bytes, its memory commitments in and its roots not; the global transcript after G9 as its `postcard` snapshot ([transcript.md](transcript.md) §3); the four memory challenges; the digest |
+| `PostGkr` | per shard, in statement order: family `u32`, index `u32`, `ts_start` and `ts_end` `u64`, the witness commitment, the outputs, the GKR proof, the base claims' point, the shard transcript's snapshot after the GKR proof |
+| `PostOpening` | each shard's `ShardProof` bytes, its opening in them |
 | `Final` | the complete `PublicInputs` bytes, then the proofs |

@@ -1,0 +1,15 @@
+[package]
+name = "pcs-verify"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The verifier half of the Akita polynomial commitment scheme, `#![no_std]` +
+# alloc: parameters, the public setup, ring arithmetic, proof types and the
+# opening verifier. `crates/pcs` is the std + rayon prover half and re-exports
+# everything public here. `docs/spec/pcs.md` specifies it.
+[dependencies]
+constants.workspace = true
+field.workspace = true
+poly.workspace = true
+transcript.workspace = true

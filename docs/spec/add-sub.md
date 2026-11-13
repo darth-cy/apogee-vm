@@ -111,8 +111,8 @@ gated by those bits alone, `m_pc` times a bit being degree 3. That is harmless: 
 the row's other three masks and every lookup is off, so it adds no memory tuple. On a live row,
 `wrap` outside the four sums and `sel` on a `fence` row are free, and nothing reads them.
 
-All of this holds of the column values a proof claims; with no commitment scheme nothing ties
-those to the execution (**UNFINISHED**, [proof.md](proof.md) §3).
+All of this holds of the column values a proof claims, which the shard's opening ties to its
+commitments ([proof.md](proof.md) §3, §5).
 
 ## 5. Limits
 

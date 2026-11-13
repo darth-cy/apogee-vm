@@ -1,5 +1,6 @@
 //! The byte layouts of `docs/spec/proof.md` §9: little-endian integers,
-//! canonical `Fp`s and `Fp2`s, `u32`-length-prefixed byte strings and lists.
+//! canonical `Fp`s and `Fp2`s, `u32`-length-prefixed byte strings and lists,
+//! and a presence byte before an optional field.
 //!
 //! Public because the prover's phase snapshots (`docs/spec/streaming.md`
 //! §6) are written in the same primitives, and one set of them is enough.
@@ -145,6 +146,21 @@ impl<'a> Reader<'a> {
         (0..n).map(|_| self.fp2()).collect()
     }
 
+    /// A list of base elements.
+    pub fn fps(&mut self) -> Read<Vec<Fp>> {
+        let n = self.count(8)?;
+        (0..n).map(|_| self.fp()).collect()
+    }
+
+    /// An optional field's presence byte: 0 or 1, and nothing else.
+    pub fn flag(&mut self) -> Read<bool> {
+        match self.u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err("a presence byte is not 0 or 1"),
+        }
+    }
+
     /// Refuse bytes after the value.
     pub fn finish(&self) -> Read<()> {
         match self.left() {
@@ -167,5 +183,16 @@ impl Writer {
         for x in xs {
             self.fp2(*x);
         }
+    }
+
+    pub fn fps(&mut self, xs: &[Fp]) {
+        self.count(xs.len());
+        for x in xs {
+            self.fp(*x);
+        }
+    }
+
+    pub fn flag(&mut self, present: bool) {
+        self.u8(present as u8);
     }
 }

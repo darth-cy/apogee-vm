@@ -436,6 +436,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "pcs"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "field",
+ "pcs-verify",
+ "poly",
+ "rayon",
+ "test-support",
+ "transcript",
+]
+
+[[package]]
+name = "pcs-verify"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "field",
+ "poly",
+ "transcript",
+]
+
+[[package]]
 name = "poly"
 version = "0.1.0"
 dependencies = [
@@ -495,6 +518,7 @@ dependencies = [
  "field",
  "isa",
  "loader",
+ "pcs",
  "poly",
  "test-support",
  "transcript",
@@ -512,6 +536,7 @@ dependencies = [
  "field",
  "gkr",
  "loader",
+ "pcs",
  "poly",
  "postcard",
  "program",
@@ -742,6 +767,7 @@ dependencies = [
  "constraints",
  "field",
  "gkr-verify",
+ "pcs-verify",
  "poly",
  "transcript",
 ]

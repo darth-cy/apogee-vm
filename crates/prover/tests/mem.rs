@@ -39,15 +39,26 @@ fn proved() -> (ProverSetup, TraceArchive, PublicInputs, Vec<ShardProof>) {
 }
 
 /// The byte length a proof of `artifact` has: `docs/spec/proof.md` §9's
-/// layout, every count read off the circuit.
-fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
+/// layout, every count read off the circuit and its opening schedule, but the
+/// opening's, whose Rice-coded response is as long as it codes.
+fn proof_bytes(a: &constraints::CircuitArtifact, p: &ShardProof) -> usize {
     let transitions: usize = (0..a.depth())
         .map(|k| {
             let claims = a.layer_width(k) as usize * if a.layers[k].halving { 2 } else { 1 };
             4 + 64 * a.layer_vars(k + 1) as usize + 4 + 16 * claims
         })
         .sum();
-    4 + 4 + 16 + 16 + (4 + 16 * a.outputs.len()) + 4 + transitions
+    let (slices, len) = verifier_core::opening_schedule(a).commitment_shape(a.witness.len());
+    let mut opening = verifier_core::wire::Writer::new();
+    verifier_core::write_opening(&mut opening, &p.opening);
+    4 + 4
+        + 16
+        + 16
+        + (4 + slices * (4 + 8 * len))
+        + (4 + 16 * a.outputs.len())
+        + 4
+        + transitions
+        + opening.bytes.len()
 }
 
 /// The guest decodes into the five execution families it runs — add/sub and
@@ -137,27 +148,17 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             assert_eq!(layer.final_evals.len(), claims);
         }
         assert_eq!(proof.outputs.len(), 2 + 2 * circuit.channels.len());
-        assert_eq!(proof.to_bytes().len(), proof_bytes(a));
+        assert_eq!(proof.to_bytes().len(), proof_bytes(a, proof));
     }
 
     let by_family = |f: u32| proofs.iter().find(|p| p.family == f).expect("a shard");
 
-    // Each shard reduces to one claim per committed column, in layout order:
-    // memory, witness, setup.
-    //
-    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. Those claims
-    // are meant to be opened against the statement's memory commitments, the
-    // shard's witness commitments and the key's setup and generic-table
-    // commitments. Nothing is opened, so these lengths are all that can be
-    // held (`docs/architecture.md` §0).
+    // Each shard reduces to one claim per committed column, in layout order —
+    // memory, witness, setup — and the claims open against the statement's,
+    // the proof's and the key's commitments.
     for proof in [by_family(MW), by_family(MS), by_family(AT)] {
-        let claim = match reduce_shard(&setup.vk, proof, &public) {
-            Ok(claim) => claim,
-            Err(e) => panic!("the honest shard reduces: {e}"),
-        };
-        let a = &setup.vk.circuit(proof.family).expect("a circuit").artifact;
-        assert_eq!(claim.columns, a.committed());
-        assert_eq!(claim.values.len(), claim.columns.len());
-        assert_eq!(claim.point.len(), 20);
+        if let Err(e) = reduce_shard(&setup.vk, proof, &public) {
+            panic!("the honest shard verifies: {e}");
+        }
     }
 }

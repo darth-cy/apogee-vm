@@ -2,8 +2,7 @@
 
 The layered-circuit model every family circuit is written in, the artifact that carries one, its
 laws, and the backward pass reducing a circuit's outputs to claims on its committed columns at one
-point, which a shard's opening is meant to discharge ([proof.md](proof.md) §5) — **UNFINISHED**:
-there is no opening, and the claims are dropped unchecked ([proof.md](proof.md) §3).
+point, which a shard's opening discharges ([proof.md](proof.md) §5).
 
 `crates/constraints` is §1–§4; `crates/gkr-verify` is §5's verifier half and the verifier's
 helpers for the memory argument ([memory.md](memory.md) §3, §4) and LogUp
@@ -217,8 +216,7 @@ proofs do not depend on the thread count.
 ### 5.1 What the caller owes
 
 - The base is bound into the transcript before `prove` or `verify`, which absorb none of it
-  ([proof.md](proof.md) §4 is where a shard's commitments are meant to be bound; **UNFINISHED**,
-  none is, [proof.md](proof.md) §3).
+  ([proof.md](proof.md) §3, §4 bind a shard's commitments).
 - Each challenge is drawn after every committed column its gates reach is bound, or is
   **derived**: a fixed function of such challenges and of statement data bound before them,
   computed by the verifier. That suffices for GKR; the memory argument needs more

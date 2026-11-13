@@ -148,8 +148,10 @@ fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
         shard_index: _,
         ts_window: _,
         global_digest: _,
+        witness_commitment: _,
         outputs: _,
         gkr: _,
+        opening: _,
     } = block.shard_proofs()[0].clone();
     let BlockProof {
         config: _,
@@ -183,6 +185,7 @@ fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
                 "MEMORY_WINDOWS",
                 "PROGRAM_IDENTITY",
                 "PUBLIC_INPUTS",
+                "MEMORY_COMMITMENT",
                 "MEMORY_BOUNDARY",
                 "MEMORY_CHALLENGE",
                 "GLOBAL_STATE_DIGEST",

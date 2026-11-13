@@ -75,15 +75,9 @@ fn the_slot_constants_are_the_frames() {
 
 const CONSTRAINT: VerifyError = VerifyError::Constraint { layer: 0 };
 const MEMORY: VerifyError = VerifyError::MemoryArgument("");
-
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A twin only
-/// an opening of the committed columns can refuse: no gate, no channel and no
-/// memory argument sees it. There is no opening and so no class to refuse it
-/// with — **the twin verifies today** — and its test stops here until a
-/// commitment scheme fills the void (`docs/architecture.md` §0).
-fn unfinished_refusal(_h: &TamperHarness, _twin: &Tamper, _shard: (u32, u32)) -> ! {
-    todo!("UNFINISHED: no commitment scheme, so no opening refuses this twin (docs/architecture.md §0)")
-}
+/// A twin only an opening of the committed columns refuses: no gate, no
+/// channel and no memory argument sees it.
+const OPENING: VerifyError = VerifyError::Opening("");
 
 fn lookup(channel: u32) -> VerifyError {
     VerifyError::Lookup { channel }
@@ -368,7 +362,7 @@ fn a_pc_read_less_than_a_cycle_before_its_write_is_refused() {
 ///   `Constraint`.
 ///
 /// The image column's twin is
-/// `UNFINISHED_the_image_column_moved_with_its_teardown_is_refused`.
+/// `the_image_column_moved_with_its_teardown_is_refused`.
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn the_targets_s14_left_to_s16_are_refused() {
@@ -440,17 +434,12 @@ fn the_targets_s14_left_to_s16_are_refused() {
     );
 }
 
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The image
-/// column and the teardown of one untouched word, moved together, so the
-/// multiset still balances: meant to be refused by the opening of `S[0]`
-/// against the identity's commitment of the image column
-/// (`docs/spec/memory.md` §6.2). Nothing commits it, so the twin verifies
-/// today (`docs/architecture.md` §0).
+/// The image column and the teardown of one untouched word, moved together,
+/// so the multiset still balances: refused by the opening of `S[0]` against
+/// the key's commitment of the image column (`docs/spec/memory.md` §6.2).
 #[test]
-#[ignore = "UNFINISHED: only an opening refuses this twin, and there is no commitment scheme \
-            (docs/architecture.md §0)"]
-#[allow(non_snake_case)]
-fn UNFINISHED_the_image_column_moved_with_its_teardown_is_refused() {
+#[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
+fn the_image_column_moved_with_its_teardown_is_refused() {
     let setup = common::setup();
     let archive = common::archive(&setup.program);
     let h = TamperHarness::new(&setup, &archive);
@@ -461,7 +450,7 @@ fn UNFINISHED_the_image_column_moved_with_its_teardown_is_refused() {
         cell(INIT, PolyAddress::Setup(0), row, word + Fp::ONE),
         cell(INIT, PolyAddress::Memory(1), row, word + Fp::ONE),
     ]);
-    unfinished_refusal(&h, &twin, (INIT, 0));
+    h.assert_rejects(&twin, (INIT, 0), OPENING);
 }
 
 /// A field element's canonical integer, which the tests only read where it is
@@ -525,7 +514,7 @@ fn jbs_cell(address: PolyAddress, row: usize, value: Fp) -> Cell {
 /// - one generic-channel count moved, `Lookup { GENERIC }`.
 ///
 /// And two cells nothing reads, on a padding row, still verify. The poisoned
-/// packed-table twin is `UNFINISHED_a_poisoned_generic_table_row_is_refused`.
+/// packed-table twin is `a_poisoned_generic_table_row_is_refused`.
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 5.4 GB"]
 fn s17_a7_the_comparison_and_the_pc_are_pinned() {
@@ -646,16 +635,12 @@ fn jalr_moved(r: usize, v: u64, next: u64) -> Vec<Cell> {
     ]
 }
 
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** A
-/// packed-table cell no row looks up, poisoned — `37 AND 45` answering 0 —
-/// which no gate and no channel sees: meant to be refused by the opening of
-/// the table's columns against the key's commitments. Nothing commits the
-/// table, so the twin verifies today (`docs/architecture.md` §0).
+/// A packed-table cell no row looks up, poisoned — `37 AND 45` answering 0 —
+/// which no gate and no channel sees: refused by the opening of the table's
+/// columns against the key's setup commitment.
 #[test]
-#[ignore = "UNFINISHED: only an opening refuses this twin, and there is no commitment scheme \
-            (docs/architecture.md §0)"]
-#[allow(non_snake_case)]
-fn UNFINISHED_a_poisoned_generic_table_row_is_refused() {
+#[ignore = "2^20 rows: one statement's proof peaks at 5.4 GB"]
+fn a_poisoned_generic_table_row_is_refused() {
     let setup = common::control_setup();
     let archive = common::control_archive(&setup.program);
     let h = TamperHarness::new(&setup, &archive);
@@ -664,5 +649,5 @@ fn UNFINISHED_a_poisoned_generic_table_row_is_refused() {
     assert_eq!(h.cell(JBS, 0, jbs::GENERIC_TABLE[2], and_row), f(37 & 45));
     assert_eq!(h.cell(JBS, 0, jbs::MULTIPLICITIES[2], and_row), Fp::ZERO);
     let twin = tamper(vec![jbs_cell(jbs::GENERIC_TABLE[2], and_row, Fp::ZERO)]);
-    unfinished_refusal(&h, &twin, (JBS, 0));
+    h.assert_rejects(&twin, (JBS, 0), OPENING);
 }

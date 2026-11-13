@@ -11,6 +11,8 @@ field.workspace = true
 isa.workspace = true
 # `ProgramImage` is the input; `load_elf` is never called here.
 loader.workspace = true
+# Akita: the setup columns are committed here, and identity digests them.
+pcs.workspace = true
 poly.workspace = true
 # `VmConfig`, `ProgramIdentity`, the statement descriptor, the window rules and
 # the identity digest, which live there so the no_std verifier binds a

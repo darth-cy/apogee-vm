@@ -1,12 +1,8 @@
 //! A synthetic statement for the core's own suites: a key whose circuits are
 //! the protocol's and whose identity is consistent, and a statement shaped to
 //! it. Nothing here is proved: the suites that use it test what the core
-//! decides before and around a proof.
-//!
-//! **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The key
-//! carries no setup or generic-table commitment, the statement no memory
-//! commitment and the shard no witness commitment or opening: there is none
-//! to carry (`docs/architecture.md` §0).
+//! decides before and around a proof. Every commitment is of its columns'
+//! shape and commits nothing — all lanes zero — and no shard opens.
 
 #![allow(dead_code)]
 
@@ -15,8 +11,8 @@ use constraints::family_circuit;
 use field::{Fp, Fp2};
 use gkr_verify::{BoundaryFinals, GkrProof};
 use verifier_core::{
-    global_commit, identity_digest, PublicInputs, ShardProof, VerifyingKey, VmConfig,
-    TRIVIAL_TS_WINDOW,
+    global_commit, identity_digest, opening_schedule, Commitment, PublicInputs, Setup, ShardProof,
+    VerifyingKey, VmConfig, TRIVIAL_TS_WINDOW,
 };
 
 pub const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
@@ -58,19 +54,36 @@ pub fn config() -> VmConfig {
     }
 }
 
-/// The key over `config`, its circuits the registry's at those heights.
+/// A commitment of group `g` — 0, 1, 2 for `M`, `W`, `S` — of `circuit`'s
+/// columns' shape, every lane zero.
+pub fn zeros(circuit: &constraints::FamilyCircuit, g: usize) -> Commitment {
+    let columns = verifier_core::committed_groups(&circuit.artifact)[g];
+    let (slices, len) = opening_schedule(&circuit.artifact).commitment_shape(columns);
+    Commitment(vec![vec![Fp::ZERO; len]; slices])
+}
+
+/// A memory commitment of `family`'s shape at `2^vars` rows.
+pub fn memory_zeros(family: u32, vars: u32) -> Commitment {
+    zeros(&family_circuit(family, vars).unwrap(), 0)
+}
+
+/// The key over `config`, its circuits the registry's at those heights. Its
+/// setup is empty: no shard here reaches an opening.
 fn key_over(config: VmConfig) -> VerifyingKey {
-    let circuits = config
+    let circuits: Vec<_> = config
         .families
         .iter()
         .map(|(f, h)| family_circuit(*f, h.trailing_zeros()).unwrap())
         .collect();
+    let setup_commitments: Vec<Commitment> = circuits.iter().map(|c| zeros(c, 2)).collect();
     VerifyingKey {
         code_version: family::CODE_VERSION,
         entry_pc: 0x1_0000,
-        identity: identity_digest(family::CODE_VERSION, &config, 0x1_0000),
+        identity: identity_digest(family::CODE_VERSION, &config, 0x1_0000, &setup_commitments),
         config,
+        setup_commitments,
         circuits,
+        pcs: Setup(Vec::new()),
     }
 }
 
@@ -106,6 +119,9 @@ pub fn jbs_statement() -> PublicInputs {
     s.memory_roots
         .push([Fp2::from(Fp::from_u64(5)), Fp2::from(Fp::from_u64(6))]);
     s.memory_roots.extend(roots);
+    let commitments = s.memory_commitments.split_off(2);
+    s.memory_commitments.push(memory_zeros(JBS, 20));
+    s.memory_commitments.extend(commitments);
     s
 }
 
@@ -133,6 +149,12 @@ pub fn statement() -> PublicInputs {
         shard_counts: vec![1, 1, 0, 1, 1, 0],
         windows: vec![],
         boundary: finals(42),
+        memory_commitments: vec![
+            memory_zeros(INIT, 16),
+            memory_zeros(ADD, 20),
+            memory_zeros(PIN, PUB_VARS),
+            memory_zeros(POUT, PUB_VARS),
+        ],
         memory_roots: vec![
             [Fp2::from(Fp::from_u64(1)), Fp2::from(Fp::from_u64(2))],
             [Fp2::from(Fp::from_u64(3)), Fp2::from(Fp::from_u64(4))],
@@ -154,7 +176,9 @@ pub fn shell(vk: &VerifyingKey, public: &PublicInputs) -> ShardProof {
         shard_index: 0,
         ts_window: TRIVIAL_TS_WINDOW,
         global_digest: global_commit(vk, public).digest,
+        witness_commitment: zeros(circuit, 1),
         outputs: vec![Fp2::ZERO; outputs],
         gkr: GkrProof { layers: vec![] },
+        opening: Default::default(),
     }
 }

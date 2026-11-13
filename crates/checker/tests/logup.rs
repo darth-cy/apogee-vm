@@ -276,11 +276,9 @@ fn toy() -> Toy {
     // under one challenge tag. The memory slots are the global argument's and
     // come from a sponge of their own, as `common::memory_challenges` draws
     // them.
-    //
-    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. Every
-    // committed column's commitment is meant to be absorbed HERE, before `g`
-    // and `β`. None is, so the challenges bind no column
-    // (`docs/architecture.md` §0).
+    // A shard's proof absorbs its witness commitment first
+    // (`verifier_core::shard_transcript`); the toy commits nothing, so its
+    // challenges bind no column.
     let base = BaseLayer::new(columns);
     let mut t = Transcript::new();
     let mut challenges = common::memory_challenges();
@@ -498,12 +496,11 @@ fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
     // coordinate, and drive the channel's numerator to 0. Nothing in the
     // circuit forbids it.
     //
-    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. What is meant
-    // to forbid it is the order of `docs/spec/lookup.md` §2 — every
-    // multiplicity commitment absorbed before `g` is drawn. There is no
-    // commitment, so **this forgery is accepted today**: the assertions below
-    // pass and they describe a live attack until a commitment scheme fills
-    // the void (`docs/architecture.md` §0).
+    // What forbids it is the order of `docs/spec/lookup.md` §2 — every
+    // multiplicity committed and absorbed before `g` is drawn
+    // (`verifier_core::shard_transcript`). The toy draws `g` over no
+    // commitment, so the forgery is accepted here: the assertions below are
+    // the attack that order closes.
     let g = toy
         .shard
         .challenges

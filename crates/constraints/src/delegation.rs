@@ -5,8 +5,12 @@
 //! fixed-offset RAM words at `base + 4j`, and the anchor is two leaves in the
 //! family's own address space that pair the invocation with exactly one
 //! request (`constants::delegation`). This module is that paragraph as data —
-//! the memory columns, the leaves and the bounds — so a family's own file,
-//! `keccak.rs` or `sha256.rs`, holds only the function it delegates.
+//! the memory columns, the leaves and the bounds — so a family's own file
+//! holds only the function it delegates.
+//!
+//! **UNFINISHED: no delegation is registered** (`constants::delegation::TYPES`),
+//! so no circuit builds on this frame yet and its helpers are allowed to be
+//! unused until the first delegation family does.
 //!
 //! # The layout every delegation family shares
 //!
@@ -21,6 +25,7 @@
 //! W[2j + c]         frame word j's two timestamp-gap chunks
 //! W[2·words + ..]   base_low, base_low_hi, base_room, base_room_hi
 //! ```
+#![allow(dead_code)]
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -284,8 +289,8 @@ pub(crate) fn leaves(space: u8, words: usize) -> [Vec<(String, GateDef)>; 2] {
 // Range checks through the RANGE16 channel
 // ---------------------------------------------------------------------------
 //
-// Both delegation families sit at `2^16` or above and bound through
-// `RANGE16`, and the helpers below are what they share.
+// A delegation family sits at `2^16` or above and bounds through `RANGE16`,
+// and the helpers below are what such families share.
 
 /// Bits a `RANGE16` chunk holds.
 pub(crate) const CHUNK_BITS: u32 = 16;

@@ -33,15 +33,26 @@ fn proved() -> (ProverSetup, TraceArchive, PublicInputs, Vec<ShardProof>) {
 }
 
 /// The byte length a proof of `artifact` has: `docs/spec/proof.md` §9's
-/// layout, every count read off the circuit.
-fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
+/// layout, every count read off the circuit and its opening schedule, but the
+/// opening's, whose Rice-coded response is as long as it codes.
+fn proof_bytes(a: &constraints::CircuitArtifact, p: &ShardProof) -> usize {
     let transitions: usize = (0..a.depth())
         .map(|k| {
             let claims = a.layer_width(k) as usize * if a.layers[k].halving { 2 } else { 1 };
             4 + 64 * a.layer_vars(k + 1) as usize + 4 + 16 * claims
         })
         .sum();
-    4 + 4 + 16 + 16 + (4 + 16 * a.outputs.len()) + 4 + transitions
+    let (slices, len) = verifier_core::opening_schedule(a).commitment_shape(a.witness.len());
+    let mut opening = verifier_core::wire::Writer::new();
+    verifier_core::write_opening(&mut opening, &p.opening);
+    4 + 4
+        + 16
+        + 16
+        + (4 + slices * (4 + 8 * len))
+        + (4 + 16 * a.outputs.len())
+        + 4
+        + transitions
+        + opening.bytes.len()
 }
 
 /// The guest decodes into the add/sub family, the jump/branch/slt family and
@@ -112,39 +123,66 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             assert_eq!(layer.final_evals.len(), claims);
         }
         assert_eq!(proof.outputs.len(), 2 + 2 * circuit.channels.len());
-        assert_eq!(proof.to_bytes().len(), proof_bytes(a));
+        assert_eq!(proof.to_bytes().len(), proof_bytes(a, proof));
     }
 
-    // Each shard reduces to one claim per committed column, in layout order:
-    // memory, witness, setup.
-    //
-    // ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME. Those claims
-    // are meant to be opened against the statement's memory commitments, the
-    // shard's witness commitments and the key's setup and generic-table
-    // commitments. Nothing is opened, so these lengths are all that can be
-    // held (`docs/architecture.md` §0).
+    // Each shard reduces to one claim per committed column, in layout order —
+    // memory, witness, setup — and the claims open against the statement's,
+    // the proof's and the key's commitments.
     for proof in [&proofs[1], &proofs[2]] {
-        let claim = match reduce_shard(&setup.vk, proof, &public) {
-            Ok(claim) => claim,
-            Err(e) => panic!("the honest shard reduces: {e}"),
-        };
-        let a = &setup.vk.circuit(proof.family).expect("a circuit").artifact;
-        assert_eq!(claim.columns, a.committed());
-        assert_eq!(claim.values.len(), claim.columns.len());
-        assert_eq!(claim.point.len(), 20);
+        if let Err(e) = reduce_shard(&setup.vk, proof, &public) {
+            panic!("the honest shard verifies: {e}");
+        }
     }
 }
 
-/// **ALARM — UNFINISHED — WARNING — TODO: NO COMMITMENT SCHEME.** The generic
-/// table's binding: a key whose generic table is another table's is another
-/// statement, and every honest shard is refused under it. Nothing commits the
-/// table, so no key names one and there is nothing to swap. This is held here,
-/// disabled, as the property a commitment scheme must restore
-/// (`docs/architecture.md` §0).
+/// The generic table's binding: a key whose generic table is another table's
+/// is another statement, and every honest shard is refused under it. The
+/// other key commits jump/branch/slt's setup columns with one packed-table
+/// cell poisoned — `37 AND 45` answering 0 — and its identity digests that.
 #[test]
-#[ignore = "UNFINISHED: the key commits no generic table until a commitment scheme exists \
-            (docs/architecture.md §0)"]
-#[allow(non_snake_case)]
-fn UNFINISHED_a_key_with_another_generic_table_is_another_statement() {
-    todo!("UNFINISHED: no commitment scheme commits the generic table (docs/architecture.md §0)")
+#[ignore = "2^20 rows: one statement's proof peaks at 8.7 GB"]
+fn a_key_with_another_generic_table_is_another_statement() {
+    use poly::{MultilinearPoly, PolyBacking};
+    let (setup, _, public, proofs) = proved();
+    let mut vk = setup.vk.clone();
+    let at = vk
+        .config
+        .families
+        .iter()
+        .position(|(f, _)| *f == JBS)
+        .unwrap();
+    let circuit = &vk.circuits[at];
+    let mut columns = program::setup_columns(&setup.program.image, &setup.program.tables, circuit);
+    // The packed table's last column holds an entry's second value.
+    let value = columns.last().unwrap();
+    let mut poisoned: Vec<u32> = (0..value.len())
+        .map(|i| value.get_base(i).to_u64() as u32)
+        .collect();
+    let and_row = 1 + 37 * 256 + 45;
+    assert_eq!(poisoned[and_row], 37 & 45);
+    poisoned[and_row] = 0;
+    *columns.last_mut().unwrap() = MultilinearPoly::new(PolyBacking::U32(poisoned));
+    let refs: Vec<&MultilinearPoly> = columns.iter().collect();
+    let root = &verifier_core::opening_schedule(&circuit.artifact).levels[0];
+    vk.setup_commitments[at] =
+        pcs::commit(&vk.pcs.0, root, &pcs::Source::Columns(&refs)).commitment;
+    vk.identity = verifier_core::identity_digest(
+        vk.code_version,
+        &vk.config,
+        vk.entry_pc,
+        &vk.setup_commitments,
+    );
+    assert_ne!(vk.identity, setup.vk.identity);
+    for proof in &proofs {
+        assert!(
+            matches!(
+                verify_shard(&vk, proof, &public),
+                Err(verifier::VerifyError::Statement(_))
+            ),
+            "shard ({}, {}) under another generic table",
+            proof.family,
+            proof.shard_index
+        );
+    }
 }

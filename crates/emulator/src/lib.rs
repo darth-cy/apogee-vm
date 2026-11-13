@@ -28,7 +28,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use constants::{delegation, ecall, family, guest_memory, keccak, memory, sha256};
+use constants::{delegation, ecall, guest_memory, memory};
 use isa::{decode, Instr};
 use loader::{ProgramImage, Slot};
 use program::{row_kind, DecodedTables, FamilyId, VmConfig};
@@ -115,9 +115,8 @@ pub enum EmuError {
     /// program calls a delegation its image does not declare, so no trace
     /// can describe it. Only the tracing path raises it.
     DelegationFamilyAbsent { pc: u32, number: u32 },
-    /// A delegation frame its family cannot answer: a `KECCAK_F` round word
-    /// or a `SHA256_COMP` group word out of range, which the circuit has no
-    /// selector for.
+    /// A delegation frame its family cannot answer: a word its circuit has no
+    /// selector for, such as a round number out of range.
     DelegationFrame { pc: u32, detail: &'static str },
 }
 
@@ -963,8 +962,7 @@ impl<'a> Machine<'a> {
     ///
     /// The frame must be word-aligned and wholly in RAM, the circuit's two
     /// frame checks; both are fatal guest errors, as a misaligned load is.
-    /// The one dispatch: a family with no arm here is a
-    /// `constants::delegation::TYPES` row nobody implemented.
+    /// What the call computes is [`frame_function`]'s.
     fn delegate(
         &mut self,
         family: FamilyId,
@@ -985,11 +983,7 @@ impl<'a> Machine<'a> {
             return Err(EmuError::OutOfBounds { pc, addr: base });
         }
         let old: Vec<u32> = (0..words).map(|j| self.word(base + 4 * j as u32)).collect();
-        let new = match family {
-            family::KECCAK_F => keccak_frame(pc, &old)?,
-            family::SHA256_COMP => sha256_frame(pc, &old)?,
-            other => panic!("emulator: delegation family {other} has no implementation"),
-        };
+        let new = frame_function(family)(pc, &old)?;
         Ok((0..words)
             .map(|j| {
                 let addr = base + 4 * j as u32;
@@ -1000,135 +994,20 @@ impl<'a> Machine<'a> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The delegations
-// ---------------------------------------------------------------------------
+/// A delegation's function: from the requesting pc and the frame's words
+/// before the call, the words after it, or why the frame is not a call the
+/// family answers (`EmuError::DelegationFrame`).
+type FrameFn = fn(u32, &[u32]) -> Result<Vec<u32>, EmuError>;
 
-/// One `KECCAK_F` invocation: the round frame word 0 names, applied to the
-/// state in the words after it, written back in place. A round at or above 24
-/// has no selector in the circuit, so it is refused; the round word is written
-/// back unchanged, the guest's own loop advancing it.
-fn keccak_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
-    let round = old[keccak::ROUND_WORD];
-    if round as usize >= keccak::ROUNDS {
-        return Err(EmuError::DelegationFrame {
-            pc,
-            detail: "the round word is not a keccak-f round",
-        });
+/// The function delegation `family` performs. The one dispatch: a family with
+/// no arm here is a `constants::delegation::TYPES` row nobody implemented.
+///
+/// **UNFINISHED: no delegation is registered**, so the refusal is the only arm.
+#[allow(clippy::match_single_binding)]
+fn frame_function(family: FamilyId) -> FrameFn {
+    match family {
+        other => panic!("emulator: delegation family {other} has no implementation"),
     }
-    let state: [u32; keccak::STATE_WORDS] = core::array::from_fn(|j| old[keccak::STATE_WORD + j]);
-    let mut lanes = lanes_of(&state);
-    keccak_round(&mut lanes, round as usize);
-    let mut new = Vec::with_capacity(keccak::FRAME_WORDS);
-    new.push(round);
-    new.extend((0..keccak::STATE_WORDS).map(|j| (lanes[j / 2] >> (32 * (j % 2))) as u32));
-    Ok(new)
-}
-
-/// The 50 state words as 25 lanes: state word `2i` is lane `i`'s low half.
-pub fn lanes_of(words: &[u32; keccak::STATE_WORDS]) -> [u64; keccak::LANES] {
-    core::array::from_fn(|i| words[2 * i] as u64 | (words[2 * i + 1] as u64) << 32)
-}
-
-/// **One round** of keccak-f[1600] over 25 little-endian lanes, lane `x + 5y`
-/// at index `x + 5y`: what one `KECCAK_F` invocation performs, and so the
-/// function the circuit and the fill are held to.
-fn keccak_round(lanes: &mut [u64; keccak::LANES], round: usize) {
-    // theta
-    let mut c = [0u64; 5];
-    for (x, c) in c.iter_mut().enumerate() {
-        *c = lanes[x] ^ lanes[x + 5] ^ lanes[x + 10] ^ lanes[x + 15] ^ lanes[x + 20];
-    }
-    for x in 0..5 {
-        let d = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
-        for y in 0..5 {
-            lanes[x + 5 * y] ^= d;
-        }
-    }
-    // rho and pi
-    let mut b = [0u64; keccak::LANES];
-    for x in 0..5 {
-        for y in 0..5 {
-            b[y + 5 * ((2 * x + 3 * y) % 5)] =
-                lanes[x + 5 * y].rotate_left(keccak::ROTATIONS[y][x]);
-        }
-    }
-    // chi
-    for x in 0..5 {
-        for y in 0..5 {
-            lanes[x + 5 * y] = b[x + 5 * y] ^ (!b[(x + 1) % 5 + 5 * y] & b[(x + 2) % 5 + 5 * y]);
-        }
-    }
-    // iota
-    lanes[0] ^= keccak::ROUND_CONSTANTS[round];
-}
-
-/// One `SHA256_COMP` invocation over its frame, in place: the four rounds of
-/// the group frame word 0 names. A group at or above 16 has no selector in the
-/// circuit, so it is refused; the group word is written back unchanged.
-fn sha256_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
-    let group = old[sha256::GROUP_WORD];
-    if group as usize >= sha256::GROUPS {
-        return Err(EmuError::DelegationFrame {
-            pc,
-            detail: "the group word is not a SHA-256 round group",
-        });
-    }
-    let mut state: [u32; sha256::STATE_WORDS] =
-        core::array::from_fn(|j| old[sha256::STATE_WORD + j]);
-    let mut window: [u32; sha256::BLOCK_WORDS] =
-        core::array::from_fn(|i| old[sha256::WINDOW_WORD + i]);
-    sha256_call(group as usize, &mut state, &mut window);
-    let mut new = Vec::with_capacity(sha256::FRAME_WORDS);
-    new.push(group);
-    new.extend_from_slice(&state);
-    new.extend_from_slice(&window);
-    Ok(new)
-}
-
-/// What one `SHA256_COMP` invocation does: rounds `4·group..4·group + 4` of
-/// FIPS 180-4's compression over the working variables, with the window's
-/// first four words as their schedule words, then the window shifted by four
-/// with the four schedule words it unlocks appended.
-fn sha256_call(
-    group: usize,
-    state: &mut [u32; sha256::STATE_WORDS],
-    window: &mut [u32; sha256::BLOCK_WORDS],
-) {
-    let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = *state;
-    for (k, w) in window.iter().take(sha256::ROUNDS_PER_CALL).enumerate() {
-        let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-        let ch = (e & f) ^ (!e & g);
-        let t1 = h
-            .wrapping_add(s1)
-            .wrapping_add(ch)
-            .wrapping_add(sha256::ROUND_CONSTANTS[sha256::ROUNDS_PER_CALL * group + k])
-            .wrapping_add(*w);
-        let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-        let maj = (a & b) ^ (a & c) ^ (b & c);
-        let t2 = s0.wrapping_add(maj);
-        h = g;
-        g = f;
-        f = e;
-        e = d.wrapping_add(t1);
-        d = c;
-        c = b;
-        b = a;
-        a = t1.wrapping_add(t2);
-    }
-    *state = [a, b, c, d, e, f, g, h];
-    let mut x = [0u32; sha256::BLOCK_WORDS + sha256::ROUNDS_PER_CALL];
-    x[..sha256::BLOCK_WORDS].copy_from_slice(window);
-    for m in 0..sha256::ROUNDS_PER_CALL {
-        let t = sha256::BLOCK_WORDS + m;
-        let s0 = x[t - 15].rotate_right(7) ^ x[t - 15].rotate_right(18) ^ (x[t - 15] >> 3);
-        let s1 = x[t - 2].rotate_right(17) ^ x[t - 2].rotate_right(19) ^ (x[t - 2] >> 10);
-        x[t] = x[t - 16]
-            .wrapping_add(s0)
-            .wrapping_add(x[t - 7])
-            .wrapping_add(s1);
-    }
-    window.copy_from_slice(&x[sha256::ROUNDS_PER_CALL..]);
 }
 
 // ---------------------------------------------------------------------------
