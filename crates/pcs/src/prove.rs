@@ -326,16 +326,20 @@ fn fold(
         .expect("some nonce admits the honest response");
     t.append_scalar(PCS_MESSAGE, Fp::from_u64(nonce as u64));
     let _ = t.challenge(PCS_CHALLENGE);
+    // Ring element `xp`'s digits fill `[δ_f·xp·d_A, δ_f·(xp + 1)·d_A)`.
     let mut z_digits = vec![0i8; lay.z.len];
-    let mut ds = vec![0i32; l.fold_digits];
-    for (xp, zx) in z.iter().enumerate() {
-        for (k, &v) in zx.iter().enumerate() {
-            digits(v as i128, l.log_b, l.fold_digits, &mut ds);
-            for (u, &dv) in ds.iter().enumerate() {
-                z_digits[(l.fold_digits * xp + u) * l.d_a + k] = dv as i8;
+    z_digits
+        .par_chunks_mut(l.fold_digits * l.d_a)
+        .zip(&z)
+        .for_each(|(out, zx)| {
+            let mut ds = vec![0i32; l.fold_digits];
+            for (k, &v) in zx.iter().enumerate() {
+                digits(v as i128, l.log_b, l.fold_digits, &mut ds);
+                for (u, &dv) in ds.iter().enumerate() {
+                    out[u * l.d_a + k] = dv as i8;
+                }
             }
-        }
-    }
+        });
     // 3. The quotients of every ring row (paper (111)).
     let blocks_of = |lam: usize| {
         let (g, b) = locate(lam);
