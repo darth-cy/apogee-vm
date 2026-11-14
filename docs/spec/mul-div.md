@@ -1,190 +1,200 @@
 # The `MUL_DIV` family
 
-The M extension — `mul`, `mulh`, `mulhsu`, `mulhu`, `div`, `divu`, `rem`, `remu` — as one circuit
-beside the memory frame every execution family carries ([memory.md](memory.md) §2). One product
-identity serves the four multiplies and the division; a sign rule and a range-checked gap make the
-division truncated, and one gate pins division by zero. `constraints::mul_div` builds it: 21 `M`,
-54 `W` and 9 `S` columns, 55 enforcing gates, 27 lookups.
+The M extension and its W forms — `mul mulh mulhsu mulhu div divu rem remu mulw divw divuw remw
+remuw` — and every shift — `slli srli srai slliw srliw sraiw sll srl sra sllw srlw sraw` — as one
+circuit beside the memory frame ([memory.md](memory.md) §2). Each row proves one identity
+`q·B + r ≡ Z (mod 2^128)` over 64-bit two's-complement words in 16-bit limbs: a multiply is `q = A`,
+`r = 0` and `Z` the product; a division is `Z = A` with `q`, `r` its quotient and remainder, a sign
+rule and a range-checked bound making them the ISA's. A left shift multiplies, a right shift
+floor-divides, by a looked-up `2^s`. `constraints::mul_div::artifact` builds it on
+`crates/constraints/src/family.rs`'s builder; its shape is [circuits.md](circuits.md) §1's.
 
 ## 1. What the circuit reads from the decoded table
 
-Every M instruction is R-type, so the decoded tuple has no `imm`: `pc next_pc rs1 rs2 rd
-extra_mask`, six columns ([program.md](program.md) §5). `extra_mask` is one-hot over
-`constants::extra_mask::mul_div`, bits 0–7 in the order above; the legal masks are its eight single
-bits (`mul_div::LEGAL_MASKS`), which the table's domain enforces ([lookup.md](lookup.md) §10). The
-circuit commits the bits `b_k` and reads every signal as a linear form over them:
+The tuple is `pc next_pc rs1 rs2 rd imm extra_mask` ([program.md](program.md) §5): `imm` is a shift
+immediate's amount and 0 elsewhere, `next_pc` the fall-through. The 25 kind bits are in
+`constants::extra_mask::mul_div` order, the list above. The circuit reads them through sums over
+these lists (`mul_div.rs`):
 
-| signal | form |
+| list | kinds |
 | --- | --- |
-| reads `rs1` signed | `b_mul + b_mulh + b_mulhsu + b_div + b_rem` |
-| reads `rs2` signed | `b_mul + b_mulh + b_div + b_rem` |
-| a multiply, `Σ_mul` | `b_mul + b_mulh + b_mulhsu + b_mulhu` |
-| a division, `f_div` | `b_div + b_divu + b_rem + b_remu`, a column: the is-zero gadgets' `enable` |
-
-`mul` is read signed × signed: its low word is the same either way, which lets one product
-identity serve all four multiplies. `mulhsu`'s asymmetry is the two lists, not a case split.
+| `DIVIDE` (`f_div`) | the eight divisions and remainders, and every right shift |
+| `WORD` | the eleven W forms, which write their low word sign-extended |
+| `SHIFT_64`, `SHIFT_W` (`f_shift`) | the 64-bit and the 32-bit shifts |
+| `SIGNED_A_64`, `SIGNED_A_W` | `A` read signed: `mulh mulhsu div rem srai sra`; `divw remw sraiw sraw` |
+| `SIGNED_B_64`, `SIGNED_B_W` | `B` read signed: `mulh div rem`; `divw remw` |
+| `RS2_64` | `B` is all of `rs2`: the eight 64-bit M kinds |
+| `TRUNCATED` | a nonzero remainder takes the dividend's sign: `div rem divw remw` |
+| `UNSIGNED_Q` | the quotient is not negative: `divu remu divuw remuw srli srl srliw srlw` |
+| `FROM_Z0`, `FROM_Z2`, `FROM_Q`, `FROM_R` | `rd` is `Z`'s low or high half, `q` or `r` |
 
 ## 2. Columns
 
-The frame is `pc rs1 rs2 rd`, `M[0..21]` and `W[0..7]` ([memory.md](memory.md) §2.1); below,
-`m_q`, `a_q` and `v_q` are query `q`'s mask, address and read value, and `rs1`, `rs2` the operands'
-read values. The family adds:
+The frame's `pc rs1 rs2 rd`: `v1`, `v2`, `vh1`, `vh2` are the operands' low and high words, `sel`,
+`sel_hi` the frame's `rd_selected`, `rd_selected_hi`. The family adds the builder's decoded row and
+kind bits, and, each `word` a high halfword `<name>_h16` beside it and each signed word also a sign:
 
 ```text
-W[7..12]   decoded_next_pc decoded_rs1 decoded_rs2 decoded_rd decoded_mask    (no imm)
-W[12..20]  kind_mul … kind_remu
-W[20]      f_div
-W[21..27]  rs1_hi rs1_top rs2_hi rs2_top s1 s2          high halfwords, bit 31, §3
-W[27..34]  mx my p_low p_low_hi p_high p_high_hi p_sign  the product
-W[34..40]  q q_hi q_sign r r_hi r_sign                   quotient and remainder
-W[40..45]  r_inv rz d1 d_inv dz                          is_zero(r), f_div·s1, is_zero(rs2)
-W[45..50]  abs_r abs_d gap gap_hi rd_hi
-W[50..54]  mult_timestamp mult_range16 mult_generic mult_decoder
-S[0..6]    the decoded table, bound by identity
-S[6..9]    the packed generic table (lookup.md §9)
-V          range19 range16
+f_div f_shift                       the two list sums, committed bits
+rs1_lo rs1_hi (signed words)        rs1's words' halfwords and bit 31s: s1l, s1h
+a_hi a_sign                         A's high word and sign
+amount_high (word) amount_w amount  rs2 + imm = 64·amount_high + 32·amount_w + amount
+pow_lo pow_hi                       2^amount as two words, looked up
+b_lo b_hi (signed words) b_sign     B's words, their bit 31s, and B's sign
+q_lo q_hi (words) q_sign            q
+r_lo r_hi (words) r_sign            r
+z0 z1 z2 z3 (words)                 Z
+carry0 … carry3                     the chunk carries
+r_inv r_is_zero                     is_zero(r), enabled by f_div
+dividend_signed                     TRUNCATED·a_sign
+b_inv b_is_zero                     is_zero(B), enabled by f_div
+bound_lo bound_hi (words)           the bound G (§3.3)
+bound_carry                         its carry
+rd_lo_h16 rd_sign                   rd's low word's high halfword, and its bit 31
 ```
 
-The fill keeps `mx`, `my` (signed) and `r_inv`, `d_inv` (inverses) in `Fp`, every other column in
-`u32`.
+## 3. Gates
 
-## 3. The sign adjustments
+The frame's, the builder's (`decoded_mask_bits`, booleanity, each query's mask, address and
+value-mask rules: `rs2` is absent on a shift immediate), and the family's, by group. `T = 2^32`,
+`ones = T − 1`; `any(L)` is the list's bit sum.
+
+### 3.1 The operands
 
 ```text
-rs1_adj = rs1 − 2^32·s1      s1 = (b_mul + b_mulh + b_mulhsu + b_div + b_rem)·rs1_top
-rs2_adj = rs2 − 2^32·s2      s2 = (b_mul + b_mulh + b_div + b_rem)·rs2_top
-q_adj   = q − 2^32·q_sign    r_adj = r − 2^32·r_sign
+next_pc_rule     next_pc − seq
+f_div_rule       f_div − any(DIVIDE)                f_shift_rule   f_shift − any(SHIFT_64 + SHIFT_W)
+a_hi_rule        a_hi − any(¬WORD)·vh1 − any(SIGNED_A_W)·s1l·ones
+a_sign_rule      a_sign − any(SIGNED_A_64)·s1h − any(SIGNED_A_W)·s1l
+amount_split     v2 + imm − 64·amount_high − 32·amount_w − amount
+amount_w_rule    any(SHIFT_64)·amount_w
+b_lo_rule        b_lo − (1 − f_shift)·v2 − f_shift·pow_lo
+b_hi_rule        b_hi − any(RS2_64)·vh2 − any(SIGNED_B_W)·s(b_lo)·ones − f_shift·pow_hi
+b_sign_rule      b_sign − any(SIGNED_B_64)·s(b_hi) − any(SIGNED_B_W)·s(b_lo)
 ```
 
-`rs1_top` is the `U16GetSign` lookup of `rs1_hi`, which `rs1`'s 16+16 pair makes its true high
-halfword, so the key lies in that sub-table's range and the answer is bit 31
-([lookup.md](lookup.md) §4); `rs2_top` likewise. An unsigned position forces its adjustment to 0
-whatever the top bit, which keeps the selection degree 2. `q_sign` and `r_sign` are not sign
-lookups (§5.3), and `q_sign` is 0 on an unsigned division (§5.1). `f_div`, `rs1_top`, `rs2_top`,
-`s1`, `s2`, `p_sign`, `q_sign` and `r_sign` carry booleanity gates; `rz` and `dz` are boolean by
-the is-zero gadget ([jump-branch-slt.md](jump-branch-slt.md) §3), `d1` as a product of booleans.
+`A` is `rs1`'s low word with `a_hi`, `B` is `b_lo` with `b_hi`; a W form's operands are their low
+words extended by sign or zero. `pow` is `GENERIC`'s `(POW or POW_W, amount, pow_lo, pow_hi)` under
+`f_shift`, its tag `2·any(SHIFT_64) + 3·any(SHIFT_W)` ([lookup.md](lookup.md) §9).
 
-## 4. Gates
-
-The frame's ten enforcing gates ([memory.md](memory.md) §2.4) and the family's 45, all in gate
-list 0, each formula `= 0`. The plumbing:
+### 3.2 The core
 
 ```text
-kind_<k>_boolean          b_k − b_k²                       eight
-decoded_mask_bits         Σ_k 2^k·b_k − decoded_mask
-<q>_mask_rule             m_q − m_pc·Σ_k b_k               rs1, rs2, rd: every kind uses all three
-<q>_addr_rule             m_q·(a_q − decoded_q)            rs1, rs2, rd
-<q>_value_masked          v_q − m_q·v_q                    rs1, rs2
-next_pc_rule              next_pc − decoded_next_pc        the fall-through (memory.md §5)
+q_lo_is_a q_hi_is_a q_sign_is_a   (live − f_div)·(q − A), word by word and the sign
+r_zero_on_multiply                (live − f_div)·(r_lo + r_hi)
+q_sign_unsigned                   any(UNSIGNED_Q)·q_sign
+chunk0   s0 + 2^16·s1 + r_lo − Z0 − T·carry0
+chunk1   s2 + 2^16·s3 + r_hi + carry0 − Z1 − T·carry1
+chunk2   s4 + 2^16·s5 + ones·r_sign − q_sign·b_lo − b_sign·q_lo + carry1 − Z2 − T·carry2
+chunk3   s6 + ones·r_sign − q_sign·b_hi − b_sign·q_hi + carry2 − Z3 − T·carry3
 ```
 
-The arithmetic, `mul_div::arithmetic_gates(32)`, written with §3's abbreviations:
+`s_m = Σ_{i+j=m} q_i·b_j` over the 16-bit limbs `q_0..q_3` and `b_0..b_3`, each limb a word's low
+halfword `w − 2^16·w_h16` or its `_h16`. `Zj` is `zj` on a multiply row and `A` sign-extended to 128
+bits on a division row (`v1`, `a_hi`, then `a_sign·ones` twice): the gate reads `zj − f_div·zj +
+f_div·Aj`. `carry0`, `carry1` are 19-bit and `carry2 + 3`, `carry3 + 3` 19-bit on `TIMESTAMP`'s
+table, which admits the corrections' negative carries.
+
+### 3.3 The division
 
 ```text
-f_div_rule, s1_rule, s2_rule   §1's and §3's forms, and eight booleanity gates (§3)
-q_sign_unsigned        q_sign·(b_divu + b_remu)       an unsigned quotient is not negative, §5.1
-mx_rule                mx − Σ_mul b·rs1_adj − f_div·rs2_adj
-my_rule                my − Σ_mul b·rs2_adj − f_div·q_adj
-product_rule           mx·my − p_low − 2^32·p_high + 2^64·p_sign
-division_rule          f_div·(p_low + 2^32·p_high − 2^64·p_sign + r_adj − rs1_adj)
-rz_inverse             r·r_inv + rz − f_div          rz_at_nonzero   rz·r
-dz_inverse             rs2·d_inv + dz − f_div        dz_at_nonzero   dz·rs2
-d1_rule                d1 − f_div·s1
-r_sign_rule            r_sign − d1 + d1·rz           so r_sign = f_div·s1·(1 − [r = 0])
-abs_r_rule             abs_r − r − 2^32·r_sign + 2·r·r_sign       abs_r = |r_adj|
-abs_d_rule             abs_d − rs2 − 2^32·s2 + 2·rs2·s2           abs_d = |rs2_adj|
-gap_rule               gap − f_div·(abs_d − abs_r − 1) − 2^32·dz
-zero_divisor_quotient  dz·(q − (2^32 − 1))
-rd_value_rule          rd_selected − b_mul·p_low − (b_mulh + b_mulhsu + b_mulhu)·p_high
-                         − (b_div + b_divu)·q − (b_rem + b_remu)·r
+r_is_zero_inverse r_is_zero_at_nonzero    is_zero(r_lo + r_hi, r_inv, r_is_zero, f_div)
+dividend_signed_rule   dividend_signed − any(TRUNCATED)·a_sign
+r_sign_rule            r_sign − dividend_signed·(1 − r_is_zero)
+b_is_zero_inverse b_is_zero_at_nonzero    is_zero(b_lo + b_hi, b_inv, b_is_zero, f_div)
+zero_divisor_q_lo      b_is_zero·(q_lo − ones)          zero_divisor_q_hi   b_is_zero·(q_hi − ones)
+bound_lo_rule   b_lo − 2·b_sign·b_lo − r_lo + 2·r_sign·r_lo − f_div − bound_lo − T·bound_carry
+bound_hi_rule   b_hi − 2·b_sign·b_hi − r_hi + 2·r_sign·r_hi + bound_carry
+                  + T·(b_sign − r_sign + b_is_zero) − bound_hi
 ```
 
-The lookups: the frame's eight `TIMESTAMP` gap chunks, each under its query's mask; and under
-`m_pc`, 16+16 `RANGE16` pairs on `rs1`, `rs2`, `p_low`, `p_high`, `q`, `r`, `gap` and `rd_selected`,
-`rs1_get_sign`, `(rs1_hi + SIGN_BASE, rs1_top, 0)` on `GENERIC`, and `rs2_get_sign`, and
-`decode_row` on `DECODER`.
+`bound_carry + 3` is 19-bit. Together the two rules say `|B_s| − |r_s| − f_div + 2^64·b_is_zero =
+G`, `G = bound_lo + T·bound_hi ∈ [0, 2^64)`.
 
-The width is a parameter of `arithmetic_gates` so the encoding can be checked whole:
-`crates/checker/tests/mul_div.rs` evaluates `arithmetic_gates(4)` through `gkr::eval_gate` over
-every `(dividend, divisor)` pair of a 4-bit word and each division kind, and exactly one `(q, r)`
-survives, RV32M's. A reduced width cannot show a total that wraps past `p`, which only the 32-bit
-word reaches, so §5.1's forgery is a full-width row test of its own.
+### 3.4 `rd`
+
+```text
+rd_lo_rule       sel − any(FROM_Z0)·z0 − any(FROM_Z2)·z2 − any(FROM_Q)·q_lo − any(FROM_R)·r_lo
+rd_lo_h16_rule   rd_lo_h16 − the same selection of the halfwords
+rd_hi_rule       sel_hi − z1 (64-bit FROM_Z0) − z3 (FROM_Z2) − q_hi (64-bit FROM_Q)
+                   − r_hi (64-bit FROM_R) − any(WORD)·rd_sign·ones
+```
+
+`rd_get_sign` is `(SIGN, rd_lo_h16, rd_sign)` under `m_pc`.
+
+## 4. Lookups
+
+The frame's `TIMESTAMP` gaps; the carries' 19-bit obligations; every word's and signed word's
+`RANGE16` obligations; `GENERIC`'s sign lookups, `pow` and `rd_get_sign`; and `decode_row`.
 
 ## 5. Why it is sound
 
-On a live row the decoder lookup makes exactly one kind bit 1 ([lookup.md](lookup.md) §10), and
-`rs1`, `rs2` are words whose `_top` is bit 31, so `rs1_adj`, `rs2_adj ∈ [−2^31, 2^32)` are the
-operands as the kind reads them.
+On a live row the decoder makes one kind bit 1 ([lookup.md](lookup.md) §10). Every committed word
+is below `2^32` — a word by its pair, a signed word by its low range and its `SIGN` lookup, which
+also makes its sign its bit 31 — and every limb below `2^16`.
 
-### 5.1 The product
+### 5.1 Every identity is exact over the integers
 
-On a multiply row `mx·my = rs1_adj·rs2_adj`; on a division row it is `rs2_adj·q_adj`, `q`'s pair
-and `q_sign`'s booleanity putting `q_adj` in `[−2^32, 2^32)`. Either way `|mx·my| < 2^64`, and two
-words and a boolean cover `[−2^64, 2^64)` once, so over the integers `product_rule` has one
-solution: `p_low`, `p_high` are the words of the 64-bit two's-complement product, RV32M's for each
-multiply. `product_rule` is ungated and the circuit's only product of two row values, which is what
-lets both readings share it at degree 2.
+`s_m` is a sum of at most four limb products, below `2^34`; `2^16·s_{m+1}` below `2^50`; the carries
+lie in `[−3, 2^19)`, so `T·carry` below `2^51` in magnitude; every other term is a word. Each chunk's
+terms total below `2^52`, the bound rules', `amount_split`'s and the operand rules' below `2^40`,
+all far below `p = 2^64 − 59`, so each gate's field identity is its integer one. Summing the chunks
+with weights `T^j` gives
 
-**UNFINISHED: A64-C5 CHARACTERISTIC.** That interval is about `2p` wide at `p = 2^64 − 59`, so the
-field identity is not the integer one: `p_low + 2^32·p_high − 2^64·p_sign` is pinned only up to a
-multiple of `p`, and a multiply's result can be forged by one. `mul 2, 3` admits `p_low` =
-`0xFFFFFFCB`, `p_high` = `0xFFFFFFFF`, whose integer is `6 + p`. A later stage splits the product
-into limbs.
+```text
+q_s·B_s + r_s = Z_s + 2^128·carry3      q_s = q − 2^64·q_sign,  B_s = B − 2^64·b_sign,
+                                        r_s = r − 2^64·r_sign
+```
 
-The division's identity holds over the integers only while its total stays below `p`, and that
-takes `q_sign_unsigned`. A signed row's `|rs2_adj| ≤ 2^31` keeps `|rs2_adj·q_adj| ≤ 2^63`. An
-unsigned row's `rs2_adj` reaches `2^32 − 1`, so a negative `q_adj` carries the total to `−2^64`:
-without the gate, `divu` and `remu` of `0xFFFFFFFF` by `0xFFFFFFFF` admit `q = 0`, `q_sign = 1`,
-`r = 58`, with `p_low = 0`, `p_high = 1`, `p_sign = 1` and `gap = 0xFFFFFFC4`, writing 0 for 1 and
-58 for 0. Its residual, `(2^32 − 1)·(−2^32) + 58 − (2^32 − 1) = −2^64 + 59`, is `−p`, zero in the
-field. With `q_sign = 0` there, `q_adj = q`, and the total lies in `(−2^32, 2^64 − 2^32]`.
+with `Z_s` the 128-bit two's-complement value of `Z`: the corrections are exactly `−2^64·(q_sign·B
++ b_sign·q)` and `r_s`'s, the `2^128·q_sign·b_sign` term vanishing mod `2^128`. So the row proves
+`q_s·B_s + r_s ≡ Z (mod 2^128)`.
 
-### 5.2 The division
+### 5.2 Multiplies and left shifts
 
-With `rs2_adj ≠ 0`, `division_rule` is `rs2_adj·q_adj + r_adj = rs1_adj` over the integers.
-Truncated division is its one solution with `|r_adj| < |rs2_adj|` and `r_adj` zero or of the
-dividend's sign, and two gates state exactly that:
+On a multiply row `q = A` and `r = 0` (`r_lo + r_hi = 0` with both words non-negative), so `Z` is
+`A_s·B_s mod 2^128` in four words: one solution. `|A_s·B_s| < 2^128` for every pairing of signs, so
+that is the full product: `mul` and `mulw` take `z0` (and `z1`), `mulh`, `mulhsu`, `mulhu` `z2` and
+`z3`. A left shift is the product with `B = 2^s`: `(A << s) mod 2^64` in `z0`, `z1`.
 
-- **The sign.** `r_sign = f_div·s1·(1 − [r = 0])` makes `r_adj` the word `r` on an unsigned row or
-  a non-negative dividend, and `r − 2^32 < 0` on a negative one unless `r = 0`. It is what separates
-  truncated division from floored: without it `DIV(−7, 2)` admits `q = −4, r = 1` as readily as
-  `q = −3, r = −1`. As a definition, through `d1`, it is degree 2.
-- **The magnitude.** `gap = abs_d − abs_r − 1` is range-checked, and neither magnitude reaches
-  `2^32`: `abs_d ≤ 2^31` where `s2 = 1`, `abs_r ≤ 2^32 − 1` where `r_sign = 1`, which needs
-  `r ≠ 0`, and each is a word elsewhere. So the difference lies in `[−2^32, 2^32)`, in range exactly
-  when `|r_adj| < |rs2_adj|`.
-  The comparison gadget would repeat bounds that hold and has no place for the zero divisor's term.
+### 5.3 Divisions and right shifts
 
-So `q_adj` and `r_adj` are RV32M's. On a signed row `q_sign` is pinned only by `q`'s range: one
-value puts `q_adj + 2^32·q_sign` in `[0, 2^32)`. On an unsigned row it is 0.
+On a division row `Z = A_s`. With `B ≠ 0` the operands keep `|q_s·B_s + r_s − A_s| < 2^128` — an
+unsigned quotient is not negative (`q_sign_unsigned`), so its product is below `(2^64 − 1)^2`, and a
+signed or shifted `B` is at most `2^63` in magnitude — so the congruence is `q_s·B_s + r_s = A_s` over
+ℤ. The bound makes `|r_s| < |B_s|`, `G` being a word pair exactly when `|B_s| − |r_s| − 1 ≥ 0`; the
+sign rule makes `r_s` zero or of the dividend's sign on a truncated kind, and non-negative on every
+other. Those are the two conditions that single out the ISA's quotient: truncated division for
+`div`, `rem`, `divw`, `remw`; floor division by a positive `B` for the unsigned kinds and the right
+shifts, which is `srl`'s logical and `sra`'s arithmetic shift, `A` read signed for `sra` alone.
 
-**A zero divisor** makes `dz = 1` and `rs2_adj = 0`: the identity leaves `r_adj = rs1_adj`, so `r`
-is the dividend's word; `zero_divisor_quotient`, the one pin, makes `q` all ones; the `2^32·dz` term
-lifts `gap` to `2^32 − 1 − abs_r`, so the divisor imposes no bound. A signed row's `q_sign` is free
-and harmless: `mx = 0`, and `rd` reads the word `q`.
+**A zero divisor** gives `b_is_zero = 1`: `q` is all ones, the identity leaves `r_s = A_s`, and
+`2^64·b_is_zero` lifts `G` so the bound imposes nothing; `q_sign` is free there and multiplies
+`B = 0`. **The signed overflow** `div(−2^63, −1)` needs no pin: `|r_s| < 1` forces `r = 0` and the
+identity `q_s = 2^63`, which only `q_sign = 0`, `q = 2^63` represent — the ISA's answer, as `divw`'s
+low-word one is. A signed kind's `q_sign` is therefore free, pinned only by the identity; tied to
+`q`'s bit 63 it would make that row unprovable.
 
-**The identity is gated.** On a multiply row `r_sign = 0` and `r` is a word, so an ungated identity
-would demand `rs1_adj − rs1_adj·rs2_adj ∈ [0, 2^32)`, false for nearly every multiply: `7 × 3`, a
-negative `rs1` times `x0`.
+### 5.4 The shift amount and the W forms
 
-### 5.3 The signed overflow, and why a signed `q_sign` is free
+`amount_split` decomposes `rs2`'s low word plus the immediate, below `2^33`: `pow`'s tag bounds
+`amount` below 64 (`POW`) or 32 (`POW_W`), `amount_w_rule` zeroes `amount_w` on a 64-bit shift, and
+`amount_high` is a word, so the decomposition is unique and `amount` is `(rs2 + imm) mod 64`, or mod
+32 for a W shift. A W form's operands are its low words extended as the kind reads them, and
+`rd_hi_rule` writes the low result word's sign extension, `rd_sign` being its bit 31.
 
-`DIV(−2^31, −1)` needs no pin: `|r_adj| < 1` forces `r = 0`, the identity `q_adj = 2^31`, and `q`'s
-range `q_sign = 0`, `q = 0x80000000`, RV32M's answer; `REM` gives 0. This row is why a signed
-division's `q_sign` is a free boolean: tied to bit 31 of `q`, as `s1` and `s2` are to their
-operands', it would force `q_adj = −2^31` and make the row unprovable. An unsigned quotient is
-never negative, and §5.1's gate sets its `q_sign` to 0. `r_sign` likewise follows the dividend's
-sign, not the remainder's word.
+Every gate is zero on the all-zero padding row. `crates/checker/tests/families.rs` holds the fill
+to the circuit over `alu`'s, `opcodes`' and `cpp-primes`' traces, all 25 kinds among them: every
+written word one off is refused by the row alone, every gate and lookup refuses some single-cell
+edit, and `a_remainder_past_its_divisor_is_refused_by_the_bound_alone` forges a quotient one short
+with the remainder grown by the divisor, every chunk identity holding, which the bound's range
+obligations refuse and nothing else does.
 
-`rd_selected`'s pair is implied by its four sources' and kept, every family bounding what it writes
-to `rd` ([memory-ops.md](memory-ops.md) §5). Every gate is zero on the all-zero padding row, which
-`mul_div::artifact` asserts with each channel's obligation count.
+## 6. The fill
 
-### 5.4 The fill
-
-`prover::family_fill(MUL_DIV)` (`crates/prover/src/fill.rs`) computes the witness with Rust's
-integers: the product in `i128`, the division by `wrapping_div` and `wrapping_rem`, which give
-RV32M's overflow answer, with the zero divisor an arm of its own, and `q_sign` from the sign of
-`q_adj`. It writes the computed value to `rd_selected`, which the frame's x0 rule masks, and panics,
-on rows the emulator cannot produce, if the identity does not divide, a product exceeds two words,
-or the trace's `rd` write or `next_pc` is not what the instruction computes.
+`prover::family_fill(MUL_DIV)` (`crates/prover/src/fill.rs`) computes `A`, `B` and the power, then
+`q` and `r` in `i128`: the product for a multiply-like row, Rust's truncating or flooring division
+for a division row, the zero divisor an arm of its own. It writes the limbs' chunk carries exactly,
+asserting each chunk divides, the bound and its carry, and the computed `rd` even where `rd = x0`,
+and panics, on rows the emulator cannot produce, if the trace's `rd` write or `next_pc` is not what
+the instruction computes.

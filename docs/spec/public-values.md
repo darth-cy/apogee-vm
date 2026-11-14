@@ -175,5 +175,5 @@ so a guest that panics has published what it committed, and its run is proved li
   form; a guest writing the window directly must.
 - **Nothing orders the journal's writes, and nothing forces a guest to read its input.** The proof
   binds a window's contents, not its accesses.
-- **Read the exit status first.** It is `x10`'s final value ([memory.md](memory.md) §4): a failed
+- **Read the exit status first.** It is `x10`'s final low word, read as an `i32` ([memory.md](memory.md) §4): a failed
   run, a panic included, has a verifying proof and a journal too (§7).

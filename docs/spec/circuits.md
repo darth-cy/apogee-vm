@@ -14,7 +14,7 @@ A verifying key loads only if its circuits are the registry's at its heights
 
 Families 0–6 (`constants::family`) are the **execution** families, one executed instruction a
 row ([add-sub.md](add-sub.md), [jump-branch-slt.md](jump-branch-slt.md),
-[shift-bitwise.md](shift-bitwise.md), [mul-div.md](mul-div.md), [memory-ops.md](memory-ops.md) §3,
+[bitwise.md](bitwise.md), [mul-div.md](mul-div.md), [memory-ops.md](memory-ops.md) §3,
 §4, §6); 7–11 the **window** families, one memory word a row ([memory.md](memory.md) §3,
 [public-values.md](public-values.md) §4).
 
@@ -25,13 +25,13 @@ lists (the halving ones are `n`), inner columns, artifact bytes, and a shard pro
 
 | id | family | `n` | `M` | `W` | `S` | gates | lookups | row-wise | inner | bytes | proof |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | `ADD_SUB_LUI_AUIPC` | 22 | 21 | 28 | 7 | 38 | 8/4/0/1 | 5 | 300 | 34,075 | 30,600 |
-| 1 | `JUMP_BRANCH_SLT` | 22 | 21 | 44 | 10 | 42 | 8/11/2/1 | 5 | 392 | 45,036 | 33,080 |
-| 2 | `SHIFT_BITWISE` | 22 | 21 | 61 | 10 | 48 | 8/24/6/1 | 6 | 478 | 58,029 | 36,144 |
-| 3 | `MUL_DIV` | 20 | 21 | 54 | 9 | 55 | 8/16/2/1 | 6 | 444 | 52,719 | 31,744 |
-| 4 | `MEM_WORD` | 22 | 31 | 24 | 7 | 33 | 12/5/0/1 | 5 | 314 | 35,279 | 30,920 |
-| 5 | `MEM_SUBWORD` | 22 | 31 | 55 | 10 | 53 | 12/22/1/1 | 6 | 472 | 56,366 | 36,112 |
-| 6 | `ATOMICS` | 20 | 26 | 54 | 9 | 46 | 10/19/6/1 | 6 | 472 | 57,193 | 32,272 |
+| 0 | `ADD_SUB_LUI_AUIPC` | 22 | 27 | 37 | 11 | 54 | 8/5/1/1 | 5 | 356 | 42,652 | 32,504 |
+| 1 | `JUMP_BRANCH_SLT` | 22 | 27 | 51 | 11 | 54 | 8/11/2/1 | 5 | 392 | 47,243 | 33,304 |
+| 2 | `BITWISE` | 22 | 27 | 48 | 11 | 38 | 8/0/8/1 | 5 | 330 | 41,255 | 31,560 |
+| 3 | `MUL_DIV` | 20 | 27 | 98 | 11 | 86 | 13/26/6/1 | 6 | 458 | 68,632 | 32,800 |
+| 4 | `MEM_WORD` | 22 | 37 | 34 | 11 | 47 | 12/6/1/1 | 5 | 370 | 43,046 | 32,840 |
+| 5 | `MEM_SUBWORD` | 22 | 37 | 59 | 11 | 63 | 12/21/1/1 | 6 | 472 | 57,992 | 36,288 |
+| 6 | `ATOMICS` | 20 | 37 | 93 | 10 | 80 | 12/15/12/1 | 5 | 430 | 65,993 | 31,128 |
 | 7 | `INIT_TEARDOWN` | 22 | 2 | 0 | 1 | 0 | — | 1 | 46 | 3,019 | 17,912 |
 | 8 | `ZERO_WINDOWS` | 22 | 2 | 0 | 0 | 0 | — | 1 | 46 | 2,794 | 17,896 |
 | 9 | `PUBLIC_INPUT` | 12 | 3 | 0 | 0 | 0 | — | 1 | 26 | 1,759 | 5,992 |
@@ -45,7 +45,7 @@ The bytes are the GKR pass and outputs; the witness commitment and the opening c
 [lookup.md](lookup.md) §3 derives from the family's channels: 19 with `TIMESTAMP`, else 16 with
 `RANGE16`, else 0. A height changes `trace_vars`, each list's variable count and the number of
 halving lists, one per variable and as wide as the outputs, and no gate below them: at `2^20`
-`ADD_SUB_LUI_AUIPC` has 284 inner columns, 32,985 bytes and a 26,808-byte proof.
+`ADD_SUB_LUI_AUIPC` has 336 inner columns, 41,280 bytes and a 28,584-byte proof.
 
 **Shared circuits.** `PUBLIC_OUTPUT`'s circuit is `ZERO_WINDOWS`' and `ADVICE_WINDOWS`' is
 `PUBLIC_INPUT`'s, byte for byte at one height, all `constraints::memory` constructors

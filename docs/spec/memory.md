@@ -9,15 +9,18 @@ numbers are the ones the code cites.
 ## 1. The tuple
 
 ```text
-T(AS, ADDR, TS, VAL) = γ_M + AS + α_addr·ADDR + α_ts·TS + α_val·VAL
+T(AS, ADDR, TS, VAL, HI) = γ_M + AS + α_addr·ADDR + α_ts·TS + α_val·VAL + α_hi·HI
 ```
 
-The parts are in the order of `constants::memory::{PART_AS, PART_ADDR, PART_TS, PART_VAL}`.
-`AS`, an address-space tag ([execution-trace.md](execution-trace.md) §2), is unweighted; a RAM
-address is a 4-aligned word's byte address. `γ_M, α_addr, α_ts, α_val` are
-`constants::challenge_slot` slots 1–4, `MEM_GAMMA` to `MEM_ALPHA_VAL`, drawn once per statement
-after everything §6.1 lists; slot 5, `MEM_WINDOW_CONSTANT`, is derived per window shard by the
-verifier and never read from a proof (§3.3). A gate coefficient is one literal or one slot
+The parts are in the order of
+`constants::memory::{PART_AS, PART_ADDR, PART_TS, PART_VAL, PART_VAL_HI}`. `AS`, an address-space
+tag ([execution-trace.md](execution-trace.md) §2), is unweighted; a RAM address is a 4-aligned
+word's byte address. A register holds 64 bits as two words, `VAL` the low and `HI` the high; a RAM
+word and the pc have no `HI`, which is 0 in their tuples. `γ_M, α_addr, α_ts, α_val` are
+`constants::challenge_slot` slots 1–4, `MEM_GAMMA` to `MEM_ALPHA_VAL`, and `α_hi` slot 14,
+`MEM_ALPHA_HI`, all drawn once per statement after everything §6.1 lists; slot 5,
+`MEM_WINDOW_CONSTANT`, is derived per window shard by the verifier and never read from a proof
+(§3.3). A gate coefficient is one literal or one slot
 ([gkr.md](gkr.md) §3), so `α_ts·4·cycle` is the term `(α_ts, cycle)` four times.
 
 Every memory artifact outputs its read product at `outputs[READ_ROOT = 0]` and its write product
@@ -40,33 +43,33 @@ query table is `constraints::memory::{FRAME_NAMES, FRAME_SPACE, FRAME_DELTA}`:
 | 0 | `pc` | `PC` | 0 | address 0; reads `pc`, writes `next_pc` |
 | 1 | `rs1` | `REG` | 1 | read-only; an ecall's `a7` |
 | 2 | `rs2` | `REG` | 2 | read-only; an ecall's `a0` |
-| 3 | `load` | `RAM` | 2 | read-only; a load's word |
-| 4 | `ram` | `RAM` | 3 | a store's or an atomic's word |
+| 3 | `load` | `RAM` | 2 | a load's word; a word or doubleword store's low word; a `.d` atomic's high word |
+| 4 | `ram` | `RAM` | 3 | a sub-word store's word; a doubleword's high word; an atomic's word |
 | 5 | `rd` | `REG` | 3 | the x0 rule (§2.4) |
 
 A family's **frame** is exactly the queries its instructions make
 ([execution-trace.md](execution-trace.md) §4), in table order: `constraints::memory::frame_queries`,
-which `crates/trace/tests/memory.rs` holds to the union over all 59 instructions. A missing query
-would leave an instruction's written value unconstrained. No instruction routed to
-`ADD_SUB_LUI_AUIPC` touches RAM, and `ATOMICS` keeps every RAM access at `Δ = 3`, `lr.w`
-included. Window families have no frame (§3.3).
+which `crates/trace/tests/memory.rs` holds to the union over all 87 instructions. A missing query
+would leave an instruction's written value unconstrained. No instruction routed to the first four
+families touches RAM. Window families have no frame (§3.3).
 
 | family | queries, in slot order | `w` | leaves a side |
 | --- | --- | --- | --- |
-| `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV` | `pc rs1 rs2 rd` | 4 | 4 |
-| `MEM_WORD`, `MEM_SUBWORD` | `pc rs1 rs2 load ram rd` | 6 | 8 |
-| `ATOMICS` | `pc rs1 rs2 ram rd` | 5 | 8 |
+| `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `BITWISE`, `MUL_DIV` | `pc rs1 rs2 rd` | 4 | 4 |
+| `MEM_WORD`, `MEM_SUBWORD`, `ATOMICS` | `pc rs1 rs2 load ram rd` | 6 | 8 |
 
-Columns are addressed by **slot** `s`, a query's position in its family's list:
+Columns are addressed by **slot** `s`, a query's position in its family's list, and a register
+query's high words by its position `r` among the frame's register queries:
 
 ```text
 M[0]                  cycle
 M[1 + 5s + f]         slot s's <q>_mask, <q>_addr, <q>_read_ts, <q>_read_value, <q>_write_value
+M[1 + 5w + 2r + h]    register query r's <q>_read_hi, <q>_write_hi
 W[s]                  <q>_gap_hi, for s < w
-W[w], W[w+1], W[w+2]  rd_inv, rd_is_zero, rd_selected
+W[w .. w+4]           rd_inv, rd_is_zero, rd_selected, rd_selected_hi
 ```
 
-That is `1 + 5w` `M` columns and `w + 3` `W` columns, the family's own following
+That is `1 + 5w + 2·regs` `M` columns and `w + 4` `W` columns, the family's own following
 ([circuits.md](circuits.md) §2). The honest fill (`trace::build_memory_columns`,
 `trace::build_frame_witness`, over a shard's `trace::RowSlice`) sets a mask to 1 where the row is
 live and has the query, and every column of an absent query or a padding row to 0.
@@ -83,9 +86,12 @@ selectors that make the query.
 For the query at slot `s` with mask `m`, space `AS` and in-cycle slot `Δ`:
 
 ```text
-read_<q>    m·T(AS, addr, read_ts, read_value) + 1 − m
-write_<q>   m·T(AS, addr, 4·cycle + Δ, write_value) + 1 − m
+read_<q>    m·T(AS, addr, read_ts, read_value, read_hi) + 1 − m
+write_<q>   m·T(AS, addr, 4·cycle + Δ, write_value, write_hi) + 1 − m
 ```
+
+`read_hi` and `write_hi` are a register query's high-word columns; a `pc` or RAM query's tuple has
+no `α_hi` term.
 
 Each is one flat `Quadratic` of gate list 0, built from the unmasked tuple, a `Linear` whose `AS`
 and `Δ` terms sit on `m` (`constraints::memory::read_tuple` is the read one): constant 1;
@@ -108,11 +114,13 @@ Gate list 0's first enforcing gates, in this order, and the circuit's first `2w`
 
 ```text
 <q>_mask_boolean       m − m·m = 0                       every query
-<q>_writes_back        write_value − read_value = 0      rs1, rs2 and load, where held
+<q>_writes_back        write_value − read_value = 0      rs1 and rs2, where held
+<q>_writes_back_hi     write_hi − read_hi = 0            the same, on the high words
 rd_is_zero_inverse     addr·rd_inv + z − m = 0           on rd; z = rd_is_zero
 rd_is_zero_at_nonzero  addr·z = 0
 rd_is_zero_boolean     z − z·z = 0
 rd_write_masked        write_value − sel + z·sel = 0     sel = rd_selected
+rd_write_masked_hi     write_hi − sel_hi + z·sel_hi = 0  sel_hi = rd_selected_hi
 
 gap_hi_<q>   TIMESTAMP, selector m:   hi                                   hi = <q>_gap_hi
 gap_lo_<q>   TIMESTAMP, selector m:   4·cycle + δ_q − read_ts − 2^19·hi        δ_q = Δ − 1; δ_pc = −4
@@ -120,10 +128,12 @@ gap_lo_<q>   TIMESTAMP, selector m:   4·cycle + δ_q − read_ts − 2^19·hi  
 
 - **Booleanity.** At `m = −1` a `pc` query's leaves are each `−T(REG, …)`: one sign flip a
   side, so the products balance and the pc access reads as a register access.
-- **Write-back.** Without it a read of `x0` could write 5 there.
+- **Write-back.** Without it a read of `x0` could write 5 there. A `load` query is not
+  read-only in every family: a store writes through it, so a load's write-back is the memory
+  families' own gate ([memory-ops.md](memory-ops.md)).
 - **x0.** The first two `rd` gates (`constraints::gadgets::is_zero`) make `z = m·[addr = 0]`
-  and the last `write_value = (1 − z)·sel`: every write to `x0` writes 0, whatever the family
-  computed into `sel`, and with write-backs and `x0`'s init 0 every read of it returns 0. The
+  and the last two `write_value = (1 − z)·sel`, `write_hi = (1 − z)·sel_hi`: every write to
+  `x0` writes 0, whatever the family computed into `sel` and `sel_hi`, and with write-backs and `x0`'s init 0 every read of it returns 0. The
   boundary's final `x0 = 0` (§4.1) pins only its last write: a write of 5, a read of 5 and a
   write of 0 would otherwise balance.
 - **Gap.** Both chunks below `2^19` put `gap = 4·cycle + δ_q − read_ts` in `[0, 2^38)`, so
@@ -231,26 +241,28 @@ stale read would balance against the copy.
 
 ### 4.1 The boundary scalars
 
-The statement carries 64 scalars, `gkr_verify::BoundaryFinals`, absorbed as one `MEMORY_BOUNDARY`
+The statement carries 95 scalars, `gkr_verify::BoundaryFinals`, absorbed as one `MEMORY_BOUNDARY`
 message in this order (`verifier_core::boundary_scalars`):
 
 | positions | | |
 | --- | --- | --- |
 | 0–31 | `t_0 … t_31` | `x_r`'s final timestamp: its last query's write, 0 if never queried |
 | 32 | `t_pc` | the pc's: the exit row's pc write |
-| 33–63 | `v_1 … v_31` | `x_r`'s final value, 0 if never queried |
+| 33–63 | `v_1 … v_31` | `x_r`'s final value's low word, 0 if never queried |
+| 64–94 | `u_1 … u_31` | its high word |
 
-The final values of `x0`, 0, and of the pc, `HALT_PC`, are constants, not carried.
-`PublicInputs::from_bytes` refuses `t ≥ 2^38` or `v ≥ 2^32`, and `verify_global_memory`
-re-checks the timestamps and holds `v_10` to the exit status; no other register carries a public
-value. `t_pc` is not a cycle count: the pc's timestamps increase but need not be consecutive.
+`BoundaryFinals::reg_values` holds each `v_r + 2^32·u_r` as one `u64`. The final values of `x0`,
+0, and of the pc, `HALT_PC`, are constants, not carried. `PublicInputs::from_bytes` refuses
+`t ≥ 2^38` or a word `≥ 2^32`, and `verify_global_memory` re-checks the timestamps and holds
+`v_10`, `a0`'s low word, to the exit status ([ecall-abi.md](ecall-abi.md)); no other register
+carries a public value. `t_pc` is not a cycle count: the pc's timestamps increase but need not be consecutive.
 `trace::build_boundary_finals(state)` is the fill.
 
 ### 4.2 The factors and the reconciliation
 
 ```text
-W_b = ∏_{r=0}^{31} T(REG, r, 0, 0) · T(PC, 0, 0, entry_pc)
-R_b = T(REG, 0, t_0, 0) · ∏_{r=1}^{31} T(REG, r, t_r, v_r) · T(PC, 0, t_pc, HALT_PC)
+W_b = ∏_{r=0}^{31} T(REG, r, 0, 0, 0) · T(PC, 0, 0, entry_pc, 0)
+R_b = T(REG, 0, t_0, 0, 0) · ∏_{r=1}^{31} T(REG, r, t_r, v_r, u_r) · T(PC, 0, t_pc, HALT_PC, 0)
 
 ∏ read roots · R_b  =  ∏ write roots · W_b  ≠  0       over every shard of the statement
 ```
@@ -300,7 +312,7 @@ the final read. With a free final pc every prefix of an execution would balance.
 
 ### 6.1 What precedes the memory challenges
 
-The four challenges are squeezed once per statement, at the end of the global transcript
+The five challenges are squeezed once per statement, at the end of the global transcript
 ([proof.md](proof.md) §2 is the schedule), after everything a tuple or the reconciliation reads is
 fixed, because what is chosen after them can be solved for:
 
@@ -311,8 +323,8 @@ fixed, because what is chosen after them can be solved for:
   addresses through `WC`: a list chosen afterwards is a union over up to `2^(N − 1)` lists,
   `2^127` at `h = 2^22` and no bound at all at `2^20`;
 - `io_digest`, fixing the public windows' contents ([public-values.md](public-values.md) §5);
-- last, the 64 boundary scalars: a final value chosen afterwards reconciles any trace,
-  `v_r = (target − γ_M − REG − α_addr·r − α_ts·t_r)/α_val`.
+- last, the 95 boundary scalars: a final value chosen afterwards reconciles any trace,
+  `v_r = (target − γ_M − REG − α_addr·r − α_ts·t_r − α_hi·u_r)/α_val`.
 
 The roots are not absorbed: each shard's GKR proof binds its own.
 
@@ -333,8 +345,9 @@ list, public or advice word.
 A range obligation holds where its selector is 0 or its one expression is below its channel's
 bound ([lookup.md](lookup.md) §1, §3). Every circuit bounds a value one way:
 
-- a **32-bit value** `v`: a witnessed high halfword `h` and `RANGE16` obligations on `h` and on
-  `v − 2^16·h`, under the row's selector, and no gate;
+- a **32-bit value** `v`, a word: a witnessed high halfword `h` and `RANGE16` obligations on `h`
+  and on `v − 2^16·h`, under the row's selector, and no gate (`Family::word`); a word whose sign
+  is read takes `h`'s bound from its `SIGN` lookup instead ([lookup.md](lookup.md) §9);
 - a **result** `r = e mod 2^32` of an exact `0 ≤ e < 2^33`: a witnessed `wrap`, the gates
   `wrap − wrap·wrap = 0` and `e − r − 2^32·wrap = 0`, and `r` bounded as above; a wider carry is
   a family's own construction;
@@ -344,7 +357,7 @@ bound ([lookup.md](lookup.md) §1, §3). Every circuit bounds a value one way:
 
 `constraints::memory::check_memory` refuses, naming the gate, a memory artifact with:
 
-1. **provenance**: a gate or output whose cone both names a memory slot (1–5) and reads a `W`
+1. **provenance**: a gate or output whose cone both names a memory slot (1–5, 14) and reads a `W`
    column, computed forward with two flags a column, so a tuple times a copy of a `W` column two
    layers up is refused too;
 2. **a root over `W`**: `outputs[READ_ROOT]` or `outputs[WRITE_ROOT]` whose cone reads a `W`
@@ -364,7 +377,7 @@ identity (§6.1).
 
 ## 9. What the argument rests on
 
-Both sides of §4.2 are products of linear forms in `(γ_M, α_addr, α_ts, α_val)`, one per distinct
+Both sides of §4.2 are products of linear forms in `(γ_M, α_addr, α_ts, α_val, α_hi)`, one per distinct
 tuple, every tuple fixed before those are drawn (§6.1, §8). By Schwartz–Zippel they agree on
 unequal multisets with probability at most `N/|Fp2| = N/p^2`, below `2^−66` at `N < 2^62` (§4.2),
 and on equal ones §4.2's count gives — **UNFINISHED** at A64-C5's characteristic, which leaves it a
