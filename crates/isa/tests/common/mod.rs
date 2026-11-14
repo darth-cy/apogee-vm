@@ -31,9 +31,10 @@ pub fn lines(bytes: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// The 59 RV32IMA mnemonics, from the ISA manual's tables: RV32I's 40, M's 8,
-/// A's 11. The corpus must cover every one.
-pub const MNEMONICS: [&str; 59] = [
+/// The 87 RV64IMA mnemonics, from the ISA manual's tables: RV32I's 40 and
+/// RV64I's 12, M's 8 and RV64M's 5, A's 11 in each width. The corpus must cover
+/// every one.
+pub const MNEMONICS: [&str; 87] = [
     "lui",
     "auipc",
     "jal",
@@ -93,4 +94,32 @@ pub const MNEMONICS: [&str; 59] = [
     "amomax.w",
     "amominu.w",
     "amomaxu.w",
+    "ld",
+    "lwu",
+    "sd",
+    "addiw",
+    "slliw",
+    "srliw",
+    "sraiw",
+    "addw",
+    "subw",
+    "sllw",
+    "srlw",
+    "sraw",
+    "mulw",
+    "divw",
+    "divuw",
+    "remw",
+    "remuw",
+    "lr.d",
+    "sc.d",
+    "amoswap.d",
+    "amoadd.d",
+    "amoxor.d",
+    "amoand.d",
+    "amoor.d",
+    "amomin.d",
+    "amomax.d",
+    "amominu.d",
+    "amomaxu.d",
 ];

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use profiler::report::ProfileReport;
 
 fn usage() -> &'static str {
-    "profiler — where a guest's RV32 cycles go\n\
+    "profiler — where a guest's cycles go\n\
      \n\
      profiler elf <file> [--advice <f>] [--input <f>] [--top <n>] [--json <p>]\n\
      \n\

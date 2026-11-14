@@ -27,6 +27,7 @@ use checker::{
     check_padding, check_padding_identity, violated_lookups, violated_relations, ChannelSum,
 };
 use common::{forwarded_shard, witness_row, Shard, HEIGHT};
+use constants::extra_mask::IMM_NEGATIVE;
 use constants::{challenge_slot, family, lookup_channel, transcript_tags};
 use constraints::lookup::ChannelSpec;
 use constraints::{CircuitArtifact, PolyAddress};
@@ -224,8 +225,10 @@ fn toy() -> Toy {
     };
     let decoded_mask = claimed(6);
     assert!(
-        decoded_mask.iter().all(|m| *m < 1 << MASK_BITS),
-        "the packed mask fits its bits"
+        decoded_mask
+            .iter()
+            .all(|m| m & !(((1 << MASK_BITS) - 1) | (1 << IMM_NEGATIVE)) == 0),
+        "the packed mask is its kind bits and the immediate's sign"
     );
 
     let mut witness: Vec<(&str, Vec<u32>)> = vec![
@@ -256,6 +259,8 @@ fn toy() -> Toy {
         let bit: Vec<u32> = decoded_mask.iter().map(|m| (m >> k) & 1).collect();
         witness.push((Box::leak(format!("kind_{k}").into_boxed_str()), bit));
     }
+    let negative = decoded_mask.iter().map(|m| m >> IMM_NEGATIVE).collect();
+    witness.push(("imm_negative", negative));
     for (name, values) in witness {
         columns.push((at(&artifact, name), u32_column(values)));
     }
@@ -785,6 +790,8 @@ fn a_moved_decoded_output_and_an_illegal_mask_each_fail_the_decoder_channel() {
             let bit = bit_of(claimed, k);
             cells.push((at(a, &format!("kind_{k}")), live, bit));
         }
+        let negative = bit_of(claimed, IMM_NEGATIVE as usize);
+        cells.push((at(a, "imm_negative"), live, negative));
         let forged = with_cells(&toy.shard, &cells);
         let values = forwarded_shard(&forged);
         // The bits still recompose the mask, and each is still boolean.

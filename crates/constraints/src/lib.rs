@@ -22,8 +22,10 @@ use field::Fp;
 
 pub mod add_sub;
 pub mod atomics;
+pub mod bitwise;
 mod build;
 pub mod delegation;
+pub mod family;
 pub mod gadgets;
 pub mod jump_branch_slt;
 mod laws;
@@ -32,7 +34,6 @@ pub mod mem_subword;
 pub mod mem_word;
 pub mod memory;
 pub mod mul_div;
-pub mod shift_bitwise;
 mod wire;
 
 pub use laws::ConstraintError;
@@ -109,7 +110,7 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
         match family {
             f::ADD_SUB_LUI_AUIPC => (add_sub::artifact, add_sub::channels()),
             f::JUMP_BRANCH_SLT => (jump_branch_slt::artifact, jump_branch_slt::channels()),
-            f::SHIFT_BITWISE => (shift_bitwise::artifact, shift_bitwise::channels()),
+            f::BITWISE => (bitwise::artifact, bitwise::channels()),
             f::MUL_DIV => (mul_div::artifact, mul_div::channels()),
             f::MEM_WORD => (mem_word::artifact, mem_word::channels()),
             f::MEM_SUBWORD => (mem_subword::artifact, mem_subword::channels()),
@@ -598,6 +599,15 @@ impl CircuitArtifact {
         let w = (0..self.witness.len() as u32).map(PolyAddress::Witness);
         let s = (0..self.setup.len() as u32).map(PolyAddress::Setup);
         m.chain(w).chain(s).collect()
+    }
+
+    /// The committed column named `name`, `M`, `W` or `S`.
+    pub fn column(&self, name: &str) -> Option<PolyAddress> {
+        let at = |names: &[String]| names.iter().position(|n| n == name).map(|i| i as u32);
+        at(&self.memory)
+            .map(PolyAddress::Memory)
+            .or_else(|| at(&self.witness).map(PolyAddress::Witness))
+            .or_else(|| at(&self.setup).map(PolyAddress::Setup))
     }
 
     /// Every law and construction rule of `docs/spec/gkr.md` §4.2, and the

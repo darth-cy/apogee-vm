@@ -144,7 +144,7 @@ pub fn build_profile(name: &str, slot: &str, profile: &str) -> Vec<u8> {
     let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     command
         .current_dir(&guest_dir)
-        .args(["build", "--target", "riscv32imac-unknown-none-elf"])
+        .args(["build", "--target", "riscv64imac-unknown-none-elf"])
         .env("CARGO_TARGET_DIR", &target_dir);
     if profile == "release" {
         command.arg("--release");
@@ -167,7 +167,7 @@ pub fn build_profile(name: &str, slot: &str, profile: &str) -> Vec<u8> {
     );
     let bytes = read(
         target_dir
-            .join(format!("riscv32imac-unknown-none-elf/{profile}"))
+            .join(format!("riscv64imac-unknown-none-elf/{profile}"))
             .join(name),
     );
     let _ = fs::remove_dir_all(&target_dir);

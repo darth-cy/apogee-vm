@@ -10,7 +10,7 @@ changes directory.
 ## 1. Before you start
 
 `rust-toolchain.toml` pins stable Rust 1.96.1 with `llvm-tools` and the target
-`riscv32imac-unknown-none-elf`, whose `core` and `alloc` ship prebuilt; rustup applies it in every
+`riscv64imac-unknown-none-elf`, whose `core` and `alloc` ship prebuilt; rustup applies it in every
 directory below the root.
 
 A guest is an Apogee-SDK program, not a Linux one: no file descriptors, streams, clock, entropy or
@@ -55,8 +55,8 @@ members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "atomics", "opcodes",
 
 - `#![no_std]`: the target is bare metal. `extern crate alloc;` adds `Vec`, `Box` and `String`
   over the SDK's allocator; any dependency that builds for the target without `std` will do.
-- `#![no_main]`, `entry!(main)`: crt0's `_start` sets `sp`, zeroes `.bss` and calls `main`, a
-  wrapper the macro exports around your function. Returning is `exit(0)`; `guest_sdk::exit(code)`
+- `#![no_main]`, `entry!(main)`: crt0's `_start` sets `sp`, zeroes `.bss`, runs any static
+  initializers and calls `main`, a wrapper the macro exports around your function. Returning is `exit(0)`; `guest_sdk::exit(code)`
   or a panic ends the run otherwise.
 
 The guests in the tree are worked examples:
@@ -67,8 +67,9 @@ The guests in the tree are worked examples:
 | `fib` | the smallest SDK guest: a `u32` in, a `u32` out |
 | `echo`, `heap` | the allocator: advice copied through heap buffers, `Vec` and `Box` churn |
 | `amm`, `orderbook` | 128- and 256-bit integers with no heap; `BTreeMap`, sorting, a sorted order from advice checked |
-| `atomics`, `opcodes`, `rvc-dense` | the A extension from `core::sync::atomic`; every RV32IMAC instruction; RVC expansion |
+| `atomics`, `opcodes`, `rvc-dense` | the A extension from `core::sync::atomic`; every RV64IMAC instruction; RVC expansion |
 | `addsub`, `control`, `alu`, `mem`, `shards` | assembly with its own `_start` and no SDK, exiting with its result; `shards` fills two `2^20` shards |
+| `cpp-primes` | a C++ guest, built by CMake against the C/C++ SDK (§11) |
 
 ### 2.1 Run the same logic on the host
 
@@ -76,13 +77,13 @@ A guest prints nothing, so debug it on the host: put the program in a `#![no_std
 bytes to bytes, keep `main.rs` to the regions, and make the SDK a guest-target dependency:
 
 ```toml
-[target.'cfg(target_arch = "riscv32")'.dependencies]
+[target.'cfg(target_arch = "riscv64")'.dependencies]
 guest-sdk.workspace = true
 ```
 
-Host code depends on the library by path and compares its output with the guest's journal (§7). On the guest `usize` is 32 bits: overflowing it
-panics there alone, `x as usize` truncates silently, and `size_of` and `core::hash` of anything
-holding a length differ, so keep them out of what you commit.
+Host code depends on the library by path and compares its output with the guest's journal (§7).
+`usize` is 64 bits on the guest as on a 64-bit host, but no guest address reaches `2^32`
+([ecall-abi.md](spec/ecall-abi.md) §5): keep pointer values out of what you commit.
 
 ## 3. Input, advice and journal
 
@@ -117,7 +118,7 @@ fn main() {
 
 `digest` is a collision-resistant hash the guest links — a Poseidon2 sponge over
 `crates/transcript`, say. The SDK carries none, and the VM has
-no precompile: every operation is RV32IMAC code in the guest, proved row by row.
+no precompile: every operation is RV64IMAC code in the guest, proved row by row.
 [ecall-abi.md](spec/ecall-abi.md) §6 lists the SDK.
 
 ## 4. Build it
@@ -126,12 +127,12 @@ From the guest's own directory, with no flag but the target:
 
 ```text
 cd guests/hello
-cargo build --target riscv32imac-unknown-none-elf
+cargo build --target riscv64imac-unknown-none-elf
 cd ../..
 ```
 
-The ELF is `guests/target/riscv32imac-unknown-none-elf/debug/hello`, the guest workspace having one
-target directory. `guests/.cargo/config.toml` adds `-T` of `crates/guest-sdk/link.ld`, the memory
+The ELF is `guests/target/riscv64imac-unknown-none-elf/debug/hello`, the guest workspace having one
+target directory. `guests/.cargo/config.toml` adds `-T` of `crates/guest-sdk/apogee.ld`, the memory
 map ([ecall-abi.md](spec/ecall-abi.md) §5), and `--no-relax`: relaxation rewrites instruction
 sequences and moves every later address, which identity binds. It names no runner, as nothing
 outside this VM maps the regions: §7 runs a guest.
@@ -153,7 +154,7 @@ fit its decoded table (§8). The identity you publish is the release image's.
 ## 5. Export the artifact
 
 ```text
-cargo run -p artifact-dump -- guests/target/riscv32imac-unknown-none-elf/debug/hello --out artifacts
+cargo run -p artifact-dump -- guests/target/riscv64imac-unknown-none-elf/debug/hello --out artifacts
 ```
 
 This writes `artifacts/hello.img`, `postcard` over `ProgramImage`'s four fields with no header
@@ -218,9 +219,9 @@ Build into a fresh target directory, export again and compare:
 
 ```text
 cd guests/hello
-CARGO_TARGET_DIR=/tmp/fresh cargo build --target riscv32imac-unknown-none-elf
+CARGO_TARGET_DIR=/tmp/fresh cargo build --target riscv64imac-unknown-none-elf
 cd ../..
-cargo run -p artifact-dump -- /tmp/fresh/riscv32imac-unknown-none-elf/debug/hello --out /tmp/again
+cargo run -p artifact-dump -- /tmp/fresh/riscv64imac-unknown-none-elf/debug/hello --out /tmp/again
 cmp artifacts/hello.img /tmp/again/hello.img
 diff artifacts/hello.img.txt /tmp/again/hello.img.txt
 ```
@@ -254,7 +255,7 @@ pc, `next_pc`, family, mnemonic and fields ([program.md](spec/program.md) §4–
 ([program.md](spec/program.md) §8): it moves with the entry, the families the code needs, any
 height and every byte of the code and the image. Derivation refuses, naming the pc or size:
 
-- `Not all opcodes supported: pc=…`: a word outside RV32IMA, such as a CSR access in assembly;
+- `Not all opcodes supported: pc=…`: a word outside RV64IMA, such as a CSR access in assembly;
 - `TableTooShort`: code past a family's reach, `pc ≤ 2h − 4`, which is 1.9375 MiB of code at `2^20`
   and 7.9375 MiB at `2^22` ([program.md](spec/program.md) §5);
 - `ProgramTooLarge`, `ImageOutsideWindow`: an image over `bytecode_size_words`, 4 MiB by default,
@@ -275,8 +276,8 @@ call chain.
 
 **A fatal executor error**, with no exit status and no proof
 ([execution-trace.md](spec/execution-trace.md) §10): `OutOfBounds`, a null or wild pointer
-(`[0, 0x8000)` is a hole) or advice read past what was supplied; `Misaligned`, a halfword or word
-access through an unaligned pointer; `NotAnInstruction`, a jump to a pc holding none.
+(`[0, 0x8000)` is a hole) or advice read past what was supplied; `Misaligned`, a halfword, word or
+doubleword access through an unaligned pointer; `NotAnInstruction`, a jump to a pc holding none.
 
 **A refused export**, a `loader::LoaderError` ([program.md](spec/program.md) §1):
 
@@ -284,7 +285,7 @@ access through an unaligned pointer; `NotAnInstruction`, a jump to a pc holding 
 | --- | --- |
 | `NotAnElf`, `Truncated` | not the guest's ELF: a `.d` file, a partial write |
 | `NotRiscV`, `UnsupportedElfType`, `RelocatableElf`, `DynamicElf` | a host build, an object file, a PIE or dynamic build |
-| `BadSegment`, `NoExecutableSegment`, `EntryNotAnInstruction` | an edited `link.ld`, or no `_start` linked |
+| `BadSegment`, `NoExecutableSegment`, `EntryNotAnInstruction` | an edited `apogee.ld`, or no `_start` linked |
 | `RvcIllegal`, `InstructionTooLong`, `TextTruncated` | data in `.text`, such as a table in hand-written assembly; never the zero halfword (§6a) |
 
 ## 10. Prove it
@@ -304,3 +305,65 @@ UNFINISHED**: a block that verifies is not yet evidence of its execution
 height, so a short run wastes less at smaller heights: `2^20` is an instruction family's floor
 ([lookup.md](spec/lookup.md) §3), and each choice of heights is its own identity. A shard's cost is
 [architecture.md](architecture.md) §7.
+
+## 11. A guest in C or C++
+
+A guest need not be Rust. The C/C++ SDK, four files published with each release as
+`apogee-guest-sdk.tar.gz`, builds one with standard Clang, LLD and CMake and no Rust tooling:
+
+| file | what |
+| --- | --- |
+| `include/apogee_guest.h` | the C ABI: public input, advice, journal, exit ([ecall-abi.md](spec/ecall-abi.md) §7) |
+| `lib/libapogee_guest.a` | startup and that ABI: `crates/guest-sdk` built as a static library |
+| `lib/apogee.ld` | the memory map ([ecall-abi.md](spec/ecall-abi.md) §5) |
+| `cmake/apogee-rv64.cmake` | the toolchain file: rv64imac/lp64, freestanding, the other three wired in |
+
+A guest defines `int main(void)`, whose return value is the exit status:
+
+```cpp
+// main.cpp
+#include <apogee_guest.h>
+
+int main() {
+    size_t len = 0;
+    const uint8_t *input = apogee_public_input(&len);
+    uint64_t sum = 0;
+    for (size_t i = 0; i < len; ++i) {
+        sum += input[i];
+    }
+    apogee_commit(&sum, sizeof sum);
+    return 0;
+}
+```
+
+```cmake
+# CMakeLists.txt
+cmake_minimum_required(VERSION 3.20)
+project(hello CXX)
+add_executable(hello main.cpp)
+```
+
+```text
+cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=<sdk>/cmake/apogee-rv64.cmake
+cmake --build build
+```
+
+`build/hello` is a static RV64IMAC/LP64 ELF, and §5–§10 apply to it unchanged. The toolchain file
+finds `clang`, `clang++` and `ld.lld` on `PATH`, and Homebrew's keg-only LLVM on macOS, whose
+system clang has no RISC-V backend: `apt install clang lld cmake` or `brew install llvm lld cmake`.
+It compiles freestanding — no exceptions, RTTI, C++ standard library or allocator, the compiler's
+own C headers (`stdint.h`, `stddef.h`) — with `-mcmodel=medany`, code and data anywhere below
+`2^31`, and links with `--no-relax` (§4). Those flags are the compilers' own arguments and the end
+of every link line, so a project's or the command line's `CMAKE_<LANG>_FLAGS` and
+`CMAKE_EXE_LINKER_FLAGS` add to them rather than replacing them, and the SDK may sit under a path
+with spaces.
+
+Globals are ordinary. Initialized, zero-initialized and small-data globals are where `apogee.ld`
+puts them; C++ dynamic initializers and `__attribute__((constructor))` functions run before
+`main`, prioritised ones first; and static objects' destructors run when `main` returns, the
+latest constructed first. `apogee_exit` ends the run without them, as C's `_Exit` does.
+
+Building against this repository instead of a release: `cargo rustc --lib --release --crate-type
+staticlib --target riscv64imac-unknown-none-elf` in `crates/guest-sdk` builds the library, and
+`-DAPOGEE_GUEST_LIB=…`, `-DAPOGEE_LINKER_SCRIPT=…` and `-DAPOGEE_INCLUDE_DIR=…` point the toolchain
+file at the tree's pieces. `test_support::guest_elf` builds `guests/cpp-primes` that way.

@@ -160,16 +160,16 @@ fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
     } = block.clone();
 
     // The global commit phase's tape is the pre-fork order of
-    // `docs/spec/proof.md` §2, its four memory challenges and its digest are
+    // `docs/spec/proof.md` §2, its five memory challenges and its digest are
     // drawn once each and strictly after every absorb, and no line of it
     // carries a tag that could chain a pc.
     let tape = checker::check_global_tape(&setup.vk, block.statement())
         .expect("the phase keeps the pre-fork order");
     let squeezes: Vec<&String> = tape.iter().filter(|l| l.starts_with("squeeze")).collect();
-    assert_eq!(squeezes.len(), 5, "four memory challenges and the digest");
+    assert_eq!(squeezes.len(), 6, "five memory challenges and the digest");
     assert_eq!(
         tape.iter().position(|l| l.starts_with("squeeze")),
-        Some(tape.len() - 5),
+        Some(tape.len() - 6),
         "every squeeze follows every absorb"
     );
     let tags: Vec<&str> = tape
@@ -243,7 +243,7 @@ fn a4_a6_every_block_twin_is_refused() {
     // and the digest is what has to catch it.
     //
     // **The block's answer is check 5's, not the shard loop's**, and that is
-    // the verifier's split at work (`docs/spec/proof.md` §6): the four memory
+    // the verifier's split at work (`docs/spec/proof.md` §6): the five memory
     // challenges are drawn from the statement's own transcript (G8), so
     // re-deriving them from a different statement makes the honest roots' two
     // products disagree, and `verify_global_memory` runs before any shard is
@@ -411,21 +411,25 @@ fn a7_a_corrupted_cell_in_the_second_shard_refuses_the_block() {
         global,
     };
 
-    // `wrap`, the add/sub family's carry bit, on a live row of shard 1. No
+    // `c0`, the add/sub family's low carry, on a live row of shard 1. No
     // lookup tuple reads it, so an honest prover recounts nothing; the sum
     // gate is what refuses it.
     let windows = honest.statement().windows.clone();
     let mut columns =
         shard_columns(&setup, &archive, ADD, 1, &windows).expect("the shard's columns");
-    let wrap = constraints::add_sub::WRAP;
+    let wrap = constraints::family_circuit(ADD, 20)
+        .expect("the add/sub circuit")
+        .artifact
+        .column("c0")
+        .expect("the low carry");
     let at = columns
         .iter()
         .position(|(a, _)| *a == wrap)
-        .expect("the wrap column");
+        .expect("the carry column");
     let mut values: Vec<Fp> = (0..columns[at].1.len())
         .map(|i| columns[at].1.get_base(i))
         .collect();
-    assert_eq!(values[0], Fp::ZERO, "row 0 of shard 1 carries no wrap");
+    assert_eq!(values[0], Fp::ZERO, "row 0 of shard 1 does not carry");
     values[0] = Fp::ONE;
     columns[at].1 = poly::MultilinearPoly::new(poly::PolyBacking::Fp(values));
 
@@ -505,9 +509,10 @@ fn the_block_does_not_depend_on_the_thread_count() {
     }
 }
 
-/// A multi-family block. `guests/mem` touches five execution families —
-/// add/sub, jump/branch/slt and the three memory-op families — and writes near
-/// the top of RAM, so its block also carries a `ZERO_WINDOWS` shard.
+/// A multi-family block. `guests/mem` touches six execution families —
+/// add/sub, jump/branch/slt, mul/div and the three memory-op families — and
+/// writes near the top of RAM, so its block also carries a `ZERO_WINDOWS`
+/// shard.
 #[test]
 #[ignore]
 fn a2_a_multi_family_block_proves_and_verifies() {

@@ -14,11 +14,10 @@
 //!
 //! # What this is a fixture for
 //!
-//! **Wide integer arithmetic on a 32-bit machine.** RV32 multiplies 32 bits by
-//! 32 bits and has nothing wider, so a `u128` here is four registers and every
-//! operation on one is a sequence the backend writes out itself — rustc calls no
-//! 128-bit builtin on this target, and `compiler_builtins` contributes only
-//! `memcpy` and `memset` to the linked image. `crates/field` reaches for
+//! **Wide integer arithmetic past the register width.** RV64 multiplies 64 bits
+//! by 64 bits into two registers and has nothing wider, so a `u128` here is two
+//! registers, a `u256` four, and every operation on one is a sequence the
+//! backend writes out itself or a `compiler_builtins` routine. `crates/field` reaches for
 //! `u128` as well, but only ever as the widening result of a 64-bit multiply;
 //! this is the only guest whose *values* are 128 bits wide, and the only one
 //! that needs the 256-bit intermediate an exact `mul_div` and a constant-product
@@ -26,12 +25,10 @@
 //!
 //! None of it is cheap. At opt-level 0 nothing knows that the `u64` halves
 //! [`mul_u256`] multiplies have empty top halves, so each of its four partial
-//! products compiles as a full 128-by-128 multiply — seventeen hardware
-//! multiplies rather than the four a `u64 * u64` needs — and one 256-bit product
-//! is sixty-eight of them. A single `mul_div` is that product and then 256
-//! shift-and-subtract iterations of [`div_u256`], which is tens of thousands of
-//! executed instructions with nothing in them but integer arithmetic; a swap is
-//! two of those.
+//! products compiles as a full 128-by-128 multiply. A single `mul_div` is that
+//! product and then 256 shift-and-subtract iterations of [`div_u256`], which is
+//! thousands of executed instructions with nothing in them but integer
+//! arithmetic; a swap is two of those.
 //!
 //! It allocates nothing. Every buffer is a fixed array on the stack, because the
 //! format bounds every one of them — the batch is read one 36-byte record at a
@@ -225,8 +222,8 @@ fn mul_u256(a: u128, b: u128) -> U256 {
 /// quotient will not fit in a `u128`.
 ///
 /// Restoring long division, one bit of the dividend at a time. There is no
-/// wider type to fall back on and no hardware divider on RV32 that would help
-/// even if the operands were narrower, so a shift-and-subtract loop is both the
+/// wider type to fall back on and no hardware divider wider than 64 bits that
+/// would help, so a shift-and-subtract loop is both the
 /// obvious implementation and the only one whose exactness is visible by
 /// inspection. It is 256 iterations regardless of the operands, which is also
 /// what makes its cost independent of the values a prover chose.

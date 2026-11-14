@@ -30,8 +30,10 @@ fn the_levels_are_ordered_with_off_at_the_bottom() {
 #[test]
 fn a_circuit_inventory_carries_what_a_later_failure_is_read_against() {
     let height: u32 = 1 << 20;
-    let c = constraints::family_circuit(constants::family::SHIFT_BITWISE, height.trailing_zeros())
-        .expect("SHIFT_BITWISE is registered at 2^20");
+    // MUL_DIV reads all four channels, a range table and the generic one among
+    // them.
+    let c = constraints::family_circuit(constants::family::MUL_DIV, height.trailing_zeros())
+        .expect("MUL_DIV is registered at 2^20");
     let text = circuit(&c, height);
     assert!(text.contains("h=2^20"), "{text}");
     assert!(
@@ -40,7 +42,7 @@ fn a_circuit_inventory_carries_what_a_later_failure_is_read_against() {
     );
     assert!(
         text.contains("range16(16)"),
-        "SHIFT_BITWISE carries RANGE16: {text}"
+        "MUL_DIV carries RANGE16: {text}"
     );
     assert!(text.contains("generic=true"), "{text}");
     // Widths, so a shard whose fill wrote nothing is legible against them.

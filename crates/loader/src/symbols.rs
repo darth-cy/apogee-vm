@@ -18,8 +18,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 const SHT_SYMTAB: u32 = 2;
-const SHDR_LEN: usize = 40;
-const SYM_LEN: usize = 16;
+const SHDR_LEN: usize = 64;
+const SYM_LEN: usize = 24;
 
 /// `st_info & 0xf`: the symbol's type. `STT_FUNC` is code.
 const STT_FUNC: u8 = 2;
@@ -108,11 +108,17 @@ fn for_each_symbol(elf: &[u8], mut each: impl FnMut(&str, u32, u32, u8, u16)) {
             continue;
         };
         for entry in table.chunks_exact(SYM_LEN) {
+            // Elf64_Sym. A guest's addresses are below 2^32, so a value or a
+            // size that is not names nothing in the image.
             let name_at = u32le(entry, 0) as usize;
-            let value = u32le(entry, 4);
-            let size = u32le(entry, 8);
-            let info = entry[12];
-            let shndx = u16le(entry, 14);
+            let info = entry[4];
+            let shndx = u16le(entry, 6);
+            let (Ok(value), Ok(size)) = (
+                u32::try_from(u64le(entry, 8)),
+                u32::try_from(u64le(entry, 16)),
+            ) else {
+                continue;
+            };
             if shndx == 0 || shndx >= SHN_LORESERVE {
                 continue;
             }
@@ -136,13 +142,13 @@ struct SectionHeader {
 
 fn section_headers(elf: &[u8]) -> Option<Vec<SectionHeader>> {
     // The ELF header this reads has already been validated by `load_elf`;
-    // these offsets are the class-32 little-endian ones it checked for.
-    if elf.len() < 52 {
+    // these offsets are the class-64 little-endian ones it checked for.
+    if elf.len() < 64 {
         return None;
     }
-    let shoff = u32le(elf, 0x20) as usize;
-    let shentsize = u16le(elf, 0x2e) as usize;
-    let shnum = u16le(elf, 0x30) as usize;
+    let shoff = usize::try_from(u64le(elf, 0x28)).ok()?;
+    let shentsize = u16le(elf, 0x3a) as usize;
+    let shnum = u16le(elf, 0x3c) as usize;
     if shoff == 0 || shentsize < SHDR_LEN {
         return None;
     }
@@ -153,9 +159,9 @@ fn section_headers(elf: &[u8]) -> Option<Vec<SectionHeader>> {
         let header = slice(elf, at, SHDR_LEN)?;
         out.push(SectionHeader {
             kind: u32le(header, 4),
-            offset: u32le(header, 16) as usize,
-            size: u32le(header, 20) as usize,
-            link: u32le(header, 24),
+            offset: usize::try_from(u64le(header, 24)).ok()?,
+            size: usize::try_from(u64le(header, 32)).ok()?,
+            link: u32le(header, 40),
         });
     }
     Some(out)
@@ -169,6 +175,10 @@ fn string_at(strings: &[u8], at: usize) -> Option<&str> {
     let rest = strings.get(at..)?;
     let end = rest.iter().position(|b| *b == 0)?;
     std::str::from_utf8(&rest[..end]).ok()
+}
+
+fn u64le(b: &[u8], at: usize) -> u64 {
+    u64::from_le_bytes(b[at..at + 8].try_into().expect("eight bytes"))
 }
 
 fn u32le(b: &[u8], at: usize) -> u32 {

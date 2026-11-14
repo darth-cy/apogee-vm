@@ -1,0 +1,59 @@
+name: release
+
+# The C/C++ guest SDK, published with each release tag: `apogee_guest.h`,
+# `libapogee_guest.a` — `crates/guest-sdk` built as a static library — the
+# linker script and the CMake toolchain file, laid out as
+# `cmake/apogee-rv64.cmake` expects (docs/guest-program-manual.md §11). A
+# C/C++ developer needs nothing else: no Rust, only Clang, LLD and CMake.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  guest-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: toolchains
+        run: |
+          rustup show
+          sudo apt-get update && sudo apt-get install -y clang lld cmake
+
+      - name: the static library
+        working-directory: crates/guest-sdk
+        run: cargo rustc --lib --release --crate-type staticlib --target riscv64imac-unknown-none-elf
+
+      - name: the bundle
+        run: |
+          sdk=apogee-guest-sdk
+          mkdir -p $sdk/include $sdk/lib $sdk/cmake
+          cp crates/guest-sdk/include/apogee_guest.h $sdk/include/
+          cp crates/guest-sdk/target/riscv64imac-unknown-none-elf/release/libguest_sdk.a \
+             $sdk/lib/libapogee_guest.a
+          cp crates/guest-sdk/apogee.ld $sdk/lib/
+          cp crates/guest-sdk/cmake/apogee-rv64.cmake $sdk/cmake/
+          tar czf $sdk.tar.gz $sdk
+
+      # The bundle as a C++ developer meets it: the tarball unpacked wherever
+      # they keep it, here under a path with a space, their own CMake project
+      # and the toolchain file, nothing from this repository's build.
+      - name: a C++ guest builds against the bundle alone
+        run: |
+          mkdir -p "$RUNNER_TEMP/an sdk" && tar xzf apogee-guest-sdk.tar.gz -C "$RUNNER_TEMP/an sdk"
+          cmake -S guests/cpp-primes -B build \
+                "-DCMAKE_TOOLCHAIN_FILE=$RUNNER_TEMP/an sdk/apogee-guest-sdk/cmake/apogee-rv64.cmake"
+          cmake --build build
+          test -s build/cpp-primes
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" apogee-guest-sdk.tar.gz --clobber

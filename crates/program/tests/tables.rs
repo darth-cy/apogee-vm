@@ -283,7 +283,7 @@ fn code_above_a_shorter_familys_table_is_padding_there() {
 
 /// `bytecode_size_words` is an explicit input, and a program
 /// above it fails loudly. The span ends at the last file-backed byte: fib's
-/// heap-and-stack reservation lies above it with no file bytes and counts for
+/// heap-and-stack reservation, a zero tail, lies above it and counts for
 /// nothing.
 #[test]
 fn a_program_above_bytecode_size_words_fails_loudly() {
@@ -299,7 +299,7 @@ fn a_program_above_bytecode_size_words_fails_loudly() {
         image
             .segments
             .iter()
-            .any(|s| s.bytes.is_empty() && s.vaddr as u64 >= end),
+            .any(|s| s.vaddr as u64 + s.mem_len as u64 > end),
         "fib's reservation lies above its file bytes"
     );
     let words = (end - guest_memory::RAM_ORIGIN as u64).div_ceil(4);
@@ -442,8 +442,8 @@ fn each_instruction_family_binds_the_fields_its_instructions_use() {
     for (family, uses) in [
         (family::ADD_SUB_LUI_AUIPC, 0b1011_1111),
         (family::JUMP_BRANCH_SLT, 0b1011_1111),
-        (family::SHIFT_BITWISE, 0b1011_1111),
-        (family::MUL_DIV, 0b1001_1111),
+        (family::BITWISE, 0b1011_1111),
+        (family::MUL_DIV, 0b1011_1111),
         (family::MEM_WORD, 0b1011_1111),
         (family::MEM_SUBWORD, 0b1011_1111),
         (family::ATOMICS, 0b1001_1111),
@@ -463,8 +463,8 @@ fn each_instruction_family_binds_the_fields_its_instructions_use() {
     }
 }
 
-/// The extra mask over every RV32IMA mnemonic: each live row's mask is
-/// one-hot, the bit is the one `constants::extra_mask` names, `(family, mask,
+/// The extra mask over every RV64IMA mnemonic: each live row's mask is
+/// one-hot beside the immediate's sign, the bit is the one `constants::extra_mask` names, `(family, mask,
 /// system code)` names exactly one mnemonic, and each family's bits are dense
 /// from 0.
 #[test]
@@ -481,11 +481,13 @@ fn every_row_kind_is_one_hot_and_names_exactly_one_mnemonic() {
         let column = |field| table.columns.iter().position(|(f, _)| *f == field).unwrap();
         let row = (pc / 2) as usize;
         let mask = table.get(column(RowField::ExtraMask), row).unwrap();
+        let negative = instr.fields().imm.is_some_and(|imm| imm < 0);
         assert_eq!(
             mask,
-            1 << bit,
-            "{pc:#010x}: the mask is the one-hot kind bit"
+            1 << bit | u32::from(negative) << extra_mask::IMM_NEGATIVE,
+            "{pc:#010x}: the mask is the one-hot kind bit and the immediate's sign"
         );
+        let mask = mask & !(1 << extra_mask::IMM_NEGATIVE);
 
         let system = (family == family::ADD_SUB_LUI_AUIPC
             && bit == extra_mask::add_sub_lui_auipc::SYSTEM)
@@ -506,15 +508,15 @@ fn every_row_kind_is_one_hot_and_names_exactly_one_mnemonic() {
         }
         bits.entry(family).or_default().insert(bit);
     }
-    assert_eq!(kinds.len(), 59, "one row kind per RV32IMA mnemonic");
+    assert_eq!(kinds.len(), 87, "one row kind per RV64IMA mnemonic");
     let widths: BTreeMap<FamilyId, usize> = [
-        (family::ADD_SUB_LUI_AUIPC, 6),
+        (family::ADD_SUB_LUI_AUIPC, 9),
         (family::JUMP_BRANCH_SLT, 12),
-        (family::SHIFT_BITWISE, 12),
-        (family::MUL_DIV, 8),
-        (family::MEM_WORD, 2),
+        (family::BITWISE, 6),
+        (family::MUL_DIV, 25),
+        (family::MEM_WORD, 5),
         (family::MEM_SUBWORD, 6),
-        (family::ATOMICS, 11),
+        (family::ATOMICS, 22),
     ]
     .into_iter()
     .collect();
@@ -532,7 +534,7 @@ fn every_row_kind_is_one_hot_and_names_exactly_one_mnemonic() {
 /// The row kinds, as `docs/spec/program.md` §4 and §6 tabulate them:
 /// `(mnemonic, family, extra-mask bit, system code)`. Numbers, not constant
 /// names, so a renumbered constant fails here too.
-const KINDS: [(&str, FamilyId, u32, Option<u32>); 59] = [
+const KINDS: [(&str, FamilyId, u32, Option<u32>); 87] = [
     ("ecall", 0, 0, Some(0)),
     ("ebreak", 0, 0, Some(1)),
     ("fence", 0, 0, Some(2)),
@@ -541,6 +543,9 @@ const KINDS: [(&str, FamilyId, u32, Option<u32>); 59] = [
     ("add", 0, 3, None),
     ("sub", 0, 4, None),
     ("lui", 0, 5, None),
+    ("addiw", 0, 6, None),
+    ("addw", 0, 7, None),
+    ("subw", 0, 8, None),
     ("slti", 1, 0, None),
     ("sltiu", 1, 1, None),
     ("slt", 1, 2, None),
@@ -553,18 +558,12 @@ const KINDS: [(&str, FamilyId, u32, Option<u32>); 59] = [
     ("bgeu", 1, 9, None),
     ("jalr", 1, 10, None),
     ("jal", 1, 11, None),
-    ("slli", 2, 0, None),
-    ("xori", 2, 1, None),
-    ("srli", 2, 2, None),
-    ("srai", 2, 3, None),
-    ("ori", 2, 4, None),
-    ("andi", 2, 5, None),
-    ("sll", 2, 6, None),
-    ("xor", 2, 7, None),
-    ("srl", 2, 8, None),
-    ("sra", 2, 9, None),
-    ("or", 2, 10, None),
-    ("and", 2, 11, None),
+    ("xori", 2, 0, None),
+    ("ori", 2, 1, None),
+    ("andi", 2, 2, None),
+    ("xor", 2, 3, None),
+    ("or", 2, 4, None),
+    ("and", 2, 5, None),
     ("mul", 3, 0, None),
     ("mulh", 3, 1, None),
     ("mulhsu", 3, 2, None),
@@ -573,8 +572,28 @@ const KINDS: [(&str, FamilyId, u32, Option<u32>); 59] = [
     ("divu", 3, 5, None),
     ("rem", 3, 6, None),
     ("remu", 3, 7, None),
+    ("mulw", 3, 8, None),
+    ("divw", 3, 9, None),
+    ("divuw", 3, 10, None),
+    ("remw", 3, 11, None),
+    ("remuw", 3, 12, None),
+    ("slli", 3, 13, None),
+    ("srli", 3, 14, None),
+    ("srai", 3, 15, None),
+    ("slliw", 3, 16, None),
+    ("srliw", 3, 17, None),
+    ("sraiw", 3, 18, None),
+    ("sll", 3, 19, None),
+    ("srl", 3, 20, None),
+    ("sra", 3, 21, None),
+    ("sllw", 3, 22, None),
+    ("srlw", 3, 23, None),
+    ("sraw", 3, 24, None),
     ("lw", 4, 0, None),
     ("sw", 4, 1, None),
+    ("ld", 4, 2, None),
+    ("sd", 4, 3, None),
+    ("lwu", 4, 4, None),
     ("lb", 5, 0, None),
     ("lh", 5, 1, None),
     ("lbu", 5, 2, None),
@@ -592,6 +611,17 @@ const KINDS: [(&str, FamilyId, u32, Option<u32>); 59] = [
     ("amomax.w", 6, 8, None),
     ("amominu.w", 6, 9, None),
     ("amomaxu.w", 6, 10, None),
+    ("amoadd.d", 6, 11, None),
+    ("amoswap.d", 6, 12, None),
+    ("lr.d", 6, 13, None),
+    ("sc.d", 6, 14, None),
+    ("amoxor.d", 6, 15, None),
+    ("amoor.d", 6, 16, None),
+    ("amoand.d", 6, 17, None),
+    ("amomin.d", 6, 18, None),
+    ("amomax.d", 6, 19, None),
+    ("amominu.d", 6, 20, None),
+    ("amomaxu.d", 6, 21, None),
 ];
 
 /// `narrowest` at the boundaries of each width, on hand-built programs whose

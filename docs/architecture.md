@@ -1,6 +1,7 @@
 # Architecture
 
-Apogee proves executions of RV32IMAC programs. This page is the system end to end: what a proof
+Apogee proves executions of RV64IMAC programs, written in Rust or in C and C++
+([guest-program-manual.md](guest-program-manual.md)). This page is the system end to end: what a proof
 states, how one is made and checked, what it assumes and where it stops. Each paragraph names the
 page that specifies its subject; [glossary.md](glossary.md) indexes the vocabulary.
 
@@ -8,11 +9,10 @@ page that specifies its subject; [glossary.md](glossary.md) indexes the vocabula
 
 **Every proof this repository makes is UNSOUND.** The base field is A64-C5, `p = 2^64 − 59`, and
 every challenge is an element of its quadratic extension ([primitives.md](spec/primitives.md) §1).
-Three integer arguments do not hold at `p ≈ 2^64`: the memory argument's timestamps, which nothing
-bounds ([memory.md](spec/memory.md) §4.2), `MUL_DIV`'s product identity
-([mul-div.md](spec/mul-div.md) §5.1) and `SHIFT_BITWISE`'s left shift
-([shift-bitwise.md](spec/shift-bitwise.md) §5). A later stage reshapes those circuits. Each seam is
-marked:
+One integer argument does not hold at `p ≈ 2^64`: the memory argument's count of timestamps,
+which nothing bounds ([memory.md](spec/memory.md) §4.2). Every execution family's identities are
+exact over the integers, `MUL_DIV`'s product among them ([mul-div.md](spec/mul-div.md) §5.1). Each
+seam is marked:
 
 ```console
 $ grep -rn "A64-C5 CHARACTERISTIC" crates
@@ -115,11 +115,11 @@ shard's witness commitment before its lookup challenges ([proof.md](spec/proof.m
 
 | | |
 | --- | --- |
-| **unsound** | three arguments fail at A64-C5's characteristic (§0) |
+| **unsound** | the memory argument's timestamp count fails at A64-C5's characteristic (§0) |
 | not zero-knowledge | no blinding in GKR |
 | advice is unbound | a guest checks it against something a proof binds ([public-values.md](spec/public-values.md) §6) |
 | public values | at most 16,380 bytes each of input and journal ([public-values.md](spec/public-values.md) §9) |
-| `sc.w` always succeeds | the one deviation from RV32IMAC's semantics; there is no reservation state ([memory-ops.md](spec/memory-ops.md) §6) |
+| `sc` always succeeds | the one deviation from RV64IMAC's semantics; there is no reservation state ([memory-ops.md](spec/memory-ops.md) §6) |
 | traps are not provable | a misaligned access, an access outside mapped memory, `ebreak` or a pc with no instruction ends an execution with no proof ([execution-trace.md](spec/execution-trace.md) §10) |
 | code is static | the instruction stream is the image decoded at load; one undecodable word in an executable segment refuses the program ([program.md](spec/program.md)) |
 | code size | `.text` within a decoded table's reach of its load address, 7.94 MiB at `2^22`, and the image within `bytecode_size_words`, 4 MiB by default ([program.md](spec/program.md) §5, §7) |

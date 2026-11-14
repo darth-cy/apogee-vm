@@ -288,7 +288,7 @@ pub fn family_name(f: FamilyId) -> String {
     match f {
         family::ADD_SUB_LUI_AUIPC => "ADD_SUB_LUI_AUIPC".to_string(),
         family::JUMP_BRANCH_SLT => "JUMP_BRANCH_SLT".to_string(),
-        family::SHIFT_BITWISE => "SHIFT_BITWISE".to_string(),
+        family::BITWISE => "BITWISE".to_string(),
         family::MUL_DIV => "MUL_DIV".to_string(),
         family::MEM_WORD => "MEM_WORD".to_string(),
         family::MEM_SUBWORD => "MEM_SUBWORD".to_string(),

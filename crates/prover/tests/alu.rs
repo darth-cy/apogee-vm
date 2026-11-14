@@ -1,12 +1,11 @@
-//! The shift/bitwise and mul/div statement end to end: `guests/alu`, proved and
+//! The bitwise and mul/div statement end to end: `guests/alu`, proved and
 //! verified shard by shard.
 //!
 //! **Every test here is `#[ignore]`d, and runs by name with
 //! `--include-ignored --test-threads=1`**, for `tests/acceptance.rs`' reason:
 //! all four execution families' shards are `2^20` rows, and CI does not run
-//! them. The circuits row by row, the reduced-width division check and
-//! everything else that needs no proof is `crates/checker/tests/
-//! shift_bitwise.rs` and `crates/checker/tests/mul_div.rs`, in ordinary CI.
+//! them. The circuits row by row over the same guest, and everything else that
+//! needs no proof, is `crates/checker/tests/families.rs`, in ordinary CI.
 
 mod common;
 
@@ -18,7 +17,7 @@ use verifier_core::reduce_shard;
 
 const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
 const JBS: u32 = family::JUMP_BRANCH_SLT;
-const SHB: u32 = family::SHIFT_BITWISE;
+const BIT: u32 = family::BITWISE;
 const MD: u32 = family::MUL_DIV;
 const INIT: u32 = family::INIT_TEARDOWN;
 const ZERO: u32 = family::ZERO_WINDOWS;
@@ -58,19 +57,17 @@ fn proof_bytes(a: &constraints::CircuitArtifact, p: &ShardProof) -> usize {
 }
 
 /// The guest decodes into four execution families — add/sub, jump/branch/slt,
-/// shift/bitwise and mul/div — and the window families; its trace self-checks
+/// bitwise and mul/div — and the window families; its trace self-checks
 /// and exits with the number of checks it ran; the streaming prover proves one
 /// shard of each execution family, of `INIT_TEARDOWN` and of each public
 /// window, seven in all, `ZERO_WINDOWS` and `ADVICE_WINDOWS` proving none;
 /// `verify_shard` accepts every one against the one statement; and every proof
 /// has its circuit's shape.
 ///
-/// The shift/bitwise and mul/div families' shapes are pinned twice — as
-/// literals and as the numbers read off the registry's circuit
-/// (`docs/spec/circuits.md` §1 tabulates the shapes) — so that a change to
-/// either family shows up on both sides. What the trace holds, instruction by
-/// instruction, is `crates/checker/tests/shift_bitwise.rs` and `crates/checker/
-/// tests/mul_div.rs` over the same fixture, and the emulator's reading of it is
+/// Every proof's shape is read off the registry's circuit
+/// (`docs/spec/circuits.md` §1 tabulates the shapes). What the trace holds,
+/// row by row, is `crates/checker/tests/families.rs` over the same fixture,
+/// and the emulator's reading of it is
 /// `crates/emulator/tests/guests.rs`', which checks the exit status and the
 /// journal and nothing below that.
 #[test]
@@ -83,7 +80,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
         vec![
             (ADD, 1 << 20),
             (JBS, 1 << 20),
-            (SHB, 1 << 20),
+            (BIT, 1 << 20),
             (MD, 1 << 20),
             (INIT, 1 << 16),
             (ZERO, 1 << 16),
@@ -98,8 +95,8 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             .filter(|r| table.is_live(*r))
             .count()
     };
-    assert_eq!((live(ADD), live(JBS)), (452, 96));
-    assert_eq!((live(SHB), live(MD)), (45, 54));
+    assert_eq!((live(ADD), live(JBS)), (925, 176));
+    assert_eq!((live(BIT), live(MD)), (17, 459));
     assert_eq!(
         archive.memory_log().self_check(&trace::InitialMemory {
             image: &setup.program.image,
@@ -119,7 +116,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             (INIT, 0),
             (ADD, 0),
             (JBS, 0),
-            (SHB, 0),
+            (BIT, 0),
             (MD, 0),
             (family::PUBLIC_INPUT, 0),
             (family::PUBLIC_OUTPUT, 0)
@@ -142,7 +139,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     }
 
     // Each shard reduces to one claim per committed column, in layout order —
-    // memory, witness, setup, the add/sub family's 21 + 28 + 7 — and the claims
+    // memory, witness, setup, the add/sub family's 27 + 37 + 11 — and the claims
     // open against the statement's, the proof's and the key's commitments.
     let reduced = |proof: &ShardProof| {
         if let Err(e) = reduce_shard(&setup.vk, proof, &public) {

@@ -167,7 +167,7 @@ statement's shards, each once, in any order; the second verifies a `BlockProof` 
 `verify_block`, as an archive's `.vk`, `.public` and `.block` ([proof.md](spec/proof.md) §9). Exit
 0 when all verifies, 1 naming the first file refused or a wrong shard set, 2 on usage or a
 malformed identity. **Every run prints a warning to stderr that a proof which verifies is
-UNSOUND**: three arguments fail at A64-C5's characteristic ([architecture.md](architecture.md) §0).
+UNSOUND**: the memory argument's timestamp count fails at A64-C5's characteristic ([architecture.md](architecture.md) §0).
 
 ## 7. kat-gen and the committed vectors
 
@@ -176,7 +176,7 @@ UNSOUND**: three arguments fail at A64-C5's characteristic ([architecture.md](ar
 | group | writes | from |
 | --- | --- | --- |
 | `poly` | multilinear-polynomial vectors over A64-C5's `Fp2` | `ark-poly` over arkworks' own A64-C5 field and extension |
-| `loader`, `isa` | synthetic ELFs, fib's public-I/O record; an RV32IMA corpus, words that must not decode | the pinned toolchain's `llvm-objdump` |
+| `loader`, `isa` | synthetic ELFs, fib's public-I/O record; an RV64IMA corpus, words that must not decode | the pinned toolchain's `llvm-objdump` |
 | `program` | a mul-free program | hand-built |
 
 **A file is committed only if no implementation change can move it.** `kat-gen` links nothing of the

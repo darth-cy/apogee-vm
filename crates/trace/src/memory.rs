@@ -9,9 +9,9 @@
 use constants::lookup_channel;
 use constants::memory::{HALT_PC, RAM_LIVE_BIT, TS_STEP};
 use constraints::memory::{
-    frame, frame_query_takes, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, FIELD_ADDR,
-    FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_MIN_ADVANCE,
-    RD,
+    frame, frame_hi, frame_query_takes, gap_hi, rd_inv, rd_is_zero, rd_selected, rd_selected_hi,
+    CYCLE, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA,
+    FRAME_MIN_ADVANCE, FRAME_SPACE, RD,
 };
 use constraints::PolyAddress;
 use field::Fp;
@@ -23,9 +23,9 @@ use crate::family::{Row, RowSlice, ROLES};
 use crate::log::{AddressSpace, MemoryEvent, MemoryState};
 
 /// `values`, zero-padded to `height` rows, in the narrowest backing that holds
-/// its largest entry: `U1`, `U8`, `U16`, `U32`, or `Fp` for a timestamp past
-/// 32 bits.
-fn column(mut values: Vec<u64>, height: usize) -> MultilinearPoly {
+/// its largest entry: `U1`, `U8`, `U16`, `U32`, or `Fp` for a value past 32
+/// bits.
+pub fn column(mut values: Vec<u64>, height: usize) -> MultilinearPoly {
     values.resize(height, 0);
     let max = values.iter().copied().max().unwrap_or(0);
     let backing = if max <= 1 {
@@ -65,8 +65,8 @@ fn row_events(row: &Row) -> Vec<MemoryEvent> {
         addr: 0,
         ts: base,
         read_ts: base - TS_STEP,
-        read_value: row.pc,
-        write_value: row.next_pc,
+        read_value: row.pc as u64,
+        write_value: row.next_pc as u64,
     });
     for role in ROLES {
         if let Some(q) = row.query(role) {
@@ -130,11 +130,11 @@ fn frame_rows(rows: &RowSlice, queries: &[usize], height: usize) -> Vec<Vec<Opti
     out
 }
 
-/// An execution family's `1 + 5·queries.len()` frame columns,
-/// `docs/spec/memory.md` §2.1, in `constraints::memory`'s layout order: `M[0]`
-/// cycle, then per slot of `queries` its mask, address, read timestamp, read
-/// value and write value. `queries` is the family's query list,
-/// `constraints::memory::frame_queries`.
+/// An execution family's frame columns, `docs/spec/memory.md` §2.1, in
+/// `constraints::memory`'s layout order: `M[0]` cycle, then per slot of
+/// `queries` its mask, address, read timestamp, and the low words of its read
+/// and write values, then each register query's two high words. `queries` is
+/// the family's query list, `constraints::memory::frame_queries`.
 ///
 /// Row `i` is `rows`' row `i` — one shard's rows, in the order the buffer holds
 /// them — and rows `rows.len()..height` are padding, 0 in every column. A query
@@ -161,14 +161,24 @@ pub fn build_memory_columns(
         out.push((frame(at, FIELD_MASK), field(|_| 1)));
         out.push((frame(at, FIELD_ADDR), field(|e| e.addr as u64)));
         out.push((frame(at, FIELD_READ_TS), field(|e| e.read_ts)));
-        out.push((frame(at, FIELD_READ_VALUE), field(|e| e.read_value as u64)));
-        out.push((
-            frame(at, FIELD_WRITE_VALUE),
-            field(|e| e.write_value as u64),
-        ));
+        out.push((frame(at, FIELD_READ_VALUE), field(|e| e.read_value & LOW)));
+        out.push((frame(at, FIELD_WRITE_VALUE), field(|e| e.write_value & LOW)));
+    }
+    for (at, &q) in queries.iter().enumerate() {
+        if FRAME_SPACE[q] == constants::address_space::REG {
+            let field = |f: fn(&MemoryEvent) -> u64| {
+                let values = rows.iter().map(|row| row[at].as_ref().map_or(0, f));
+                column(values.collect(), height)
+            };
+            out.push((frame_hi(queries, at, false), field(|e| e.read_value >> 32)));
+            out.push((frame_hi(queries, at, true), field(|e| e.write_value >> 32)));
+        }
     }
     out
 }
+
+/// A 64-bit value's low word.
+const LOW: u64 = u32::MAX as u64;
 
 /// The frame's `queries.len() + 3` witness columns, `docs/spec/memory.md` §2.4,
 /// over the rows [`build_memory_columns`] fills for the same `rows`, `queries`
@@ -179,9 +189,10 @@ pub fn build_memory_columns(
 ///   slot `s`;
 /// - `W[w] rd_inv`: the inverse of `rd`'s address, where it is not 0;
 /// - `W[w + 1] rd_is_zero`: 1 exactly on a live `rd` query at address 0;
-/// - `W[w + 2] rd_selected`: `rd`'s write value, where its address is not 0;
+/// - `W[w + 2] rd_selected`, `W[w + 3] rd_selected_hi`: the two words of `rd`'s
+///   write value, where its address is not 0;
 ///
-/// and 0 everywhere else, padding rows included. The three x0 columns are
+/// and 0 everywhere else, padding rows included. The four x0 columns are
 /// there exactly when the frame has `rd`, as its gadget is. On an honest log
 /// every enforcing gate and every obligation of `frame_artifact` holds on
 /// every row. Panics as [`build_memory_columns`] does.
@@ -223,8 +234,10 @@ pub fn build_frame_witness(
         .iter()
         .map(|row| row[at].map_or(0, |e| (e.addr == 0) as u64));
     out.push((rd_is_zero(width), column(is_zero.collect(), height)));
-    let selected = named.map(|e| e.map_or(0, |e| e.write_value as u64));
+    let selected = named.clone().map(|e| e.map_or(0, |e| e.write_value & LOW));
     out.push((rd_selected(width), column(selected.collect(), height)));
+    let selected_hi = named.map(|e| e.map_or(0, |e| e.write_value >> 32));
+    out.push((rd_selected_hi(width), column(selected_hi.collect(), height)));
     out
 }
 
@@ -273,7 +286,7 @@ pub fn build_init_teardown_columns(
         }
         if let Some((t, v)) = state.ram((first + 4 * y as u64) as u32) {
             ts[y] = t;
-            value[y] = v as u64;
+            value[y] = v;
         }
     }
     let mut out = vec![
@@ -320,7 +333,7 @@ pub fn build_value_window_columns(
     for y in 0..height {
         if let Some((t, v)) = state.ram((first + 4 * y as u64) as u32) {
             ts[y] = t;
-            value[y] = v as u64;
+            value[y] = v;
         }
     }
     vec![
@@ -360,7 +373,7 @@ pub fn build_boundary_finals(state: &MemoryState) -> BoundaryFinals {
         .pc()
         .expect("build_boundary_finals: the execution has no pc query, so no final pc");
     assert_eq!(
-        pc.1, HALT_PC,
+        pc.1, HALT_PC as u64,
         "build_boundary_finals: the pc's final value is {:#x}, not HALT_PC",
         pc.1
     );

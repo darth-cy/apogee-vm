@@ -3,10 +3,9 @@
 //!
 //! **Every test here is `#[ignore]`d, and runs by name with
 //! `--include-ignored --test-threads=1`**, for `tests/acceptance.rs`' reason:
-//! both execution families' shards are `2^20` rows, and CI does not run them.
-//! The circuit row by row, the reduced-width comparison and everything else
-//! that needs no proof is `crates/checker/tests/jump_branch_slt.rs`, in
-//! ordinary CI.
+//! its three execution families' shards are `2^20` rows, and CI does not run
+//! them. The circuits row by row, the flipped comparison and everything else
+//! that needs no proof is `crates/checker/tests/families.rs`, in ordinary CI.
 
 mod common;
 
@@ -18,6 +17,7 @@ use verifier_core::reduce_shard;
 
 const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
 const JBS: u32 = family::JUMP_BRANCH_SLT;
+const MD: u32 = family::MUL_DIV;
 const INIT: u32 = family::INIT_TEARDOWN;
 const ZERO: u32 = family::ZERO_WINDOWS;
 
@@ -55,13 +55,13 @@ fn proof_bytes(a: &constraints::CircuitArtifact, p: &ShardProof) -> usize {
         + opening.bytes.len()
 }
 
-/// The guest decodes into the add/sub family, the jump/branch/slt family and
-/// the window families; its trace self-checks; the streaming prover proves one
-/// shard of each family that has one; `verify_shard` accepts every one against
-/// one statement, whose result is the guest's 16 passed checks; and every proof
-/// has its circuit's shape. What the trace holds — the twelve instructions and
-/// the branch matrix — is `crates/checker/tests/jump_branch_slt.rs`'
-/// `the_guest_runs_the_acceptance_matrix`, over the same fixture, and the
+/// The guest decodes into the add/sub, jump/branch/slt and mul/div families —
+/// the last for the shifts that build its 64-bit constants — and the window
+/// families; its trace self-checks; the streaming prover proves one shard of
+/// each family that has one; `verify_shard` accepts every one against one
+/// statement, whose result is the guest's 17 passed checks; and every proof
+/// has its circuit's shape. What the trace holds, row by row, is
+/// `crates/checker/tests/families.rs` over the same fixture, and the
 /// emulator's reading of it is `crates/emulator/tests/guests.rs`', which checks
 /// the exit status and the journal and nothing below that.
 #[test]
@@ -74,6 +74,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
         vec![
             (ADD, 1 << 20),
             (JBS, 1 << 20),
+            (MD, 1 << 20),
             (INIT, 1 << 16),
             (ZERO, 1 << 16),
             (family::PUBLIC_INPUT, family::PUBLIC_WINDOW_HEIGHT),
@@ -87,7 +88,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             .filter(|r| table.is_live(*r))
             .count()
     };
-    assert_eq!((live(ADD), live(JBS)), (57, 90));
+    assert_eq!((live(ADD), live(JBS), live(MD)), (65, 99, 3));
     assert_eq!(
         archive.memory_log().self_check(&trace::InitialMemory {
             image: &setup.program.image,
@@ -96,7 +97,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
         }),
         Ok(())
     );
-    assert_eq!(public.shard_counts, vec![1, 1, 1, 0, 1, 1, 0]);
+    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 0, 1, 1, 0]);
     assert!(public.windows.is_empty(), "control touches no RAM");
     assert_eq!(public.exit_status, common::CONTROL_RESULT);
     assert!(public.input.is_empty() && public.output.is_empty());
@@ -107,6 +108,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             (INIT, 0),
             (ADD, 0),
             (JBS, 0),
+            (MD, 0),
             (family::PUBLIC_INPUT, 0),
             (family::PUBLIC_OUTPUT, 0)
         ]

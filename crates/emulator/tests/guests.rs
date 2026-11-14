@@ -31,6 +31,35 @@ fn fib_commits_the_recorded_value() {
     );
 }
 
+/// `cpp-primes`, the C++ guest, built by CMake against the C/C++ SDK
+/// (`docs/guest-program-manual.md` §11), decides primality of 64-bit integers
+/// whose answers are number theory, not this repository: the first primes and
+/// non-primes, the Carmichael number 561, the Mersenne prime `2^61 − 1`, the
+/// largest 64-bit prime `2^64 − 59`, `2^64 − 1`, and 3215031751, the least
+/// strong pseudoprime to the bases 2, 3, 5 and 7.
+#[test]
+fn cpp_primes_decides_each_integer() {
+    let cases: [(u64, u8); 10] = [
+        (0, 0),
+        (1, 0),
+        (2, 1),
+        (97, 1),
+        (561, 0),
+        (1_000_000_007, 1),
+        ((1 << 61) - 1, 1),
+        (u64::MAX - 58, 1),
+        (u64::MAX, 0),
+        (3_215_031_751, 0),
+    ];
+    let input: Vec<u8> = cases.iter().flat_map(|(n, _)| n.to_le_bytes()).collect();
+    let execution = run(&image("cpp-primes"), &io(&input)).unwrap();
+    assert_eq!(execution.exit_code, 0);
+    let mut journal = 10u32.to_le_bytes().to_vec();
+    journal.extend(5u32.to_le_bytes());
+    journal.extend(cases.map(|(_, prime)| prime));
+    assert_eq!(to_hex(&execution.io.output), to_hex(&journal));
+}
+
 // ---------------------------------------------------------------------------
 // The public values and the advice region, executed
 // ---------------------------------------------------------------------------
@@ -115,7 +144,7 @@ fn asking_for_advice_that_was_not_supplied_is_fatal() {
     match run(&image("public-io"), &guest) {
         Err(EmuError::OutOfBounds { addr, .. }) => assert_eq!(
             addr,
-            constants::guest_memory::ADVICE_ORIGIN,
+            constants::guest_memory::ADVICE_ORIGIN as u64,
             "the fatal read is the region's length word"
         ),
         other => panic!("a run with no advice gave {other:?}"),
@@ -187,6 +216,11 @@ fn atomics_computes_its_cells() {
     let (mut low, mut high, mut steps) = (i32::MAX, 0u32, 1u32);
     let (mut signed_high, mut unsigned_low) = (i32::MIN, u32::MAX);
     let mut old = 0u32;
+    let fold64 = |acc: u64, value: u64| acc.wrapping_mul(31).wrapping_add(value);
+    let mut wide = [0u64, 0, 0, u64::MAX, 0, 1];
+    let (mut wide_low, mut wide_high) = (i64::MAX, i64::MIN);
+    let (mut wide_ulow, mut wide_uhigh) = (u64::MAX, 0u64);
+    let mut wide_old = 0u64;
     for i in 0..n {
         let x = i.wrapping_mul(0x9e37_79b9);
         old = fold(old, sum);
@@ -208,15 +242,46 @@ fn atomics_computes_its_cells() {
         old = fold(old, unsigned_low);
         unsigned_low = unsigned_low.min(x ^ 0x5555_5555);
         steps = steps.wrapping_mul(3).wrapping_add(1);
+        let y = (x as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ i as u64;
+        let returned = [
+            wide[0],
+            wide[1],
+            wide[2],
+            wide[3],
+            wide[4],
+            wide_low as u64,
+            wide_high as u64,
+            wide_ulow,
+            wide_uhigh,
+        ];
+        for v in returned {
+            wide_old = fold64(wide_old, v);
+        }
+        wide[0] = wide[0].wrapping_add(y);
+        wide[1] = y;
+        wide[2] ^= y;
+        wide[3] &= !(1 << (i % 64));
+        wide[4] |= 1 << (y >> 58);
+        wide_low = wide_low.min(y as i64);
+        wide_high = wide_high.max(y as i64);
+        wide_ulow = wide_ulow.min(y);
+        wide_uhigh = wide_uhigh.max(y);
+        wide[5] = wide[5].wrapping_mul(3).wrapping_add(1);
     }
     high ^= signed_high as u32;
     sum = sum.wrapping_add(unsigned_low);
-    let want: Vec<u8> = [
+    let mut want: Vec<u8> = [
         sum, last, mixed, masked, flags, low as u32, high, steps, old,
     ]
     .iter()
     .flat_map(|w| w.to_le_bytes())
     .collect();
+    let cells =
+        wide.iter()
+            .copied()
+            .chain([wide_low as u64, wide_high as u64, wide_ulow, wide_uhigh]);
+    want.extend(cells.fold(0, fold64).to_le_bytes());
+    want.extend(wide_old.to_le_bytes());
 
     let execution = run(&image("atomics"), &io(&n.to_le_bytes())).unwrap();
     assert_eq!(execution.exit_code, 0);
@@ -296,9 +361,9 @@ fn orderbook_ignores_advice_it_cannot_verify() {
     assert_eq!(journals[0], journals[2]);
 }
 
-/// The 59 RV32IMA mnemonics, from the ISA manual's tables rather than from
+/// The 87 RV64IMA mnemonics, from the ISA manual's tables rather than from
 /// `crates/isa`.
-const MNEMONICS: [&str; 59] = [
+const MNEMONICS: [&str; 87] = [
     "lui",
     "auipc",
     "jal",
@@ -358,6 +423,34 @@ const MNEMONICS: [&str; 59] = [
     "amomax.w",
     "amominu.w",
     "amomaxu.w",
+    "ld",
+    "lwu",
+    "sd",
+    "addiw",
+    "slliw",
+    "srliw",
+    "sraiw",
+    "addw",
+    "subw",
+    "sllw",
+    "srlw",
+    "sraw",
+    "mulw",
+    "divw",
+    "divuw",
+    "remw",
+    "remuw",
+    "lr.d",
+    "sc.d",
+    "amoswap.d",
+    "amoadd.d",
+    "amoxor.d",
+    "amoand.d",
+    "amoor.d",
+    "amomin.d",
+    "amomax.d",
+    "amominu.d",
+    "amomaxu.d",
 ];
 
 /// `opcodes` executes every instruction but `ebreak` in mode 0 — and
@@ -380,16 +473,16 @@ fn opcodes_executes_every_instruction() {
         .copied()
         .collect();
     assert!(missing.is_empty(), "opcodes never executes {missing:?}");
-    assert_eq!(executed.len(), 58, "{executed:?}");
+    assert_eq!(executed.len(), 86, "{executed:?}");
 
     let out = &t.execution.io.output;
     assert_eq!(
         out.len(),
-        28,
-        "the journal is the five blocks' folds and the compressed block's bounds"
+        32,
+        "the journal is the six blocks' folds and the compressed block's bounds"
     );
     let word = |i: usize| u32::from_le_bytes(out[4 * i..4 * i + 4].try_into().unwrap());
-    let (begin, end) = (word(5), word(6));
+    let (begin, end) = (word(6), word(7));
     assert!(
         end > begin + 60,
         "the compressed block is {} bytes",
@@ -421,7 +514,7 @@ fn opcodes_executes_every_instruction() {
 }
 
 /// Each misaligned access — `lw`, `sw`, `lh`, `sh`, `lr.w`,
-/// `sc.w`, `amoadd.w` — is the named fatal error in `run` and in
+/// `sc.w`, `amoadd.w`, `ld`, `amoadd.d` — is the named fatal error in `run` and in
 /// `trace_run`, at the instruction that made it, and `trace_run` hands back
 /// no trace.
 #[test]
@@ -436,6 +529,8 @@ fn a_misaligned_access_is_a_named_fatal_error_in_both_paths() {
         (6, "lr.w", 4),
         (7, "sc.w", 4),
         (8, "amoadd.w", 4),
+        (9, "ld", 8),
+        (10, "amoadd.d", 8),
     ] {
         let guest = io(&mode.to_le_bytes());
         let plain = run(&image, &guest).unwrap_err();
@@ -446,7 +541,7 @@ fn a_misaligned_access_is_a_named_fatal_error_in_both_paths() {
         };
         assert_eq!(instr_at(&image, pc).mnemonic(), mnemonic);
         assert_eq!(w, width, "{mnemonic}");
-        assert_ne!(addr % width, 0, "{mnemonic}: {addr:#x} is aligned");
+        assert_ne!(addr % width as u64, 0, "{mnemonic}: {addr:#x} is aligned");
         assert!(plain.to_string().contains("misaligned"), "{plain}");
     }
 }

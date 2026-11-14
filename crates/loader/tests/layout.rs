@@ -29,7 +29,7 @@
 //! the same parser rather than an independent one.
 //!
 //! Nothing here needs an emulator. The guests are linked as the suite runs,
-//! so a `link.ld` regression fails here at once.
+//! so a `apogee.ld` regression fails here at once.
 
 mod common;
 
@@ -208,7 +208,7 @@ fn check(elf: &[u8], name: &str) {
     let sym = |k: &str| {
         *syms
             .get(k)
-            .unwrap_or_else(|| panic!("{name} has no {k} -- link.ld defines the name"))
+            .unwrap_or_else(|| panic!("{name} has no {k} -- apogee.ld defines the name"))
             as u64
     };
 
@@ -240,7 +240,7 @@ fn check(elf: &[u8], name: &str) {
     }
 
     // The entry point, which must be both mapped and executable.
-    let entry = u32_at(elf, 0x18) as u64;
+    let entry = u64_at(elf, 0x18);
     assert_eq!(
         entry, RAM_ORIGIN as u64,
         "{name}: _start must be at the base of RAM"
@@ -414,7 +414,7 @@ fn the_layout_that_failed_in_ci_is_rejected() {
 }
 
 // ---------------------------------------------------------------------------
-// A small ELF32 reader
+// A small ELF64 reader
 // ---------------------------------------------------------------------------
 //
 // Deliberately not `loader`'s: `ProgramImage` drops the flags, offsets and
@@ -430,26 +430,30 @@ fn u32_at(b: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(b[at..at + 4].try_into().expect("in range"))
 }
 
+fn u64_at(b: &[u8], at: usize) -> u64 {
+    u64::from_le_bytes(b[at..at + 8].try_into().expect("in range"))
+}
+
 /// Every `PT_LOAD` with a nonzero span, in header order.
 fn loads(elf: &[u8]) -> Vec<Load> {
     assert_eq!(&elf[..4], b"\x7fELF", "not an ELF");
-    assert_eq!(elf[4], 1, "not ELF32");
+    assert_eq!(elf[4], 2, "not ELF64");
     assert_eq!(elf[5], 1, "not little-endian");
 
     let (phoff, phentsize, phnum) = (
-        u32_at(elf, 0x1C) as usize,
-        u16_at(elf, 0x2A) as usize,
-        u16_at(elf, 0x2C) as usize,
+        u64_at(elf, 0x20) as usize,
+        u16_at(elf, 0x36) as usize,
+        u16_at(elf, 0x38) as usize,
     );
     (0..phnum)
         .map(|i| phoff + i * phentsize)
         .filter(|&at| u32_at(elf, at) == 1) // PT_LOAD
         .map(|at| Load {
-            offset: u32_at(elf, at + 4) as u64,
-            vaddr: u32_at(elf, at + 8) as u64,
-            filesz: u32_at(elf, at + 16) as u64,
-            memsz: u32_at(elf, at + 20) as u64,
-            flags: u32_at(elf, at + 24),
+            offset: u64_at(elf, at + 8),
+            vaddr: u64_at(elf, at + 16),
+            filesz: u64_at(elf, at + 32),
+            memsz: u64_at(elf, at + 40),
+            flags: u32_at(elf, at + 4),
         })
         .filter(|l| l.memsz > 0)
         .collect()
@@ -458,9 +462,9 @@ fn loads(elf: &[u8]) -> Vec<Load> {
 /// `.symtab`, as name -> value.
 fn symbols(elf: &[u8]) -> BTreeMap<String, u32> {
     let (shoff, shentsize, shnum) = (
-        u32_at(elf, 0x20) as usize,
-        u16_at(elf, 0x2E) as usize,
-        u16_at(elf, 0x30) as usize,
+        u64_at(elf, 0x28) as usize,
+        u16_at(elf, 0x3A) as usize,
+        u16_at(elf, 0x3C) as usize,
     );
     let header = |i: usize| shoff + i * shentsize;
 
@@ -469,11 +473,11 @@ fn symbols(elf: &[u8]) -> BTreeMap<String, u32> {
         .find(|&at| u32_at(elf, at + 4) == 2) // SHT_SYMTAB
         .expect("the guest ELF is not stripped, so it has a .symtab");
     let (off, size, entsize) = (
-        u32_at(elf, symtab + 16) as usize,
-        u32_at(elf, symtab + 20) as usize,
-        u32_at(elf, symtab + 36) as usize,
+        u64_at(elf, symtab + 24) as usize,
+        u64_at(elf, symtab + 32) as usize,
+        u64_at(elf, symtab + 56) as usize,
     );
-    let strtab = u32_at(elf, header(u32_at(elf, symtab + 24) as usize) + 16) as usize;
+    let strtab = u64_at(elf, header(u32_at(elf, symtab + 40) as usize) + 24) as usize;
 
     let mut out = BTreeMap::new();
     for at in (off..off + size).step_by(entsize) {
@@ -485,7 +489,7 @@ fn symbols(elf: &[u8]) -> BTreeMap<String, u32> {
             + name_at;
         if end > name_at {
             let name = String::from_utf8_lossy(&elf[name_at..end]).into_owned();
-            out.insert(name, u32_at(elf, at + 4));
+            out.insert(name, u64_at(elf, at + 8) as u32);
         }
     }
     out

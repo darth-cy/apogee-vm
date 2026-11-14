@@ -2,7 +2,7 @@
 #
 # It defines `#[panic_handler]` and `#[global_allocator]`, which are lang items
 # a host build cannot link twice, and it only ever compiles for
-# `riscv32imac-unknown-none-elf`. Keeping it out means `cargo test --workspace`
+# `riscv64imac-unknown-none-elf`. Keeping it out means `cargo test --workspace`
 # never tries to build a host test harness for it.
 #
 # The toolchain still comes from the repository root's `rust-toolchain.toml`:

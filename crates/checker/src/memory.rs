@@ -15,12 +15,13 @@
 //! `crates/prover`, and it is `O(events)` per shard by design, the log being
 //! the thing it reads.
 
+use constants::address_space;
 use constants::lookup_channel;
 use constants::memory::TS_STEP;
 use constraints::memory::{
-    frame, frame_query_takes, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, FIELD_ADDR,
-    FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_MIN_ADVANCE,
-    RD,
+    frame, frame_hi, frame_query_takes, gap_hi, rd_inv, rd_is_zero, rd_selected, rd_selected_hi,
+    CYCLE, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA,
+    FRAME_MIN_ADVANCE, FRAME_SPACE, RD,
 };
 use constraints::PolyAddress;
 use field::Fp;
@@ -108,8 +109,9 @@ fn frame_rows(
     rows
 }
 
-/// An execution family's `1 + 5·queries.len()` frame columns from the log,
-/// `docs/spec/memory.md` §2.1: the independent reading of
+/// An execution family's frame columns from the log, `docs/spec/memory.md`
+/// §2.1 — five per query, a register's values by their low words, then each
+/// register query's two high words: the independent reading of
 /// `trace::build_memory_columns`.
 pub fn memory_columns_from_log(
     log: &MemoryEventLog,
@@ -127,16 +129,37 @@ pub fn memory_columns_from_log(
         out.push((frame(at, FIELD_MASK), field(|_| 1)));
         out.push((frame(at, FIELD_ADDR), field(|e| e.addr as u64)));
         out.push((frame(at, FIELD_READ_TS), field(|e| e.read_ts)));
-        out.push((frame(at, FIELD_READ_VALUE), field(|e| e.read_value as u64)));
+        out.push((
+            frame(at, FIELD_READ_VALUE),
+            field(|e| e.read_value % (1 << 32)),
+        ));
         out.push((
             frame(at, FIELD_WRITE_VALUE),
-            field(|e| e.write_value as u64),
+            field(|e| e.write_value % (1 << 32)),
         ));
+    }
+    for (at, &q) in queries.iter().enumerate() {
+        if FRAME_SPACE[q] != address_space::REG {
+            continue;
+        }
+        // A register value's high word: the read's, then the write's.
+        for write in [false, true] {
+            let values = rows.iter().map(|row| {
+                row[at].as_ref().map_or(0, |e| {
+                    let value = if write { e.write_value } else { e.read_value };
+                    value >> 32
+                })
+            });
+            out.push((
+                frame_hi(queries, at, write),
+                column(values.collect(), height),
+            ));
+        }
     }
     out
 }
 
-/// The frame's `queries.len() + 3` witness columns from the log,
+/// The frame's `queries.len() + 4` witness columns from the log,
 /// `docs/spec/memory.md` §2.4: the independent reading of
 /// `trace::build_frame_witness`.
 pub fn frame_witness_from_log(
@@ -178,7 +201,11 @@ pub fn frame_witness_from_log(
         .iter()
         .map(|row| row[at].map_or(0, |e| (e.addr == 0) as u64));
     out.push((rd_is_zero(width), column(is_zero.collect(), height)));
-    let selected = named.map(|e| e.map_or(0, |e| e.write_value as u64));
+    let selected = named
+        .clone()
+        .map(|e| e.map_or(0, |e| e.write_value % (1 << 32)));
     out.push((rd_selected(width), column(selected.collect(), height)));
+    let selected_hi = named.map(|e| e.map_or(0, |e| e.write_value / (1 << 32)));
+    out.push((rd_selected_hi(width), column(selected_hi.collect(), height)));
     out
 }

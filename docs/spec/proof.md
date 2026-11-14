@@ -27,10 +27,10 @@ leaves its caller to check the identity and the statement's input, output and ex
 | --- | --- |
 | `input: Vec<u8>` | the public input window's payload, at most `PUBLIC_PAYLOAD_BYTES` = 16,380 ([public-values.md](public-values.md) §3) |
 | `output: Vec<u8>` | the journal, the public output window's payload, as long |
-| `exit_status: u32` | `x10`'s final value |
+| `exit_status: u32` | `x10`'s final low word |
 | `shard_counts: Vec<u32>` | one per family of the `VmConfig`, in its order, possibly 0 |
 | `windows: Vec<u32>` | `ZERO_WINDOWS`' window ids, one per shard ([memory.md](memory.md) §3.5) |
-| `boundary: BoundaryFinals` | the 64 register and pc boundary scalars ([memory.md](memory.md) §4.1) |
+| `boundary: BoundaryFinals` | the 95 register and pc boundary scalars ([memory.md](memory.md) §4.1) |
 | `memory_commitments: Vec<Commitment>` | per statement shard, the commitment to its `M` columns (§3) |
 | `memory_roots: Vec<[Fp2; 2]>` | per statement shard, `[read_root, write_root]` |
 
@@ -81,8 +81,8 @@ transcript, tag values in [transcript.md](transcript.md) §4.
 | G5 | absorb | `PROGRAM_IDENTITY` | `vk.identity`'s 8 lanes |
 | G6 | absorb | `PUBLIC_INPUTS` | `io_digest(input, output)`'s 8 lanes ([public-values.md](public-values.md) §5) |
 | G6a | absorb, per shard | `MEMORY_COMMITMENT` | each statement shard's memory commitment, in statement order: its payloads concatenated |
-| G7 | absorb | `MEMORY_BOUNDARY` | the 64 boundary scalars |
-| G8 | squeeze ×4 | `MEMORY_CHALLENGE` | `γ_M, α_addr, α_ts, α_val`, challenge slots 1–4 |
+| G7 | absorb | `MEMORY_BOUNDARY` | the 95 boundary scalars |
+| G8 | squeeze ×5 | `MEMORY_CHALLENGE` | `γ_M, α_addr, α_ts, α_val, α_hi`, challenge slots 1–4 and 14 |
 | G9 | squeeze | `GLOBAL_STATE_DIGEST` | the **global state digest**, one `Fp2` |
 
 G2–G4 are `verifier_core::absorb_statement_descriptor`.
@@ -131,7 +131,7 @@ that every challenge follow every commitment the circuit reads ([gkr.md](gkr.md)
 commitments precede both transcripts through the identity, the memory commitments G8 and the
 witness commitment S3.
 
-The circuit's external challenges (`verifier_core::shard_challenges`) are slots 1–4 from G8; for a
+The circuit's external challenges (`verifier_core::shard_challenges`) are slots 1–4 and 14 from G8; for a
 window family, slot 5 at the window `verifier_core::shard_window` gives the shard
 ([memory.md](memory.md) §3.3); then the lookup slots from `g` and `β`. Its outputs, the top layer,
 are the two memory roots and then each channel's `(num, den)` ([lookup.md](lookup.md) §6), `2 + 2c`
@@ -188,7 +188,7 @@ nothing a proof or statement carries makes the core panic, for a loaded key.
 | `verify_shard_local(vk, global, proof, public)` | and one `ShardProof` | 4–10a, 10c, 11 | once a shard |
 | `verify_global_memory(vk, global, public)` | key, statement, challenges | 10b | once a statement |
 
-`GlobalChallenges` is the four memory challenges and the digest. `reduce_shard` and `verify_shard`
+`GlobalChallenges` is the five memory challenges (`verifier_core::MEMORY_CHALLENGES`) and the digest. `reduce_shard` and `verify_shard`
 are the three in that order, so a proof that fails both step 11 and 10b is refused at 11. Step
 10b reads only `vk.entry_pc`, the boundary, the roots and the challenges, so a block runs it once;
 step 10a puts each shard into the product by holding the roots its GKR proof outputs to the
@@ -228,7 +228,7 @@ setup column moved with the memory it initializes, a generic-table row no lookup
 
 | field | |
 | --- | --- |
-| `code_version: u32` | `constants::family::CODE_VERSION`, 0 |
+| `code_version: u32` | `constants::family::CODE_VERSION`, 1 |
 | `config: VmConfig` | the static shape ([program.md](program.md) §7) |
 | `entry_pc: u32` | the image's entry pc |
 | `identity: ProgramIdentity` | [program.md](program.md) §8 |
@@ -308,7 +308,7 @@ length asks for, and refuses trailing bytes.
 ```text
 PublicInputs   input bytes, output bytes, exit_status u32,
                shard_counts list<u32>, windows list<u32>,
-               boundary Fp[64]                     memory.md §4.1's order and ranges
+               boundary Fp[95]                     memory.md §4.1's order and ranges
                memory_commitments list<Commitment>
                memory_roots list<Fp2[2]>
 

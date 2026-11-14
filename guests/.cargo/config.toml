@@ -1,9 +1,9 @@
 # The guest template config. One setting and two linker flags, and nothing
 # that a guest author has to remember to type.
 [build]
-target = "riscv32imac-unknown-none-elf"
+target = "riscv64imac-unknown-none-elf"
 
-[target.riscv32imac-unknown-none-elf]
+[target.riscv64imac-unknown-none-elf]
 # No `runner`. An Apogee guest is an Apogee-SDK program and not a Linux
 # executable: its input, its advice and its journal are windows of guest memory
 # this VM lays out (`docs/spec/public-values.md`), which nothing outside the VM
@@ -18,7 +18,7 @@ target = "riscv32imac-unknown-none-elf"
 #       addresses, so relaxation is off.
 rustflags = [
     "-C",
-    "link-arg=-T../crates/guest-sdk/link.ld",
+    "link-arg=-T../crates/guest-sdk/apogee.ld",
     "-C",
     "link-arg=--no-relax",
 ]

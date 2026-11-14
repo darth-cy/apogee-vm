@@ -3,10 +3,9 @@
 //!
 //! **Every test here is `#[ignore]`d, and runs by name with
 //! `--include-ignored --test-threads=1`**, for `tests/acceptance.rs`' reason:
-//! five execution families' shards are `2^20` rows, and CI does not run them.
+//! six execution families' shards are `2^20` rows, and CI does not run them.
 //! The circuits row by row, the reduced-width splice check and everything else
-//! that needs no proof is `crates/checker/tests/mem_word.rs`, `mem_subword.rs`,
-//! `atomics.rs` and `mem_fill.rs`, in ordinary CI.
+//! that needs no proof is `crates/checker/tests/families.rs`, in ordinary CI.
 //!
 //! The statement's **rows touch RAM**, so it has a `ZERO_WINDOWS` shard: the
 //! guest writes near the top of RAM as well as inside window 0.
@@ -21,6 +20,7 @@ use verifier_core::reduce_shard;
 
 const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
 const JBS: u32 = family::JUMP_BRANCH_SLT;
+const MD: u32 = family::MUL_DIV;
 const MW: u32 = family::MEM_WORD;
 const MS: u32 = family::MEM_SUBWORD;
 const AT: u32 = family::ATOMICS;
@@ -61,22 +61,21 @@ fn proof_bytes(a: &constraints::CircuitArtifact, p: &ShardProof) -> usize {
         + opening.bytes.len()
 }
 
-/// The guest decodes into the five execution families it runs — add/sub and
-/// jump/branch/slt beside the three memory-op families — and the window
-/// families; its trace self-checks and exits with the number of checks it ran,
-/// 50; the streaming prover proves one shard of each family that has one, nine
-/// of them, a `ZERO_WINDOWS` shard among them; `verify_shard` accepts every one
-/// against the one statement; and every proof has its circuit's shape.
+/// The guest decodes into the six execution families it runs — add/sub,
+/// jump/branch/slt and mul/div, the last for the shifts that build its 64-bit
+/// constants, beside the three memory-op families — and the window families;
+/// its trace self-checks and exits with the number of checks it ran, 66; the
+/// streaming prover proves one shard of each family that has one, ten of them,
+/// a `ZERO_WINDOWS` shard among them; `verify_shard` accepts every one against
+/// the one statement; and every proof has its circuit's shape, read off the
+/// registry's circuit (`docs/spec/circuits.md` §1 tabulates the shapes).
 ///
-/// The three memory-op families' shapes are pinned twice — as literals and as
-/// the numbers read off the registry's circuit (`docs/spec/circuits.md` §1
-/// tabulates the shapes) — so a change to any of them shows on both sides.
-/// What the trace holds, instruction by instruction, is the three row suites
-/// in `crates/checker/tests` over the same fixture, and the emulator's reading
-/// of it is `crates/emulator/tests/guests.rs`', which checks the exit status
-/// and the journal and nothing below that.
+/// What the trace holds, row by row, is `crates/checker/tests/families.rs`
+/// over the same fixture, and the emulator's reading of it is
+/// `crates/emulator/tests/guests.rs`', which checks the exit status and the
+/// journal and nothing below that.
 #[test]
-#[ignore = "five 2^20-row execution shards: one statement's proof peaks at 18.1 GB"]
+#[ignore = "six 2^20-row execution shards: one statement's proof peaks near 22 GB (unmeasured since RV64)"]
 fn a1_the_guest_proves_and_every_shard_verifies() {
     let (setup, archive, public, proofs) = proved();
     let config = &setup.program.config;
@@ -85,6 +84,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
         vec![
             (ADD, 1 << 20),
             (JBS, 1 << 20),
+            (MD, 1 << 20),
             (MW, 1 << 20),
             (MS, 1 << 20),
             (AT, 1 << 20),
@@ -94,7 +94,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             (family::PUBLIC_OUTPUT, family::PUBLIC_WINDOW_HEIGHT),
             (family::ADVICE_WINDOWS, 1 << 16)
         ],
-        "the guest runs no shift/bitwise and no mul/div, so neither is derived"
+        "the guest runs no bitwise operation, so that family is not derived"
     );
     let live = |f: u32| {
         let table = setup.program.tables.family(f).expect("a table");
@@ -102,8 +102,8 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             .filter(|r| table.is_live(*r))
             .count()
     };
-    assert_eq!((live(ADD), live(JBS)), (180, 56));
-    assert_eq!((live(MW), live(MS), live(AT)), (53, 21, 15));
+    assert_eq!((live(ADD), live(JBS), live(MD)), (274, 84, 50));
+    assert_eq!((live(MW), live(MS), live(AT)), (92, 21, 28));
     assert_eq!(
         archive.memory_log().self_check(&trace::InitialMemory {
             image: &setup.program.image,
@@ -112,7 +112,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
         }),
         Ok(())
     );
-    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 0]);
+    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]);
     assert_eq!(
         public.windows,
         vec![8191],
@@ -128,6 +128,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             (ZERO, 0),
             (ADD, 0),
             (JBS, 0),
+            (MD, 0),
             (MW, 0),
             (MS, 0),
             (AT, 0),

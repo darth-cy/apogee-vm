@@ -1,4 +1,4 @@
-//! RV32C expansion: every 16-bit encoding to the exact 32-bit instruction it
+//! RV64C expansion: every 16-bit encoding to the exact 32-bit instruction it
 //! abbreviates.
 //!
 //! The C extension is *purely an encoding*. Every valid compressed form is one
@@ -9,16 +9,16 @@
 //!
 //! # What is accepted
 //!
-//! The base C extension in its **RV32 flavor**, and nothing else. Everything
-//! below is a loud error, never a silently-passed word:
+//! The base C extension in its **RV64 flavor**, and nothing else: `c.ld`,
+//! `c.sd`, `c.ldsp`, `c.sdsp`, `c.addiw`, `c.addw`, `c.subw` and six-bit
+//! shift amounts are in, RV32's `c.jal` (whose slot is `c.addiw` here) is
+//! not. Everything below is a loud error, never a silently-passed word:
 //!
-//! - the floating-point forms (`c.fld`, `c.flw`, `c.fsd`, `c.fsw`, and their
-//!   `sp` variants) — the F and D extensions are not in RV32IMAC;
-//! - the RV64-only forms (`c.addw`, `c.subw`, and any shift with `shamt[5]`
-//!   set, which on RV32 is a reserved encoding rather than a 64-bit shift);
+//! - the floating-point forms (`c.fld`, `c.fsd` and their `sp` variants) — the
+//!   D extension is not in RV64IMAC;
 //! - the reserved code points (`c.addi4spn` with `nzuimm = 0`, `c.addi16sp`
-//!   and `c.lui` with `nzimm = 0`, `c.lwsp` with `rd = x0`, `c.jr` with
-//!   `rs1 = x0`, the all-zero halfword);
+//!   and `c.lui` with `nzimm = 0`, `c.addiw`, `c.lwsp` and `c.ldsp` with
+//!   `rd = x0`, `c.jr` with `rs1 = x0`, the all-zero halfword);
 //! - the `Zc*` extensions, which reuse the reserved slots this file rejects:
 //!   `Zcb` sits in quadrant 0 `funct3 = 100`, `Zcmp`/`Zcmt` in quadrant 2
 //!   `funct3 = 101`.
@@ -40,7 +40,9 @@
 
 // Base opcodes, from the RISC-V unprivileged spec's opcode map.
 const OP_IMM: u32 = 0b001_0011;
+const OP_IMM_32: u32 = 0b001_1011;
 const OP: u32 = 0b011_0011;
+const OP_32: u32 = 0b011_1011;
 const LOAD: u32 = 0b000_0011;
 const STORE: u32 = 0b010_0011;
 const BRANCH: u32 = 0b110_0011;
@@ -95,15 +97,17 @@ pub fn expand(c: u16) -> Result<u32, &'static str> {
                 // c.addi4spn rd', nzuimm  ->  addi rd', x2, nzuimm
                 Ok(i_type(nzuimm as i32, 2, 0b000, rp_lo, OP_IMM))
             }
-            0b001 => Err("c.fld: the D extension is not in RV32IMAC"),
+            0b001 => Err("c.fld: the D extension is not in RV64IMAC"),
             // c.lw rd', uimm(rs1')  ->  lw rd', uimm(rs1')
             0b010 => Ok(i_type(cl_cs_imm(c) as i32, rp_hi, 0b010, rp_lo, LOAD)),
-            0b011 => Err("c.flw: the F extension is not in RV32IMAC"),
+            // c.ld rd', uimm(rs1')  ->  ld rd', uimm(rs1')
+            0b011 => Ok(i_type(cl_cs_d_imm(c) as i32, rp_hi, 0b011, rp_lo, LOAD)),
             0b100 => Err("quadrant 0 funct3 = 100 is reserved (the Zcb encoding space)"),
-            0b101 => Err("c.fsd: the D extension is not in RV32IMAC"),
+            0b101 => Err("c.fsd: the D extension is not in RV64IMAC"),
             // c.sw rs2', uimm(rs1')  ->  sw rs2', uimm(rs1')
             0b110 => Ok(s_type(cl_cs_imm(c) as i32, rp_lo, rp_hi, 0b010, STORE)),
-            _ => Err("c.fsw: the F extension is not in RV32IMAC"),
+            // c.sd rs2', uimm(rs1')  ->  sd rs2', uimm(rs1')
+            _ => Ok(s_type(cl_cs_d_imm(c) as i32, rp_lo, rp_hi, 0b011, STORE)),
         },
 
         // -------------------------------------------------------------------
@@ -117,8 +121,13 @@ pub fn expand(c: u16) -> Result<u32, &'static str> {
             // cases with the other field nonzero are HINTs, and expand the same
             // way.
             0b000 => Ok(i_type(ci_imm(c), rd_rs1, 0b000, rd_rs1, OP_IMM)),
-            // c.jal offset  ->  jal x1, offset   (RV32-only encoding)
-            0b001 => Ok(j_type(cj_imm(c), 1, JAL)),
+            // c.addiw rd, imm  ->  addiw rd, rd, imm   (RV32's c.jal slot)
+            0b001 => {
+                if rd_rs1 == 0 {
+                    return Err("c.addiw with rd = x0 is a reserved encoding");
+                }
+                Ok(i_type(ci_imm(c), rd_rs1, 0b000, rd_rs1, OP_IMM_32))
+            }
             // c.li rd, imm  ->  addi rd, x0, imm
             0b010 => Ok(i_type(ci_imm(c), 0, 0b000, rd_rs1, OP_IMM)),
             0b011 => {
@@ -145,13 +154,13 @@ pub fn expand(c: u16) -> Result<u32, &'static str> {
             }
             0b100 => match (c >> 10) & 0b11 {
                 // c.srli rd', shamt  ->  srli rd', rd', shamt
-                0b00 => Ok(i_type(rv32_shamt(c)? as i32, rp_hi, 0b101, rp_hi, OP_IMM)),
+                0b00 => Ok(i_type(shamt(c) as i32, rp_hi, 0b101, rp_hi, OP_IMM)),
                 // c.srai rd', shamt  ->  srai rd', rd', shamt
                 //
                 // SRAI is SRLI with bit 30 of the word set, which is bit 10 of
                 // the 12-bit immediate field.
                 0b01 => Ok(i_type(
-                    (0b0100_0000_0000 | rv32_shamt(c)?) as i32,
+                    (0b0100_0000_0000 | shamt(c)) as i32,
                     rp_hi,
                     0b101,
                     rp_hi,
@@ -168,8 +177,9 @@ pub fn expand(c: u16) -> Result<u32, &'static str> {
                         (0, 0b01) => Ok(r_type(0, rp_lo, rp_hi, 0b100, rp_hi, OP)),
                         (0, 0b10) => Ok(r_type(0, rp_lo, rp_hi, 0b110, rp_hi, OP)),
                         (0, _) => Ok(r_type(0, rp_lo, rp_hi, 0b111, rp_hi, OP)),
-                        (_, 0b00) => Err("c.subw is an RV64-only encoding"),
-                        (_, 0b01) => Err("c.addw is an RV64-only encoding"),
+                        // c.subw / c.addw rd', rs2'
+                        (_, 0b00) => Ok(r_type(0b010_0000, rp_lo, rp_hi, 0b000, rp_hi, OP_32)),
+                        (_, 0b01) => Ok(r_type(0, rp_lo, rp_hi, 0b000, rp_hi, OP_32)),
                         _ => Err("quadrant 1 funct3 = 100, bit 12 = 1, bits 6:5 = 1x is reserved"),
                     }
                 }
@@ -187,8 +197,8 @@ pub fn expand(c: u16) -> Result<u32, &'static str> {
         // -------------------------------------------------------------------
         0b10 => match funct3 {
             // c.slli rd, shamt  ->  slli rd, rd, shamt
-            0b000 => Ok(i_type(rv32_shamt(c)? as i32, rd_rs1, 0b001, rd_rs1, OP_IMM)),
-            0b001 => Err("c.fldsp: the D extension is not in RV32IMAC"),
+            0b000 => Ok(i_type(shamt(c) as i32, rd_rs1, 0b001, rd_rs1, OP_IMM)),
+            0b001 => Err("c.fldsp: the D extension is not in RV64IMAC"),
             0b010 => {
                 if rd_rs1 == 0 {
                     return Err("c.lwsp with rd = x0 is a reserved encoding");
@@ -196,7 +206,13 @@ pub fn expand(c: u16) -> Result<u32, &'static str> {
                 // c.lwsp rd, uimm(x2)  ->  lw rd, uimm(x2)
                 Ok(i_type(lwsp_imm(c) as i32, 2, 0b010, rd_rs1, LOAD))
             }
-            0b011 => Err("c.flwsp: the F extension is not in RV32IMAC"),
+            0b011 => {
+                if rd_rs1 == 0 {
+                    return Err("c.ldsp with rd = x0 is a reserved encoding");
+                }
+                // c.ldsp rd, uimm(x2)  ->  ld rd, uimm(x2)
+                Ok(i_type(ldsp_imm(c) as i32, 2, 0b011, rd_rs1, LOAD))
+            }
             0b100 => match ((c >> 12) & 1, rs2) {
                 (0, 0) => {
                     if rd_rs1 == 0 {
@@ -214,10 +230,11 @@ pub fn expand(c: u16) -> Result<u32, &'static str> {
                 // c.add rd, rs2  ->  add rd, rd, rs2
                 (_, _) => Ok(r_type(0, rs2, rd_rs1, 0b000, rd_rs1, OP)),
             },
-            0b101 => Err("c.fsdsp: the D extension is not in RV32IMAC (the Zcmp encoding space)"),
+            0b101 => Err("c.fsdsp: the D extension is not in RV64IMAC (the Zcmp encoding space)"),
             // c.swsp rs2, uimm(x2)  ->  sw rs2, uimm(x2)
             0b110 => Ok(s_type(swsp_imm(c) as i32, rs2, 2, 0b010, STORE)),
-            _ => Err("c.fswsp: the F extension is not in RV32IMAC"),
+            // c.sdsp rs2, uimm(x2)  ->  sd rs2, uimm(x2)
+            _ => Ok(s_type(sdsp_imm(c) as i32, rs2, 2, 0b011, STORE)),
         },
 
         // `c & 0b11 == 0b11` is a 32-bit instruction; the caller never asks.
@@ -247,6 +264,13 @@ fn ciw_imm(c: u32) -> u32 {
 /// `uimm[5:3] = c[12:10]`, `[2] = c[6]`, `[6] = c[5]`.
 fn cl_cs_imm(c: u32) -> u32 {
     ((c >> 7) & 0b11_1000) | ((c >> 4) & 0b100) | ((c << 1) & 0b100_0000)
+}
+
+/// CL/CS, `c.ld` and `c.sd`: a zero-extended, doubleword-scaled 8-bit offset.
+///
+/// `uimm[5:3] = c[12:10]`, `[7:6] = c[6:5]`.
+fn cl_cs_d_imm(c: u32) -> u32 {
+    ((c >> 7) & 0b11_1000) | ((c << 1) & 0b1100_0000)
 }
 
 /// CI, the plain 6-bit signed immediate: `imm[5] = c[12]`, `[4:0] = c[6:2]`.
@@ -279,6 +303,20 @@ fn lwsp_imm(c: u32) -> u32 {
     ((c >> 7) & 0b10_0000) | ((c >> 2) & 0b1_1100) | ((c << 4) & 0b1100_0000)
 }
 
+/// `c.ldsp`: a zero-extended, doubleword-scaled 9-bit offset from `x2`.
+///
+/// `uimm[5] = c[12]`, `[4:3] = c[6:5]`, `[8:6] = c[4:2]`.
+fn ldsp_imm(c: u32) -> u32 {
+    ((c >> 7) & 0b10_0000) | ((c >> 2) & 0b1_1000) | ((c << 4) & 0b1_1100_0000)
+}
+
+/// `c.sdsp`: a zero-extended, doubleword-scaled 9-bit offset to `x2`.
+///
+/// `uimm[5:3] = c[12:10]`, `[8:6] = c[9:7]`.
+fn sdsp_imm(c: u32) -> u32 {
+    ((c >> 7) & 0b11_1000) | ((c >> 1) & 0b1_1100_0000)
+}
+
 /// `c.swsp`: a zero-extended, word-scaled 8-bit offset to `x2`.
 ///
 /// `uimm[5:2] = c[12:9]`, `[7:6] = c[8:7]`.
@@ -286,7 +324,7 @@ fn swsp_imm(c: u32) -> u32 {
     ((c >> 7) & 0b11_1100) | ((c >> 1) & 0b1100_0000)
 }
 
-/// CJ, `c.j` and `c.jal`: a sign-extended, halfword-scaled 12-bit offset.
+/// CJ, `c.j`: a sign-extended, halfword-scaled 12-bit offset.
 ///
 /// `imm[11] = c[12]`, `[4] = c[11]`, `[9:8] = c[10:9]`, `[10] = c[8]`,
 /// `[6] = c[7]`, `[7] = c[6]`, `[3:1] = c[5:3]`, `[5] = c[2]`. Bit 0 is zero.
@@ -319,15 +357,12 @@ fn cb_imm(c: u32) -> i32 {
     )
 }
 
-/// The shift amount shared by `c.slli`, `c.srli` and `c.srai`.
+/// The six-bit shift amount shared by `c.slli`, `c.srli` and `c.srai`.
 ///
-/// `shamt[5] = c[12]`, `[4:0] = c[6:2]`. On RV32 the high bit must be zero: a
-/// set bit is not a 64-bit shift, it is a reserved encoding.
-fn rv32_shamt(c: u32) -> Result<u32, &'static str> {
-    if (c >> 12) & 1 != 0 {
-        return Err("a compressed shift with shamt[5] set is reserved on RV32");
-    }
-    Ok((c >> 2) & 0b1_1111)
+/// `shamt[5] = c[12]`, `[4:0] = c[6:2]`. A zero amount is a HINT on RV64C,
+/// expanded like the others.
+fn shamt(c: u32) -> u32 {
+    ((c >> 7) & 0b10_0000) | ((c >> 2) & 0b1_1111)
 }
 
 // ---------------------------------------------------------------------------
@@ -428,32 +463,24 @@ mod tests {
     /// exists for the ones a program is most likely to contain.
     #[test]
     fn the_rejected_classes_are_rejected() {
-        let cases: [(u16, &str); 22] = [
+        let cases: [(u16, &str); 14] = [
             (0x0000, "the all-zero halfword"),
             (0x0008, "c.addi4spn with nzuimm = 0"),
-            // quadrant 0: the F/D forms and the Zcb slot
+            // quadrant 0: the D forms and the Zcb slot
             (0x2000, "c.fld"),
-            (0x6000, "c.flw"),
             (0x8000, "quadrant 0 funct3 = 100 (Zcb)"),
             (0xa000, "c.fsd"),
-            (0xe000, "c.fsw"),
-            // quadrant 1: the reserved immediates and the RV64 forms
+            // quadrant 1: the reserved immediates and register fields
+            (0x2001, "c.addiw with rd = x0"),
             (0x6101, "c.addi16sp with nzimm = 0"),
             (0x6181, "c.lui with nzimm = 0"),
-            (0x9101, "c.srli with shamt[5] set"),
-            (0x9501, "c.srai with shamt[5] set"),
-            (0x9c01, "c.subw"),
-            (0x9c21, "c.addw"),
             (0x9c41, "quadrant 1 reserved, bits 6:5 = 10"),
             (0x9c61, "quadrant 1 reserved, bits 6:5 = 11"),
             // quadrant 2
-            (0x1082, "c.slli with shamt[5] set"),
             (0x2002, "c.fldsp"),
             (0x4002, "c.lwsp with rd = x0"),
-            (0x6002, "c.flwsp"),
+            (0x6002, "c.ldsp with rd = x0"),
             (0x8002, "c.jr with rs1 = x0"),
-            (0xa002, "c.fsdsp / the Zcmp slot"),
-            (0xe002, "c.fswsp"),
         ];
         for (encoding, what) in cases {
             let got = expand(encoding);
@@ -475,9 +502,11 @@ mod tests {
     fn every_halfword_either_expands_or_is_named() {
         // The only opcodes an RVC expansion can produce, from the table in the
         // module docs.
-        const OPCODES: [u32; 9] = [
+        const OPCODES: [u32; 11] = [
             super::OP_IMM,
+            super::OP_IMM_32,
             super::OP,
+            super::OP_32,
             super::LOAD,
             super::STORE,
             super::BRANCH,
@@ -520,33 +549,32 @@ mod tests {
         // Three quarters of the 16-bit space is compressed encodings.
         assert_eq!(accepted.iter().sum::<usize>() + refused, 49152);
 
-        // Quadrant 0: c.lw and c.sw take two whole slots; c.addi4spn takes its
-        // slot less the eight encodings whose nzuimm is zero (one per rd');
-        // the five F/D and Zcb slots are gone entirely.
-        assert_eq!(accepted[0], 2 * 2048 + (2048 - 8), "quadrant 0");
+        // Quadrant 0: c.lw, c.ld, c.sw and c.sd take four whole slots;
+        // c.addi4spn takes its slot less the eight encodings whose nzuimm is
+        // zero (one per rd'); the two D slots and the Zcb slot are gone.
+        assert_eq!(accepted[0], 4 * 2048 + (2048 - 8), "quadrant 0");
 
-        // Quadrant 1: six whole slots (c.addi, c.jal, c.li, c.j, c.beqz,
-        // c.bnez), plus
+        // Quadrant 1: five whole slots (c.addi, c.li, c.j, c.beqz, c.bnez),
+        // plus
+        //   funct3 = 001: c.addiw less the 64 encodings with rd = x0;
         //   funct3 = 011: 64 encodings have rd = x2 and are c.addi16sp, one of
         //     which has nzimm = 0; the other 1984 are c.lui, of which the 31
         //     with nzimm = 0 (one per rd != x2) are reserved;
-        //   funct3 = 100: c.srli and c.srai keep half of their 512 encodings
-        //     each (shamt[5] must be zero), c.andi keeps all 512, and the
-        //     register-register block keeps the 256 with bit 12 clear and none
-        //     of the 256 with it set (c.subw, c.addw and two reserved corners).
+        //   funct3 = 100: c.srli, c.srai and c.andi keep all 512 each, and the
+        //     register-register block keeps the 256 with bit 12 clear and the
+        //     128 of c.subw and c.addw with it set, losing two reserved corners.
         assert_eq!(
             accepted[1],
-            6 * 2048 + (63 + 1953) + (256 + 256 + 512 + 256),
+            5 * 2048 + (2048 - 64) + (63 + 1953) + (3 * 512 + 256 + 128),
             "quadrant 1"
         );
 
-        // Quadrant 2: c.swsp takes a whole slot; c.slli keeps the half with
-        // shamt[5] clear; c.lwsp loses the 64 encodings with rd = x0; the
-        // funct3 = 100 slot loses only c.jr with rs1 = x0; the four F/D slots
-        // are gone.
+        // Quadrant 2: c.slli, c.swsp and c.sdsp take whole slots; c.lwsp and
+        // c.ldsp lose the 64 encodings with rd = x0; the funct3 = 100 slot
+        // loses only c.jr with rs1 = x0; the two D slots are gone.
         assert_eq!(
             accepted[2],
-            2048 + 1024 + (2048 - 64) + (2048 - 1),
+            3 * 2048 + 2 * (2048 - 64) + (2048 - 1),
             "quadrant 2"
         );
     }

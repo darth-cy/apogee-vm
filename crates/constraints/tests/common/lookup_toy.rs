@@ -13,18 +13,19 @@
 //!           pc mask
 //!
 //! generic   and_a, and_b, and_c, and_on   -> the AND byte table
-//!           sign_h, sign_s, sign_on       -> U16GetSign
+//!           sign_h, sign_s, sign_on       -> SIGN
 //!           S[0..3] the packed table: key, v1, v2
 //!
 //! decoder   the row's pc is the frame's own M column; six more columns claim
-//!           next_pc, rs1, rs2, rd, imm and the packed mask, and twelve bits,
-//!           each boolean, recompose that mask
+//!           next_pc, rs1, rs2, rd, imm and the packed mask, and twelve kind
+//!           bits and the immediate's sign, each boolean, recompose that mask
 //!           S[3..10] JUMP_BRANCH_SLT's table in lookup-tuple order
 //!
 //! last      one multiplicity column per channel, last in the subtree
 //! ```
 
-use constants::generic_table::{AND_BASE, SIGN_BASE, WIDTH as GENERIC_WIDTH};
+use constants::extra_mask::IMM_NEGATIVE;
+use constants::generic_table::{AND, SIGN, WIDTH as GENERIC_WIDTH};
 use constants::{family, lookup_channel};
 use constraints::lookup::{range_table, ChannelSpec};
 use constraints::memory::{
@@ -48,14 +49,17 @@ pub const TRACE_VARS: u32 = 20;
 /// `rd` — four queries — so it holds the future-read attack (two `x0` reads
 /// with their timestamps swapped) and the x0 gadget, at half the leaves of the
 /// widest frame. Its lookup tuple is seven columns, the widest any channel
-/// carries, and its packed mask has twelve one-hot bits.
+/// carries, and its packed mask has twelve one-hot kind bits and the
+/// immediate's sign at bit `IMM_NEGATIVE`.
 pub const FAMILY: u32 = family::JUMP_BRANCH_SLT;
 
 /// The decoder table's width, `program::lookup_tuple(FAMILY).len()`.
 pub const DECODER_WIDTH: usize = 7;
 
-/// How many bits the decoder's packed mask is split into,
-/// `constants::extra_mask`'s count for [`FAMILY`].
+/// How many kind bits the decoder's packed mask is split into,
+/// `constants::extra_mask`'s count for [`FAMILY`]. The immediate's sign is one
+/// more boolean column, `imm_negative`, weighted `2^IMM_NEGATIVE`, as every
+/// family circuit's is.
 pub const MASK_BITS: usize = 12;
 
 /// The channels this toy declares, in the order its multiplicity columns and its
@@ -114,8 +118,8 @@ fn frame(slot: usize, field: u32) -> PolyAddress {
 }
 
 /// The frame's own witness columns: one `<q>_gap_hi` per query, then the x0
-/// gadget's three. Everything below follows them.
-const FRAME_WITNESS: u32 = 4 + 3;
+/// gadget's four. Everything below follows them.
+const FRAME_WITNESS: u32 = 4 + 4;
 const WORD: u32 = FRAME_WITNESS;
 const WORD_HI: u32 = FRAME_WITNESS + 1;
 const AND_A: u32 = FRAME_WITNESS + 2;
@@ -127,7 +131,8 @@ const SIGN_S: u32 = FRAME_WITNESS + 7;
 const SIGN_ON: u32 = FRAME_WITNESS + 8;
 const DECODED: u32 = FRAME_WITNESS + 9;
 const KIND: u32 = DECODED + 6;
-const MULT: u32 = KIND + MASK_BITS as u32;
+const IMM_NEG: u32 = KIND + MASK_BITS as u32;
+const MULT: u32 = IMM_NEG + 1;
 
 /// The setup layout: the generic table, then the decoder's.
 const DECODER_TABLE: u32 = GENERIC_WIDTH as u32;
@@ -146,6 +151,7 @@ pub fn lookup_toy() -> CircuitArtifact {
         "decoded_mask",
     ]));
     witness.extend((0..MASK_BITS).map(|k| format!("kind_{k}")));
+    witness.push("imm_negative".to_string());
     // One multiplicity per channel **this toy declares**, in the order
     // `channels()` below lists them — and not one per channel that exists:
     // iterating `NAMES` would give the toy a committed column for any channel
@@ -156,7 +162,7 @@ pub fn lookup_toy() -> CircuitArtifact {
             .map(|channel| format!("mult_{}", lookup_channel::NAMES[*channel as usize])),
     );
 
-    let mut setup = names(&["generic_key", "generic_v1", "generic_v2"]);
+    let mut setup = names(&["generic_tag", "generic_key", "generic_v1", "generic_v2"]);
     setup.extend(names(&[
         "table_pc",
         "table_next_pc",
@@ -184,27 +190,28 @@ pub fn lookup_toy() -> CircuitArtifact {
             selector: pc_mask,
             tuple: vec![linear(&[(lit(1), w(WORD)), (halfword, w(WORD_HI))], lit(0))],
         },
-        // The gated key is `and_on·(a + AND_BASE + 1)`, the offset of one being
-        // the gating's, so a switched-off row lands on the ZeroEntry and no
-        // real entry does.
+        // The gated tag is `and_on·(AND + 1)`, the offset of one being the
+        // gating's, so a switched-off row lands on the ZeroEntry and no real
+        // entry does; the tag names the sub-table, which bounds the key.
         LookupExpr {
             name: "and_lookup".into(),
             channel: lookup_channel::GENERIC,
             selector: w(AND_ON),
             tuple: vec![
-                linear(&[(lit(1), w(AND_A))], lit(AND_BASE as u64)),
+                linear(&[], lit(AND as u64)),
+                column(w(AND_A)),
                 column(w(AND_B)),
                 column(w(AND_C)),
             ],
         },
-        // `U16GetSign` is the narrower table, zero-padded to the channel's
-        // width; its key base keeps its range disjoint from the AND table's.
+        // `SIGN` is the narrower table, zero-padded to the channel's width.
         LookupExpr {
             name: "sign_lookup".into(),
             channel: lookup_channel::GENERIC,
             selector: w(SIGN_ON),
             tuple: vec![
-                linear(&[(lit(1), w(SIGN_H))], lit(SIGN_BASE as u64)),
+                linear(&[], lit(SIGN as u64)),
+                column(w(SIGN_H)),
                 column(w(SIGN_S)),
                 linear(&[], lit(0)),
             ],
@@ -242,11 +249,13 @@ pub fn lookup_toy() -> CircuitArtifact {
     for k in 0..MASK_BITS {
         enforcing.push((format!("kind_{k}_boolean"), booleanity(w(KIND + k as u32))));
     }
+    enforcing.push(("imm_negative_boolean".to_string(), booleanity(w(IMM_NEG))));
     // The packed mask's bits: booleanity is each bit's, and one-hotness is the
     // table's domain and nothing else.
     let mut terms: Vec<(Coeff, PolyAddress)> = (0..MASK_BITS)
         .map(|k| (lit(1 << k), w(KIND + k as u32)))
         .collect();
+    terms.push((lit(1 << IMM_NEGATIVE), w(IMM_NEG)));
     terms.push((Coeff::Literal(Fp::MINUS_ONE), w(DECODED + 5)));
     enforcing.push(("decoded_mask_bits".to_string(), linear(&terms, lit(0))));
 

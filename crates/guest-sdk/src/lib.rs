@@ -1,9 +1,11 @@
 #![no_std]
 //! The guest-side runtime: crt0, the entry macro, a bump allocator, a panic
-//! handler, the exit call and the delegation call.
+//! handler, the exit call and the delegation call — and, last in the file, the
+//! C ABI over them, which a C or C++ guest links as `libapogee_guest.a`
+//! (`include/apogee_guest.h`, `docs/guest-program-manual.md` §11).
 //!
 //! Everything here runs *inside* the proof. It compiles only for
-//! `riscv32imac-unknown-none-elf` and links only into guest binaries.
+//! `riscv64imac-unknown-none-elf` and links only into guest binaries.
 //!
 //! # The I/O model in one paragraph
 //!
@@ -34,8 +36,16 @@ use constants::{delegation, ecall, guest_memory};
 // ---------------------------------------------------------------------------
 
 // `_start` sits in its own `.text._start` section so the linker script places
-// it first, at ORIGIN(RAM). It does exactly four things: point `sp` at
-// `__stack_top`, zero `.bss`, call `main`, and exit(0) if `main` returns.
+// it first, at ORIGIN(RAM). It does exactly six things: point `sp` at
+// `__stack_top`, zero `.bss`, call each initializer in
+// `__init_array_start..__init_array_end` in order, call `main`, run the
+// destructors `__cxa_atexit` registered, and exit with what `main` returned in
+// `a0` — C's `int main(void)`, and 0 from the `entry!` wrapper. The
+// initializers are C++'s dynamic initialization and C's constructor functions,
+// and the destructors are its static objects'. A Rust guest has neither, and
+// pays a few instructions for each empty step. The pointers are walked in `s0`
+// and `s1`, and `main`'s status is kept in `s0`: callee-saved registers, which
+// every initializer and destructor preserves.
 //
 // The `.bss` loop is byte-wise on purpose. `__bss_start` is aligned to the
 // output section's alignment and `__bss_end` is not aligned at all, so a
@@ -61,13 +71,25 @@ global_asm!(
     "  addi t0, t0, 1",
     "  j    1b",
     "2:",
+    "  la   s0, __init_array_start",
+    "  la   s1, __init_array_end",
+    "3:",
+    "  bgeu s0, s1, 4f",
+    "  ld   t0, 0(s0)",
+    "  jalr t0",
+    "  addi s0, s0, 8",
+    "  j    3b",
+    "4:",
     "  call main",
-    "  li   a0, 0",
+    "  mv   s0, a0",
+    "  call {destructors}",
+    "  mv   a0, s0",
     "  li   a7, {exit}",
     "  ecall",
-    "3:",
-    "  j    3b",
+    "5:",
+    "  j    5b",
     exit = const ecall::EXIT,
+    destructors = sym run_destructors,
 );
 
 /// Give a function the `main` symbol that crt0 calls.
@@ -86,7 +108,7 @@ global_asm!(
 /// The named function keeps its own name and may be called `main`: what this
 /// emits is a separate wrapper carrying the exported symbol, so the two never
 /// collide. The function takes no arguments and returns `()`; returning from it
-/// is an `exit(0)`.
+/// is an `exit(0)`, the wrapper returning 0 to crt0.
 ///
 /// This is a `macro_rules!` and not an `#[entry]` attribute, because an
 /// attribute macro requires a `proc-macro` crate — which cannot export anything
@@ -95,8 +117,9 @@ global_asm!(
 macro_rules! entry {
     ($f:ident) => {
         #[export_name = "main"]
-        pub extern "C" fn __apogee_guest_entry() {
-            $f()
+        pub extern "C" fn __apogee_guest_entry() -> i32 {
+            $f();
+            0
         }
     };
 }
@@ -123,8 +146,8 @@ macro_rules! entry {
 /// # Safety
 /// The caller guarantees that `num` names a call whose contract is satisfied
 /// by `a0`.
-unsafe fn ecall1(num: u32, a0: u32) -> i32 {
-    let ret: i32;
+unsafe fn ecall1(num: usize, a0: usize) -> isize {
+    let ret: isize;
     core::arch::asm!(
         "ecall",
         in("a7") num,
@@ -143,7 +166,7 @@ unsafe fn ecall1(num: u32, a0: u32) -> i32 {
 /// memory to every instruction, which is the whole point of putting them there
 /// (`docs/spec/public-values.md` §2). Volatile because the compiler has no
 /// reason to believe anything ever wrote them.
-fn word_at(addr: u32) -> u32 {
+fn word_at(addr: usize) -> u32 {
     // SAFETY: `addr` is 4-aligned and inside a region the executor makes
     // addressable; every caller here derives it from a window origin.
     unsafe { core::ptr::read_volatile(addr as *const u32) }
@@ -153,7 +176,7 @@ fn word_at(addr: u32) -> u32 {
 ///
 /// # Safety
 /// `addr .. addr + len` must lie inside one addressable region.
-unsafe fn slice_at(addr: u32, len: usize) -> &'static [u8] {
+unsafe fn slice_at(addr: usize, len: usize) -> &'static [u8] {
     core::slice::from_raw_parts(addr as *const u8, len)
 }
 
@@ -164,10 +187,11 @@ unsafe fn slice_at(addr: u32, len: usize) -> &'static [u8] {
 /// statement through the memory argument (`docs/spec/public-values.md` §5).
 /// Reading it is optional: nothing forces a guest to look.
 pub fn public_input() -> &'static [u8] {
-    let len = word_at(guest_memory::PUBLIC_INPUT_ORIGIN).min(guest_memory::PUBLIC_PAYLOAD_BYTES);
+    let origin = guest_memory::PUBLIC_INPUT_ORIGIN as usize;
+    let len = word_at(origin).min(guest_memory::PUBLIC_PAYLOAD_BYTES);
     // SAFETY: `len` is clamped to the window's payload, so the slice is inside
     // the window the executor initialized.
-    unsafe { slice_at(guest_memory::PUBLIC_INPUT_ORIGIN + 4, len as usize) }
+    unsafe { slice_at(origin + 4, len as usize) }
 }
 
 /// The public input, copied into `buf`; returns how many bytes it copied,
@@ -194,32 +218,29 @@ pub fn read_input(buf: &mut [u8]) -> usize {
 /// **A guest that panics has still published what it committed**, because the
 /// journal is memory and the panic handler does not have to know about it.
 pub fn commit(bytes: &[u8]) {
-    let len = word_at(guest_memory::PUBLIC_OUTPUT_ORIGIN) as usize;
+    let origin = guest_memory::PUBLIC_OUTPUT_ORIGIN as usize;
+    let len = word_at(origin) as usize;
     if len > guest_memory::PUBLIC_PAYLOAD_BYTES as usize
         || bytes.len() > guest_memory::PUBLIC_PAYLOAD_BYTES as usize - len
     {
         exit(EXIT_IO_ERROR);
     }
-    let payload = guest_memory::PUBLIC_OUTPUT_ORIGIN + 4;
+    let payload = origin + 4;
     for (i, byte) in bytes.iter().enumerate() {
         // SAFETY: `len + bytes.len()` is inside the window's payload, checked
         // just above, so the address is inside the window.
-        unsafe { core::ptr::write_volatile((payload + (len + i) as u32) as *mut u8, *byte) };
+        unsafe { core::ptr::write_volatile((payload + len + i) as *mut u8, *byte) };
     }
     // SAFETY: word 0 of the window, which the executor initialized.
-    unsafe {
-        core::ptr::write_volatile(
-            guest_memory::PUBLIC_OUTPUT_ORIGIN as *mut u32,
-            (len + bytes.len()) as u32,
-        )
-    };
+    unsafe { core::ptr::write_volatile(origin as *mut u32, (len + bytes.len()) as u32) };
 }
 
 /// The journal so far: everything [`commit`] has appended.
 pub fn journal() -> &'static [u8] {
-    let len = word_at(guest_memory::PUBLIC_OUTPUT_ORIGIN).min(guest_memory::PUBLIC_PAYLOAD_BYTES);
+    let origin = guest_memory::PUBLIC_OUTPUT_ORIGIN as usize;
+    let len = word_at(origin).min(guest_memory::PUBLIC_PAYLOAD_BYTES);
     // SAFETY: `len` is clamped to the window's payload.
-    unsafe { slice_at(guest_memory::PUBLIC_OUTPUT_ORIGIN + 4, len as usize) }
+    unsafe { slice_at(origin + 4, len as usize) }
 }
 
 /// The **advice**: prover-supplied bytes at `guest_memory::ADVICE_ORIGIN`.
@@ -238,11 +259,11 @@ pub fn journal() -> &'static [u8] {
 /// slice: no advice means no advice region at all, so that a program which uses
 /// none pays no `ADVICE_WINDOWS` shard (`docs/spec/public-values.md` §6).
 pub fn advice() -> &'static [u8] {
-    let len = word_at(guest_memory::ADVICE_ORIGIN);
-    let len = len.min(4 * guest_memory::ADVICE_WORDS - 4);
+    let origin = guest_memory::ADVICE_ORIGIN as usize;
+    let len = word_at(origin).min(4 * guest_memory::ADVICE_WORDS - 4);
     // SAFETY: `len` is clamped to the region, and the executor refuses a read
     // past the bytes it was given rather than returning something else.
-    unsafe { slice_at(guest_memory::ADVICE_ORIGIN + 4, len as usize) }
+    unsafe { slice_at(origin + 4, len as usize) }
 }
 
 /// Exit with `code`. A nonzero status is a failed execution.
@@ -253,7 +274,7 @@ pub fn exit(code: i32) -> ! {
     // thing to do about that than burning cycles.
     loop {
         // SAFETY: `EXIT` takes a status in `a0` and does not return.
-        unsafe { ecall1(ecall::EXIT, code as u32) };
+        unsafe { ecall1(ecall::EXIT as usize, code as isize as usize) };
     }
 }
 
@@ -272,9 +293,9 @@ const EXIT_PANIC: i32 = 101;
 // ---------------------------------------------------------------------------
 
 extern "C" {
-    /// First byte above `.bss`, 16-aligned. Defined by `link.ld`.
+    /// First byte above `.bss`, 16-aligned. Defined by `apogee.ld`.
     static __heap_start: u8;
-    /// One past the last byte of RAM; the initial `sp`. Defined by `link.ld`.
+    /// One past the last byte of RAM; the initial `sp`. Defined by `apogee.ld`.
     static __stack_top: u8;
 }
 
@@ -463,7 +484,128 @@ fn delegate(declared: &'static [u8; delegation::MARKER_BYTES], frame: &mut [u32]
     ]);
     // SAFETY: `frame` is live, writable and word-aligned, and the caller sizes
     // it to the frame `number`'s family reads and writes in place.
-    if unsafe { ecall1(number, frame.as_mut_ptr() as u32) } != 0 {
+    if unsafe { ecall1(number as usize, frame.as_mut_ptr() as usize) } != 0 {
         exit(EXIT_DELEGATION_ERROR);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The C ABI
+// ---------------------------------------------------------------------------
+//
+// What `include/apogee_guest.h` declares, for a C or C++ guest that links this
+// crate built as a static library, `libapogee_guest.a`: crt0 above calls its
+// `main`, and these four are the whole surface it calls. `__cxa_atexit` and
+// `__dso_handle`, after them, are what a C++ compiler calls for a static
+// object's destructor. Last in the file, for the same reason the delegation
+// shims are: a Rust guest that calls none links none.
+
+/// `public_input()`: its address, its length through `len` where not null.
+///
+/// # Safety
+/// `len` is null or valid for a write.
+#[no_mangle]
+pub unsafe extern "C" fn apogee_public_input(len: *mut usize) -> *const u8 {
+    let bytes = public_input();
+    if !len.is_null() {
+        *len = bytes.len();
+    }
+    bytes.as_ptr()
+}
+
+/// `advice()`: its address, its length through `len` where not null.
+///
+/// # Safety
+/// `len` is null or valid for a write.
+#[no_mangle]
+pub unsafe extern "C" fn apogee_advice(len: *mut usize) -> *const u8 {
+    let bytes = advice();
+    if !len.is_null() {
+        *len = bytes.len();
+    }
+    bytes.as_ptr()
+}
+
+/// `commit()`: append `len` bytes at `bytes` to the journal.
+///
+/// # Safety
+/// `bytes` is valid for `len` reads, or `len` is 0.
+#[no_mangle]
+pub unsafe extern "C" fn apogee_commit(bytes: *const u8, len: usize) {
+    if len > 0 {
+        commit(core::slice::from_raw_parts(bytes, len));
+    }
+}
+
+/// `exit()`.
+#[no_mangle]
+pub extern "C" fn apogee_exit(code: i32) -> ! {
+    exit(code)
+}
+
+/// A destructor `__cxa_atexit` registered: the function, its argument and the
+/// destructor registered before it.
+struct Destructor {
+    f: unsafe extern "C" fn(*mut u8),
+    arg: *mut u8,
+    next: *mut Destructor,
+}
+
+/// The registered destructors, the latest first; null when there are none.
+///
+/// In `.data`, not `.bss`, so a guest with no static destructor pays nothing
+/// at startup: crt0 zeroes `.bss` a byte at a time, and in `.bss` LLVM merges
+/// this pointer with the allocator's `BUMP`, so every guest would carry and
+/// zero both.
+#[link_section = ".data"]
+static mut DESTRUCTORS: *mut Destructor = core::ptr::null_mut();
+
+/// Register `f(arg)` to run when `main` returns. C++ calls this once for each
+/// static object whose type has a non-trivial destructor, after constructing
+/// it. The record comes from the bump allocator, so registering more than the
+/// heap holds exits 71, like any allocation.
+///
+/// # Safety
+/// `f` may be called once with `arg` after `main` returns.
+#[no_mangle]
+pub unsafe extern "C" fn __cxa_atexit(
+    f: unsafe extern "C" fn(*mut u8),
+    arg: *mut u8,
+    _dso: *mut u8,
+) -> i32 {
+    let record = ALLOCATOR
+        .alloc(Layout::new::<Destructor>())
+        .cast::<Destructor>();
+    let head = core::ptr::addr_of_mut!(DESTRUCTORS);
+    record.write(Destructor {
+        f,
+        arg,
+        next: *head,
+    });
+    *head = record;
+    0
+}
+
+/// The handle `__cxa_atexit`'s last argument points at. A static image is one
+/// object, so nothing compares it with another.
+#[no_mangle]
+#[allow(non_upper_case_globals)]
+pub static __dso_handle: u8 = 0;
+
+/// Run the registered destructors, the latest first, each once. crt0 calls
+/// this after `main` returns. A destructor that registers another one runs it
+/// next, in the order C++ requires. `apogee_exit`, a panic and every other exit
+/// skip them, like C's `_Exit`.
+extern "C" fn run_destructors() {
+    // SAFETY: the guest is single-threaded. Each record was written whole by
+    // `__cxa_atexit` and is never freed. It is unlinked before its function
+    // runs, so a destructor that registers another, or exits, leaves the list
+    // well formed.
+    unsafe {
+        let head = core::ptr::addr_of_mut!(DESTRUCTORS);
+        while let Some(d) = (*head).as_ref() {
+            *head = d.next;
+            (d.f)(d.arg);
+        }
     }
 }

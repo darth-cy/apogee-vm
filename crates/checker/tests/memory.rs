@@ -17,7 +17,7 @@ use common::{
     frame_height, frame_plan, frame_shard, memory_challenges, prove_and_verify, shards, traced,
     window_shards, witness_row, FAMILY_NAMES, GUESTS, HEIGHT,
 };
-use constants::challenge_slot::{MEM_ALPHA_VAL, MEM_GAMMA};
+use constants::challenge_slot::{MEM_ALPHA_HI, MEM_ALPHA_VAL, MEM_GAMMA};
 use constants::family;
 use constraints::memory::{
     family_frame_artifact, frame_queries, image_window_artifact, value_window_artifact,
@@ -42,20 +42,20 @@ use trace::{
 const EXECUTION: [u32; 7] = [
     family::ADD_SUB_LUI_AUIPC,
     family::JUMP_BRANCH_SLT,
-    family::SHIFT_BITWISE,
+    family::BITWISE,
     family::MUL_DIV,
     family::MEM_WORD,
     family::MEM_SUBWORD,
     family::ATOMICS,
 ];
 
-/// A forwarded artifact over random columns and random slots 1–4, plus slot 5
-/// for window 9.
+/// A forwarded artifact over random columns and random memory slots — 1–4 and
+/// 14 — plus slot 5 for window 9.
 fn forwarded(a: &CircuitArtifact, seed: u64) -> LayerValues {
     let mut rng = Rng::new(seed);
     let rows = 1usize << a.trace_vars;
     let mut memory = ExternalChallenges::new();
-    for slot in MEM_GAMMA..=MEM_ALPHA_VAL {
+    for slot in (MEM_GAMMA..=MEM_ALPHA_VAL).chain([MEM_ALPHA_HI]) {
         let c0 = Fp::from_u64(rng.next_u64());
         memory.insert(
             slot,
@@ -73,13 +73,15 @@ fn forwarded(a: &CircuitArtifact, seed: u64) -> LayerValues {
             (address, MultilinearPoly::new(PolyBacking::Fp(column)))
         })
         .collect();
-    let challenges = window_challenges(&memory, 9, a.trace_vars);
+    // A window's challenges are slots 1–5; a frame also reads `α_hi`.
+    let mut challenges = window_challenges(&memory, 9, a.trace_vars);
+    challenges.insert(MEM_ALPHA_HI, memory.get(MEM_ALPHA_HI).expect("drawn above"));
     forward(a, &BaseLayer::new(columns), &challenges)
 }
 
 type Constructor = fn(u32) -> CircuitArtifact;
 
-/// A padded frame, `ATOMICS`' five queries: 8 leaves a side.
+/// A padded frame, `ATOMICS`' six queries: 8 leaves a side.
 fn atomics_frame(trace_vars: u32) -> CircuitArtifact {
     family_frame_artifact(family::ATOMICS, trace_vars)
 }
@@ -91,7 +93,7 @@ fn reg_frame(trace_vars: u32) -> CircuitArtifact {
 
 /// Each artifact at `trace_vars` 4 beside the layer its first halving list
 /// reads: layer 1 for a window, whose two leaves it halves at once; layer 4 for
-/// a five-query frame, whose 16 leaves take three row-wise lists; and layer 3
+/// a six-query frame, whose 16 leaves take three row-wise lists; and layer 3
 /// for a four-query frame, whose 8 leaves take two. The two frame widths are
 /// here so the hook is held to a depth it cannot have hardcoded.
 const HALVING_INPUTS: [(&str, Constructor, usize); 3] = [
@@ -399,9 +401,9 @@ fn the_row_reading_and_the_log_reading_of_a_frame_agree() {
         ("atomics", 37, 0, HEIGHT),
         ("rvc-dense", 7, 0, HEIGHT),
         ("addsub", 0, 42, HEIGHT),
-        ("mem", 0, 50, HEIGHT),
-        ("alu", 0, 96, HEIGHT),
-        ("control", 0, 16, HEIGHT),
+        ("mem", 0, 66, HEIGHT),
+        ("alu", 0, 144, HEIGHT),
+        ("control", 0, 17, HEIGHT),
     ] {
         let t = common::traced_exiting_at(name, input, status, height);
         for trace in t.traces.families.iter().filter(|f| !f.is_empty()) {

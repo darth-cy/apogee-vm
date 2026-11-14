@@ -141,13 +141,18 @@ __rvcpair_begin:
     c.lw        a4, 124(a3)
     c.sw        a1, 4(a0)
     c.sw        a4, 124(a3)
+    c.ld        a1, 0(a0)
+    c.ld        a4, 248(a3)
+    c.sd        a1, 8(a0)
+    c.sd        a4, 248(a3)
     /* quadrant 1 */
     c.nop
     c.addi      a2, 1
     c.addi      s1, -32
     c.addi      t0, 31
-    c.jal       .+16
-    c.jal       .-2048
+    c.addiw     a2, 1
+    c.addiw     s1, -32
+    c.addiw     t0, 0
     c.li        a3, -1
     c.li        a4, 31
     c.addi16sp  sp, 16
@@ -156,13 +161,17 @@ __rvcpair_begin:
     c.lui       s1, 0xfffe0
     c.srli      a0, 1
     c.srli      a0, 31
+    c.srli      a0, 63
     c.srai      a1, 31
+    c.srai      a1, 32
     c.andi      a2, -32
     c.andi      a3, 31
     c.sub       a0, a1
     c.xor       a0, a1
     c.or        a0, a1
     c.and       a0, a1
+    c.subw      a0, a1
+    c.addw      a4, a5
     c.j         .+8
     c.j         .-2048
     c.beqz      a0, .+8
@@ -172,8 +181,11 @@ __rvcpair_begin:
     /* quadrant 2 */
     c.slli      a0, 1
     c.slli      t0, 31
+    c.slli      t0, 63
     c.lwsp      a0, 0(sp)
     c.lwsp      t1, 252(sp)
+    c.ldsp      a0, 0(sp)
+    c.ldsp      t1, 504(sp)
     c.jr        t0
     c.mv        a0, t1
     c.ebreak
@@ -181,6 +193,8 @@ __rvcpair_begin:
     c.add       a0, t1
     c.swsp      ra, 4(sp)
     c.swsp      t2, 252(sp)
+    c.sdsp      ra, 8(sp)
+    c.sdsp      t2, 504(sp)
 .globl __rvcpair_end
 __rvcpair_end:
 .option pop
@@ -201,13 +215,18 @@ __norvcpair_begin:
     lw          a4, 124(a3)
     sw          a1, 4(a0)
     sw          a4, 124(a3)
+    ld          a1, 0(a0)
+    ld          a4, 248(a3)
+    sd          a1, 8(a0)
+    sd          a4, 248(a3)
     /* quadrant 1 */
     addi        zero, zero, 0
     addi        a2, a2, 1
     addi        s1, s1, -32
     addi        t0, t0, 31
-    jal         ra, .+16
-    jal         ra, .-2048
+    addiw       a2, a2, 1
+    addiw       s1, s1, -32
+    addiw       t0, t0, 0
     addi        a3, zero, -1
     addi        a4, zero, 31
     addi        sp, sp, 16
@@ -216,13 +235,17 @@ __norvcpair_begin:
     lui         s1, 0xfffe0
     srli        a0, a0, 1
     srli        a0, a0, 31
+    srli        a0, a0, 63
     srai        a1, a1, 31
+    srai        a1, a1, 32
     andi        a2, a2, -32
     andi        a3, a3, 31
     sub         a0, a0, a1
     xor         a0, a0, a1
     or          a0, a0, a1
     and         a0, a0, a1
+    subw        a0, a0, a1
+    addw        a4, a4, a5
     jal         zero, .+8
     jal         zero, .-2048
     beq         a0, zero, .+8
@@ -232,8 +255,11 @@ __norvcpair_begin:
     /* quadrant 2 */
     slli        a0, a0, 1
     slli        t0, t0, 31
+    slli        t0, t0, 63
     lw          a0, 0(sp)
     lw          t1, 252(sp)
+    ld          a0, 0(sp)
+    ld          t1, 504(sp)
     jalr        zero, 0(t0)
     add         a0, zero, t1
     ebreak
@@ -241,6 +267,8 @@ __norvcpair_begin:
     add         a0, a0, t1
     sw          ra, 4(sp)
     sw          t2, 252(sp)
+    sd          ra, 8(sp)
+    sd          t2, 504(sp)
 .globl __norvcpair_end
 __norvcpair_end:
 .option pop
@@ -260,7 +288,7 @@ global_asm!(
 .globl rvc_exec
 rvc_exec:
     addi    sp, sp, -16
-    sw      ra, 12(sp)
+    sd      ra, 8(sp)
     addi    a1, a0, 1
     slli    a1, a1, 2
     sw      a1, 0(sp)
@@ -270,7 +298,7 @@ rvc_exec:
     addi    a0, a0, 7
 1:
     andi    a0, a0, 255
-    lw      ra, 12(sp)
+    ld      ra, 8(sp)
     addi    sp, sp, 16
     ret
 .option pop
@@ -281,7 +309,7 @@ rvc_exec:
 .globl norvc_exec
 norvc_exec:
     addi    sp, sp, -16
-    sw      ra, 12(sp)
+    sd      ra, 8(sp)
     addi    a1, a0, 1
     slli    a1, a1, 2
     sw      a1, 0(sp)
@@ -291,7 +319,7 @@ norvc_exec:
     addi    a0, a0, 7
 1:
     andi    a0, a0, 255
-    lw      ra, 12(sp)
+    ld      ra, 8(sp)
     addi    sp, sp, 16
     ret
 .option pop

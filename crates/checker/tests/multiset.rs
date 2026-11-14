@@ -60,7 +60,7 @@ fn int(v: u64) -> Fp {
     Fp::from_u64(v)
 }
 
-/// fib's honest statement: its trace, slots 1–4, its frame plan, its ten
+/// fib's honest statement: its trace, the memory slots, its frame plan, its ten
 /// shards — one frame per family that ran, then window 0 and the stack window,
 /// then the two public value windows, in that order — and its finals.
 ///
@@ -92,7 +92,7 @@ fn fib() -> Fib {
         [
             "frame of add_sub_lui_auipc",
             "frame of jump_branch_slt",
-            "frame of shift_bitwise",
+            "frame of bitwise",
             "frame of mul_div",
             "frame of mem_word",
             "frame of mem_subword",
@@ -108,7 +108,7 @@ fn fib() -> Fib {
         [
             family::ADD_SUB_LUI_AUIPC,
             family::JUMP_BRANCH_SLT,
-            family::SHIFT_BITWISE,
+            family::BITWISE,
             family::MUL_DIV,
             family::MEM_WORD,
             family::MEM_SUBWORD,
@@ -341,13 +341,13 @@ fn one_changed_value_does_not_reconcile() {
     assert_eq!(surface(&f, &forged, &f.finals), expected);
 }
 
-/// One timestamp, in both of its places on row 11 of `ADD_SUB_LUI_AUIPC`'s
-/// frame, cycle 18:
+/// One timestamp, in both of its places on row 15 of `ADD_SUB_LUI_AUIPC`'s
+/// frame, cycle 23:
 ///
-/// - its pc query's read timestamp moved one earlier, 68 to 67, with `gap_hi`
+/// - its pc query's read timestamp moved one earlier, 88 to 87, with `gap_hi`
 ///   rewritten for the new gap (it stays 0): no gate and no obligation breaks,
 ///   and the roots do not reconcile — the value tamper's surface;
-/// - its cycle moved one earlier, 18 to 17, which moves every write timestamp
+/// - its cycle moved one earlier, 23 to 22, which moves every write timestamp
 ///   of the row four earlier: the roots do not reconcile, and the lookup
 ///   evaluator also names, on that row, the low chunk of every live query whose
 ///   gap was below 4 and went negative — measured: the pc query's, whose gap is
@@ -361,15 +361,15 @@ fn one_changed_value_does_not_reconcile() {
 #[test]
 fn one_changed_timestamp_does_not_reconcile_and_a_moved_cycle_breaks_a_gap() {
     let f = fib();
-    const ROW: usize = 11;
-    const CYCLE_AT_ROW: u64 = 18;
+    const ROW: usize = 15;
+    const CYCLE_AT_ROW: u64 = 23;
     assert_eq!(cell(&f.shards[ALU], CYCLE, ROW), int(CYCLE_AT_ROW));
     let pc = slot(&f, ALU, PC).expect("every frame has the pc query");
     let read_ts = frame(pc, FIELD_READ_TS);
-    assert_eq!(cell(&f.shards[ALU], read_ts, ROW), int(68));
-    let gap = TS_STEP * CYCLE_AT_ROW - 67 - FRAME_MIN_ADVANCE[PC];
+    assert_eq!(cell(&f.shards[ALU], read_ts, ROW), int(88));
+    let gap = TS_STEP * CYCLE_AT_ROW - 87 - FRAME_MIN_ADVANCE[PC];
     let cells = [
-        (ALU, read_ts, ROW, int(67)),
+        (ALU, read_ts, ROW, int(87)),
         (ALU, gap_hi(pc), ROW, int(gap >> 19)),
     ];
     let expected = Surface {
@@ -453,14 +453,13 @@ fn a_zeroed_register_write_and_a_nonzero_x0_write_are_each_refused_by_their_gate
 }
 
 /// `docs/spec/memory.md` §2.4, the read-only queries. On the first live row of
-/// each of `rs1`, `rs2` and `load`, in the first frame of fib's statement whose
-/// family holds that query, that query's write value set to its read value plus
-/// one — a read that silently changes the register or word it read.
-/// `gkr::self_check` and the witness-row evaluator name exactly
-/// `<q>_writes_back` on that row. All of `FRAME_READ_ONLY` is tried, so a gate
-/// built over another query's columns under the right name fails too; and since
-/// no family holds all three, this crosses frames — `load` is a memory family's
-/// alone. Fails if a read-only query could write back a value it did not read.
+/// each of `rs1` and `rs2`, in the first frame of fib's statement whose family
+/// holds that query, that query's write value set to its read value plus one —
+/// a read that silently changes the register it read. `gkr::self_check` and
+/// the witness-row evaluator name exactly `<q>_writes_back` on that row. All of
+/// `FRAME_READ_ONLY` is tried, so a gate built over another query's columns
+/// under the right name fails too. Fails if a read-only query could write back
+/// a value it did not read.
 #[test]
 fn a_read_only_query_writing_back_another_value_is_refused_by_its_gate() {
     let f = fib();
@@ -482,7 +481,7 @@ fn a_read_only_query_writing_back_another_value_is_refused_by_its_gate() {
         let w = witness_row(a, &values, row);
         assert_eq!(violated_relations(a, &w, challenges), [relation]);
     }
-    assert_eq!(families, [ALU, ALU, MEM], "three queries, two frames");
+    assert_eq!(families, [ALU, ALU], "two queries, one frame");
 }
 
 /// The full-width boundary: `ADD_SUB_LUI_AUIPC`'s own `rs1` obligations through
@@ -619,7 +618,7 @@ fn a_pc_query_masked_by_minus_1_reads_as_a_register_and_only_booleanity_refuses_
             (ALU, frame(pc, FIELD_MASK), row, mask),
             (ALU, frame(pc, FIELD_ADDR), row, int(10)),
             (ALU, frame(pc, FIELD_READ_TS), row, int(t10)),
-            (ALU, frame(pc, FIELD_READ_VALUE), row, int(v10 as u64)),
+            (ALU, frame(pc, FIELD_READ_VALUE), row, int(v10)),
             (ALU, frame(pc, FIELD_WRITE_VALUE), row, int(42)),
         ]
     };

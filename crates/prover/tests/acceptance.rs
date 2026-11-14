@@ -7,7 +7,7 @@
 //! about 3.9 GB, and CI does not run them. What needs no proof — the wire
 //! forms, the key's load rules, the statement's refusals, the circuit row by
 //! row — is in `crates/verifier-core/tests` and
-//! `crates/checker/tests/add_sub.rs`, and runs in ordinary CI.
+//! `crates/checker/tests/families.rs`, and runs in ordinary CI.
 
 mod common;
 
@@ -92,7 +92,7 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
     let live = (0..table.height as usize)
         .filter(|r| table.is_live(*r))
         .count();
-    assert_eq!(live, 29, "every instruction of addsub is the family's");
+    assert_eq!(live, 39, "every instruction of addsub is the family's");
     assert_eq!(
         archive.memory_log().self_check(&trace::InitialMemory {
             image: &setup.program.image,
@@ -108,7 +108,7 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
     assert_eq!(
         archive.cycle_profile().counts,
         vec![
-            (ADD, 29),
+            (ADD, 39),
             (INIT, 0),
             (family::ZERO_WINDOWS, 0),
             (family::PUBLIC_INPUT, 0),
@@ -363,8 +363,8 @@ fn a6_a8_every_base_claim_is_at_one_point_and_the_schedule_holds() {
         global: global.clone(),
     };
 
-    // The global transcript: the boundary, then the four challenges and the
-    // digest, and nothing drawn before.
+    // The global transcript: the boundary, then the five memory challenges
+    // and the digest, and nothing drawn before.
     let g = global_commit(&setup.vk, &global.statement);
     let log = g.transcript.event_log();
     let first_challenge = log
@@ -375,13 +375,13 @@ fn a6_a8_every_base_claim_is_at_one_point_and_the_schedule_holds() {
         log[first_challenge - 1],
         Absorb {
             tag: tags::MEMORY_BOUNDARY,
-            n: 64
+            n: 95
         }
     );
     assert_eq!(
-        first_challenge + 5,
+        first_challenge + 6,
         log.len(),
-        "four challenges and the digest"
+        "five memory challenges and the digest"
     );
     assert_eq!(g.digest, global.digest);
 

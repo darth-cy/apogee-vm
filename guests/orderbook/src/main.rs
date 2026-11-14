@@ -11,7 +11,7 @@
 //! sort and a few iterator chains over a batch of up to [`MAX_ORDERS`] orders,
 //! on an allocator whose `dealloc` does nothing — so its peak footprint is the
 //! *sum* of every allocation it ever made, not the most it ever held at once.
-//! That sum is a few kilobytes against the just-under-2-GiB window `link.ld`
+//! That sum is a few kilobytes against the just-under-2-GiB window `apogee.ld`
 //! reserves. It grows linearly with the batch and the cap is the only thing
 //! holding it down, so the allocator's ceiling check stays out of reach here
 //! while staying reachable in principle: uncapped, a large enough batch finds

@@ -158,7 +158,7 @@ fn the_entry_is_annotated_with_its_symbol() {
 /// A file the loader refuses is an error, not a written artifact.
 #[test]
 fn a_refused_elf_produces_no_artifact() {
-    for name in ["et_dyn", "elf64", "not_riscv"] {
+    for name in ["et_dyn", "elf32", "not_riscv"] {
         // `Dump` carries a whole report, so a `Debug` bound on it would put the
         // page in the failure message; matching says the same thing quietly.
         match dump(&elf(name), name, "x.img") {
@@ -258,42 +258,42 @@ fn hex(s: &str) -> u32 {
 // A synthetic ELF, for the one case no guest produces
 // ---------------------------------------------------------------------------
 
-/// A static RV32 executable with a read-only segment below an executable one.
+/// A static RV64 executable with a read-only segment below an executable one.
 ///
-/// The same 52-byte header and 32-byte program headers `tools/kat-gen` writes
+/// The same 64-byte header and 56-byte program headers `tools/kat-gen` writes
 /// for the loader's negative controls; entry is the first byte of the text.
 fn two_segment_elf(data_at: u32, data: &[u8], text_at: u32, text: &[u8]) -> Vec<u8> {
-    const EHDR: usize = 52;
-    const PHDR: usize = 32;
+    const EHDR: usize = 64;
+    const PHDR: usize = 56;
     let body_at = EHDR + 2 * PHDR;
 
     let mut out = Vec::new();
-    out.extend_from_slice(&[0x7f, b'E', b'L', b'F', 1, 1, 1, 0]);
+    out.extend_from_slice(&[0x7f, b'E', b'L', b'F', 2, 1, 1, 0]);
     out.extend_from_slice(&[0u8; 8]);
     out.extend_from_slice(&2u16.to_le_bytes()); // e_type: ET_EXEC
     out.extend_from_slice(&243u16.to_le_bytes()); // e_machine: EM_RISCV
     out.extend_from_slice(&1u32.to_le_bytes()); // e_version
-    out.extend_from_slice(&text_at.to_le_bytes()); // e_entry
-    out.extend_from_slice(&(EHDR as u32).to_le_bytes()); // e_phoff
-    out.extend_from_slice(&0u32.to_le_bytes()); // e_shoff: no sections
+    out.extend_from_slice(&(text_at as u64).to_le_bytes()); // e_entry
+    out.extend_from_slice(&(EHDR as u64).to_le_bytes()); // e_phoff
+    out.extend_from_slice(&0u64.to_le_bytes()); // e_shoff: no sections
     out.extend_from_slice(&1u32.to_le_bytes()); // e_flags: EF_RISCV_RVC
     out.extend_from_slice(&(EHDR as u16).to_le_bytes());
     out.extend_from_slice(&(PHDR as u16).to_le_bytes());
     out.extend_from_slice(&2u16.to_le_bytes()); // e_phnum
-    out.extend_from_slice(&40u16.to_le_bytes()); // e_shentsize
+    out.extend_from_slice(&64u16.to_le_bytes()); // e_shentsize
     out.extend_from_slice(&0u16.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());
 
     let mut offset = body_at;
     for (vaddr, bytes, flags) in [(data_at, data, 4u32), (text_at, text, 5u32)] {
         out.extend_from_slice(&1u32.to_le_bytes()); // p_type: PT_LOAD
-        out.extend_from_slice(&(offset as u32).to_le_bytes());
-        out.extend_from_slice(&vaddr.to_le_bytes());
-        out.extend_from_slice(&vaddr.to_le_bytes());
-        out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-        out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
         out.extend_from_slice(&flags.to_le_bytes());
-        out.extend_from_slice(&4u32.to_le_bytes());
+        for word in [offset as u64, vaddr as u64, vaddr as u64] {
+            out.extend_from_slice(&word.to_le_bytes()); // offset, vaddr, paddr
+        }
+        for word in [bytes.len() as u64, bytes.len() as u64, 4] {
+            out.extend_from_slice(&word.to_le_bytes()); // filesz, memsz, align
+        }
         offset += bytes.len();
     }
     out.extend_from_slice(data);
