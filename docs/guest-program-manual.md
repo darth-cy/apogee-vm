@@ -55,8 +55,8 @@ members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "atomics", "opcodes",
 
 - `#![no_std]`: the target is bare metal. `extern crate alloc;` adds `Vec`, `Box` and `String`
   over the SDK's allocator; any dependency that builds for the target without `std` will do.
-- `#![no_main]`, `entry!(main)`: crt0's `_start` sets `sp`, zeroes `.bss` and calls `main`, a
-  wrapper the macro exports around your function. Returning is `exit(0)`; `guest_sdk::exit(code)`
+- `#![no_main]`, `entry!(main)`: crt0's `_start` sets `sp`, zeroes `.bss`, runs any static
+  initializers and calls `main`, a wrapper the macro exports around your function. Returning is `exit(0)`; `guest_sdk::exit(code)`
   or a panic ends the run otherwise.
 
 The guests in the tree are worked examples:
@@ -353,7 +353,11 @@ finds `clang`, `clang++` and `ld.lld` on `PATH`, and Homebrew's keg-only LLVM on
 system clang has no RISC-V backend: `apt install clang lld cmake` or `brew install llvm lld cmake`.
 It compiles freestanding — no exceptions, RTTI, C++ standard library or allocator, the compiler's
 own C headers (`stdint.h`, `stddef.h`) — with `-mcmodel=medany`, code and data anywhere below
-`2^31`, and links with `--no-relax` (§4).
+`2^31`, and links with `--no-relax` (§4). Globals are ordinary: initialized, zero-initialized and
+small-data globals are where `apogee.ld` puts them, and C++ dynamic initializers and
+`__attribute__((constructor))` functions run before `main`, prioritised ones first. A global whose
+type has a non-trivial destructor does not link, as the library has no `__cxa_atexit`. The SDK may
+sit under a path with spaces.
 
 Building against this repository instead of a release: `cargo rustc --lib --release --crate-type
 staticlib --target riscv64imac-unknown-none-elf` in `crates/guest-sdk` builds the library, and

@@ -4,6 +4,12 @@
 // `mul` and a `mulhu` of full registers, and the bases below decide every
 // 64-bit integer exactly, so the answer is a function of the input alone.
 //
+// Its state is ordinary C++ globals, which the SDK places and initializes:
+// the integers are read by a global's constructor, a dynamic initializer the
+// startup runs before `main`; the tally, four bytes, is in `.sbss` or `.bss`
+// as Clang's small-data limit has it; the verdicts are in `.bss`
+// (docs/guest-program-manual.md §11).
+//
 // # The public input
 //
 //     0..8k     k unsigned 64-bit integers, little-endian
@@ -131,19 +137,35 @@ void commit_le(T v) {
     apogee_commit(bytes, sizeof(T));
 }
 
+// The public input as integers.
+class Integers {
+  public:
+    Integers() : bytes_(apogee_public_input(&len_)) {}
+
+    bool whole() const { return len_ % 8 == 0; }
+    uint32_t size() const { return static_cast<uint32_t>(len_ / 8); }
+    u64 operator[](uint32_t i) const { return read_le<u64>(bytes_ + 8 * i); }
+
+  private:
+    size_t len_ = 0;
+    const uint8_t *bytes_;
+};
+
+const Integers integers;
+
 }  // namespace
 
+// External, so the optimizer keeps them globals rather than locals of `main`.
+uint32_t primes;
+uint8_t verdicts[2048];
+
 int main() {
-    size_t len = 0;
-    const uint8_t *input = apogee_public_input(&len);
-    if (len % 8 != 0) {
+    if (!integers.whole()) {
         return 2;
     }
-    const uint32_t k = static_cast<uint32_t>(len / 8);
-    uint32_t primes = 0;
-    uint8_t verdicts[2048];
+    const uint32_t k = integers.size();
     for (uint32_t i = 0; i < k; ++i) {
-        verdicts[i] = is_prime(read_le<u64>(input + 8 * i));
+        verdicts[i] = is_prime(integers[i]);
         primes += verdicts[i];
     }
     commit_le(k);

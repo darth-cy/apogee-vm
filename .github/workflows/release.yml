@@ -39,12 +39,14 @@ jobs:
           cp crates/guest-sdk/cmake/apogee-rv64.cmake $sdk/cmake/
           tar czf $sdk.tar.gz $sdk
 
-      # The bundle as a C++ developer meets it: their own CMake project and the
-      # toolchain file, nothing from this repository's build.
+      # The bundle as a C++ developer meets it: the tarball unpacked wherever
+      # they keep it, here under a path with a space, their own CMake project
+      # and the toolchain file, nothing from this repository's build.
       - name: a C++ guest builds against the bundle alone
         run: |
+          mkdir -p "$RUNNER_TEMP/an sdk" && tar xzf apogee-guest-sdk.tar.gz -C "$RUNNER_TEMP/an sdk"
           cmake -S guests/cpp-primes -B build \
-                -DCMAKE_TOOLCHAIN_FILE=$PWD/apogee-guest-sdk/cmake/apogee-rv64.cmake
+                "-DCMAKE_TOOLCHAIN_FILE=$RUNNER_TEMP/an sdk/apogee-guest-sdk/cmake/apogee-rv64.cmake"
           cmake --build build
           test -s build/cpp-primes
 

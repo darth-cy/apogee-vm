@@ -341,13 +341,13 @@ fn one_changed_value_does_not_reconcile() {
     assert_eq!(surface(&f, &forged, &f.finals), expected);
 }
 
-/// One timestamp, in both of its places on row 11 of `ADD_SUB_LUI_AUIPC`'s
-/// frame, cycle 18:
+/// One timestamp, in both of its places on row 15 of `ADD_SUB_LUI_AUIPC`'s
+/// frame, cycle 23:
 ///
-/// - its pc query's read timestamp moved one earlier, 68 to 67, with `gap_hi`
+/// - its pc query's read timestamp moved one earlier, 88 to 87, with `gap_hi`
 ///   rewritten for the new gap (it stays 0): no gate and no obligation breaks,
 ///   and the roots do not reconcile — the value tamper's surface;
-/// - its cycle moved one earlier, 18 to 17, which moves every write timestamp
+/// - its cycle moved one earlier, 23 to 22, which moves every write timestamp
 ///   of the row four earlier: the roots do not reconcile, and the lookup
 ///   evaluator also names, on that row, the low chunk of every live query whose
 ///   gap was below 4 and went negative — measured: the pc query's, whose gap is
@@ -361,15 +361,15 @@ fn one_changed_value_does_not_reconcile() {
 #[test]
 fn one_changed_timestamp_does_not_reconcile_and_a_moved_cycle_breaks_a_gap() {
     let f = fib();
-    const ROW: usize = 11;
-    const CYCLE_AT_ROW: u64 = 18;
+    const ROW: usize = 15;
+    const CYCLE_AT_ROW: u64 = 23;
     assert_eq!(cell(&f.shards[ALU], CYCLE, ROW), int(CYCLE_AT_ROW));
     let pc = slot(&f, ALU, PC).expect("every frame has the pc query");
     let read_ts = frame(pc, FIELD_READ_TS);
-    assert_eq!(cell(&f.shards[ALU], read_ts, ROW), int(68));
-    let gap = TS_STEP * CYCLE_AT_ROW - 67 - FRAME_MIN_ADVANCE[PC];
+    assert_eq!(cell(&f.shards[ALU], read_ts, ROW), int(88));
+    let gap = TS_STEP * CYCLE_AT_ROW - 87 - FRAME_MIN_ADVANCE[PC];
     let cells = [
-        (ALU, read_ts, ROW, int(67)),
+        (ALU, read_ts, ROW, int(87)),
         (ALU, gap_hi(pc), ROW, int(gap >> 19)),
     ];
     let expected = Surface {

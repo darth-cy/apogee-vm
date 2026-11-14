@@ -2,11 +2,15 @@
  *
  * Link a program against `libapogee_guest.a` and the `apogee.ld` memory map
  * (`cmake/apogee-rv64.cmake` does both) and define `int main(void)`: the
- * library's startup zeroes `.bss`, calls `main`, and exits with what it
- * returns. An Apogee guest has no files and no streams. Its public input,
- * advice and journal are memory the proof binds — or, for advice, does not —
- * and these four calls are the whole of reaching them
- * (docs/guest-program-manual.md §11, docs/spec/public-values.md).
+ * library's startup zeroes `.bss`, runs the static initializers (C++ dynamic
+ * initialization and constructor functions), calls `main`, and exits with
+ * what it returns. A global whose type has a non-trivial destructor does not
+ * link: the library has no `__cxa_atexit`.
+ *
+ * An Apogee guest has no files and no streams. Its public input, advice and
+ * journal are memory the proof binds — or, for advice, does not — and these
+ * four calls are the whole of reaching them (docs/guest-program-manual.md §11,
+ * docs/spec/public-values.md).
  *
  * The library also provides `memcpy`, `memmove`, `memset` and `memcmp`, and
  * the 128-bit integer helpers a compiler calls. It has no allocator, no

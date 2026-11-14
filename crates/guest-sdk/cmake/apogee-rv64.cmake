@@ -40,13 +40,14 @@ endforeach()
 # -mcmodel=medany: code and data anywhere below 2^31, the whole guest map.
 # No exceptions, no RTTI, no C++ standard library headers: a guest is
 # freestanding, and the compiler's own C headers (stdint.h, stddef.h) are
-# what it includes.
-set(_apogee_flags "-march=rv64imac -mabi=lp64 -mcmodel=medany -ffreestanding -fno-pic -isystem ${APOGEE_INCLUDE_DIR}")
+# what it includes. These are command-line strings, so every path in them is
+# quoted: the SDK may sit under a directory whose name has a space.
+set(_apogee_flags "-march=rv64imac -mabi=lp64 -mcmodel=medany -ffreestanding -fno-pic -isystem \"${APOGEE_INCLUDE_DIR}\"")
 set(CMAKE_C_FLAGS_INIT "${_apogee_flags}")
 set(CMAKE_CXX_FLAGS_INIT "${_apogee_flags} -nostdinc++ -fno-exceptions -fno-rtti -fno-threadsafe-statics")
 set(CMAKE_ASM_FLAGS_INIT "${_apogee_flags}")
 # --no-relax: relaxation moves addresses, and the program identity is a
 # function of them.
-set(CMAKE_EXE_LINKER_FLAGS_INIT "-nostdlib -static -fuse-ld=lld --ld-path=${APOGEE_LLD} -Wl,-T,${APOGEE_LINKER_SCRIPT} -Wl,--no-relax")
-set(CMAKE_C_STANDARD_LIBRARIES "${APOGEE_GUEST_LIB}")
-set(CMAKE_CXX_STANDARD_LIBRARIES "${APOGEE_GUEST_LIB}")
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-nostdlib -static -fuse-ld=lld \"--ld-path=${APOGEE_LLD}\" \"-Wl,-T,${APOGEE_LINKER_SCRIPT}\" -Wl,--no-relax")
+set(CMAKE_C_STANDARD_LIBRARIES "\"${APOGEE_GUEST_LIB}\"")
+set(CMAKE_CXX_STANDARD_LIBRARIES "\"${APOGEE_GUEST_LIB}\"")

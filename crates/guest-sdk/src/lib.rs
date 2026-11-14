@@ -36,9 +36,14 @@ use constants::{delegation, ecall, guest_memory};
 // ---------------------------------------------------------------------------
 
 // `_start` sits in its own `.text._start` section so the linker script places
-// it first, at ORIGIN(RAM). It does exactly four things: point `sp` at
-// `__stack_top`, zero `.bss`, call `main`, and exit with what `main` returned
-// in `a0` — C's `int main(void)`, and 0 from the `entry!` wrapper.
+// it first, at ORIGIN(RAM). It does exactly five things: point `sp` at
+// `__stack_top`, zero `.bss`, call each initializer in
+// `__init_array_start..__init_array_end` in order, call `main`, and exit with
+// what `main` returned in `a0` — C's `int main(void)`, and 0 from the `entry!`
+// wrapper. The initializers are C++'s dynamic initialization and C's
+// constructor functions; a Rust guest has none, and pays five instructions for
+// the empty loop. The pointers are walked in `s0` and `s1`, which every
+// initializer preserves.
 //
 // The `.bss` loop is byte-wise on purpose. `__bss_start` is aligned to the
 // output section's alignment and `__bss_end` is not aligned at all, so a
@@ -64,11 +69,20 @@ global_asm!(
     "  addi t0, t0, 1",
     "  j    1b",
     "2:",
+    "  la   s0, __init_array_start",
+    "  la   s1, __init_array_end",
+    "3:",
+    "  bgeu s0, s1, 4f",
+    "  ld   t0, 0(s0)",
+    "  jalr t0",
+    "  addi s0, s0, 8",
+    "  j    3b",
+    "4:",
     "  call main",
     "  li   a7, {exit}",
     "  ecall",
-    "3:",
-    "  j    3b",
+    "5:",
+    "  j    5b",
     exit = const ecall::EXIT,
 );
 
