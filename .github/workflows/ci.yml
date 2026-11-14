@@ -74,7 +74,7 @@ jobs:
       # - name: the jump/branch/slt statement, proved and verified
       #   run: cargo test -p prover --test control -- --include-ignored --test-threads=1
       #
-      # - name: the shift/bitwise and mul/div statement, proved and verified
+      # - name: the bitwise and mul/div statement, proved and verified
       #   run: cargo test -p prover --test alu -- --include-ignored --test-threads=1
       #
       # - name: the memory-op statement, proved and verified

@@ -17,7 +17,7 @@ use verifier_core::reduce_shard;
 
 const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
 const JBS: u32 = family::JUMP_BRANCH_SLT;
-const SHB: u32 = family::BITWISE;
+const BIT: u32 = family::BITWISE;
 const MD: u32 = family::MUL_DIV;
 const INIT: u32 = family::INIT_TEARDOWN;
 const ZERO: u32 = family::ZERO_WINDOWS;
@@ -57,7 +57,7 @@ fn proof_bytes(a: &constraints::CircuitArtifact, p: &ShardProof) -> usize {
 }
 
 /// The guest decodes into four execution families — add/sub, jump/branch/slt,
-/// shift/bitwise and mul/div — and the window families; its trace self-checks
+/// bitwise and mul/div — and the window families; its trace self-checks
 /// and exits with the number of checks it ran; the streaming prover proves one
 /// shard of each execution family, of `INIT_TEARDOWN` and of each public
 /// window, seven in all, `ZERO_WINDOWS` and `ADVICE_WINDOWS` proving none;
@@ -81,7 +81,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
         vec![
             (ADD, 1 << 20),
             (JBS, 1 << 20),
-            (SHB, 1 << 20),
+            (BIT, 1 << 20),
             (MD, 1 << 20),
             (INIT, 1 << 16),
             (ZERO, 1 << 16),
@@ -97,7 +97,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             .count()
     };
     assert_eq!((live(ADD), live(JBS)), (925, 176));
-    assert_eq!((live(SHB), live(MD)), (17, 459));
+    assert_eq!((live(BIT), live(MD)), (17, 459));
     assert_eq!(
         archive.memory_log().self_check(&trace::InitialMemory {
             image: &setup.program.image,
@@ -117,7 +117,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             (INIT, 0),
             (ADD, 0),
             (JBS, 0),
-            (SHB, 0),
+            (BIT, 0),
             (MD, 0),
             (family::PUBLIC_INPUT, 0),
             (family::PUBLIC_OUTPUT, 0)

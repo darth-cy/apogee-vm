@@ -3,12 +3,12 @@
 //! - `guests/addsub`, built from source, decoded with its execution family at
 //!   `2^20` rows — the timestamp channel's floor — and everything else at
 //!   `2^16`, traced into an archive.
-//! - `guests/control`'s, the same way, with both of its execution families —
-//!   add/sub and jump/branch/slt — at `2^20`.
-//! - `guests/alu`'s, with all four of its execution families — those two,
-//!   shift/bitwise and mul/div — at `2^20`.
-//! - `guests/mem`'s, with five — add/sub, jump/branch/slt and the three
-//!   memory-op families — at `2^20`. Its rows touch RAM, so it has a
+//! - `guests/control`'s, the same way, with its three execution families —
+//!   add/sub, jump/branch/slt and mul/div — at `2^20`.
+//! - `guests/alu`'s, with all four of its execution families — those three
+//!   and bitwise — at `2^20`.
+//! - `guests/mem`'s, with six — add/sub, jump/branch/slt, mul/div and the
+//!   three memory-op families — at `2^20`. Its rows touch RAM, so it has a
 //!   `ZERO_WINDOWS` shard.
 //! - `guests/shards`', with add/sub and jump/branch/slt at `2^20`. Its add/sub
 //!   family runs past `2^20` cycles, so it has **two shards of one family** —

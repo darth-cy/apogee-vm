@@ -442,10 +442,11 @@ fn read_segments(
         // the prover — so a segment that leaves RAM is not something this VM
         // can run, and checking it here is also what stops a hostile `p_memsz`
         // from sizing the slot vector, which is a function of the image span.
-        // In `u64`: past it every field fits a `u32`.
+        // In `u64`, where every field is a free 64-bit value, so the end is
+        // checked for overflow: past it every field fits a `u32`.
         let ram_lo = guest_memory::RAM_ORIGIN as u64;
         let ram_hi = ram_lo + guest_memory::RAM_LENGTH as u64;
-        if vaddr64 < ram_lo || memsz > ram_hi - vaddr64 {
+        if vaddr64 < ram_lo || vaddr64.checked_add(memsz).is_none_or(|end| end > ram_hi) {
             return Err(LoaderError::BadSegment {
                 vaddr,
                 reason: "segment lies outside the guest RAM window",
