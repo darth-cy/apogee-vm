@@ -47,7 +47,7 @@ fn read_snapshot(r: &mut Reader) -> Read<TranscriptSnapshot> {
 // The four sections
 // ---------------------------------------------------------------------------
 
-/// `PostCommit`: the statement, the global transcript, the four memory
+/// `PostCommit`: the statement, the global transcript, the five memory
 /// challenges, the digest.
 pub(crate) fn encode_global(g: &GlobalCommitState) -> Vec<u8> {
     let mut w = Writer::new();
@@ -64,7 +64,7 @@ pub(crate) fn decode_global(bytes: &[u8]) -> Read<GlobalCommitState> {
     let mut r = Reader::new(bytes);
     let statement = PublicInputs::from_bytes(r.bytes()?)?;
     let transcript = read_snapshot(&mut r)?;
-    let memory_challenges = [r.fp2()?, r.fp2()?, r.fp2()?, r.fp2()?];
+    let memory_challenges = [r.fp2()?, r.fp2()?, r.fp2()?, r.fp2()?, r.fp2()?];
     let digest = r.fp2()?;
     r.finish()?;
     Ok(GlobalCommitState {
@@ -413,7 +413,7 @@ mod tests {
         GlobalCommitState {
             statement,
             transcript: t.snapshot(),
-            memory_challenges: [1, 2, 3, 4].map(|x| Fp2::from(Fp::from_u64(x))),
+            memory_challenges: [1, 2, 3, 4, 5].map(|x| Fp2::from(Fp::from_u64(x))),
             digest: Fp2::from(Fp::from_u64(5)),
         }
     }

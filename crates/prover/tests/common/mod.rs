@@ -41,13 +41,13 @@ pub const WINDOW_VARS: u32 = 16;
 pub const RESULT: u32 = 42;
 
 /// `guests/alu`'s exit status: the number of its checks.
-pub const ALU_RESULT: u32 = 96;
+pub const ALU_RESULT: u32 = 144;
 
 /// `guests/control`'s exit status: the number of its checks.
-pub const CONTROL_RESULT: u32 = 16;
+pub const CONTROL_RESULT: u32 = 17;
 
 /// `guests/mem`'s exit status: the number of its checks.
-pub const MEM_RESULT: u32 = 50;
+pub const MEM_RESULT: u32 = 66;
 
 /// `guests/shards`' exit status: the number of its checks.
 pub const SHARDS_RESULT: u32 = 2;
@@ -77,9 +77,14 @@ pub fn params() -> ProgramParams {
     heights(&[family::ADD_SUB_LUI_AUIPC])
 }
 
-/// `control`'s heights: both of its execution families at `2^20`.
+/// `control`'s heights: its three execution families at `2^20` — the
+/// shifts that build its 64-bit constants are `MUL_DIV`'s.
 pub fn control_params() -> ProgramParams {
-    heights(&[family::ADD_SUB_LUI_AUIPC, family::JUMP_BRANCH_SLT])
+    heights(&[
+        family::ADD_SUB_LUI_AUIPC,
+        family::JUMP_BRANCH_SLT,
+        family::MUL_DIV,
+    ])
 }
 
 /// `alu`'s heights: all four of its execution families at `2^20`.
@@ -87,16 +92,18 @@ pub fn alu_params() -> ProgramParams {
     heights(&[
         family::ADD_SUB_LUI_AUIPC,
         family::JUMP_BRANCH_SLT,
-        family::SHIFT_BITWISE,
+        family::BITWISE,
         family::MUL_DIV,
     ])
 }
 
-/// `mem`'s heights: all five of its execution families at `2^20`.
+/// `mem`'s heights: all six of its execution families at `2^20`, `MUL_DIV`
+/// for the shifts that build its 64-bit constants.
 pub fn mem_params() -> ProgramParams {
     heights(&[
         family::ADD_SUB_LUI_AUIPC,
         family::JUMP_BRANCH_SLT,
+        family::MUL_DIV,
         family::MEM_WORD,
         family::MEM_SUBWORD,
         family::ATOMICS,
@@ -149,7 +156,7 @@ pub fn public_io_program() -> Program {
         &heights(&[
             family::ADD_SUB_LUI_AUIPC,
             family::JUMP_BRANCH_SLT,
-            family::SHIFT_BITWISE,
+            family::BITWISE,
             family::MUL_DIV,
             family::MEM_WORD,
             family::MEM_SUBWORD,

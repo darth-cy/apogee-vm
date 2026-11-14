@@ -119,7 +119,7 @@ impl PublicInputs {
     }
 
     /// Decode, refusing anything [`PublicInputs::to_bytes`] would not write,
-    /// and a boundary timestamp at or above `2^38` or value at or above
+    /// and a boundary timestamp at or above `2^38` or a value word at or above
     /// `2^32` (`docs/spec/memory.md` §4.1).
     pub fn from_bytes(bytes: &[u8]) -> Result<PublicInputs, &'static str> {
         let mut r = Reader::new(bytes);
@@ -142,9 +142,16 @@ impl PublicInputs {
             *t = timestamp(&mut r)?;
         }
         boundary.pc_ts = timestamp(&mut r)?;
+        let word = |r: &mut Reader| -> Read<u64> {
+            Some(r.fp()?.to_u64())
+                .filter(|v| *v <= u32::MAX as u64)
+                .ok_or("a boundary value word is not below 2^32")
+        };
         for v in boundary.reg_values.iter_mut() {
-            *v = u32::try_from(r.fp()?.to_u64())
-                .map_err(|_| "a boundary value is not below 2^32")?;
+            *v = word(&mut r)?;
+        }
+        for v in boundary.reg_values.iter_mut() {
+            *v |= word(&mut r)? << 32;
         }
         let commitments = r.count(4)?;
         let memory_commitments = (0..commitments)

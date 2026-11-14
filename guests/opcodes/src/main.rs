@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
-//! Every RV32IMAC instruction, executed.
+//! Every RV64IMAC instruction, executed.
 //!
-//! The coverage fixture: every one of the 59 RV32IMA instructions runs here
+//! The coverage fixture: every one of the 87 RV64IMA instructions runs here
 //! with edge-case operands, and a block of compressed code runs every
 //! compressed form a program can execute. `crates/emulator/tests/` checks that
 //! every mnemonic really does execute, rather than trusting this comment.
@@ -22,6 +22,9 @@
 //!   deviation of `docs/spec/memory-ops.md` §6, exercised on purpose;
 //! - `cover_rvc`: every executable compressed form (all but `c.ebreak` and
 //!   `c.unimp`, which trap), each instruction of the block executed;
+//! - `cover_rv64`: RV64's own forms — `ld`, `sd`, `lwu`, the W operations of
+//!   I and M, six-bit shift amounts, and every A operation in `.d` with
+//!   `lr.d`/`sc.d`;
 //! - `cover_ecall`: the `ecall` instruction over two numbers nothing answers,
 //!   each returning `-ENOSYS`. There is no I/O call to cover: the ABI has no
 //!   descriptors and no `read`/`write` (`docs/spec/public-values.md` §1), and
@@ -35,14 +38,14 @@
 //!
 //! - mode 0 runs every block;
 //! - mode 1 executes `ebreak`, which is a fatal guest error;
-//! - modes 2 to 8 each make one misaligned access — `lw`, `sw`, `lh`, `sh`,
-//!   `lr.w`, `sc.w`, `amoadd.w` — which this VM refuses as a fatal guest
-//!   error. That refusal is what these modes are for; nothing is committed
+//! - modes 2 to 10 each make one misaligned access — `lw`, `sw`, `lh`, `sh`,
+//!   `lr.w`, `sc.w`, `amoadd.w`, and a 4-aligned `ld` and `amoadd.d` — which
+//!   this VM refuses as a fatal guest error. That refusal is what these modes are for; nothing is committed
 //!   on any of them, because the run does not reach an exit.
 //!
 //! # The journal (mode 0)
 //!
-//! Seven `u32` LE words — the five blocks' folds in the order above, and the
+//! Eight `u32` LE words — the six blocks' folds in the order above, and the
 //! compressed block's first and one-past-last address.
 //!
 //! # The advice
@@ -59,6 +62,7 @@ extern "C" {
     fn cover_a(scratch: *mut u32) -> u32;
     fn cover_rvc() -> u32;
     fn cover_ecall(scratch: *mut u32) -> u32;
+    fn cover_rv64(scratch: *mut u32) -> u32;
     fn misaligned(mode: u32, scratch: *mut u32);
 
     static __cover_rvc_begin: u8;
@@ -71,8 +75,9 @@ fn main() {
         4 => u32::from_le_bytes(mode),
         _ => 0,
     };
-    let mut scratch = [0u32; 16];
-    let scratch = scratch.as_mut_ptr();
+    // Sixteen words, 8-aligned for the doubleword accesses.
+    let mut scratch = [0u64; 8];
+    let scratch = scratch.as_mut_ptr() as *mut u32;
 
     match mode {
         0 => {
@@ -86,6 +91,7 @@ fn main() {
                     cover_a(scratch),
                     cover_rvc(),
                     cover_ecall(scratch),
+                    cover_rv64(scratch),
                 ]
             };
             for fold in folds {
@@ -100,7 +106,7 @@ fn main() {
         1 => unsafe { core::arch::asm!("ebreak") },
         // SAFETY: as the blocks above; the misaligned address is inside
         // `scratch`.
-        2..=8 => unsafe { misaligned(mode, scratch) },
+        2..=10 => unsafe { misaligned(mode, scratch) },
         _ => guest_sdk::exit(2),
     }
 }
@@ -475,6 +481,7 @@ global_asm!(
 cover_rvc:
     mv          t6, ra
     li          a0, 0
+    la          t5, 3f
 __cover_rvc_begin:
     c.addi16sp  sp, -32
     c.addi4spn  a1, sp, 8
@@ -499,6 +506,15 @@ __cover_rvc_begin:
     c.srli      a5, 1
     c.srai      a2, 2
     c.andi      a5, -3
+    c.addiw     a2, 3
+    c.addw      a2, a3
+    c.subw      a2, a5
+    c.sd        a2, 8(a1)
+    c.ld        a5, 8(a1)
+    c.sdsp      a3, 16(sp)
+    c.ldsp      a2, 16(sp)
+    c.slli      a5, 40
+    c.srli      a5, 33
     c.add       a0, a5
     c.add       a0, a2
     c.beqz      a5, 1f
@@ -510,7 +526,7 @@ __cover_rvc_begin:
 1:  c.j         2f
 3:  c.addi      a0, 1
     c.jr        ra
-2:  c.jal       3b
+2:  c.jalr      t5
     c.mv        a4, ra
     c.addi      a4, 6
     c.jalr      a4
@@ -588,6 +604,10 @@ misaligned:
     beq     a0, t1, 7f
     li      t1, 8
     beq     a0, t1, 8f
+    li      t1, 9
+    beq     a0, t1, 9f
+    li      t1, 10
+    beq     a0, t1, 10f
     ret
 2:  lw      t2, 2(a1)
     ret
@@ -602,6 +622,129 @@ misaligned:
 7:  sc.w    t2, t1, (t0)
     ret
 8:  amoadd.w t2, t1, (t0)
+    ret
+9:  ld      t2, 4(a1)
+    ret
+10: addi    t0, a1, 4
+    amoadd.d t2, t1, (t0)
+    ret
+.option pop
+"#
+);
+
+// ---------------------------------------------------------------------------
+// RV64: the doubleword loads and stores, the W operations of I and M, shift
+// amounts past 31, and every A operation in `.d`. a6 holds the scratch words
+// and a0 the fold.
+// ---------------------------------------------------------------------------
+
+global_asm!(
+    r#"
+.section .text.cover_rv64,"ax",@progbits
+.option push
+.option norvc
+.globl cover_rv64
+cover_rv64:
+    mv      a6, a0
+    li      a0, 0
+
+    /* doublewords, and a word read zero-extended */
+    li      t0, 0x8000000180000001
+    sd      t0, 0(a6)
+    ld      t1, 0(a6)
+    lwu     t2, 0(a6)
+    lw      t3, 4(a6)
+    ld      x0, 0(a6)
+    add     a0, a0, t1
+    xor     a0, a0, t2
+    add     a0, a0, t3
+
+    /* the W operations: the low words, results sign-extended */
+    li      t0, 0xdeadbeef7fffffff
+    li      t1, 0x0000000100000001
+    addw    t2, t0, t1
+    subw    t3, t1, t0
+    addiw   t4, t0, 1
+    addiw   x0, t0, 1
+    sllw    t5, t1, t1
+    srlw    t6, t0, t1
+    sraw    a1, t2, t1
+    slliw   a2, t0, 31
+    srliw   a3, t2, 31
+    sraiw   a4, t2, 31
+    add     a0, a0, t2
+    xor     a0, a0, t3
+    add     a0, a0, t4
+    xor     a0, a0, t5
+    add     a0, a0, t6
+    xor     a0, a0, a1
+    add     a0, a0, a2
+    xor     a0, a0, a3
+    add     a0, a0, a4
+
+    /* six-bit shift amounts */
+    li      t0, -5
+    li      t1, 63
+    slli    t2, t0, 63
+    srli    t3, t0, 32
+    srai    t4, t0, 40
+    sll     t5, t0, t1
+    srl     t6, t0, t1
+    sra     a1, t0, t1
+    add     a0, a0, t2
+    xor     a0, a0, t3
+    add     a0, a0, t4
+    xor     a0, a0, t5
+    add     a0, a0, t6
+    xor     a0, a0, a1
+
+    /* the M W operations, division by zero and INT32_MIN / -1 among them */
+    li      t0, 0xffffffff80000000
+    li      t1, -1
+    li      t2, 0x123456789
+    mulw    t3, t2, t2
+    divw    t4, t0, t1
+    divuw   t5, t2, t1
+    remw    t6, t0, t1
+    remuw   a1, t2, x0
+    divw    a2, t2, x0
+    add     a0, a0, t3
+    xor     a0, a0, t4
+    add     a0, a0, t5
+    xor     a0, a0, t6
+    add     a0, a0, a1
+    xor     a0, a0, a2
+
+    /* every A operation in .d */
+    li      t0, 0x8000000000000000
+    sd      t0, 8(a6)
+    addi    a7, a6, 8
+    li      t1, 5
+    amoadd.d    t2, t1, (a7)
+    amoswap.d   t3, t1, (a7)
+    amoxor.d    t4, t0, (a7)
+    amoand.d    t5, t1, (a7)
+    amoor.d     t6, t0, (a7)
+    amomin.d    a1, t1, (a7)
+    amomax.d    a2, t1, (a7)
+    amominu.d   a3, t0, (a7)
+    amomaxu.d.aqrl  a4, t0, (a7)
+    lr.d        a5, (a7)
+    sc.d        t1, a5, (a7)
+    lr.d.aq     a1, (a7)
+    sc.d.rl     a2, a1, (a7)
+    amoadd.d    x0, t0, (a7)
+    add     a0, a0, t2
+    xor     a0, a0, t3
+    add     a0, a0, t4
+    xor     a0, a0, t5
+    add     a0, a0, t6
+    xor     a0, a0, a1
+    add     a0, a0, a2
+    xor     a0, a0, a3
+    add     a0, a0, a4
+    xor     a0, a0, a5
+    add     a0, a0, t1
     ret
 .option pop
 "#

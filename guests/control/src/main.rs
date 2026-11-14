@@ -13,8 +13,11 @@
 //!
 //! The sections, in order:
 //!
-//! - **comparisons**: `slt` and `sltu` at full width — `0x80000000` against 1
-//!   both ways, mixed signs, equal operands, `rd = rs1`;
+//! - **comparisons**: `slt` and `sltu` over sign-extended words —
+//!   `0xffffffff80000000` against 1 both ways, mixed signs, equal operands,
+//!   `rd = rs1`;
+//! - **64-bit order**: operands equal in their low words and apart in their
+//!   high ones, and `0x80000000`, which is positive at 64 bits, against 1;
 //! - **`slti` / `sltiu` against −1**, writing `x5`, over a positive, a negative
 //!   and an equal `rs1` — the immediate's sign is the comparison's, not
 //!   `rs2`'s — and against the largest positive immediate;
@@ -30,8 +33,9 @@
 //! - **`jalr`** with `rs1 = rd` and a negative immediate that sets bit 0 of
 //!   `rs1 + imm`: the target is formed from the old `rs1` with the bit
 //!   cleared, the link is written after, and returns are `jalr x0`;
-//! - **compressed forms**: `c.beqz` and `c.bnez` taken and not taken, `c.jal`
-//!   and `c.jalr`, whose links are `pc + 2`, and `c.jr` and `c.j`.
+//! - **compressed forms**: `c.beqz` and `c.bnez` taken and not taken, two
+//!   `c.jalr` calls, whose links are `pc + 2`, and `c.jr` and `c.j` (RV64C has
+//!   no `c.jal`).
 //!
 //! Each section ends by adding 1 to `s0` — each call adds 1 in its callee —
 //! and any wrong answer jumps to `fail`.
@@ -43,7 +47,7 @@
 //!
 //! # The result
 //!
-//! The exit status, `a0`: 16, the number of checks, on success; 1 from `fail`.
+//! The exit status, `a0`: 17, the number of checks, on success; 1 from `fail`.
 
 use core::arch::global_asm;
 
@@ -77,6 +81,27 @@ global_asm!(
     "  addi  s0, s0, 1",
     "  slt   t0, t0, t1", // rd = rs1: INT_MIN < 1, so t0 = 1
     "  bne   t0, t1, fail",
+    "  addi  s0, s0, 1",
+    // 64-bit order: equal low words, the high words deciding; and 2^31, a
+    // positive value at 64 bits.
+    "  addi  t0, x0, 1",
+    "  slli  t0, t0, 32", // t0 = 2^32
+    "  addi  t1, x0, 0",
+    "  beq   t0, t1, fail", // equal low words, unequal: not taken
+    "  bltu  t0, t1, fail", // 2^32 < 0: not taken
+    "  slt   t3, t1, t0",   // 0 < 2^32: 1
+    "  beq   t3, x0, fail",
+    "  addi  t0, x0, -1",
+    "  srli  t0, t0, 32", // t0 = 0x00000000ffffffff
+    "  addi  t1, x0, -1", // t1 = all ones
+    "  bge   t0, t1, 1f", // 2^32 - 1 >= -1: taken
+    "  jal   x0, fail",
+    "1:",
+    "  bgeu  t0, t1, fail", // 2^32 - 1 >= 2^64 - 1: not taken
+    "  addi  t0, x0, 1",
+    "  slli  t0, t0, 31", // t0 = 2^31, positive at 64 bits
+    "  slti  t3, t0, 1",  // 2^31 < 1: 0
+    "  bne   t3, x0, fail",
     "  addi  s0, s0, 1",
     // slti and sltiu against -1, into x5 (t0).
     "  addi  t1, x0, 5",
@@ -196,7 +221,8 @@ global_asm!(
     "  c.j    cfail",
     "5:",
     "  c.beqz a1, cfail", // not taken
-    "  c.jal  ccall",     // link: pc + 2
+    "  lla    t6, ccall",
+    "  c.jalr t6", // link: pc + 2
     "clink:",
     "  lla    t6, ccall2",
     "  c.jalr t6", // link: pc + 2

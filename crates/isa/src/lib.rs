@@ -1,4 +1,4 @@
-//! The RV32IMAC instruction model: [`Instr`], and [`decode`] for 32-bit words.
+//! The RV64IMAC instruction model: [`Instr`], and [`decode`] for 32-bit words.
 //!
 //! The loader expands every compressed instruction to the exact 32-bit
 //! instruction it abbreviates before anything reaches this crate, so there is
@@ -8,14 +8,15 @@
 //!
 //! # What is accepted
 //!
-//! Exactly the 59 RV32IMA instructions, in every encoding the ISA defines for
+//! Exactly the 87 RV64IMA instructions, in every encoding the ISA defines for
 //! them and in no other:
 //!
 //! - every field that is an operand may hold any value — `x0` as a
 //!   destination included, which is how RVC HINTs and `nop` arrive;
 //! - every field that is fixed must hold its one value: `funct7` of the
-//!   register-register and shift-immediate forms, `funct3` of `jalr`, the
-//!   whole of `ecall` and `ebreak`, the `.w` width and `rs2 = 0` of `lr.w`;
+//!   register-register and W shift-immediate forms, `funct6` of the 64-bit
+//!   shift immediates, `funct3` of `jalr`, the whole of `ecall` and `ebreak`,
+//!   the `.w` or `.d` width and `rs2 = 0` of `lr`;
 //! - **`fence` is the exception, on the ISA's own instruction.** Its `rd`,
 //!   `rs1` and every `fm`/`pred`/`succ` setting are either ignored or reserved
 //!   with the rule "base implementations shall treat all such reserved
@@ -23,9 +24,9 @@
 //!   is a fence. On one hart a fence orders nothing, which is why nothing
 //!   downstream needs to tell them apart.
 //!
-//! Everything else — RV64-only encodings, the F and D extensions, Zicsr,
-//! `fence.i`, privileged instructions, reserved `funct3`/`funct7`/`funct5`
-//! values — is a [`DecodeError`] naming why. `tests/sweep.rs` counts the
+//! Everything else — the F and D extensions, Zicsr, `fence.i`, privileged
+//! instructions, reserved `funct3`/`funct7`/`funct5` values — is a
+//! [`DecodeError`] naming why. `tests/sweep.rs` counts the
 //! accepted words of each major opcode across the whole 32-bit space and holds
 //! the count to one derived by hand from the ISA tables.
 //!
@@ -33,14 +34,16 @@
 //!
 //! An immediate is the **value the instruction uses**, as an `i32`: sign
 //! extended for the I, S, B and J forms, the whole shifted word for the U form
-//! (`lui a0, 1` has `imm = 4096`), and the shift amount for the three shift
-//! immediates. B and J immediates are always even — bit 0 is not encoded — so
+//! (`lui a0, 1` has `imm = 4096`), and the shift amount for the shift
+//! immediates. RV64 sign-extends every one of them to 64 bits where it uses it,
+//! the U form included, so an `i32` holds each exactly. B and J immediates are always even — bit 0 is not encoded — so
 //! a static branch or jump target is always 2-byte aligned, which is exactly
 //! the granularity RVC code needs and the pc/2 indexing of the decoded tables
 //! assumes. Nothing here demands 4-byte alignment.
 
-/// One RV32IMAC instruction: one variant per mnemonic, carrying that form's
-/// fields. Register fields are indices `0..32`.
+/// One RV64IMAC instruction: one variant per mnemonic but the atomics, which
+/// are one variant over [`AmoOp`] and the width. Register fields are indices
+/// `0..32`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Instr {
     // RV32I: upper immediates and jumps
@@ -120,6 +123,16 @@ pub enum Instr {
         rs1: u8,
         imm: i32,
     },
+    Lwu {
+        rd: u8,
+        rs1: u8,
+        imm: i32,
+    },
+    Ld {
+        rd: u8,
+        rs1: u8,
+        imm: i32,
+    },
     Sb {
         rs1: u8,
         rs2: u8,
@@ -131,6 +144,11 @@ pub enum Instr {
         imm: i32,
     },
     Sw {
+        rs1: u8,
+        rs2: u8,
+        imm: i32,
+    },
+    Sd {
         rs1: u8,
         rs2: u8,
         imm: i32,
@@ -181,6 +199,53 @@ pub enum Instr {
         rd: u8,
         rs1: u8,
         shamt: u8,
+    },
+
+    // RV64I: the 32-bit forms, each sign-extending its 32-bit result
+    Addiw {
+        rd: u8,
+        rs1: u8,
+        imm: i32,
+    },
+    Slliw {
+        rd: u8,
+        rs1: u8,
+        shamt: u8,
+    },
+    Srliw {
+        rd: u8,
+        rs1: u8,
+        shamt: u8,
+    },
+    Sraiw {
+        rd: u8,
+        rs1: u8,
+        shamt: u8,
+    },
+    Addw {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+    },
+    Subw {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+    },
+    Sllw {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+    },
+    Srlw {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+    },
+    Sraw {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
     },
 
     // RV32I: register-register
@@ -286,83 +351,80 @@ pub enum Instr {
         rs2: u8,
     },
 
-    // A
-    LrW {
+    // RV64M: the 32-bit forms
+    Mulw {
         rd: u8,
         rs1: u8,
-        aq: bool,
-        rl: bool,
+        rs2: u8,
     },
-    ScW {
+    Divw {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+    },
+    Divuw {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+    },
+    Remw {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+    },
+    Remuw {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+    },
+
+    // A: `lr`, `sc` and the nine AMOs, `.w` or, with `double`, `.d`. `lr`'s
+    // `rs2` is 0.
+    Amo {
+        op: AmoOp,
+        double: bool,
         rd: u8,
         rs1: u8,
         rs2: u8,
         aq: bool,
         rl: bool,
     },
-    AmoswapW {
-        rd: u8,
-        rs1: u8,
-        rs2: u8,
-        aq: bool,
-        rl: bool,
-    },
-    AmoaddW {
-        rd: u8,
-        rs1: u8,
-        rs2: u8,
-        aq: bool,
-        rl: bool,
-    },
-    AmoxorW {
-        rd: u8,
-        rs1: u8,
-        rs2: u8,
-        aq: bool,
-        rl: bool,
-    },
-    AmoandW {
-        rd: u8,
-        rs1: u8,
-        rs2: u8,
-        aq: bool,
-        rl: bool,
-    },
-    AmoorW {
-        rd: u8,
-        rs1: u8,
-        rs2: u8,
-        aq: bool,
-        rl: bool,
-    },
-    AmominW {
-        rd: u8,
-        rs1: u8,
-        rs2: u8,
-        aq: bool,
-        rl: bool,
-    },
-    AmomaxW {
-        rd: u8,
-        rs1: u8,
-        rs2: u8,
-        aq: bool,
-        rl: bool,
-    },
-    AmominuW {
-        rd: u8,
-        rs1: u8,
-        rs2: u8,
-        aq: bool,
-        rl: bool,
-    },
-    AmomaxuW {
-        rd: u8,
-        rs1: u8,
-        rs2: u8,
-        aq: bool,
-        rl: bool,
-    },
+}
+
+/// An A-extension operation, numbered as `constants::extra_mask::atomics`
+/// numbers its `.w` kinds: ascending `funct5`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AmoOp {
+    Add = 0,
+    Swap = 1,
+    Lr = 2,
+    Sc = 3,
+    Xor = 4,
+    Or = 5,
+    And = 6,
+    Min = 7,
+    Max = 8,
+    Minu = 9,
+    Maxu = 10,
+}
+
+impl AmoOp {
+    /// The base mnemonic, without its width.
+    pub fn name(self) -> &'static str {
+        match self {
+            AmoOp::Add => "amoadd",
+            AmoOp::Swap => "amoswap",
+            AmoOp::Lr => "lr",
+            AmoOp::Sc => "sc",
+            AmoOp::Xor => "amoxor",
+            AmoOp::Or => "amoor",
+            AmoOp::And => "amoand",
+            AmoOp::Min => "amomin",
+            AmoOp::Max => "amomax",
+            AmoOp::Minu => "amominu",
+            AmoOp::Maxu => "amomaxu",
+        }
+    }
 }
 
 /// A word [`decode`] refuses, and why.
@@ -429,9 +491,11 @@ pub fn decode(word: u32) -> Result<Instr, DecodeError> {
                 0b000 => Ok(Lb { rd, rs1, imm }),
                 0b001 => Ok(Lh { rd, rs1, imm }),
                 0b010 => Ok(Lw { rd, rs1, imm }),
+                0b011 => Ok(Ld { rd, rs1, imm }),
                 0b100 => Ok(Lbu { rd, rs1, imm }),
                 0b101 => Ok(Lhu { rd, rs1, imm }),
-                _ => refuse("load: funct3 011 and 110 are RV64's ld and lwu, 111 is reserved"),
+                0b110 => Ok(Lwu { rd, rs1, imm }),
+                _ => refuse("load: funct3 111 is reserved"),
             }
         }
         0x23 => {
@@ -440,14 +504,16 @@ pub fn decode(word: u32) -> Result<Instr, DecodeError> {
                 0b000 => Ok(Sb { rs1, rs2, imm }),
                 0b001 => Ok(Sh { rs1, rs2, imm }),
                 0b010 => Ok(Sw { rs1, rs2, imm }),
-                _ => refuse("store: funct3 011 is RV64's sd, 1xx is reserved"),
+                0b011 => Ok(Sd { rs1, rs2, imm }),
+                _ => refuse("store: funct3 1xx is reserved"),
             }
         }
         0x13 => {
             let imm = imm_i;
-            // The shift immediates keep a funct7 in the immediate's top bits.
-            // shamt[5] -- bit 25 -- is RV64's; on RV32 it is reserved.
-            let shamt = rs2;
+            // The 64-bit shift immediates keep a funct6 in the immediate's top
+            // bits and a six-bit shamt below it.
+            let shamt = ((word >> 20) & 0x3f) as u8;
+            let funct6 = word >> 26;
             match funct3 {
                 0b000 => Ok(Addi { rd, rs1, imm }),
                 0b010 => Ok(Slti { rd, rs1, imm }),
@@ -455,15 +521,28 @@ pub fn decode(word: u32) -> Result<Instr, DecodeError> {
                 0b100 => Ok(Xori { rd, rs1, imm }),
                 0b110 => Ok(Ori { rd, rs1, imm }),
                 0b111 => Ok(Andi { rd, rs1, imm }),
-                0b001 => match funct7 {
-                    0b000_0000 => Ok(Slli { rd, rs1, shamt }),
-                    _ => refuse("slli: funct7 must be 0000000 on RV32"),
+                0b001 => match funct6 {
+                    0b00_0000 => Ok(Slli { rd, rs1, shamt }),
+                    _ => refuse("slli: funct6 must be 000000"),
                 },
-                _ => match funct7 {
-                    0b000_0000 => Ok(Srli { rd, rs1, shamt }),
-                    0b010_0000 => Ok(Srai { rd, rs1, shamt }),
-                    _ => refuse("srli/srai: funct7 must be 0000000 or 0100000 on RV32"),
+                _ => match funct6 {
+                    0b00_0000 => Ok(Srli { rd, rs1, shamt }),
+                    0b01_0000 => Ok(Srai { rd, rs1, shamt }),
+                    _ => refuse("srli/srai: funct6 must be 000000 or 010000"),
                 },
+            }
+        }
+        0x1b => {
+            // OP-IMM-32: the shift amount is five bits, and bit 25 belongs to
+            // funct7, which must be its one value.
+            let shamt = rs2;
+            match (funct3, funct7) {
+                (0b000, _) => Ok(Addiw { rd, rs1, imm: imm_i }),
+                (0b001, 0b000_0000) => Ok(Slliw { rd, rs1, shamt }),
+                (0b101, 0b000_0000) => Ok(Srliw { rd, rs1, shamt }),
+                (0b101, 0b010_0000) => Ok(Sraiw { rd, rs1, shamt }),
+                (0b001 | 0b101, _) => refuse("slliw/srliw/sraiw: funct7 must be 0000000 or 0100000"),
+                _ => refuse("OP-IMM-32: only funct3 000, 001 and 101 are RV64I"),
             }
         }
         0x33 => match (funct7, funct3) {
@@ -485,7 +564,20 @@ pub fn decode(word: u32) -> Result<Instr, DecodeError> {
             (0b000_0001, 0b101) => Ok(Divu { rd, rs1, rs2 }),
             (0b000_0001, 0b110) => Ok(Rem { rd, rs1, rs2 }),
             (0b000_0001, 0b111) => Ok(Remu { rd, rs1, rs2 }),
-            _ => refuse("register-register: no RV32IM operation has this funct7 and funct3"),
+            _ => refuse("register-register: no RV64IM operation has this funct7 and funct3"),
+        },
+        0x3b => match (funct7, funct3) {
+            (0b000_0000, 0b000) => Ok(Addw { rd, rs1, rs2 }),
+            (0b010_0000, 0b000) => Ok(Subw { rd, rs1, rs2 }),
+            (0b000_0000, 0b001) => Ok(Sllw { rd, rs1, rs2 }),
+            (0b000_0000, 0b101) => Ok(Srlw { rd, rs1, rs2 }),
+            (0b010_0000, 0b101) => Ok(Sraw { rd, rs1, rs2 }),
+            (0b000_0001, 0b000) => Ok(Mulw { rd, rs1, rs2 }),
+            (0b000_0001, 0b100) => Ok(Divw { rd, rs1, rs2 }),
+            (0b000_0001, 0b101) => Ok(Divuw { rd, rs1, rs2 }),
+            (0b000_0001, 0b110) => Ok(Remw { rd, rs1, rs2 }),
+            (0b000_0001, 0b111) => Ok(Remuw { rd, rs1, rs2 }),
+            _ => refuse("OP-32: no RV64IM operation has this funct7 and funct3"),
         },
         0x0f => match funct3 {
             0b000 => Ok(Fence {
@@ -493,39 +585,80 @@ pub fn decode(word: u32) -> Result<Instr, DecodeError> {
                 pred: ((word >> 24) & 0xf) as u8,
                 succ: ((word >> 20) & 0xf) as u8,
             }),
-            0b001 => refuse("MISC-MEM: funct3 001 is fence.i (Zifencei), which RV32IMAC does not have"),
-            _ => refuse("MISC-MEM: only funct3 000, fence, is RV32IMAC; the rest are other extensions or reserved"),
+            0b001 => refuse("MISC-MEM: funct3 001 is fence.i (Zifencei), which RV64IMAC does not have"),
+            _ => refuse("MISC-MEM: only funct3 000, fence, is RV64IMAC; the rest are other extensions or reserved"),
         },
         0x73 => match word {
             0x0000_0073 => Ok(Ecall),
             0x0010_0073 => Ok(Ebreak),
-            _ => refuse("SYSTEM: only ecall and ebreak; Zicsr and the privileged encodings are not RV32IMAC"),
+            _ => refuse("SYSTEM: only ecall and ebreak; Zicsr and the privileged encodings are not RV64IMAC"),
         },
         0x2f => {
-            if funct3 != 0b010 {
-                return refuse("AMO: funct3 must be 010, the .w width; 011 is RV64's .d");
-            }
+            let double = match funct3 {
+                0b010 => false,
+                0b011 => true,
+                _ => return refuse("AMO: funct3 must be 010 (.w) or 011 (.d)"),
+            };
             let aq = (word >> 26) & 1 == 1;
             let rl = (word >> 25) & 1 == 1;
-            match word >> 27 {
-                0b00010 if rs2 == 0 => Ok(LrW { rd, rs1, aq, rl }),
-                0b00010 => refuse("lr.w: rs2 must be x0"),
-                0b00011 => Ok(ScW { rd, rs1, rs2, aq, rl }),
-                0b00001 => Ok(AmoswapW { rd, rs1, rs2, aq, rl }),
-                0b00000 => Ok(AmoaddW { rd, rs1, rs2, aq, rl }),
-                0b00100 => Ok(AmoxorW { rd, rs1, rs2, aq, rl }),
-                0b01100 => Ok(AmoandW { rd, rs1, rs2, aq, rl }),
-                0b01000 => Ok(AmoorW { rd, rs1, rs2, aq, rl }),
-                0b10000 => Ok(AmominW { rd, rs1, rs2, aq, rl }),
-                0b10100 => Ok(AmomaxW { rd, rs1, rs2, aq, rl }),
-                0b11000 => Ok(AmominuW { rd, rs1, rs2, aq, rl }),
-                0b11100 => Ok(AmomaxuW { rd, rs1, rs2, aq, rl }),
-                _ => refuse("AMO: no A-extension operation has this funct5"),
-            }
+            let op = match word >> 27 {
+                0b00010 if rs2 == 0 => AmoOp::Lr,
+                0b00010 => return refuse("lr: rs2 must be x0"),
+                0b00011 => AmoOp::Sc,
+                0b00001 => AmoOp::Swap,
+                0b00000 => AmoOp::Add,
+                0b00100 => AmoOp::Xor,
+                0b01100 => AmoOp::And,
+                0b01000 => AmoOp::Or,
+                0b10000 => AmoOp::Min,
+                0b10100 => AmoOp::Max,
+                0b11000 => AmoOp::Minu,
+                0b11100 => AmoOp::Maxu,
+                _ => return refuse("AMO: no A-extension operation has this funct5"),
+            };
+            Ok(Amo {
+                op,
+                double,
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            })
         }
-        _ => refuse("an opcode RV32IMAC does not have"),
+        _ => refuse("an opcode RV64IMAC does not have"),
     }
 }
+
+/// Every atomic's mnemonic, `[.w, .d][op]`.
+const AMO_NAMES: [[&str; 11]; 2] = [
+    [
+        "amoadd.w",
+        "amoswap.w",
+        "lr.w",
+        "sc.w",
+        "amoxor.w",
+        "amoor.w",
+        "amoand.w",
+        "amomin.w",
+        "amomax.w",
+        "amominu.w",
+        "amomaxu.w",
+    ],
+    [
+        "amoadd.d",
+        "amoswap.d",
+        "lr.d",
+        "sc.d",
+        "amoxor.d",
+        "amoor.d",
+        "amoand.d",
+        "amomin.d",
+        "amomax.d",
+        "amominu.d",
+        "amomaxu.d",
+    ],
+];
 
 /// An instruction's fields, projected onto the names every form shares.
 ///
@@ -553,21 +686,10 @@ impl Instr {
         self.spelled().1
     }
 
-    /// `(aq, rl)` for the eleven atomics, `None` for everything else.
+    /// `(aq, rl)` for the atomics, `None` for everything else.
     pub fn aq_rl(&self) -> Option<(bool, bool)> {
-        use Instr::*;
         match *self {
-            LrW { aq, rl, .. }
-            | ScW { aq, rl, .. }
-            | AmoswapW { aq, rl, .. }
-            | AmoaddW { aq, rl, .. }
-            | AmoxorW { aq, rl, .. }
-            | AmoandW { aq, rl, .. }
-            | AmoorW { aq, rl, .. }
-            | AmominW { aq, rl, .. }
-            | AmomaxW { aq, rl, .. }
-            | AmominuW { aq, rl, .. }
-            | AmomaxuW { aq, rl, .. } => Some((aq, rl)),
+            Instr::Amo { aq, rl, .. } => Some((aq, rl)),
             _ => None,
         }
     }
@@ -630,9 +752,12 @@ impl Instr {
             Lw { rd, rs1, imm } => ("lw", i(rd, rs1, imm, 0b010)),
             Lbu { rd, rs1, imm } => ("lbu", i(rd, rs1, imm, 0b100)),
             Lhu { rd, rs1, imm } => ("lhu", i(rd, rs1, imm, 0b101)),
+            Lwu { rd, rs1, imm } => ("lwu", i(rd, rs1, imm, 0b110)),
+            Ld { rd, rs1, imm } => ("ld", i(rd, rs1, imm, 0b011)),
             Sb { rs1, rs2, imm } => ("sb", s(rs1, rs2, imm, 0b000)),
             Sh { rs1, rs2, imm } => ("sh", s(rs1, rs2, imm, 0b001)),
             Sw { rs1, rs2, imm } => ("sw", s(rs1, rs2, imm, 0b010)),
+            Sd { rs1, rs2, imm } => ("sd", s(rs1, rs2, imm, 0b011)),
 
             Addi { rd, rs1, imm } => ("addi", i(rd, rs1, imm, 0b000)),
             Slti { rd, rs1, imm } => ("slti", i(rd, rs1, imm, 0b010)),
@@ -643,6 +768,16 @@ impl Instr {
             Slli { rd, rs1, shamt } => ("slli", i(rd, rs1, shamt as i32, 0b001)),
             Srli { rd, rs1, shamt } => ("srli", i(rd, rs1, shamt as i32, 0b101)),
             Srai { rd, rs1, shamt } => ("srai", i(rd, rs1, shamt as i32, 0b101)),
+
+            Addiw { rd, rs1, imm } => ("addiw", i(rd, rs1, imm, 0b000)),
+            Slliw { rd, rs1, shamt } => ("slliw", i(rd, rs1, shamt as i32, 0b001)),
+            Srliw { rd, rs1, shamt } => ("srliw", i(rd, rs1, shamt as i32, 0b101)),
+            Sraiw { rd, rs1, shamt } => ("sraiw", i(rd, rs1, shamt as i32, 0b101)),
+            Addw { rd, rs1, rs2 } => ("addw", r(rd, rs1, rs2, 0b000)),
+            Subw { rd, rs1, rs2 } => ("subw", r(rd, rs1, rs2, 0b000)),
+            Sllw { rd, rs1, rs2 } => ("sllw", r(rd, rs1, rs2, 0b001)),
+            Srlw { rd, rs1, rs2 } => ("srlw", r(rd, rs1, rs2, 0b101)),
+            Sraw { rd, rs1, rs2 } => ("sraw", r(rd, rs1, rs2, 0b101)),
 
             Add { rd, rs1, rs2 } => ("add", r(rd, rs1, rs2, 0b000)),
             Sub { rd, rs1, rs2 } => ("sub", r(rd, rs1, rs2, 0b000)),
@@ -668,26 +803,33 @@ impl Instr {
             Rem { rd, rs1, rs2 } => ("rem", r(rd, rs1, rs2, 0b110)),
             Remu { rd, rs1, rs2 } => ("remu", r(rd, rs1, rs2, 0b111)),
 
-            LrW { rd, rs1, .. } => (
-                "lr.w",
-                Fields {
-                    rd: Some(rd),
-                    rs1: Some(rs1),
-                    rs2: None,
-                    imm: None,
-                    funct3: Some(0b010),
-                },
-            ),
-            ScW { rd, rs1, rs2, .. } => ("sc.w", r(rd, rs1, rs2, 0b010)),
-            AmoswapW { rd, rs1, rs2, .. } => ("amoswap.w", r(rd, rs1, rs2, 0b010)),
-            AmoaddW { rd, rs1, rs2, .. } => ("amoadd.w", r(rd, rs1, rs2, 0b010)),
-            AmoxorW { rd, rs1, rs2, .. } => ("amoxor.w", r(rd, rs1, rs2, 0b010)),
-            AmoandW { rd, rs1, rs2, .. } => ("amoand.w", r(rd, rs1, rs2, 0b010)),
-            AmoorW { rd, rs1, rs2, .. } => ("amoor.w", r(rd, rs1, rs2, 0b010)),
-            AmominW { rd, rs1, rs2, .. } => ("amomin.w", r(rd, rs1, rs2, 0b010)),
-            AmomaxW { rd, rs1, rs2, .. } => ("amomax.w", r(rd, rs1, rs2, 0b010)),
-            AmominuW { rd, rs1, rs2, .. } => ("amominu.w", r(rd, rs1, rs2, 0b010)),
-            AmomaxuW { rd, rs1, rs2, .. } => ("amomaxu.w", r(rd, rs1, rs2, 0b010)),
+            Mulw { rd, rs1, rs2 } => ("mulw", r(rd, rs1, rs2, 0b000)),
+            Divw { rd, rs1, rs2 } => ("divw", r(rd, rs1, rs2, 0b100)),
+            Divuw { rd, rs1, rs2 } => ("divuw", r(rd, rs1, rs2, 0b101)),
+            Remw { rd, rs1, rs2 } => ("remw", r(rd, rs1, rs2, 0b110)),
+            Remuw { rd, rs1, rs2 } => ("remuw", r(rd, rs1, rs2, 0b111)),
+
+            Amo {
+                op,
+                double,
+                rd,
+                rs1,
+                rs2,
+                ..
+            } => {
+                let width = if double { 0b011 } else { 0b010 };
+                let fields = match op {
+                    AmoOp::Lr => Fields {
+                        rd: Some(rd),
+                        rs1: Some(rs1),
+                        rs2: None,
+                        imm: None,
+                        funct3: Some(width),
+                    },
+                    _ => r(rd, rs1, rs2, width),
+                };
+                (AMO_NAMES[double as usize][op as usize], fields)
+            }
         }
     }
 }

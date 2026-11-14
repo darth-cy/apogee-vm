@@ -21,7 +21,7 @@ use isa::{decode, Instr};
 /// `(mnemonic, format, opcode, funct3, funct7 or funct5)`, from the ISA
 /// manual's instruction listings. Formats: `U`, `J`, `I`, `H` (shift
 /// immediate), `S`, `B`, `R`, `A` (atomic), `F` (fence), `E` (environment).
-const TABLE: [(&str, char, u32, u32, u32); 59] = [
+const TABLE: [(&str, char, u32, u32, u32); 87] = [
     ("lui", 'U', 0x37, 0, 0),
     ("auipc", 'U', 0x17, 0, 0),
     ("jal", 'J', 0x6f, 0, 0),
@@ -81,7 +81,44 @@ const TABLE: [(&str, char, u32, u32, u32); 59] = [
     ("amomax.w", 'A', 0x2f, 2, 0b10100),
     ("amominu.w", 'A', 0x2f, 2, 0b11000),
     ("amomaxu.w", 'A', 0x2f, 2, 0b11100),
+    ("ld", 'I', 0x03, 3, 0),
+    ("lwu", 'I', 0x03, 6, 0),
+    ("sd", 'S', 0x23, 3, 0),
+    ("addiw", 'I', 0x1b, 0, 0),
+    ("slliw", 'H', 0x1b, 1, 0x00),
+    ("srliw", 'H', 0x1b, 5, 0x00),
+    ("sraiw", 'H', 0x1b, 5, 0x20),
+    ("addw", 'R', 0x3b, 0, 0x00),
+    ("subw", 'R', 0x3b, 0, 0x20),
+    ("sllw", 'R', 0x3b, 1, 0x00),
+    ("srlw", 'R', 0x3b, 5, 0x00),
+    ("sraw", 'R', 0x3b, 5, 0x20),
+    ("mulw", 'R', 0x3b, 0, 0x01),
+    ("divw", 'R', 0x3b, 4, 0x01),
+    ("divuw", 'R', 0x3b, 5, 0x01),
+    ("remw", 'R', 0x3b, 6, 0x01),
+    ("remuw", 'R', 0x3b, 7, 0x01),
+    ("lr.d", 'A', 0x2f, 3, 0b00010),
+    ("sc.d", 'A', 0x2f, 3, 0b00011),
+    ("amoswap.d", 'A', 0x2f, 3, 0b00001),
+    ("amoadd.d", 'A', 0x2f, 3, 0b00000),
+    ("amoxor.d", 'A', 0x2f, 3, 0b00100),
+    ("amoand.d", 'A', 0x2f, 3, 0b01100),
+    ("amoor.d", 'A', 0x2f, 3, 0b01000),
+    ("amomin.d", 'A', 0x2f, 3, 0b10000),
+    ("amomax.d", 'A', 0x2f, 3, 0b10100),
+    ("amominu.d", 'A', 0x2f, 3, 0b11000),
+    ("amomaxu.d", 'A', 0x2f, 3, 0b11100),
 ];
+
+/// A shift amount's width: six bits on OP-IMM, five on OP-IMM-32.
+fn shamt_bits(op: u32) -> u32 {
+    if op == 0x13 {
+        6
+    } else {
+        5
+    }
+}
 
 /// Re-encode a decoded instruction from [`TABLE`] and its fields.
 fn reencode(instr: &Instr) -> u32 {
@@ -106,7 +143,14 @@ fn reencode(instr: &Instr) -> u32 {
                 | op
         }
         'I' => (imm & 0xfff) << 20 | rs1 << 15 | f3 << 12 | rd << 7 | op,
-        'H' => f7 << 25 | (imm & 0x1f) << 20 | rs1 << 15 | f3 << 12 | rd << 7 | op,
+        'H' => {
+            f7 << 25
+                | (imm & ((1 << shamt_bits(op)) - 1)) << 20
+                | rs1 << 15
+                | f3 << 12
+                | rd << 7
+                | op
+        }
         'S' => {
             ((imm >> 5) & 0x7f) << 25 | rs2 << 20 | rs1 << 15 | f3 << 12 | (imm & 0x1f) << 7 | op
         }
@@ -145,13 +189,12 @@ fn reencode(instr: &Instr) -> u32 {
 
 /// Whether the immediate is in its format's range: U a multiple of 4096, I and
 /// S twelve signed bits, B thirteen and even, J twenty-one and even, a shift
-/// amount below 32.
+/// amount below 64 (32 for a word shift).
 fn canonical(instr: &Instr) -> bool {
-    let format = TABLE
+    let (_, format, op, _, _) = *TABLE
         .iter()
         .find(|row| row.0 == instr.mnemonic())
-        .expect("every mnemonic is in the table")
-        .1;
+        .expect("every mnemonic is in the table");
     let Some(imm) = instr.fields().imm else {
         return true;
     };
@@ -161,7 +204,7 @@ fn canonical(instr: &Instr) -> bool {
         'I' | 'S' => signed(12),
         'B' => imm & 1 == 0 && signed(13),
         'J' => imm & 1 == 0 && signed(21),
-        'H' => (0..32).contains(&imm),
+        'H' => (0..1 << shamt_bits(op)).contains(&imm),
         _ => false,
     }
 }
@@ -203,24 +246,29 @@ fn the_accepted_space_is_exactly_the_isa_tables() {
     const FULL: u64 = 1 << 25; // every one of the 25 bits above the opcode
     const I: u64 = 1 << 22; // funct3 fixed: rd, rs1, imm12 free
     const R: u64 = 1 << 15; // funct3 and funct7 fixed: rd, rs1, rs2 free
-    let expected: [(u32, &str, u64); 12] = [
+    let expected: [(u32, &str, u64); 14] = [
         (0x37, "LUI: every word", FULL),
         (0x17, "AUIPC: every word", FULL),
         (0x6f, "JAL: every word", FULL),
         (0x67, "JALR: funct3 000", I),
         (0x63, "BRANCH: six funct3", 6 * I),
-        (0x03, "LOAD: five funct3", 5 * I),
-        (0x23, "STORE: three funct3", 3 * I),
-        // Six funct3 with a 12-bit immediate, slli with one funct7, srli and
-        // srai sharing funct3 101 with one funct7 each.
-        (0x13, "OP-IMM", 6 * I + R + 2 * R),
+        (0x03, "LOAD: seven funct3", 7 * I),
+        (0x23, "STORE: four funct3", 4 * I),
+        // Six funct3 with a 12-bit immediate, slli with one funct6, srli and
+        // srai sharing funct3 101 with one funct6 each: a six-bit shamt is
+        // twice a funct7's worth of words.
+        (0x13, "OP-IMM", 6 * I + 2 * R + 2 * 2 * R),
+        // addiw, then slliw, srliw and sraiw with one funct7 each.
+        (0x1b, "OP-IMM-32", I + 3 * R),
         // Ten RV32I operations and eight M, one (funct7, funct3) each.
         (0x33, "OP: eighteen (funct7, funct3)", 18 * R),
+        // Five RV64I word operations and five RV64M.
+        (0x3b, "OP-32: ten (funct7, funct3)", 10 * R),
         (0x0f, "MISC-MEM: funct3 000, everything else a fence", I),
         (0x73, "SYSTEM: ecall and ebreak, one word each", 2),
-        // funct3 010; ten operations with aq, rl and rs2 free; lr.w with
-        // aq and rl free and rs2 = 0.
-        (0x2f, "AMO", 10 * 4 * R + 4 * (1 << 10)),
+        // funct3 010 and 011; ten operations with aq, rl and rs2 free; lr
+        // with aq and rl free and rs2 = 0.
+        (0x2f, "AMO", 2 * (10 * 4 * R + 4 * (1 << 10))),
     ];
 
     for k in 0..32u32 {

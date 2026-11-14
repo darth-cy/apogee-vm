@@ -186,7 +186,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
 // ---------------------------------------------------------------------------
 
 /// `guests/<name>`'s ELF, built from source with the guest manual's command --
-/// `cargo build --target riscv32imac-unknown-none-elf` from the guest's own
+/// `cargo build --target riscv64imac-unknown-none-elf` from the guest's own
 /// directory, the target and linker flags from `guests/.cargo/config.toml` --
 /// at the dev profile, into `target/guests`.
 ///
@@ -204,10 +204,20 @@ pub fn guest_elf(name: &str) -> Vec<u8> {
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let target = root.join("target/guests");
+    if root
+        .join("guests")
+        .join(name)
+        .join("CMakeLists.txt")
+        .exists()
+    {
+        let elf = cmake_guest(&root, &target, name);
+        built.insert(name.to_string(), elf.clone());
+        return elf;
+    }
     let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     command
         .current_dir(root.join("guests").join(name))
-        .args(["build", "--target", "riscv32imac-unknown-none-elf"])
+        .args(["build", "--target", "riscv64imac-unknown-none-elf"])
         .env("CARGO_TARGET_DIR", &target);
     for key in [
         "RUSTFLAGS",
@@ -227,10 +237,74 @@ pub fn guest_elf(name: &str) -> Vec<u8> {
         "guests/{name} does not build:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let path = target.join("riscv32imac-unknown-none-elf/debug").join(name);
+    let path = target.join("riscv64imac-unknown-none-elf/debug").join(name);
     let elf = fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
     built.insert(name.to_string(), elf.clone());
     elf
+}
+
+/// A C or C++ guest's ELF: `guests/<name>` is a CMake project, built with the
+/// SDK's toolchain file against the SDK's pieces in this tree —
+/// `include/apogee_guest.h`, `apogee.ld`, and `libapogee_guest.a`, which is
+/// `crates/guest-sdk` built as a static library — exactly as a C++ developer's
+/// project is built against the published SDK (`docs/guest-program-manual.md`
+/// §8). Needs CMake, Clang and LLD.
+fn cmake_guest(root: &Path, target: &Path, name: &str) -> Vec<u8> {
+    let sdk = root.join("crates/guest-sdk");
+    let sdk_target = target.join("sdk");
+    let mut cargo = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    cargo
+        .current_dir(&sdk)
+        .args(["rustc", "--lib", "--release", "--crate-type", "staticlib"])
+        .args(["--target", "riscv64imac-unknown-none-elf"])
+        .env("CARGO_TARGET_DIR", &sdk_target);
+    for key in [
+        "RUSTFLAGS",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CARGO_BUILD_RUSTFLAGS",
+    ] {
+        cargo.env_remove(key);
+    }
+    let lib = sdk_target.join("riscv64imac-unknown-none-elf/release/libguest_sdk.a");
+    let build = target.join(name);
+    let path = |p: &Path| p.to_str().expect("a UTF-8 path").to_string();
+    let configure = [
+        "-S".into(),
+        path(&root.join("guests").join(name)),
+        "-B".into(),
+        path(&build),
+        format!(
+            "-DCMAKE_TOOLCHAIN_FILE={}",
+            path(&sdk.join("cmake/apogee-rv64.cmake"))
+        ),
+        format!("-DAPOGEE_GUEST_LIB={}", path(&lib)),
+        format!("-DAPOGEE_LINKER_SCRIPT={}", path(&sdk.join("apogee.ld"))),
+        format!("-DAPOGEE_INCLUDE_DIR={}", path(&sdk.join("include"))),
+        "-DCMAKE_BUILD_TYPE=Release".into(),
+    ];
+    for (mut command, what) in [
+        (cargo, "the SDK's static library"),
+        (cmake(&configure), "the CMake configure step"),
+        (cmake(&["--build".into(), path(&build)]), "the CMake build"),
+    ] {
+        let out = command
+            .output()
+            .unwrap_or_else(|e| panic!("guests/{name}: running {what}: {e}"));
+        assert!(
+            out.status.success(),
+            "guests/{name}: {what} failed:\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let elf = build.join(name);
+    fs::read(&elf).unwrap_or_else(|e| panic!("reading {}: {e}", elf.display()))
+}
+
+fn cmake(args: &[String]) -> Command {
+    let mut command = Command::new("cmake");
+    command.args(args);
+    command
 }
 
 /// `llvm-objdump -d -M no-aliases` of `elf`: one `(address, encoding, text)`

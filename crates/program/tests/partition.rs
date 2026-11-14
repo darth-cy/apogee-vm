@@ -145,7 +145,7 @@ fn each_program_derives_only_the_families_it_uses() {
         [
             family::ADD_SUB_LUI_AUIPC,
             family::JUMP_BRANCH_SLT,
-            family::SHIFT_BITWISE,
+            family::BITWISE,
             family::MEM_WORD,
             family::MEM_SUBWORD,
             family::INIT_TEARDOWN,
@@ -210,7 +210,7 @@ fn an_instruction_no_family_knows_fails_naming_its_pc() {
         program::ProgramError::NotAllOpcodesSupported {
             pc: 0x1_0004,
             word: flw,
-            reason: "an opcode RV32IMAC does not have",
+            reason: "an opcode RV64IMAC does not have",
         }
     );
     assert!(err

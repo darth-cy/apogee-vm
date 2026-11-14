@@ -340,7 +340,7 @@ impl TraceArchive {
     }
 }
 
-type QueryRef<'a> = (&'a [u32], &'a [u64], &'a [u32], &'a [u32]);
+type QueryRef<'a> = (&'a [u32], &'a [u64], &'a [u64], &'a [u64]);
 type FamilyRef<'a> = (
     u32,
     u32,
@@ -350,7 +350,7 @@ type FamilyRef<'a> = (
     &'a [u8],
     [QueryRef<'a>; 8],
 );
-type QueryWire = (Seq<u32>, Seq<u64>, Seq<u32>, Seq<u32>);
+type QueryWire = (Seq<u32>, Seq<u64>, Seq<u64>, Seq<u64>);
 type FamilyWire = (
     u32,
     u32,
@@ -360,7 +360,7 @@ type FamilyWire = (
     Seq<u8>,
     [QueryWire; 8],
 );
-type EventWire = (u8, u32, u64, u64, u32, u32);
+type EventWire = (u8, u32, u64, u64, u64, u64);
 type DelegationRef<'a> = (u32, u32, &'a [u64], &'a [u32], &'a [QueryRef<'a>]);
 type DelegationWire = (u32, u32, Seq<u64>, Seq<u32>, Seq<QueryWire>);
 type PostExecutionWire = (
@@ -679,8 +679,8 @@ fn check_parts(
             addr: 0,
             ts: base,
             read_ts: base - memory::TS_STEP,
-            read_value: row.pc,
-            write_value: row.next_pc,
+            read_value: row.pc as u64,
+            write_value: row.next_pc as u64,
         };
         let queries = ROLES.iter().filter_map(|role| {
             row.query(*role).map(|q| MemoryEvent {

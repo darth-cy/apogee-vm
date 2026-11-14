@@ -199,7 +199,7 @@ pub fn set_operand(gate: &mut GateDef, from: PolyAddress, to: PolyAddress) -> us
 // ---------------------------------------------------------------------------
 
 use checker::{memory_roots, WitnessRow};
-use constants::challenge_slot::{MEM_ALPHA_VAL, MEM_GAMMA};
+use constants::challenge_slot::{MEM_ALPHA_HI, MEM_ALPHA_VAL, MEM_GAMMA};
 use constants::{family, transcript_tags};
 use constraints::memory::{
     family_frame_artifact, frame_queries, image_window_artifact, value_window_artifact,
@@ -224,7 +224,7 @@ use trace::{
 pub const FAMILY_NAMES: [&str; 7] = [
     "add_sub_lui_auipc",
     "jump_branch_slt",
-    "shift_bitwise",
+    "bitwise",
     "mul_div",
     "mem_word",
     "mem_subword",
@@ -312,7 +312,7 @@ pub fn traced_exiting_at(name: &str, input: u32, status: i32, height: u32) -> Tr
 pub fn memory_challenges() -> ExternalChallenges {
     let mut t = Transcript::new();
     let mut memory = ExternalChallenges::new();
-    for slot in MEM_GAMMA..=MEM_ALPHA_VAL {
+    for slot in (MEM_GAMMA..=MEM_ALPHA_VAL).chain([MEM_ALPHA_HI]) {
         memory.insert(slot, t.challenge(transcript_tags::SUMCHECK_CHALLENGE));
     }
     memory

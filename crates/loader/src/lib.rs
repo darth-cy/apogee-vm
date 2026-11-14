@@ -7,7 +7,7 @@
 //! # What a load does
 //!
 //! 1. Parse the header. Reject anything that is not a **static, executable,
-//!    little-endian, 32-bit RISC-V** ELF: dynamic, relocatable and non-RV32
+//!    little-endian, 64-bit RISC-V** ELF: dynamic, relocatable and non-RV64
 //!    files each get their own named error.
 //! 2. Take the `PT_LOAD` segments, sorted by address, as the post-load memory
 //!    image. `PT_DYNAMIC` or `PT_INTERP` anywhere is a refusal.
@@ -93,7 +93,7 @@ pub enum LoaderError {
     /// `e_entry` is not the address of an instruction: odd, outside the image,
     /// inside a data segment, or in the middle of a 32-bit instruction.
     EntryNotAnInstruction { entry: u32 },
-    /// A 16-bit halfword that no RV32C encoding claims. `reason` says which
+    /// A 16-bit halfword that no RV64C encoding claims. `reason` says which
     /// rule it broke; `pc` is where it is.
     ///
     /// The all-zero halfword is **not** one of these: it is a defined-illegal
@@ -105,7 +105,7 @@ pub enum LoaderError {
         reason: &'static str,
     },
     /// An encoding longer than 32 bits (bits 4:2 of a 32-bit-looking word are
-    /// all ones). RV32IMAC has no such instruction.
+    /// all ones). RV64IMAC has no such instruction.
     InstructionTooLong { pc: u32, encoding: u16 },
     /// A 32-bit instruction whose second halfword lies past the end of its
     /// segment.
@@ -209,7 +209,7 @@ impl ProgramImage {
 // ---------------------------------------------------------------------------
 
 const ELF_MAGIC: [u8; 4] = [0x7f, b'E', b'L', b'F'];
-const ELFCLASS32: u8 = 1;
+const ELFCLASS64: u8 = 2;
 const ELFDATA2LSB: u8 = 1;
 const EV_CURRENT: u8 = 1;
 
@@ -225,14 +225,14 @@ const PT_INTERP: u32 = 3;
 
 const PF_X: u32 = 1;
 
-const EHDR_LEN: usize = 52;
-const PHDR_LEN: usize = 32;
+const EHDR_LEN: usize = 64;
+const PHDR_LEN: usize = 56;
 
 // ---------------------------------------------------------------------------
 // load_elf
 // ---------------------------------------------------------------------------
 
-/// Load a static RV32 ELF executable.
+/// Load a static RV64 ELF executable.
 ///
 /// The one entry point, and the only way a [`ProgramImage`] is built.
 pub fn load_elf(bytes: &[u8]) -> Result<ProgramImage, LoaderError> {
@@ -306,9 +306,9 @@ fn parse_header(bytes: &[u8]) -> Result<(u32, usize, usize, usize), LoaderError>
             reason: "bad ELF magic",
         });
     }
-    if bytes[4] != ELFCLASS32 {
+    if bytes[4] != ELFCLASS64 {
         return Err(LoaderError::NotAnElf {
-            reason: "not ELFCLASS32: this VM is 32-bit",
+            reason: "not ELFCLASS64: this VM is RV64",
         });
     }
     if bytes[5] != ELFDATA2LSB {
@@ -344,14 +344,21 @@ fn parse_header(bytes: &[u8]) -> Result<(u32, usize, usize, usize), LoaderError>
         });
     }
 
-    let entry = u32le(bytes, 24);
-    let phoff = u32le(bytes, 28) as usize;
-    let phentsize = u16le(bytes, 42) as usize;
-    let phnum = u16le(bytes, 44) as usize;
+    // Every guest address is below 2^32 (`docs/spec/ecall-abi.md` §5), so an
+    // entry above it is no pc of this VM; the segment checks below hold the
+    // segments to the same map.
+    let entry = u32::try_from(u64le(bytes, 24)).map_err(|_| LoaderError::NotAnElf {
+        reason: "e_entry is above 2^32, outside the guest address space",
+    })?;
+    let phoff = usize::try_from(u64le(bytes, 32)).map_err(|_| LoaderError::NotAnElf {
+        reason: "e_phoff does not fit an offset",
+    })?;
+    let phentsize = u16le(bytes, 54) as usize;
+    let phnum = u16le(bytes, 56) as usize;
 
     if phentsize != PHDR_LEN {
         return Err(LoaderError::NotAnElf {
-            reason: "e_phentsize is not 32: not a 32-bit program header table",
+            reason: "e_phentsize is not 56: not a 64-bit program header table",
         });
     }
     if phnum == 0 {
@@ -407,13 +414,18 @@ fn read_segments(
             _ => continue,
         }
 
-        let p_offset = u32le(bytes, p + 4) as usize;
-        let vaddr = u32le(bytes, p + 8);
-        let filesz = u32le(bytes, p + 16);
-        let memsz = u32le(bytes, p + 20);
-        let flags = u32le(bytes, p + 24);
+        let flags = u32le(bytes, p + 4);
+        let p_offset = u64le(bytes, p + 8);
+        let (vaddr64, filesz, memsz) = (
+            u64le(bytes, p + 16),
+            u64le(bytes, p + 32),
+            u64le(bytes, p + 40),
+        );
+        // A `u32` for the error messages; the RAM check below is what makes it
+        // the address.
+        let vaddr = vaddr64 as u32;
 
-        if !vaddr.is_multiple_of(2) {
+        if !vaddr64.is_multiple_of(2) {
             return Err(LoaderError::BadSegment {
                 vaddr,
                 reason: "an odd segment address cannot hold an instruction stream",
@@ -430,16 +442,19 @@ fn read_segments(
         // the prover — so a segment that leaves RAM is not something this VM
         // can run, and checking it here is also what stops a hostile `p_memsz`
         // from sizing the slot vector, which is a function of the image span.
+        // In `u64`: past it every field fits a `u32`.
         let ram_lo = guest_memory::RAM_ORIGIN as u64;
         let ram_hi = ram_lo + guest_memory::RAM_LENGTH as u64;
-        if (vaddr as u64) < ram_lo || vaddr as u64 + memsz as u64 > ram_hi {
+        if vaddr64 < ram_lo || memsz > ram_hi - vaddr64 {
             return Err(LoaderError::BadSegment {
                 vaddr,
                 reason: "segment lies outside the guest RAM window",
             });
         }
-        let file_end = p_offset
-            .checked_add(filesz as usize)
+        let memsz = memsz as u32;
+        let file_end = usize::try_from(p_offset)
+            .ok()
+            .and_then(|o| o.checked_add(filesz as usize))
             .ok_or(LoaderError::BadSegment {
                 vaddr,
                 reason: "p_offset + p_filesz overflows",
@@ -456,7 +471,7 @@ fn read_segments(
             Segment {
                 vaddr,
                 mem_len: memsz,
-                bytes: bytes[p_offset..file_end].to_vec(),
+                bytes: bytes[file_end - filesz as usize..file_end].to_vec(),
             },
             flags & PF_X != 0,
         ));
@@ -479,7 +494,7 @@ fn sweep(segment: &Segment, slot_base: u32, slots: &mut [Slot]) -> Result<(), Lo
         let index = ((pc - slot_base as u64) / 2) as usize;
 
         if half & 0b11 == 0b11 {
-            // Bits 4:2 all ones means 48-bit or longer. RV32IMAC has none.
+            // Bits 4:2 all ones means 48-bit or longer. RV64IMAC has none.
             if half & 0b1_1100 == 0b1_1100 {
                 return Err(LoaderError::InstructionTooLong {
                     pc: pc as u32,
@@ -541,6 +556,10 @@ fn sweep(segment: &Segment, slot_base: u32, slots: &mut [Slot]) -> Result<(), Lo
 
 fn u16le(b: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([b[at], b[at + 1]])
+}
+
+fn u64le(b: &[u8], at: usize) -> u64 {
+    u64::from_le_bytes(b[at..at + 8].try_into().expect("eight bytes"))
 }
 
 fn u32le(b: &[u8], at: usize) -> u32 {

@@ -30,7 +30,7 @@ fn refusal(
 
 /// G1 to G9, event for event: the suite, the descriptor's three messages, the
 /// identity's 8 lanes, the I/O digest's 8 lanes, every shard's memory
-/// commitment, the boundary, four memory challenges, the digest.
+/// commitment, the boundary, five memory challenges, the digest.
 #[test]
 fn the_global_transcript_is_the_frozen_order() {
     let (key, public) = (vk(), statement());
@@ -51,11 +51,11 @@ fn the_global_transcript_is_the_frozen_order() {
     for c in &public.memory_commitments {
         want.push(absorb(tags::MEMORY_COMMITMENT, c.0.concat().len()));
     }
-    want.push(absorb(tags::MEMORY_BOUNDARY, 64));
+    want.push(absorb(tags::MEMORY_BOUNDARY, 95));
     want.extend(
         [Challenge {
             tag: tags::MEMORY_CHALLENGE,
-        }; 4],
+        }; 5],
     );
     want.push(Challenge {
         tag: tags::GLOBAL_STATE_DIGEST,
@@ -208,7 +208,7 @@ fn g_is_the_first_lookup_squeeze_and_beta_the_second() {
 fn a_shard_reads_the_window_constant_of_its_own_window() {
     use constants::challenge_slot as slot;
     let key = vk();
-    let memory = [11, 12, 13, 14].map(|v| Fp2::from(Fp::from_u64(v)));
+    let memory = [11, 12, 13, 14, 15].map(|v| Fp2::from(Fp::from_u64(v)));
     let (g, beta) = (Fp2::from(Fp::from_u64(21)), Fp2::from(Fp::from_u64(22)));
     let windows = [3, 9];
     let expected = |circuit: &constraints::FamilyCircuit, window: u32| {
@@ -244,6 +244,7 @@ fn a_shard_reads_the_window_constant_of_its_own_window() {
         slot::MEM_ALPHA_ADDR,
         slot::MEM_ALPHA_TS,
         slot::MEM_ALPHA_VAL,
+        slot::MEM_ALPHA_HI,
     ]
     .into_iter()
     .zip(memory)
@@ -487,7 +488,7 @@ fn the_statement_half_of_the_memory_argument_is_one_check_for_a_statement() {
     assert_eq!(answer(|p| p.boundary.pc_ts = 1 << 38), Err(late));
     assert_eq!(
         answer(|p| p.exit_status += 1),
-        Err(memory("x10's final value is not the exit status"))
+        Err(memory("x10's final low word is not the exit status"))
     );
     // Both, and the range refusal is the one returned: 10b checks the range
     // first.

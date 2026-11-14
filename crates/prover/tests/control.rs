@@ -18,6 +18,7 @@ use verifier_core::reduce_shard;
 
 const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
 const JBS: u32 = family::JUMP_BRANCH_SLT;
+const MD: u32 = family::MUL_DIV;
 const INIT: u32 = family::INIT_TEARDOWN;
 const ZERO: u32 = family::ZERO_WINDOWS;
 
@@ -74,6 +75,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
         vec![
             (ADD, 1 << 20),
             (JBS, 1 << 20),
+            (MD, 1 << 20),
             (INIT, 1 << 16),
             (ZERO, 1 << 16),
             (family::PUBLIC_INPUT, family::PUBLIC_WINDOW_HEIGHT),
@@ -87,7 +89,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             .filter(|r| table.is_live(*r))
             .count()
     };
-    assert_eq!((live(ADD), live(JBS)), (57, 90));
+    assert_eq!((live(ADD), live(JBS), live(MD)), (65, 99, 3));
     assert_eq!(
         archive.memory_log().self_check(&trace::InitialMemory {
             image: &setup.program.image,
@@ -96,7 +98,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
         }),
         Ok(())
     );
-    assert_eq!(public.shard_counts, vec![1, 1, 1, 0, 1, 1, 0]);
+    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 0, 1, 1, 0]);
     assert!(public.windows.is_empty(), "control touches no RAM");
     assert_eq!(public.exit_status, common::CONTROL_RESULT);
     assert!(public.input.is_empty() && public.output.is_empty());
@@ -107,6 +109,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             (INIT, 0),
             (ADD, 0),
             (JBS, 0),
+            (MD, 0),
             (family::PUBLIC_INPUT, 0),
             (family::PUBLIC_OUTPUT, 0)
         ]

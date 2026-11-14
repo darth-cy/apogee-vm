@@ -1,7 +1,7 @@
 //! The decoder against llvm-objdump.
 //!
 //! Every instruction of the committed listings — the guests `fib`, `rvc-dense`
-//! and `amm`, and the hand-encoded corpus of every RV32IMA mnemonic — is decoded
+//! and `amm`, and the hand-encoded corpus of every RV64IMA mnemonic — is decoded
 //! here and **rendered in the disassembler's own syntax**, and the two strings
 //! must be equal. That compares the mnemonic, every register and every
 //! immediate at once, with the disassembler's reading as the authority.
@@ -29,7 +29,8 @@ const ABI: [&str; 32] = [
 ];
 
 /// A decoded instruction, spelled the way `llvm-objdump -M no-aliases
-/// --no-print-imm-hex` spells it, with `pc` resolving branch and jump targets.
+/// --no-print-imm-hex` spells it, with `pc` resolving branch and jump targets
+/// in the 64-bit address space the disassembler prints.
 fn render(pc: u32, instr: &Instr) -> String {
     let x = |r: Option<u8>| ABI[r.expect("the form has this register") as usize];
     let mn = instr.mnemonic();
@@ -37,7 +38,7 @@ fn render(pc: u32, instr: &Instr) -> String {
     let target = || {
         format!(
             "0x{:x}",
-            pc.wrapping_add(f.imm.expect("a displacement") as u32)
+            (pc as u64).wrapping_add(f.imm.expect("a displacement") as i64 as u64)
         )
     };
     let suffix = |(aq, rl)| match (aq, rl) {
@@ -71,8 +72,13 @@ fn render(pc: u32, instr: &Instr) -> String {
             format!("{mn} {}, {}", x(f.rd), (f.imm.expect("upper") as u32) >> 12)
         }
         Instr::Jal { .. } => format!("jal {}, {}", x(f.rd), target()),
-        Instr::LrW { aq, rl, .. } => {
-            format!("lr.w{} {}, ({})", suffix((aq, rl)), x(f.rd), x(f.rs1))
+        Instr::Amo {
+            op: isa::AmoOp::Lr,
+            aq,
+            rl,
+            ..
+        } => {
+            format!("{mn}{} {}, ({})", suffix((aq, rl)), x(f.rd), x(f.rs1))
         }
         _ if instr.aq_rl().is_some() => format!(
             "{mn}{} {}, {}, ({})",
@@ -125,10 +131,13 @@ fn uncompress(text: &str) -> Option<String> {
         "c.andi" | "c.slli" | "c.srli" | "c.srai" => {
             format!("{} {1}, {1}, {2}", &mn[2..], o[0], o[1])
         }
+        "c.addiw" => format!("addiw {0}, {0}, {1}", o[0], o[1]),
+        "c.subw" | "c.addw" => format!("{} {1}, {1}, {2}", &mn[2..], o[0], o[1]),
         "c.lw" | "c.lwsp" => format!("lw {}, {}", o[0], o[1]),
         "c.sw" | "c.swsp" => format!("sw {}, {}", o[0], o[1]),
+        "c.ld" | "c.ldsp" => format!("ld {}, {}", o[0], o[1]),
+        "c.sd" | "c.sdsp" => format!("sd {}, {}", o[0], o[1]),
         "c.j" => format!("jal zero, {}", o[0]),
-        "c.jal" => format!("jal ra, {}", o[0]),
         "c.jr" => format!("jalr zero, 0({})", o[0]),
         "c.jalr" => format!("jalr ra, 0({})", o[0]),
         "c.beqz" => format!("beq {}, zero, {}", o[0], o[1]),
@@ -222,7 +231,7 @@ fn decode_agrees_with_objdump_on_every_mnemonic() {
     let want: BTreeSet<&str> = common::MNEMONICS.iter().copied().collect();
     assert_eq!(
         seen, want,
-        "the corpus decodes to exactly the 59 RV32IMA mnemonics"
+        "the corpus decodes to exactly the 87 RV64IMA mnemonics"
     );
 
     // The same coverage from the disassembler's side, so a decoder that
@@ -246,8 +255,8 @@ fn decode_agrees_with_objdump_on_every_mnemonic() {
         .collect();
     assert_eq!(
         spelled.len(),
-        59,
-        "llvm-objdump names 59 mnemonics in the corpus"
+        87,
+        "llvm-objdump names 87 mnemonics in the corpus"
     );
     assert!(checked >= 300, "only {checked} corpus words compared");
 }

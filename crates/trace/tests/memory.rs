@@ -46,7 +46,7 @@ fn the_frame_table_is_the_pc_query_then_the_roles() {
 
 /// Cycles 1 and 2 of a two-cycle program at entry 0x10000: `addi x5, x0, 7`,
 /// then an exit row writing `HALT_PC`, or `end_pc` in its place.
-fn two_cycles(end_pc: u32, x0_write: u32) -> MemoryEventLog {
+fn two_cycles(end_pc: u64, x0_write: u64) -> MemoryEventLog {
     let mut log = MemoryEventLog::new();
     log.record(AddressSpace::Pc, 0, 4, 0x10000, 0x10004);
     log.record(AddressSpace::Reg, 0, 5, 0, x0_write);
@@ -125,139 +125,29 @@ fn the_frame_refuses_more_rows_than_the_height() {
 /// its slots are those ids.
 const REG_FRAME: &[usize] = &[PC, RS1, RS2, RD];
 
-/// One value of every `Instr` variant, all 59. The operand values are
-/// irrelevant — a register query exists for every register field the form has,
-/// whatever register it names (`docs/spec/execution-trace.md` §4) — so one
-/// value per variant covers the variant.
+/// One instruction of every mnemonic, all 87: the first of each in the ISA
+/// corpus (`crates/isa/tests/vectors`), whose words llvm-objdump has read. The
+/// operand values are irrelevant — a register query exists for every register
+/// field the form has, whatever register it names
+/// (`docs/spec/execution-trace.md` §4) — so one value per mnemonic covers it.
 fn every_instruction() -> Vec<Instr> {
-    use Instr::*;
-    let (rd, rs1, rs2, imm, shamt) = (1u8, 2u8, 3u8, 16i32, 4u8);
-    let (aq, rl) = (false, false);
-    vec![
-        Lui { rd, imm },
-        Auipc { rd, imm },
-        Jal { rd, imm },
-        Jalr { rd, rs1, imm },
-        Beq { rs1, rs2, imm },
-        Bne { rs1, rs2, imm },
-        Blt { rs1, rs2, imm },
-        Bge { rs1, rs2, imm },
-        Bltu { rs1, rs2, imm },
-        Bgeu { rs1, rs2, imm },
-        Lb { rd, rs1, imm },
-        Lh { rd, rs1, imm },
-        Lw { rd, rs1, imm },
-        Lbu { rd, rs1, imm },
-        Lhu { rd, rs1, imm },
-        Sb { rs1, rs2, imm },
-        Sh { rs1, rs2, imm },
-        Sw { rs1, rs2, imm },
-        Addi { rd, rs1, imm },
-        Slti { rd, rs1, imm },
-        Sltiu { rd, rs1, imm },
-        Xori { rd, rs1, imm },
-        Ori { rd, rs1, imm },
-        Andi { rd, rs1, imm },
-        Slli { rd, rs1, shamt },
-        Srli { rd, rs1, shamt },
-        Srai { rd, rs1, shamt },
-        Add { rd, rs1, rs2 },
-        Sub { rd, rs1, rs2 },
-        Sll { rd, rs1, rs2 },
-        Slt { rd, rs1, rs2 },
-        Sltu { rd, rs1, rs2 },
-        Xor { rd, rs1, rs2 },
-        Srl { rd, rs1, rs2 },
-        Sra { rd, rs1, rs2 },
-        Or { rd, rs1, rs2 },
-        And { rd, rs1, rs2 },
-        Fence {
-            fm: 0,
-            pred: 3,
-            succ: 3,
-        },
-        Ecall,
-        Ebreak,
-        Mul { rd, rs1, rs2 },
-        Mulh { rd, rs1, rs2 },
-        Mulhsu { rd, rs1, rs2 },
-        Mulhu { rd, rs1, rs2 },
-        Div { rd, rs1, rs2 },
-        Divu { rd, rs1, rs2 },
-        Rem { rd, rs1, rs2 },
-        Remu { rd, rs1, rs2 },
-        LrW { rd, rs1, aq, rl },
-        ScW {
-            rd,
-            rs1,
-            rs2,
-            aq,
-            rl,
-        },
-        AmoswapW {
-            rd,
-            rs1,
-            rs2,
-            aq,
-            rl,
-        },
-        AmoaddW {
-            rd,
-            rs1,
-            rs2,
-            aq,
-            rl,
-        },
-        AmoxorW {
-            rd,
-            rs1,
-            rs2,
-            aq,
-            rl,
-        },
-        AmoandW {
-            rd,
-            rs1,
-            rs2,
-            aq,
-            rl,
-        },
-        AmoorW {
-            rd,
-            rs1,
-            rs2,
-            aq,
-            rl,
-        },
-        AmominW {
-            rd,
-            rs1,
-            rs2,
-            aq,
-            rl,
-        },
-        AmomaxW {
-            rd,
-            rs1,
-            rs2,
-            aq,
-            rl,
-        },
-        AmominuW {
-            rd,
-            rs1,
-            rs2,
-            aq,
-            rl,
-        },
-        AmomaxuW {
-            rd,
-            rs1,
-            rs2,
-            aq,
-            rl,
-        },
-    ]
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../isa/tests/vectors/isa_corpus.elf"
+    );
+    let image = load_elf(&std::fs::read(path).expect("the ISA corpus")).expect("it loads");
+    let mut seen = BTreeSet::new();
+    let out: Vec<Instr> = image
+        .slots
+        .iter()
+        .filter_map(|slot| match slot {
+            loader::Slot::Instruction { word, .. } => Some(isa::decode(*word).expect("decodes")),
+            _ => None,
+        })
+        .filter(|instr| seen.insert(instr.mnemonic()))
+        .collect();
+    assert_eq!(out.len(), 87, "every RV64IMA mnemonic");
+    out
 }
 
 /// The queries one instruction's cycle makes, ascending, written from
@@ -266,7 +156,8 @@ fn every_instruction() -> Vec<Instr> {
 /// Slot 0 is the pc query, on every row. The register queries are the form's
 /// own register fields, `x0` included and none it lacks — which is exactly
 /// `Instr::fields()`. The rest are the class's: a load's word at slot 2, a
-/// store's or an atomic's at slot 3. An ecall reads `a7` and `a0` — its one
+/// word or doubleword store's low word at slot 2, a sub-word store's word and
+/// an atomic's at slot 3, and a doubleword's other word in the remaining one. An ecall reads `a7` and `a0` — its one
 /// argument — and writes `a0`; its register fields are not encoded, so
 /// `fields()` says nothing about it. `ebreak` is a fatal guest error and has
 /// no row.
@@ -285,22 +176,14 @@ fn queries_of(instr: &Instr) -> Vec<usize> {
     if fields.rs2.is_some() {
         queries.push(RS2);
     }
-    match instr {
-        Lb { .. } | Lh { .. } | Lw { .. } | Lbu { .. } | Lhu { .. } => queries.push(LOAD),
-        Sb { .. } | Sh { .. } | Sw { .. } => queries.push(RAM),
-        LrW { .. }
-        | ScW { .. }
-        | AmoswapW { .. }
-        | AmoaddW { .. }
-        | AmoxorW { .. }
-        | AmoandW { .. }
-        | AmoorW { .. }
-        | AmominW { .. }
-        | AmomaxW { .. }
-        | AmominuW { .. }
-        | AmomaxuW { .. } => queries.push(RAM),
-        _ => {}
-    }
+    queries.extend_from_slice(match instr {
+        Lb { .. } | Lh { .. } | Lw { .. } | Lbu { .. } | Lhu { .. } | Lwu { .. } | Sw { .. } => {
+            &[LOAD][..]
+        }
+        Ld { .. } | Sd { .. } | Amo { double: true, .. } => &[LOAD, RAM],
+        Sb { .. } | Sh { .. } | Amo { .. } => &[RAM],
+        _ => &[],
+    });
     if fields.rd.is_some() {
         queries.push(RD);
     }
@@ -313,7 +196,7 @@ fn queries_of(instr: &Instr) -> Vec<usize> {
 ///
 /// The per-instruction table above is this test's own reading of
 /// `execution-trace.md` §4; the routing is `program::row_kind`'s. Taking the
-/// union over every one of the 59 instructions and comparing it with
+/// union over every one of the 87 instructions and comparing it with
 /// `constraints::memory::frame_queries` holds the two tables together, so
 /// neither can drift: adding an instruction to a family whose frame lacks one
 /// of its queries fails here, and so does a frame carrying a query no
@@ -410,7 +293,7 @@ fn the_first_word_of_a_window_is_that_windows_alone() {
     let image = load_elf(&test_support::guest_elf("fib")).expect("fib loads");
     let h = 1usize << 16;
     let mut log = MemoryEventLog::new();
-    log.record(AddressSpace::Pc, 0, 4, image.entry, 1);
+    log.record(AddressSpace::Pc, 0, 4, image.entry.into(), 1);
     log.record(AddressSpace::Ram, 4 * h as u32, 7, 0, 0xabcd);
     let teardown = |w: u32, m: u32| {
         let columns = build_init_teardown_columns(log.state(), &image, w, h);

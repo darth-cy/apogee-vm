@@ -32,12 +32,18 @@ jobs:
       - name: clippy
         run: |
           cargo clippy --workspace --all-targets -- -D warnings
-          (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
+          (cd crates/guest-sdk && cargo clippy --target riscv64imac-unknown-none-elf -- -D warnings)
           (cd guests && cargo clippy --bins -- -D warnings)
           # `debug-info` is the workspace's one cargo feature. A configuration
           # nobody builds is broken and undiscovered, so this one is built,
           # linted and tested here like the default.
           cargo clippy -p prover --all-targets --features debug-info -- -D warnings
+
+      # The C/C++ guests' toolchain: standard Clang, LLD and CMake
+      # (docs/guest-program-manual.md §11), which `test_support::guest_elf`
+      # builds `guests/cpp-*` with.
+      - name: C/C++ guest toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang lld cmake
 
       - name: test
         run: cargo test --workspace
@@ -86,4 +92,4 @@ jobs:
       # A guest builds from its own directory with no flags beyond the target,
       # everything else coming from the template config.
       - name: a guest builds from the template config
-        run: cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
+        run: cd guests/fib && cargo build --target riscv64imac-unknown-none-elf

@@ -92,7 +92,7 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
     let live = (0..table.height as usize)
         .filter(|r| table.is_live(*r))
         .count();
-    assert_eq!(live, 29, "every instruction of addsub is the family's");
+    assert_eq!(live, 39, "every instruction of addsub is the family's");
     assert_eq!(
         archive.memory_log().self_check(&trace::InitialMemory {
             image: &setup.program.image,
@@ -108,7 +108,7 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
     assert_eq!(
         archive.cycle_profile().counts,
         vec![
-            (ADD, 29),
+            (ADD, 39),
             (INIT, 0),
             (family::ZERO_WINDOWS, 0),
             (family::PUBLIC_INPUT, 0),

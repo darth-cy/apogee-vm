@@ -41,7 +41,7 @@ const EXIT_STATUS_REGISTER: usize = 10 - 1;
 /// key does not describe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GlobalChallenges {
-    pub memory: [Fp2; 4],
+    pub memory: [Fp2; crate::statement::MEMORY_CHALLENGES],
     pub digest: Fp2,
 }
 
@@ -360,8 +360,8 @@ pub fn verify_global_memory(
     {
         return Err(memory("a boundary timestamp is not below 2^38"));
     }
-    if b.reg_values[EXIT_STATUS_REGISTER] != public.exit_status {
-        return Err(memory("x10's final value is not the exit status"));
+    if b.reg_values[EXIT_STATUS_REGISTER] as u32 != public.exit_status {
+        return Err(memory("x10's final low word is not the exit status"));
     }
     let drawn = crate::statement::memory_slots(&global.memory);
     let reads: Vec<Fp2> = public.memory_roots.iter().map(|r| r[READ_ROOT]).collect();

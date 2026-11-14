@@ -261,7 +261,16 @@ fn an_amoadd_w_occupies_all_four_slots() {
     let t = traced("atomics");
     let amoadd: Vec<u64> = rows_by_cycle(&t)
         .iter()
-        .filter(|(_, row)| matches!(instr_at(&t.image, row.pc), Instr::AmoaddW { .. }))
+        .filter(|(_, row)| {
+            matches!(
+                instr_at(&t.image, row.pc),
+                Instr::Amo {
+                    op: isa::AmoOp::Add,
+                    double: false,
+                    ..
+                }
+            )
+        })
         .map(|(_, row)| row.cycle)
         .collect();
     assert!(
@@ -363,28 +372,31 @@ fn frame(instr: &Instr, row: &Row) -> u8 {
         | Andi { .. }
         | Slli { .. }
         | Srli { .. }
-        | Srai { .. } => roles(&[Rs1, Rd]),
+        | Srai { .. }
+        | Addiw { .. }
+        | Slliw { .. }
+        | Srliw { .. }
+        | Sraiw { .. } => roles(&[Rs1, Rd]),
         Beq { .. } | Bne { .. } | Blt { .. } | Bge { .. } | Bltu { .. } | Bgeu { .. } => {
             roles(&[Rs1, Rs2])
         }
-        Lb { .. } | Lh { .. } | Lw { .. } | Lbu { .. } | Lhu { .. } => roles(&[Rs1, Load, Rd]),
-        Sb { .. } | Sh { .. } | Sw { .. } => roles(&[Rs1, Rs2, Ram]),
+        Lb { .. } | Lh { .. } | Lw { .. } | Lbu { .. } | Lhu { .. } | Lwu { .. } => {
+            roles(&[Rs1, Load, Rd])
+        }
+        Ld { .. } => roles(&[Rs1, Load, Ram, Rd]),
+        Sb { .. } | Sh { .. } => roles(&[Rs1, Rs2, Ram]),
+        Sw { .. } => roles(&[Rs1, Rs2, Load]),
+        Sd { .. } => roles(&[Rs1, Rs2, Load, Ram]),
         Fence { .. } => 0,
-        LrW { .. } => roles(&[Rs1, Ram, Rd]),
-        ScW { .. }
-        | AmoswapW { .. }
-        | AmoaddW { .. }
-        | AmoxorW { .. }
-        | AmoandW { .. }
-        | AmoorW { .. }
-        | AmominW { .. }
-        | AmomaxW { .. }
-        | AmominuW { .. }
-        | AmomaxuW { .. } => roles(&[Rs1, Rs2, Ram, Rd]),
-        Ecall => match row.queries[Rs1 as usize].read_value {
-            ecall::EXIT => roles(&[Rs1, Rs2, Rd]),
-            _ => roles(&[Rs1, Rd]),
-        },
+        Amo { op, double, .. } => {
+            let rs2: &[Role] = if *op == isa::AmoOp::Lr { &[] } else { &[Rs2] };
+            let load: &[Role] = if *double { &[Load] } else { &[] };
+            roles(&[Rs1, Ram, Rd]) | roles(rs2) | roles(load)
+        }
+        Ecall if row.queries[Rs1 as usize].read_value == ecall::EXIT.into() => {
+            roles(&[Rs1, Rs2, Rd])
+        }
+        Ecall => roles(&[Rs1, Rd]),
         Ebreak => panic!("an ebreak has no row"),
         _ => roles(&[Rs1, Rs2, Rd]),
     }
@@ -420,7 +432,7 @@ fn every_row_carries_its_class_frame() {
                 assert_eq!(reg(Role::Rs1), Some(17), "{at}");
                 assert_eq!(reg(Role::Rd), Some(10), "{at}");
                 assert!(reg(Role::Rs2).is_none_or(|a| a == 10), "{at}: Rs2");
-                let next_pc = if row.queries[Role::Rs1 as usize].read_value == ecall::EXIT {
+                let next_pc = if row.queries[Role::Rs1 as usize].read_value == ecall::EXIT.into() {
                     memory::HALT_PC
                 } else {
                     row.pc + 4
@@ -473,8 +485,12 @@ fn every_row_carries_its_class_frame() {
                     assert_eq!(row.next_pc, row.pc + len, "{at}");
                 }
             }
-            for role in [Role::Rs1, Role::Rs2, Role::Load] {
-                if let Some(q) = row.query(role) {
+            // A load, `lr` included, writes back every word it reads.
+            let load = instr.mnemonic().starts_with('l') && instr.fields().rd.is_some();
+            for role in ROLES {
+                let read_only = matches!(role, Role::Rs1 | Role::Rs2)
+                    || (load && matches!(role, Role::Load | Role::Ram));
+                if let (true, Some(q)) = (read_only, row.query(role)) {
                     assert_eq!(
                         q.read_value, q.write_value,
                         "{at}: a read writes back what it read"
@@ -495,7 +511,7 @@ fn the_exit_row_alone_writes_the_halting_sentinel() {
         let final_pc = t.log.final_state().pop().expect("a run has a final state");
         assert_eq!(
             (final_pc.space, final_pc.value),
-            (AddressSpace::Pc, memory::HALT_PC),
+            (AddressSpace::Pc, memory::HALT_PC.into()),
             "{name}"
         );
         let pc_writes: Vec<&MemoryEvent> = t
@@ -505,7 +521,7 @@ fn the_exit_row_alone_writes_the_halting_sentinel() {
             .filter(|e| e.space == AddressSpace::Pc)
             .collect();
         let (last, rest) = pc_writes.split_last().expect("a run has cycles");
-        assert_eq!(last.write_value, memory::HALT_PC, "{name}");
+        assert_eq!(last.write_value, memory::HALT_PC.into(), "{name}");
         for e in rest {
             assert_eq!(
                 e.write_value % 2,
@@ -522,7 +538,7 @@ fn the_exit_row_alone_writes_the_halting_sentinel() {
                 exit_row.queries[Role::Rs1 as usize].read_value,
                 exit_row.next_pc
             ),
-            (ecall::EXIT, memory::HALT_PC),
+            (ecall::EXIT.into(), memory::HALT_PC),
             "{name}: the last row is the exit row"
         );
     }
@@ -556,8 +572,8 @@ fn the_rows_rebuild_the_log_exactly() {
                 addr: 0,
                 ts: base,
                 read_ts: base - memory::TS_STEP,
-                read_value: row.pc,
-                write_value: row.next_pc,
+                read_value: row.pc.into(),
+                write_value: row.next_pc.into(),
             });
             for role in ROLES {
                 if let Some(q) = row.query(role) {
@@ -707,14 +723,15 @@ fn the_window_list_is_exactly_the_touched_windows_above_zero() {
 /// reads no argument at all — an ecall takes one or none. `opcodes`'
 /// `cover_ecall` makes two calls nobody answers, `0x5ff` then `0x4ff`; every
 /// guest ends in `exit(0)` — `addsub` in `exit(42)` and `control` in
-/// `exit(16)`, their results; and every call anywhere is an `exit` or answered
+/// `exit(17)`, their results; and every call anywhere is an `exit` or answered
 /// `-ENOSYS`.
 #[test]
 fn every_ecall_answers_as_the_abi_says() {
-    let neg = |errno: u32| errno.wrapping_neg();
+    let neg = |errno: u32| u64::from(errno).wrapping_neg();
+    const EXIT: u64 = ecall::EXIT as u64;
     for name in TRACED {
         let t = traced(name);
-        let calls: Vec<(u32, u32, u32)> = rows_by_cycle(&t)
+        let calls: Vec<(u64, u64, u64)> = rows_by_cycle(&t)
             .iter()
             .filter(|(_, r)| instr_at(&t.image, r.pc) == Instr::Ecall)
             .map(|(_, r)| {
@@ -726,11 +743,11 @@ fn every_ecall_answers_as_the_abi_says() {
                 )
             })
             .collect();
-        let status = common::exit_code_of(name) as u32;
-        assert_eq!(calls.last(), Some(&(ecall::EXIT, status, status)), "{name}");
+        let status = common::exit_code_of(name) as i64 as u64;
+        assert_eq!(calls.last(), Some(&(EXIT, status, status)), "{name}");
         for &(number, argument, result) in &calls {
             match number {
-                ecall::EXIT => {
+                EXIT => {
                     assert_eq!(result, argument, "{name}: exit writes back its status")
                 }
                 // A number the ABI table does not list reads no argument at

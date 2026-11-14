@@ -47,23 +47,23 @@ fn the_halting_sentinel_is_odd_and_below_ram() {
     const { assert!(memory::HALT_PC < guest_memory::RAM_ORIGIN) }
 }
 
-/// `crates/guest-sdk/link.ld` is what the linker reads and
+/// `crates/guest-sdk/apogee.ld` is what the linker reads and
 /// `constants::guest_memory` is what `crates/loader` enforces, and a linker
 /// script cannot name a constant.
 #[test]
 fn the_linker_script_is_the_memory_map() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../guest-sdk/link.ld");
-    let script = fs::read_to_string(&path).expect("crates/guest-sdk/link.ld is readable");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../guest-sdk/apogee.ld");
+    let script = fs::read_to_string(&path).expect("crates/guest-sdk/apogee.ld is readable");
     let memory_line = script
         .lines()
         .find(|l| l.trim_start().starts_with("MEMORY"))
-        .expect("link.ld declares a MEMORY region")
+        .expect("apogee.ld declares a MEMORY region")
         .trim();
 
     let value = |key: &str| -> u32 {
         let at = memory_line
             .find(key)
-            .unwrap_or_else(|| panic!("link.ld's MEMORY line has no {key}"));
+            .unwrap_or_else(|| panic!("apogee.ld's MEMORY line has no {key}"));
         let rest = memory_line[at + key.len()..]
             .trim_start()
             .strip_prefix('=')
@@ -71,7 +71,7 @@ fn the_linker_script_is_the_memory_map() {
             .trim_start();
         let digits: String = rest
             .strip_prefix("0x")
-            .expect("link.ld writes the map in hex")
+            .expect("apogee.ld writes the map in hex")
             .chars()
             .take_while(|c| c.is_ascii_hexdigit())
             .collect();
