@@ -17,13 +17,14 @@
 //!           S[0..3] the packed table: key, v1, v2
 //!
 //! decoder   the row's pc is the frame's own M column; six more columns claim
-//!           next_pc, rs1, rs2, rd, imm and the packed mask, and twelve bits,
-//!           each boolean, recompose that mask
+//!           next_pc, rs1, rs2, rd, imm and the packed mask, and twelve kind
+//!           bits and the immediate's sign, each boolean, recompose that mask
 //!           S[3..10] JUMP_BRANCH_SLT's table in lookup-tuple order
 //!
 //! last      one multiplicity column per channel, last in the subtree
 //! ```
 
+use constants::extra_mask::IMM_NEGATIVE;
 use constants::generic_table::{AND, SIGN, WIDTH as GENERIC_WIDTH};
 use constants::{family, lookup_channel};
 use constraints::lookup::{range_table, ChannelSpec};
@@ -48,14 +49,17 @@ pub const TRACE_VARS: u32 = 20;
 /// `rd` — four queries — so it holds the future-read attack (two `x0` reads
 /// with their timestamps swapped) and the x0 gadget, at half the leaves of the
 /// widest frame. Its lookup tuple is seven columns, the widest any channel
-/// carries, and its packed mask has twelve one-hot bits.
+/// carries, and its packed mask has twelve one-hot kind bits and the
+/// immediate's sign at bit `IMM_NEGATIVE`.
 pub const FAMILY: u32 = family::JUMP_BRANCH_SLT;
 
 /// The decoder table's width, `program::lookup_tuple(FAMILY).len()`.
 pub const DECODER_WIDTH: usize = 7;
 
-/// How many bits the decoder's packed mask is split into,
-/// `constants::extra_mask`'s count for [`FAMILY`].
+/// How many kind bits the decoder's packed mask is split into,
+/// `constants::extra_mask`'s count for [`FAMILY`]. The immediate's sign is one
+/// more boolean column, `imm_negative`, weighted `2^IMM_NEGATIVE`, as every
+/// family circuit's is.
 pub const MASK_BITS: usize = 12;
 
 /// The channels this toy declares, in the order its multiplicity columns and its
@@ -127,7 +131,8 @@ const SIGN_S: u32 = FRAME_WITNESS + 7;
 const SIGN_ON: u32 = FRAME_WITNESS + 8;
 const DECODED: u32 = FRAME_WITNESS + 9;
 const KIND: u32 = DECODED + 6;
-const MULT: u32 = KIND + MASK_BITS as u32;
+const IMM_NEG: u32 = KIND + MASK_BITS as u32;
+const MULT: u32 = IMM_NEG + 1;
 
 /// The setup layout: the generic table, then the decoder's.
 const DECODER_TABLE: u32 = GENERIC_WIDTH as u32;
@@ -146,6 +151,7 @@ pub fn lookup_toy() -> CircuitArtifact {
         "decoded_mask",
     ]));
     witness.extend((0..MASK_BITS).map(|k| format!("kind_{k}")));
+    witness.push("imm_negative".to_string());
     // One multiplicity per channel **this toy declares**, in the order
     // `channels()` below lists them — and not one per channel that exists:
     // iterating `NAMES` would give the toy a committed column for any channel
@@ -243,11 +249,13 @@ pub fn lookup_toy() -> CircuitArtifact {
     for k in 0..MASK_BITS {
         enforcing.push((format!("kind_{k}_boolean"), booleanity(w(KIND + k as u32))));
     }
+    enforcing.push(("imm_negative_boolean".to_string(), booleanity(w(IMM_NEG))));
     // The packed mask's bits: booleanity is each bit's, and one-hotness is the
     // table's domain and nothing else.
     let mut terms: Vec<(Coeff, PolyAddress)> = (0..MASK_BITS)
         .map(|k| (lit(1 << k), w(KIND + k as u32)))
         .collect();
+    terms.push((lit(1 << IMM_NEGATIVE), w(IMM_NEG)));
     terms.push((Coeff::Literal(Fp::MINUS_ONE), w(DECODED + 5)));
     enforcing.push(("decoded_mask_bits".to_string(), linear(&terms, lit(0))));
 

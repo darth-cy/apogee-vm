@@ -64,11 +64,10 @@ fn proof_bytes(a: &constraints::CircuitArtifact, p: &ShardProof) -> usize {
 /// `verify_shard` accepts every one against the one statement; and every proof
 /// has its circuit's shape.
 ///
-/// The bitwise and mul/div families' shapes are pinned twice — as
-/// literals and as the numbers read off the registry's circuit
-/// (`docs/spec/circuits.md` §1 tabulates the shapes) — so that a change to
-/// either family shows up on both sides. What the trace holds, instruction by
-/// instruction, is `crates/checker/tests/families.rs` over the same fixture, and the emulator's reading of it is
+/// Every proof's shape is read off the registry's circuit
+/// (`docs/spec/circuits.md` §1 tabulates the shapes). What the trace holds,
+/// row by row, is `crates/checker/tests/families.rs` over the same fixture,
+/// and the emulator's reading of it is
 /// `crates/emulator/tests/guests.rs`', which checks the exit status and the
 /// journal and nothing below that.
 #[test]

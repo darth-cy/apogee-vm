@@ -7,7 +7,7 @@
 //! about 3.9 GB, and CI does not run them. What needs no proof — the wire
 //! forms, the key's load rules, the statement's refusals, the circuit row by
 //! row — is in `crates/verifier-core/tests` and
-//! `crates/checker/tests/add_sub.rs`, and runs in ordinary CI.
+//! `crates/checker/tests/families.rs`, and runs in ordinary CI.
 
 mod common;
 
@@ -363,8 +363,8 @@ fn a6_a8_every_base_claim_is_at_one_point_and_the_schedule_holds() {
         global: global.clone(),
     };
 
-    // The global transcript: the boundary, then the four challenges and the
-    // digest, and nothing drawn before.
+    // The global transcript: the boundary, then the five memory challenges
+    // and the digest, and nothing drawn before.
     let g = global_commit(&setup.vk, &global.statement);
     let log = g.transcript.event_log();
     let first_challenge = log
@@ -375,13 +375,13 @@ fn a6_a8_every_base_claim_is_at_one_point_and_the_schedule_holds() {
         log[first_challenge - 1],
         Absorb {
             tag: tags::MEMORY_BOUNDARY,
-            n: 64
+            n: 95
         }
     );
     assert_eq!(
-        first_challenge + 5,
+        first_challenge + 6,
         log.len(),
-        "four challenges and the digest"
+        "five memory challenges and the digest"
     );
     assert_eq!(g.digest, global.digest);
 

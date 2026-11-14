@@ -3,10 +3,9 @@
 //!
 //! **Every test here is `#[ignore]`d, and runs by name with
 //! `--include-ignored --test-threads=1`**, for `tests/acceptance.rs`' reason:
-//! five execution families' shards are `2^20` rows, and CI does not run them.
+//! six execution families' shards are `2^20` rows, and CI does not run them.
 //! The circuits row by row, the reduced-width splice check and everything else
-//! that needs no proof is `crates/checker/tests/mem_word.rs`, `mem_subword.rs`,
-//! `atomics.rs` and `mem_fill.rs`, in ordinary CI.
+//! that needs no proof is `crates/checker/tests/families.rs`, in ordinary CI.
 //!
 //! The statement's **rows touch RAM**, so it has a `ZERO_WINDOWS` shard: the
 //! guest writes near the top of RAM as well as inside window 0.
@@ -62,20 +61,19 @@ fn proof_bytes(a: &constraints::CircuitArtifact, p: &ShardProof) -> usize {
         + opening.bytes.len()
 }
 
-/// The guest decodes into the five execution families it runs — add/sub and
-/// jump/branch/slt beside the three memory-op families — and the window
-/// families; its trace self-checks and exits with the number of checks it ran,
-/// 50; the streaming prover proves one shard of each family that has one, nine
-/// of them, a `ZERO_WINDOWS` shard among them; `verify_shard` accepts every one
-/// against the one statement; and every proof has its circuit's shape.
+/// The guest decodes into the six execution families it runs — add/sub,
+/// jump/branch/slt and mul/div, the last for the shifts that build its 64-bit
+/// constants, beside the three memory-op families — and the window families;
+/// its trace self-checks and exits with the number of checks it ran, 66; the
+/// streaming prover proves one shard of each family that has one, ten of them,
+/// a `ZERO_WINDOWS` shard among them; `verify_shard` accepts every one against
+/// the one statement; and every proof has its circuit's shape, read off the
+/// registry's circuit (`docs/spec/circuits.md` §1 tabulates the shapes).
 ///
-/// The three memory-op families' shapes are pinned twice — as literals and as
-/// the numbers read off the registry's circuit (`docs/spec/circuits.md` §1
-/// tabulates the shapes) — so a change to any of them shows on both sides.
-/// What the trace holds, instruction by instruction, is the three row suites
-/// in `crates/checker/tests` over the same fixture, and the emulator's reading
-/// of it is `crates/emulator/tests/guests.rs`', which checks the exit status
-/// and the journal and nothing below that.
+/// What the trace holds, row by row, is `crates/checker/tests/families.rs`
+/// over the same fixture, and the emulator's reading of it is
+/// `crates/emulator/tests/guests.rs`', which checks the exit status and the
+/// journal and nothing below that.
 #[test]
 #[ignore = "six 2^20-row execution shards: one statement's proof peaks near 22 GB (unmeasured since RV64)"]
 fn a1_the_guest_proves_and_every_shard_verifies() {

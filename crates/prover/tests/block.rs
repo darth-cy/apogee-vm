@@ -169,7 +169,7 @@ fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
     assert_eq!(squeezes.len(), 6, "five memory challenges and the digest");
     assert_eq!(
         tape.iter().position(|l| l.starts_with("squeeze")),
-        Some(tape.len() - 5),
+        Some(tape.len() - 6),
         "every squeeze follows every absorb"
     );
     let tags: Vec<&str> = tape
@@ -509,9 +509,10 @@ fn the_block_does_not_depend_on_the_thread_count() {
     }
 }
 
-/// A multi-family block. `guests/mem` touches five execution families —
-/// add/sub, jump/branch/slt and the three memory-op families — and writes near
-/// the top of RAM, so its block also carries a `ZERO_WINDOWS` shard.
+/// A multi-family block. `guests/mem` touches six execution families —
+/// add/sub, jump/branch/slt, mul/div and the three memory-op families — and
+/// writes near the top of RAM, so its block also carries a `ZERO_WINDOWS`
+/// shard.
 #[test]
 #[ignore]
 fn a2_a_multi_family_block_proves_and_verifies() {

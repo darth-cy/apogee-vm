@@ -3,10 +3,9 @@
 //!
 //! **Every test here is `#[ignore]`d, and runs by name with
 //! `--include-ignored --test-threads=1`**, for `tests/acceptance.rs`' reason:
-//! both execution families' shards are `2^20` rows, and CI does not run them.
-//! The circuit row by row, the reduced-width comparison and everything else
-//! that needs no proof is `crates/checker/tests/jump_branch_slt.rs`, in
-//! ordinary CI.
+//! its three execution families' shards are `2^20` rows, and CI does not run
+//! them. The circuits row by row, the flipped comparison and everything else
+//! that needs no proof is `crates/checker/tests/families.rs`, in ordinary CI.
 
 mod common;
 
@@ -56,13 +55,13 @@ fn proof_bytes(a: &constraints::CircuitArtifact, p: &ShardProof) -> usize {
         + opening.bytes.len()
 }
 
-/// The guest decodes into the add/sub family, the jump/branch/slt family and
-/// the window families; its trace self-checks; the streaming prover proves one
-/// shard of each family that has one; `verify_shard` accepts every one against
-/// one statement, whose result is the guest's 16 passed checks; and every proof
-/// has its circuit's shape. What the trace holds — the twelve instructions and
-/// the branch matrix — is `crates/checker/tests/jump_branch_slt.rs`'
-/// `the_guest_runs_the_acceptance_matrix`, over the same fixture, and the
+/// The guest decodes into the add/sub, jump/branch/slt and mul/div families —
+/// the last for the shifts that build its 64-bit constants — and the window
+/// families; its trace self-checks; the streaming prover proves one shard of
+/// each family that has one; `verify_shard` accepts every one against one
+/// statement, whose result is the guest's 17 passed checks; and every proof
+/// has its circuit's shape. What the trace holds, row by row, is
+/// `crates/checker/tests/families.rs` over the same fixture, and the
 /// emulator's reading of it is `crates/emulator/tests/guests.rs`', which checks
 /// the exit status and the journal and nothing below that.
 #[test]
