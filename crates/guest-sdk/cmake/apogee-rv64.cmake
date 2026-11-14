@@ -30,24 +30,28 @@ find_program(APOGEE_CLANG NAMES clang HINTS ${_apogee_hints} REQUIRED)
 find_program(APOGEE_CLANGXX NAMES clang++ HINTS ${_apogee_hints} REQUIRED)
 find_program(APOGEE_LLD NAMES ld.lld HINTS ${_apogee_hints} REQUIRED)
 
-set(CMAKE_C_COMPILER "${APOGEE_CLANG}")
-set(CMAKE_CXX_COMPILER "${APOGEE_CLANGXX}")
-set(CMAKE_ASM_COMPILER "${APOGEE_CLANG}")
-foreach(lang C CXX ASM)
-  set(CMAKE_${lang}_COMPILER_TARGET riscv64-unknown-elf)
-endforeach()
-
+# What a guest cannot be built without is each compiler's own mandatory
+# arguments and the end of every link line, so CMAKE_<LANG>_FLAGS and
+# CMAKE_EXE_LINKER_FLAGS, from a project or the command line, add to it and
+# never replace it.
+#
 # -mcmodel=medany: code and data anywhere below 2^31, the whole guest map.
 # No exceptions, no RTTI, no C++ standard library headers: a guest is
 # freestanding, and the compiler's own C headers (stdint.h, stddef.h) are
-# what it includes. These are command-line strings, so every path in them is
-# quoted: the SDK may sit under a directory whose name has a space.
-set(_apogee_flags "-march=rv64imac -mabi=lp64 -mcmodel=medany -ffreestanding -fno-pic -isystem \"${APOGEE_INCLUDE_DIR}\"")
-set(CMAKE_C_FLAGS_INIT "${_apogee_flags}")
-set(CMAKE_CXX_FLAGS_INIT "${_apogee_flags} -nostdinc++ -fno-exceptions -fno-rtti -fno-threadsafe-statics")
-set(CMAKE_ASM_FLAGS_INIT "${_apogee_flags}")
+# what it includes.
+set(_apogee_arch -march=rv64imac -mabi=lp64 -mcmodel=medany -ffreestanding -fno-pic)
+set(CMAKE_C_COMPILER "${APOGEE_CLANG}" ${_apogee_arch})
+set(CMAKE_ASM_COMPILER "${APOGEE_CLANG}" ${_apogee_arch})
+set(CMAKE_CXX_COMPILER "${APOGEE_CLANGXX}" ${_apogee_arch}
+    -nostdinc++ -fno-exceptions -fno-rtti -fno-threadsafe-statics)
+foreach(lang C CXX ASM)
+  set(CMAKE_${lang}_COMPILER_TARGET riscv64-unknown-elf)
+  set(CMAKE_${lang}_STANDARD_INCLUDE_DIRECTORIES "${APOGEE_INCLUDE_DIR}")
+endforeach()
+
 # --no-relax: relaxation moves addresses, and the program identity is a
-# function of them.
-set(CMAKE_EXE_LINKER_FLAGS_INIT "-nostdlib -static -fuse-ld=lld \"--ld-path=${APOGEE_LLD}\" \"-Wl,-T,${APOGEE_LINKER_SCRIPT}\" -Wl,--no-relax")
-set(CMAKE_C_STANDARD_LIBRARIES "\"${APOGEE_GUEST_LIB}\"")
-set(CMAKE_CXX_STANDARD_LIBRARIES "\"${APOGEE_GUEST_LIB}\"")
+# function of them. A command-line string, so every path in it is quoted:
+# the SDK may sit under a directory whose name has a space.
+set(_apogee_link "-nostdlib -static -fuse-ld=lld \"--ld-path=${APOGEE_LLD}\" \"-Wl,-T,${APOGEE_LINKER_SCRIPT}\" -Wl,--no-relax \"${APOGEE_GUEST_LIB}\"")
+set(CMAKE_C_STANDARD_LIBRARIES "${_apogee_link}")
+set(CMAKE_CXX_STANDARD_LIBRARIES "${_apogee_link}")

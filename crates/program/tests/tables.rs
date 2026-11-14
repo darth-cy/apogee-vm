@@ -283,7 +283,7 @@ fn code_above_a_shorter_familys_table_is_padding_there() {
 
 /// `bytecode_size_words` is an explicit input, and a program
 /// above it fails loudly. The span ends at the last file-backed byte: fib's
-/// heap-and-stack reservation lies above it with no file bytes and counts for
+/// heap-and-stack reservation, a zero tail, lies above it and counts for
 /// nothing.
 #[test]
 fn a_program_above_bytecode_size_words_fails_loudly() {
@@ -299,7 +299,7 @@ fn a_program_above_bytecode_size_words_fails_loudly() {
         image
             .segments
             .iter()
-            .any(|s| s.bytes.is_empty() && s.vaddr as u64 >= end),
+            .any(|s| s.vaddr as u64 + s.mem_len as u64 > end),
         "fib's reservation lies above its file bytes"
     );
     let words = (end - guest_memory::RAM_ORIGIN as u64).div_ceil(4);

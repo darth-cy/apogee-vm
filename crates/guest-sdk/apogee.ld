@@ -18,7 +18,7 @@
    and heap are in no PT_LOAD is an image whose program headers are a lie about
    its own memory, and any loader that believes them leaves the first push
    pointing at nothing. The headers say what the image needs, whoever reads
-   them; the segment is NOBITS, so the file does not grow.
+   them; the reservation is NOBITS, so the file does not grow.
    crates/loader/tests/layout.rs reads the headers and pins this. */
 MEMORY { RAM (rwx) : ORIGIN = 0x00010000, LENGTH = 0x7FFF0000 }
 ENTRY(_start)

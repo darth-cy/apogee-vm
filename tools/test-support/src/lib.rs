@@ -267,6 +267,13 @@ fn cmake_guest(root: &Path, target: &Path, name: &str) -> Vec<u8> {
     }
     let lib = sdk_target.join("riscv64imac-unknown-none-elf/release/libguest_sdk.a");
     let build = target.join(name);
+    // A fresh tree every time. CMake keeps a configured tree's cache, so a
+    // tree an older toolchain file configured would build with its flags.
+    match fs::remove_dir_all(&build) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => panic!("guests/{name}: clearing {}: {e}", build.display()),
+    }
     let path = |p: &Path| p.to_str().expect("a UTF-8 path").to_string();
     let configure = [
         "-S".into(),

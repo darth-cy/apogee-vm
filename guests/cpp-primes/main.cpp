@@ -4,11 +4,13 @@
 // `mul` and a `mulhu` of full registers, and the bases below decide every
 // 64-bit integer exactly, so the answer is a function of the input alone.
 //
-// Its state is ordinary C++ globals, which the SDK places and initializes:
-// the integers are read by a global's constructor, a dynamic initializer the
-// startup runs before `main`; the tally, four bytes, is in `.sbss` or `.bss`
-// as Clang's small-data limit has it; the verdicts are in `.bss`
-// (docs/guest-program-manual.md §11).
+// Its state is ordinary C++ globals, which the SDK places, initializes and
+// tears down (docs/guest-program-manual.md §11). The integers are read by a
+// global's constructor, a dynamic initializer the startup runs before `main`.
+// The tally, four bytes, is in `.sbss` or `.bss` as Clang's small-data limit
+// has it, and the verdicts are in `.bss`. The journal is written by a static
+// object's destructor once `main` returns, as a C++ program's buffered output
+// is flushed at exit.
 //
 // # The public input
 //
@@ -156,20 +158,29 @@ const Integers integers;
 }  // namespace
 
 // External, so the optimizer keeps them globals rather than locals of `main`.
+uint32_t k;
 uint32_t primes;
 uint8_t verdicts[2048];
 
+// The journal, committed when `main` returns.
+struct Journal {
+    ~Journal() {
+        commit_le(k);
+        commit_le(primes);
+        apogee_commit(verdicts, k);
+    }
+};
+Journal journal;
+
 int main() {
     if (!integers.whole()) {
-        return 2;
+        // Ends the run before any destructor, so nothing is committed.
+        apogee_exit(2);
     }
-    const uint32_t k = integers.size();
+    k = integers.size();
     for (uint32_t i = 0; i < k; ++i) {
         verdicts[i] = is_prime(integers[i]);
         primes += verdicts[i];
     }
-    commit_le(k);
-    commit_le(primes);
-    apogee_commit(verdicts, k);
     return 0;
 }

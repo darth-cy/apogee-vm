@@ -3,17 +3,18 @@
  * Link a program against `libapogee_guest.a` and the `apogee.ld` memory map
  * (`cmake/apogee-rv64.cmake` does both) and define `int main(void)`: the
  * library's startup zeroes `.bss`, runs the static initializers (C++ dynamic
- * initialization and constructor functions), calls `main`, and exits with
- * what it returns. A global whose type has a non-trivial destructor does not
- * link: the library has no `__cxa_atexit`.
+ * initialization and constructor functions), calls `main`, runs the static
+ * objects' destructors, the latest constructed first, and exits with what
+ * `main` returned.
  *
  * An Apogee guest has no files and no streams. Its public input, advice and
  * journal are memory the proof binds — or, for advice, does not — and these
  * four calls are the whole of reaching them (docs/guest-program-manual.md §11,
  * docs/spec/public-values.md).
  *
- * The library also provides `memcpy`, `memmove`, `memset` and `memcmp`, and
- * the 128-bit integer helpers a compiler calls. It has no allocator, no
+ * The library also provides `memcpy`, `memmove`, `memset` and `memcmp`, the
+ * 128-bit integer helpers a compiler calls, and `__cxa_atexit`, which C++
+ * registers a static object's destructor with. It has no allocator, no
  * `printf` and no C++ standard library: a guest is freestanding. */
 #ifndef APOGEE_GUEST_H
 #define APOGEE_GUEST_H
@@ -39,7 +40,8 @@ const uint8_t *apogee_advice(size_t *len);
 void apogee_commit(const void *bytes, size_t len);
 
 /* End the execution with `code`; nonzero is a failed execution, still
- * provable. Returning `code` from `main` is the same. */
+ * provable. Unlike returning `code` from `main`, it runs no destructor: it is
+ * C's `_Exit`. */
 __attribute__((noreturn)) void apogee_exit(int32_t code);
 
 /* The guest's entry, which the library's startup calls. Declared here with C

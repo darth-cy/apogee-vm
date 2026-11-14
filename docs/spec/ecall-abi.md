@@ -91,11 +91,12 @@ entry and segments are refused there ([program.md](program.md) §1). The space b
   table's height bounds how far `.text` reaches ([program.md](program.md) §5).
 - crt0's `_start` sets `sp`, zeroes `[__bss_start, __bss_end)` byte by byte, so that a zero `.bss`
   is the image's property and not the executor's, calls each function pointer in
-  `[__init_array_start, __init_array_end)` in order, calls `main`, and exits with what `main`
-  returns: `entry!`'s `main` returns 0, a C `main` its own status (§7). The pointers are C++'s
-  dynamic initializers and C's constructor functions; `apogee.ld` gathers them in `.data`,
-  prioritised ones first, and places the small-data sections `.srodata`, `.sdata` and `.sbss` with
-  `.rodata`, `.data` and `.bss`.
+  `[__init_array_start, __init_array_end)` in order, calls `main`, runs the destructors registered
+  with `__cxa_atexit`, the latest first, and exits with what `main` returned: `entry!`'s `main`
+  returns 0, a C `main` its own status (§7). The pointers are C++'s dynamic initializers and C's
+  constructor functions; `apogee.ld` gathers them in `.data`, prioritised ones first, and places the
+  small-data sections `.srodata`, `.sdata` and `.sbss` with `.rodata`, `.data` and `.bss`. Every
+  other exit, `exit` and a panic among them, skips the destructors.
 - Nothing detects a stack that grows past its reserve after the heap has filled below it.
 
 ### 5.1 The segment layout
@@ -147,7 +148,8 @@ calling it.
 
 The library's `_start` is crt0's (§5): it runs the guest's static initializers and calls its own
 `int main(void)`, exiting with what it returns; the header declares `main` with C linkage, which a
-freestanding C++ compiler does not give it. It has no `__cxa_atexit`, so a global whose type has a
-non-trivial destructor does not link. The library also exports `memcpy`, `memmove`, `memset`, `memcmp` and the compiler's
+freestanding C++ compiler does not give it. Its `__cxa_atexit` and `__dso_handle` are what C++
+registers a static object's destructor with: each registration is one record from the allocator,
+and the destructors run when `main` returns. The library also exports `memcpy`, `memmove`, `memset`, `memcmp` and the compiler's
 128-bit integer helpers, weakly. The toolchain, the bundle and a worked guest are
 [guest-program-manual.md](../guest-program-manual.md) §11.

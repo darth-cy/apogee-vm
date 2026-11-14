@@ -36,14 +36,16 @@ use constants::{delegation, ecall, guest_memory};
 // ---------------------------------------------------------------------------
 
 // `_start` sits in its own `.text._start` section so the linker script places
-// it first, at ORIGIN(RAM). It does exactly five things: point `sp` at
+// it first, at ORIGIN(RAM). It does exactly six things: point `sp` at
 // `__stack_top`, zero `.bss`, call each initializer in
-// `__init_array_start..__init_array_end` in order, call `main`, and exit with
-// what `main` returned in `a0` — C's `int main(void)`, and 0 from the `entry!`
-// wrapper. The initializers are C++'s dynamic initialization and C's
-// constructor functions; a Rust guest has none, and pays five instructions for
-// the empty loop. The pointers are walked in `s0` and `s1`, which every
-// initializer preserves.
+// `__init_array_start..__init_array_end` in order, call `main`, run the
+// destructors `__cxa_atexit` registered, and exit with what `main` returned in
+// `a0` — C's `int main(void)`, and 0 from the `entry!` wrapper. The
+// initializers are C++'s dynamic initialization and C's constructor functions,
+// and the destructors are its static objects'. A Rust guest has neither, and
+// pays a few instructions for each empty step. The pointers are walked in `s0`
+// and `s1`, and `main`'s status is kept in `s0`: callee-saved registers, which
+// every initializer and destructor preserves.
 //
 // The `.bss` loop is byte-wise on purpose. `__bss_start` is aligned to the
 // output section's alignment and `__bss_end` is not aligned at all, so a
@@ -79,11 +81,15 @@ global_asm!(
     "  j    3b",
     "4:",
     "  call main",
+    "  mv   s0, a0",
+    "  call {destructors}",
+    "  mv   a0, s0",
     "  li   a7, {exit}",
     "  ecall",
     "5:",
     "  j    5b",
     exit = const ecall::EXIT,
+    destructors = sym run_destructors,
 );
 
 /// Give a function the `main` symbol that crt0 calls.
@@ -489,8 +495,10 @@ fn delegate(declared: &'static [u8; delegation::MARKER_BYTES], frame: &mut [u32]
 //
 // What `include/apogee_guest.h` declares, for a C or C++ guest that links this
 // crate built as a static library, `libapogee_guest.a`: crt0 above calls its
-// `main`, and these four are the whole surface. Last in the file, for the same
-// reason the delegation shims are: a Rust guest that calls none links none.
+// `main`, and these four are the whole surface it calls. `__cxa_atexit` and
+// `__dso_handle`, after them, are what a C++ compiler calls for a static
+// object's destructor. Last in the file, for the same reason the delegation
+// shims are: a Rust guest that calls none links none.
 
 /// `public_input()`: its address, its length through `len` where not null.
 ///
@@ -533,4 +541,71 @@ pub unsafe extern "C" fn apogee_commit(bytes: *const u8, len: usize) {
 #[no_mangle]
 pub extern "C" fn apogee_exit(code: i32) -> ! {
     exit(code)
+}
+
+/// A destructor `__cxa_atexit` registered: the function, its argument and the
+/// destructor registered before it.
+struct Destructor {
+    f: unsafe extern "C" fn(*mut u8),
+    arg: *mut u8,
+    next: *mut Destructor,
+}
+
+/// The registered destructors, the latest first; null when there are none.
+///
+/// In `.data`, not `.bss`, so a guest with no static destructor pays nothing
+/// at startup: crt0 zeroes `.bss` a byte at a time, and in `.bss` LLVM merges
+/// this pointer with the allocator's `BUMP`, so every guest would carry and
+/// zero both.
+#[link_section = ".data"]
+static mut DESTRUCTORS: *mut Destructor = core::ptr::null_mut();
+
+/// Register `f(arg)` to run when `main` returns. C++ calls this once for each
+/// static object whose type has a non-trivial destructor, after constructing
+/// it. The record comes from the bump allocator, so registering more than the
+/// heap holds exits 71, like any allocation.
+///
+/// # Safety
+/// `f` may be called once with `arg` after `main` returns.
+#[no_mangle]
+pub unsafe extern "C" fn __cxa_atexit(
+    f: unsafe extern "C" fn(*mut u8),
+    arg: *mut u8,
+    _dso: *mut u8,
+) -> i32 {
+    let record = ALLOCATOR
+        .alloc(Layout::new::<Destructor>())
+        .cast::<Destructor>();
+    let head = core::ptr::addr_of_mut!(DESTRUCTORS);
+    record.write(Destructor {
+        f,
+        arg,
+        next: *head,
+    });
+    *head = record;
+    0
+}
+
+/// The handle `__cxa_atexit`'s last argument points at. A static image is one
+/// object, so nothing compares it with another.
+#[no_mangle]
+#[allow(non_upper_case_globals)]
+pub static __dso_handle: u8 = 0;
+
+/// Run the registered destructors, the latest first, each once. crt0 calls
+/// this after `main` returns. A destructor that registers another one runs it
+/// next, in the order C++ requires. `apogee_exit`, a panic and every other exit
+/// skip them, like C's `_Exit`.
+extern "C" fn run_destructors() {
+    // SAFETY: the guest is single-threaded. Each record was written whole by
+    // `__cxa_atexit` and is never freed. It is unlinked before its function
+    // runs, so a destructor that registers another, or exits, leaves the list
+    // well formed.
+    unsafe {
+        let head = core::ptr::addr_of_mut!(DESTRUCTORS);
+        while let Some(d) = (*head).as_ref() {
+            *head = d.next;
+            (d.f)(d.arg);
+        }
+    }
 }

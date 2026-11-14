@@ -176,17 +176,17 @@ fn every_code_and_image_byte_moves_the_identity() {
 }
 
 /// Identity is meant to bind file-backed bytes, not a segment's zero tail:
-/// resizing fib's heap-and-stack reservation, a segment with no file bytes,
-/// does not move it.
+/// resizing fib's heap-and-stack reservation, the zero tail of its writable
+/// segment, does not move it.
 #[test]
-fn a_segment_without_file_bytes_does_not_move_the_identity_by_its_size() {
+fn a_segments_zero_tail_does_not_move_the_identity_by_its_size() {
     let image = common::guest("fib");
     let mut resized = image.clone();
     let reservation = resized
         .segments
         .iter_mut()
-        .find(|s| s.bytes.is_empty())
-        .expect("fib's heap-and-stack reservation has no file bytes");
+        .find(|s| s.mem_len as usize > s.bytes.len() + 0x1000)
+        .expect("fib's heap-and-stack reservation is a segment's zero tail");
     reservation.mem_len -= 0x1000;
     assert_ne!(resized, image);
     assert_eq!(

@@ -353,11 +353,15 @@ finds `clang`, `clang++` and `ld.lld` on `PATH`, and Homebrew's keg-only LLVM on
 system clang has no RISC-V backend: `apt install clang lld cmake` or `brew install llvm lld cmake`.
 It compiles freestanding — no exceptions, RTTI, C++ standard library or allocator, the compiler's
 own C headers (`stdint.h`, `stddef.h`) — with `-mcmodel=medany`, code and data anywhere below
-`2^31`, and links with `--no-relax` (§4). Globals are ordinary: initialized, zero-initialized and
-small-data globals are where `apogee.ld` puts them, and C++ dynamic initializers and
-`__attribute__((constructor))` functions run before `main`, prioritised ones first. A global whose
-type has a non-trivial destructor does not link, as the library has no `__cxa_atexit`. The SDK may
-sit under a path with spaces.
+`2^31`, and links with `--no-relax` (§4). Those flags are the compilers' own arguments and the end
+of every link line, so a project's or the command line's `CMAKE_<LANG>_FLAGS` and
+`CMAKE_EXE_LINKER_FLAGS` add to them rather than replacing them, and the SDK may sit under a path
+with spaces.
+
+Globals are ordinary. Initialized, zero-initialized and small-data globals are where `apogee.ld`
+puts them; C++ dynamic initializers and `__attribute__((constructor))` functions run before
+`main`, prioritised ones first; and static objects' destructors run when `main` returns, the
+latest constructed first. `apogee_exit` ends the run without them, as C's `_Exit` does.
 
 Building against this repository instead of a release: `cargo rustc --lib --release --crate-type
 staticlib --target riscv64imac-unknown-none-elf` in `crates/guest-sdk` builds the library, and
