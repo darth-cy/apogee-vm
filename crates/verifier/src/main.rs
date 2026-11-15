@@ -22,9 +22,9 @@
 //! Exit 0 when everything verifies; 1 naming the first file refused and why,
 //! or the shards missing or repeated; 2 on a usage error.
 //!
-//! **UNFINISHED: A64-C5 CHARACTERISTIC.** Three integer arguments do not hold
-//! at the base field's characteristic, so a proof that verifies here is not
-//! yet evidence of its execution. Every run says so on stderr
+//! **UNFINISHED: A64-C5 CHARACTERISTIC.** The memory argument's timestamp
+//! count does not hold at the base field's characteristic, so a proof that
+//! verifies here is not yet evidence of its execution. Every run says so on stderr
 //! (`docs/architecture.md` §0).
 
 use std::fs;
@@ -37,8 +37,8 @@ use verifier_core::statement_shards;
 
 fn main() {
     eprintln!(
-        "verifier: WARNING: UNFINISHED: three integer arguments do not hold at A64-C5's \
-         characteristic, so a proof that verifies here is UNSOUND (docs/architecture.md §0)"
+        "verifier: WARNING: UNFINISHED: the memory argument's timestamp count does not hold at \
+         A64-C5's characteristic, so a proof that verifies here is UNSOUND (docs/architecture.md §0)"
     );
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {

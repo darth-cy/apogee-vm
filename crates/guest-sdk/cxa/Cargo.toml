@@ -1,0 +1,16 @@
+# `__cxa_atexit` and `__dso_handle`, a crate of their own so that
+# `libapogee_guest.a` holds them as an archive member of its own. A linker takes
+# a member only for a reference nothing else resolves, so an image holds them
+# exactly where the guest references them, and under `--gc-sections` exactly
+# where live code does; `apogee.ld` selects the teardown by whether
+# `__cxa_atexit` is in the image. In one member with crt0, they would be in
+# every image.
+#
+# A member of `crates/guest-sdk`'s workspace, and guest-only like it.
+[package]
+name = "guest-sdk-cxa"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]

@@ -20,13 +20,14 @@ count is the instruction count.
 
 | Tag | Space | Address | At timestamp 0 |
 | --- | --- | --- | --- |
-| 1 | `REG` | a register index, `0..32` | 0, `x0` included |
+| 1 | `REG` | a register index, `0..32`; its value 64 bits, two words | 0, `x0` included |
 | 2 | `RAM` | the byte address of a 4-aligned word in RAM, a public window or the advice region | the image's bytes in RAM, 0 past them; the public input's and the advice's layouts; 0 in the journal |
 | 3 | `PC` | 0 | the entry point |
 
 The tags are nonzero so that no real tuple is all zeros, as `x0`'s initial write would be; 4 is the
-tag the next space takes. A byte or halfword access queries its word, and `trace::InitialMemory` is
-what RAM starts from.
+tag the next space takes. RAM is 32-bit words: a byte or halfword access queries its word, a
+doubleword access its two words, and `trace::InitialMemory` is what RAM starts from. A query's
+value is a `u64`: a register's 64 bits, a RAM word's 32.
 
 ## 3. A query
 
@@ -50,15 +51,19 @@ every register field of the decoded instruction, whatever register it names, `x0
 | `jalr`, register-immediate | `rs1` | | `rd` |
 | branches | `rs1` | `rs2` | |
 | register-register, M | `rs1` | `rs2` | `rd` |
-| loads | `rs1` | the word, read | `rd` |
-| stores | `rs1` | `rs2` | the word, the stored bytes merged in |
-| `lr.w` | `rs1` | | the word, written back; `rd` ← it |
-| `sc.w` | `rs1` | `rs2` | the word ← `rs2`; `rd` ← 0 |
-| AMOs | `rs1` | `rs2` | the word ← `op(old, rs2)`; `rd` ← `old` |
+| loads but `ld` | `rs1` | the word, read | `rd` |
+| `ld` | `rs1` | the low word, read | the high word, written back; `rd` |
+| `sb`, `sh` | `rs1` | `rs2` | the word, the stored bytes merged in |
+| `sw`, `sd` | `rs1` | `rs2`; the (low) word ← `rs2`'s low word | `sd`: the high word ← `rs2`'s high word |
+| `lr` | `rs1` | `.d`: the high word, written back | the (low) word, written back; `rd` ← the value |
+| `sc` | `rs1` | `rs2`; `.d`: the high word ← `rs2`'s | the (low) word ← `rs2`; `rd` ← 0 |
+| AMOs | `rs1` | `rs2`; `.d`: the high word ← `op`'s | the (low) word ← `op(old, rs2)`; `rd` ← `old` |
 | `fence` | | | |
 | `ecall` | `a7` | `a0` (§6) | `a0` ← the result |
 
-`ebreak` has no row (§10). An atomic's row carries two queries at slot 3, at distinct addresses. A
+`ebreak` has no row (§10). A `.w` atomic reads its word and `rs2`'s low word sign-extended, and
+writes `rd` the old word sign-extended; a `.d` atomic is the same over the doubleword. A row whose
+slot holds two queries — an atomic's word and `rd` at slot 3 — holds them at distinct addresses. A
 family's frame is the union of its instructions' queries
 ([memory.md](memory.md) §2). **`next_pc`** is the fall-through — `pc + 2` after a compressed
 instruction, `pc + 4` otherwise — except a `jal`'s or taken branch's `pc + imm`, a `jalr`'s
@@ -90,13 +95,13 @@ then one query per role the row has, in `trace::ROLES` order:
 | --- | --- | --- | --- |
 | `rs1` | 1 | `REG` | `rs1`; an ecall's `a7` |
 | `rs2` | 2 | `REG` | `rs2`; an ecall's argument `a0` |
-| `load` | 2 | `RAM` | a load's word |
-| `ram` | 3 | `RAM` | a store's or an atomic's word |
+| `load` | 2 | `RAM` | a load's word; a word or doubleword store's low word; a `.d` atomic's high word |
+| `ram` | 3 | `RAM` | a sub-word store's word; a doubleword load's or store's high word; an atomic's word |
 | `rd` | 3 | `REG` | `rd`; an ecall's result `a0` |
 
 `ROLES` is in slot order, so the log is in timestamp order, which `MemoryState::record` asserts;
 `trace::Row::present` holds one bit per role in a `u8`, and no two roles share a `(space, slot)`
-pair. The atomics family keeps its word at slot 3 for every instruction, `lr.w` included, so one
+pair. The atomics family keeps its word at slot 3 for every instruction, `lr` included, so one
 frame serves the whole A extension.
 
 ## 8. Routing
@@ -122,7 +127,7 @@ with the last write before it: sequential consistency. What it cannot see:
 
 ## 10. The emulator
 
-`crates/emulator` runs RV32IMAC on one hart over a `ProgramImage`, with no interrupts and no
+`crates/emulator` runs RV64IMAC on one hart over a `ProgramImage`, with no interrupts and no
 privilege levels; `aq`/`rl` and `fence` order nothing. `emulator::run` returns an `Execution`: the
 registers, the exit status, the cycle count and the public values. `emulator::trace_run` returns
 the family buffers, the `MemoryEventLog` and the `CycleProfile` too, and `emulator::StreamingRun`,
@@ -131,9 +136,10 @@ its height ([streaming.md](streaming.md) §2). The three differ only in what rec
 run is a pure function of `(image, io)`, with no clock, randomness or threads, so two runs cut the
 same shards. A nonzero exit status is an execution, not an error.
 
-Three points differ from a hosted RV32IMAC. `sc.w` always succeeds, storing and writing 0, as the
-circuits do ([memory-ops.md](memory-ops.md) §6). A misaligned halfword or word access is fatal,
-never split. The instruction stream is the image decoded at load, so a store into `.text` changes
+Four points differ from a hosted RV64IMAC. `sc` always succeeds, storing and writing 0, as the
+circuits do ([memory-ops.md](memory-ops.md)). A misaligned halfword, word or doubleword access is
+fatal, never split. Every address is below `2^32`: an effective address at or above it is the
+fatal `OutOfBounds`, a jump target `NotAnInstruction`. The instruction stream is the image decoded at load, so a store into `.text` changes
 RAM and not what executes.
 
 Every other stop is a fatal `EmuError`, and `run` and `trace_run` return no trace beside one:

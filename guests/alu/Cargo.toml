@@ -7,7 +7,7 @@ publish.workspace = true
 # No dependencies, and no `guest-sdk`: the SDK's crt0 zeroes `.bss` with a
 # store loop and calls `main`, and stores belong to a memory family. This guest
 # is its own `_start`, written in the instructions of four execution families —
-# add/sub/lui/auipc, jump/branch/slt, shift/bitwise and mul/div — and `EXIT`,
+# add/sub/lui/auipc, jump/branch/slt, bitwise and mul/div — and `EXIT`,
 # so its statement proves those four alone.
 # `guests/.cargo/config.toml` supplies the target and the linker script.
 [dependencies]

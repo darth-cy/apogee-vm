@@ -1,4 +1,4 @@
-//! The reference emulator: RV32IMAC on one hart, over a [`ProgramImage`].
+//! The reference emulator: RV64IMAC on one hart, over a [`ProgramImage`].
 //!
 //! Two entry points, one instruction-execution core. [`run`] executes;
 //! [`trace_run`] executes the same way and also hands each cycle's memory
@@ -15,21 +15,25 @@
 //!
 //! One hart, no interrupts, no privilege levels. Every A-extension
 //! instruction is its plain read-modify-write, and `aq`/`rl` order nothing.
-//! **`sc.w` always succeeds**: it stores and writes 0 to `rd`. The ISA
-//! requires an `sc.w` without a valid reservation to fail, so this is a
-//! conformance deviation — never a soundness one, since the verifier still
-//! knows exactly which program ran, and the circuits share the semantics
-//! (`docs/spec/memory-ops.md` §6). A halfword or word access at an address
-//! that is not a multiple of its width, and any access outside the
-//! addressable regions, is a fatal guest error, never rotated, split or
-//! emulated. So is `ebreak`, and so is a pc that is not the start of an
-//! instruction.
+//! **`sc` always succeeds**: it stores and writes 0 to `rd`. The ISA requires
+//! an `sc` without a valid reservation to fail, so this is a conformance
+//! deviation — never a soundness one, since the verifier still knows exactly
+//! which program ran, and the circuits share the semantics
+//! (`docs/spec/memory-ops.md` §6). An access at an address that is not a
+//! multiple of its width, and any access outside the addressable regions —
+//! every address at or above `2^32` among them — is a fatal guest error, never
+//! rotated, split or emulated. So is `ebreak`, and so is a pc that is not the
+//! start of an instruction.
+//!
+//! Memory is 32-bit words: a doubleword access is two of them, the word at the
+//! address at slot 2 and the one above it at slot 3
+//! (`docs/spec/execution-trace.md` §4).
 
 use std::collections::HashMap;
 use std::fmt;
 
 use constants::{delegation, ecall, guest_memory, memory};
-use isa::{decode, Instr};
+use isa::{decode, AmoOp, Instr};
 use loader::{ProgramImage, Slot};
 use program::{row_kind, DecodedTables, FamilyId, VmConfig};
 use trace::{
@@ -59,9 +63,10 @@ pub struct GuestIo {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Execution {
     /// The register file after the last cycle.
-    pub regs: [u32; 32],
-    /// The status passed to `exit`. A nonzero status is a failed execution,
-    /// which is still an execution: it is reported, not refused.
+    pub regs: [u64; 32],
+    /// The status passed to `exit`: `a0`'s low word. A nonzero status is a
+    /// failed execution, which is still an execution: it is reported, not
+    /// refused.
     pub exit_code: i32,
     /// Cycles run. Cycles are numbered from 1, so
     /// this is also the last cycle's number.
@@ -79,19 +84,19 @@ pub struct Execution {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EmuError {
     /// The pc is not the start of an instruction: the middle of one, data,
-    /// the all-zero halfword, or outside the image's code.
-    NotAnInstruction { pc: u32 },
+    /// the all-zero halfword, or outside the image's code — a jump target at
+    /// or above `2^32` among them.
+    NotAnInstruction { pc: u64 },
     /// An instruction slot holds a word the decoder refuses.
     IllegalInstruction { pc: u32, word: u32 },
     /// `ebreak`: a trap with nothing to trap to.
     Ebreak { pc: u32 },
-    /// A halfword or word access at an address that is not a multiple of
-    /// its width.
-    Misaligned { pc: u32, addr: u32, width: u32 },
+    /// An access at an address that is not a multiple of its width.
+    Misaligned { pc: u32, addr: u64, width: u32 },
     /// A data access outside the addressable regions — RAM, the two public
     /// windows, and the advice words the host supplied — or a delegation frame
     /// not wholly in RAM.
-    OutOfBounds { pc: u32, addr: u32 },
+    OutOfBounds { pc: u32, addr: u64 },
     /// Cycle `cycle`'s timestamps would pass the 38-bit clock.
     ClockOverflow { cycle: u64 },
     /// The public input handed to the run is longer than a public window's
@@ -128,7 +133,7 @@ impl fmt::Display for EmuError {
             }
             EmuError::IllegalInstruction { pc, word } => write!(
                 f,
-                "illegal instruction at pc {pc:#010x}: {word:#010x} is not RV32IMAC"
+                "illegal instruction at pc {pc:#010x}: {word:#010x} is not RV64IMAC"
             ),
             EmuError::Ebreak { pc } => write!(f, "ebreak at pc {pc:#010x}"),
             EmuError::PublicInputTooLong { len } => write!(
@@ -403,12 +408,12 @@ enum Fetch {
 }
 
 /// One cycle's queries before they are committed, by role:
-/// `(address, value read, value written)`.
+/// `(address, value read, value written)`, a register's value 64 bits.
 ///
 /// `delegation` is the invocation a delegation ecall made, if any. It is the
 /// delegation family's row, not this cycle's.
 struct Cycle {
-    queries: [Option<(u32, u32, u32)>; 8],
+    queries: [Option<(u32, u64, u64)>; 8],
     delegation: Option<Invocation>,
 }
 
@@ -424,7 +429,7 @@ impl Cycle {
         }
     }
 
-    fn stage(&mut self, role: Role, addr: u32, read: u32, write: u32) {
+    fn stage(&mut self, role: Role, addr: u32, read: u64, write: u64) {
         let slot = &mut self.queries[role as usize];
         assert!(slot.is_none(), "one cycle issued two {role:?} queries");
         *slot = Some((addr, read, write));
@@ -434,7 +439,7 @@ impl Cycle {
 struct Machine<'a> {
     code: Vec<Fetch>,
     slot_base: u32,
-    regs: [u32; 32],
+    regs: [u64; 32],
     pc: u32,
     /// RAM, 4 KiB pages by page number; an absent page is zeros.
     ram: HashMap<u32, Box<[u8; PAGE as usize]>>,
@@ -563,7 +568,7 @@ impl<'a> Machine<'a> {
         match slot {
             Some(Fetch::Code(instr, compressed)) => Ok((*instr, *compressed)),
             Some(Fetch::Illegal(word)) => Err(EmuError::IllegalInstruction { pc, word: *word }),
-            Some(Fetch::NotCode) | None => Err(EmuError::NotAnInstruction { pc }),
+            Some(Fetch::NotCode) | None => Err(EmuError::NotAnInstruction { pc: pc as u64 }),
         }
     }
 
@@ -571,7 +576,7 @@ impl<'a> Machine<'a> {
     fn step(&mut self) -> Result<(), EmuError> {
         let pc = self.pc;
         let (instr, compressed) = self.fetch(pc)?;
-        let fall = pc.wrapping_add(if compressed { 2 } else { 4 });
+        let fall = pc + if compressed { 2 } else { 4 };
         if instr == Instr::Ecall {
             return self.ecall(instr, pc, fall);
         }
@@ -606,14 +611,14 @@ impl<'a> Machine<'a> {
 
     /// Read a register, staging the query: a read, and a write-back of the
     /// same value. `x0` reads 0 like any register holding 0.
-    fn read(&mut self, cycle: &mut Cycle, role: Role, r: u8) -> u32 {
+    fn read(&mut self, cycle: &mut Cycle, role: Role, r: u8) -> u64 {
         let value = self.regs[r as usize];
         cycle.stage(role, r as u32, value, value);
         value
     }
 
     /// Write `rd`, staging the query. `x0` logs a write-back of 0 and keeps it.
-    fn write(&mut self, cycle: &mut Cycle, rd: u8, value: u32) {
+    fn write(&mut self, cycle: &mut Cycle, rd: u8, value: u64) {
         let old = self.regs[rd as usize];
         let value = if rd == 0 { 0 } else { value };
         cycle.stage(Role::Rd, rd as u32, old, value);
@@ -644,26 +649,36 @@ impl<'a> Machine<'a> {
         self.page(addr)[at..at + 4].copy_from_slice(&value.to_le_bytes());
     }
 
-    /// The word a `width`-byte access at `addr` touches, refusing a
+    /// The word a `width`-byte access at `addr` begins in, refusing a
     /// misaligned access and one outside the addressable regions: RAM, the
-    /// two public windows, and the advice words the host supplied.
-    fn data_word(&self, pc: u32, addr: u32, width: u32) -> Result<u32, EmuError> {
-        if !addr.is_multiple_of(width) {
+    /// two public windows, and the advice words the host supplied. A
+    /// doubleword is two words, and both must be reachable.
+    fn data_word(&self, pc: u32, addr: u64, width: u32) -> Result<u32, EmuError> {
+        if !addr.is_multiple_of(width as u64) {
             return Err(EmuError::Misaligned { pc, addr, width });
         }
+        let reachable = |word: u64| {
+            word <= u32::MAX as u64
+                && trace::addressable(word as u32)
+                && (word < guest_memory::ADVICE_ORIGIN as u64 || word < self.advice_end)
+        };
         let word = addr & !3;
-        let reachable = trace::addressable(word)
-            && (word < guest_memory::ADVICE_ORIGIN || (word as u64) < self.advice_end);
-        if !reachable {
+        if !reachable(word) || !reachable((addr + width as u64 - 1) & !3) {
             return Err(EmuError::OutOfBounds { pc, addr });
         }
-        Ok(word)
+        Ok(word as u32)
     }
 
-    /// Replace a word, staging the slot-3 RAM query.
-    fn ram_write(&mut self, cycle: &mut Cycle, word: u32, old: u32, new: u32) {
-        cycle.stage(Role::Ram, word, old, new);
+    /// Replace a word, staging its query in `role`.
+    fn ram_write(&mut self, cycle: &mut Cycle, role: Role, word: u32, old: u32, new: u32) {
+        cycle.stage(role, word, old as u64, new as u64);
         self.set_word(word, new);
+    }
+
+    /// A pc a jump or branch reaches, refusing one at or above `2^32`: no
+    /// instruction is there.
+    fn target(addr: u64) -> Result<u32, EmuError> {
+        u32::try_from(addr).map_err(|_| EmuError::NotAnInstruction { pc: addr })
     }
 
     // -- instructions -----------------------------------------------------
@@ -677,81 +692,108 @@ impl<'a> Machine<'a> {
         fall: u32,
     ) -> Result<u32, EmuError> {
         use Instr::*;
-        let at = |base: u32, imm: i32| base.wrapping_add(imm as u32);
+        // Every immediate is used sign-extended to 64 bits.
+        let at = |base: u64, imm: i32| base.wrapping_add(imm as i64 as u64);
         let mut next = fall;
         match instr {
-            Lui { rd, imm } => self.write(c, rd, imm as u32),
-            Auipc { rd, imm } => self.write(c, rd, at(pc, imm)),
+            Lui { rd, imm } => self.write(c, rd, imm as i64 as u64),
+            Auipc { rd, imm } => self.write(c, rd, at(pc as u64, imm)),
             Jal { rd, imm } => {
-                self.write(c, rd, fall);
-                next = at(pc, imm);
+                self.write(c, rd, fall as u64);
+                next = Self::target(at(pc as u64, imm))?;
             }
             Jalr { rd, rs1, imm } => {
                 let base = self.read(c, Role::Rs1, rs1);
-                self.write(c, rd, fall);
-                next = at(base, imm) & !1;
+                self.write(c, rd, fall as u64);
+                next = Self::target(at(base, imm) & !1)?;
             }
 
             Beq { rs1, rs2, imm } => {
-                next = self.branch(c, rs1, rs2, at(pc, imm), fall, |a, b| a == b)
+                next = self.branch(c, rs1, rs2, pc, imm, fall, |a, b| a == b)?
             }
             Bne { rs1, rs2, imm } => {
-                next = self.branch(c, rs1, rs2, at(pc, imm), fall, |a, b| a != b)
+                next = self.branch(c, rs1, rs2, pc, imm, fall, |a, b| a != b)?
             }
             Blt { rs1, rs2, imm } => {
-                next = self.branch(c, rs1, rs2, at(pc, imm), fall, |a, b| {
-                    (a as i32) < (b as i32)
-                })
+                next = self.branch(c, rs1, rs2, pc, imm, fall, |a, b| (a as i64) < (b as i64))?
             }
             Bge { rs1, rs2, imm } => {
-                next = self.branch(c, rs1, rs2, at(pc, imm), fall, |a, b| {
-                    (a as i32) >= (b as i32)
-                })
+                next = self.branch(c, rs1, rs2, pc, imm, fall, |a, b| (a as i64) >= (b as i64))?
             }
             Bltu { rs1, rs2, imm } => {
-                next = self.branch(c, rs1, rs2, at(pc, imm), fall, |a, b| a < b)
+                next = self.branch(c, rs1, rs2, pc, imm, fall, |a, b| a < b)?
             }
             Bgeu { rs1, rs2, imm } => {
-                next = self.branch(c, rs1, rs2, at(pc, imm), fall, |a, b| a >= b)
+                next = self.branch(c, rs1, rs2, pc, imm, fall, |a, b| a >= b)?
             }
 
-            Lb { rd, rs1, imm } => self.load(c, pc, rd, rs1, imm, 1, |v| v as u8 as i8 as u32)?,
-            Lh { rd, rs1, imm } => self.load(c, pc, rd, rs1, imm, 2, |v| v as u16 as i16 as u32)?,
-            Lw { rd, rs1, imm } => self.load(c, pc, rd, rs1, imm, 4, |v| v)?,
-            Lbu { rd, rs1, imm } => self.load(c, pc, rd, rs1, imm, 1, |v| v as u8 as u32)?,
-            Lhu { rd, rs1, imm } => self.load(c, pc, rd, rs1, imm, 2, |v| v as u16 as u32)?,
+            Lb { rd, rs1, imm } => self.load(c, pc, rd, rs1, imm, 1, |v| v as u8 as i8 as u64)?,
+            Lh { rd, rs1, imm } => self.load(c, pc, rd, rs1, imm, 2, |v| v as u16 as i16 as u64)?,
+            Lw { rd, rs1, imm } => self.load(c, pc, rd, rs1, imm, 4, |v| v as i32 as u64)?,
+            Ld { rd, rs1, imm } => self.load(c, pc, rd, rs1, imm, 8, |v| v)?,
+            Lbu { rd, rs1, imm } => self.load(c, pc, rd, rs1, imm, 1, |v| v as u8 as u64)?,
+            Lhu { rd, rs1, imm } => self.load(c, pc, rd, rs1, imm, 2, |v| v as u16 as u64)?,
+            Lwu { rd, rs1, imm } => self.load(c, pc, rd, rs1, imm, 4, |v| v as u32 as u64)?,
             Sb { rs1, rs2, imm } => self.store(c, pc, rs1, rs2, imm, 1)?,
             Sh { rs1, rs2, imm } => self.store(c, pc, rs1, rs2, imm, 2)?,
             Sw { rs1, rs2, imm } => self.store(c, pc, rs1, rs2, imm, 4)?,
+            Sd { rs1, rs2, imm } => self.store(c, pc, rs1, rs2, imm, 8)?,
 
             Addi { rd, rs1, imm } => self.op_imm(c, rd, rs1, imm, |a, i| a.wrapping_add(i)),
             Slti { rd, rs1, imm } => {
-                self.op_imm(c, rd, rs1, imm, |a, i| ((a as i32) < (i as i32)) as u32)
+                self.op_imm(c, rd, rs1, imm, |a, i| ((a as i64) < (i as i64)) as u64)
             }
-            Sltiu { rd, rs1, imm } => self.op_imm(c, rd, rs1, imm, |a, i| (a < i) as u32),
+            Sltiu { rd, rs1, imm } => self.op_imm(c, rd, rs1, imm, |a, i| (a < i) as u64),
             Xori { rd, rs1, imm } => self.op_imm(c, rd, rs1, imm, |a, i| a ^ i),
             Ori { rd, rs1, imm } => self.op_imm(c, rd, rs1, imm, |a, i| a | i),
             Andi { rd, rs1, imm } => self.op_imm(c, rd, rs1, imm, |a, i| a & i),
             Slli { rd, rs1, shamt } => self.op_imm(c, rd, rs1, shamt as i32, |a, s| a << s),
             Srli { rd, rs1, shamt } => self.op_imm(c, rd, rs1, shamt as i32, |a, s| a >> s),
             Srai { rd, rs1, shamt } => {
-                self.op_imm(c, rd, rs1, shamt as i32, |a, s| ((a as i32) >> s) as u32)
+                self.op_imm(c, rd, rs1, shamt as i32, |a, s| ((a as i64) >> s) as u64)
+            }
+            Addiw { rd, rs1, imm } => self.op_imm(c, rd, rs1, imm, |a, i| {
+                sext32((a as u32).wrapping_add(i as u32))
+            }),
+            Slliw { rd, rs1, shamt } => {
+                self.op_imm(c, rd, rs1, shamt as i32, |a, s| sext32((a as u32) << s))
+            }
+            Srliw { rd, rs1, shamt } => {
+                self.op_imm(c, rd, rs1, shamt as i32, |a, s| sext32((a as u32) >> s))
+            }
+            Sraiw { rd, rs1, shamt } => {
+                self.op_imm(c, rd, rs1, shamt as i32, |a, s| ((a as i32) >> s) as u64)
             }
 
             Add { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| a.wrapping_add(b)),
             Sub { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| a.wrapping_sub(b)),
-            Sll { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| a << (b & 31)),
+            Sll { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| a << (b & 63)),
             Slt { rd, rs1, rs2 } => {
-                self.op(c, rd, rs1, rs2, |a, b| ((a as i32) < (b as i32)) as u32)
+                self.op(c, rd, rs1, rs2, |a, b| ((a as i64) < (b as i64)) as u64)
             }
-            Sltu { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| (a < b) as u32),
+            Sltu { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| (a < b) as u64),
             Xor { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| a ^ b),
-            Srl { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| a >> (b & 31)),
+            Srl { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| a >> (b & 63)),
             Sra { rd, rs1, rs2 } => {
-                self.op(c, rd, rs1, rs2, |a, b| ((a as i32) >> (b & 31)) as u32)
+                self.op(c, rd, rs1, rs2, |a, b| ((a as i64) >> (b & 63)) as u64)
             }
             Or { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| a | b),
             And { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| a & b),
+            Addw { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| {
+                sext32((a as u32).wrapping_add(b as u32))
+            }),
+            Subw { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| {
+                sext32((a as u32).wrapping_sub(b as u32))
+            }),
+            Sllw { rd, rs1, rs2 } => {
+                self.op(c, rd, rs1, rs2, |a, b| sext32((a as u32) << (b & 31)))
+            }
+            Srlw { rd, rs1, rs2 } => {
+                self.op(c, rd, rs1, rs2, |a, b| sext32((a as u32) >> (b & 31)))
+            }
+            Sraw { rd, rs1, rs2 } => {
+                self.op(c, rd, rs1, rs2, |a, b| ((a as i32) >> (b & 31)) as u64)
+            }
 
             // One hart: a fence orders nothing, and it has no register queries.
             Fence { .. } => {}
@@ -760,98 +802,89 @@ impl<'a> Machine<'a> {
 
             Mul { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| a.wrapping_mul(b)),
             Mulh { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| {
-                ((a as i32 as i64 * b as i32 as i64) >> 32) as u32
+                ((a as i64 as i128 * b as i64 as i128) >> 64) as u64
             }),
             Mulhsu { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| {
-                ((a as i32 as i64 * b as i64) >> 32) as u32
+                ((a as i64 as i128 * b as i128) >> 64) as u64
             }),
-            Mulhu { rd, rs1, rs2 } => {
-                self.op(c, rd, rs1, rs2, |a, b| ((a as u64 * b as u64) >> 32) as u32)
-            }
-            Div { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| {
-                if b == 0 {
-                    u32::MAX
-                } else {
-                    (a as i32).wrapping_div(b as i32) as u32
-                }
+            Mulhu { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| {
+                ((a as u128 * b as u128) >> 64) as u64
+            }),
+            Div { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| match b {
+                0 => u64::MAX,
+                _ => (a as i64).wrapping_div(b as i64) as u64,
             }),
             Divu { rd, rs1, rs2 } => {
-                self.op(c, rd, rs1, rs2, |a, b| a.checked_div(b).unwrap_or(u32::MAX))
+                self.op(c, rd, rs1, rs2, |a, b| a.checked_div(b).unwrap_or(u64::MAX))
             }
-            Rem { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| {
-                if b == 0 {
-                    a
-                } else {
-                    (a as i32).wrapping_rem(b as i32) as u32
-                }
+            Rem { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| match b {
+                0 => a,
+                _ => (a as i64).wrapping_rem(b as i64) as u64,
             }),
             Remu { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| a.checked_rem(b).unwrap_or(a)),
+            Mulw { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| {
+                sext32((a as u32).wrapping_mul(b as u32))
+            }),
+            Divw { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| match b as u32 {
+                0 => u64::MAX,
+                _ => sext32((a as i32).wrapping_div(b as i32) as u32),
+            }),
+            Divuw { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| {
+                sext32((a as u32).checked_div(b as u32).unwrap_or(u32::MAX))
+            }),
+            Remw { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| match b as u32 {
+                0 => sext32(a as u32),
+                _ => sext32((a as i32).wrapping_rem(b as i32) as u32),
+            }),
+            Remuw { rd, rs1, rs2 } => self.op(c, rd, rs1, rs2, |a, b| {
+                sext32((a as u32).checked_rem(b as u32).unwrap_or(a as u32))
+            }),
 
-            LrW { rd, rs1, .. } => {
-                let addr = self.read(c, Role::Rs1, rs1);
-                let word = self.data_word(pc, addr, 4)?;
-                let old = self.word(word);
-                self.ram_write(c, word, old, old);
-                self.write(c, rd, old);
-            }
-            ScW { rd, rs1, rs2, .. } => {
-                let addr = self.read(c, Role::Rs1, rs1);
-                let src = self.read(c, Role::Rs2, rs2);
-                let word = self.data_word(pc, addr, 4)?;
-                let old = self.word(word);
-                self.ram_write(c, word, old, src);
-                self.write(c, rd, 0);
-            }
-            AmoswapW { rd, rs1, rs2, .. } => self.amo(c, pc, rd, rs1, rs2, |_, b| b)?,
-            AmoaddW { rd, rs1, rs2, .. } => {
-                self.amo(c, pc, rd, rs1, rs2, |a, b| a.wrapping_add(b))?
-            }
-            AmoxorW { rd, rs1, rs2, .. } => self.amo(c, pc, rd, rs1, rs2, |a, b| a ^ b)?,
-            AmoandW { rd, rs1, rs2, .. } => self.amo(c, pc, rd, rs1, rs2, |a, b| a & b)?,
-            AmoorW { rd, rs1, rs2, .. } => self.amo(c, pc, rd, rs1, rs2, |a, b| a | b)?,
-            AmominW { rd, rs1, rs2, .. } => {
-                self.amo(c, pc, rd, rs1, rs2, |a, b| (a as i32).min(b as i32) as u32)?
-            }
-            AmomaxW { rd, rs1, rs2, .. } => {
-                self.amo(c, pc, rd, rs1, rs2, |a, b| (a as i32).max(b as i32) as u32)?
-            }
-            AmominuW { rd, rs1, rs2, .. } => self.amo(c, pc, rd, rs1, rs2, |a, b| a.min(b))?,
-            AmomaxuW { rd, rs1, rs2, .. } => self.amo(c, pc, rd, rs1, rs2, |a, b| a.max(b))?,
+            Amo {
+                op,
+                double,
+                rd,
+                rs1,
+                rs2,
+                ..
+            } => self.amo(c, pc, op, double, rd, rs1, rs2)?,
         }
         Ok(next)
     }
 
-    fn op(&mut self, c: &mut Cycle, rd: u8, rs1: u8, rs2: u8, f: fn(u32, u32) -> u32) {
+    fn op(&mut self, c: &mut Cycle, rd: u8, rs1: u8, rs2: u8, f: fn(u64, u64) -> u64) {
         let a = self.read(c, Role::Rs1, rs1);
         let b = self.read(c, Role::Rs2, rs2);
         self.write(c, rd, f(a, b));
     }
 
-    fn op_imm(&mut self, c: &mut Cycle, rd: u8, rs1: u8, imm: i32, f: fn(u32, u32) -> u32) {
+    fn op_imm(&mut self, c: &mut Cycle, rd: u8, rs1: u8, imm: i32, f: fn(u64, u64) -> u64) {
         let a = self.read(c, Role::Rs1, rs1);
-        self.write(c, rd, f(a, imm as u32));
+        self.write(c, rd, f(a, imm as i64 as u64));
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn branch(
         &mut self,
         c: &mut Cycle,
         rs1: u8,
         rs2: u8,
-        target: u32,
+        pc: u32,
+        imm: i32,
         fall: u32,
-        taken: fn(u32, u32) -> bool,
-    ) -> u32 {
+        taken: fn(u64, u64) -> bool,
+    ) -> Result<u32, EmuError> {
         let a = self.read(c, Role::Rs1, rs1);
         let b = self.read(c, Role::Rs2, rs2);
-        if taken(a, b) {
-            target
-        } else {
-            fall
+        match taken(a, b) {
+            true => Self::target((pc as u64).wrapping_add(imm as i64 as u64)),
+            false => Ok(fall),
         }
     }
 
-    /// A load: `rs1` at slot 1, the word at slot 2, `rd` at slot 3.
-    /// `extend` gets the word shifted down to the accessed bytes.
+    /// A load: `rs1` at slot 1, the word at slot 2, a doubleword's high word
+    /// at slot 3 written back, `rd` at slot 3. `extend` gets the value shifted
+    /// down to the accessed bytes.
     #[allow(clippy::too_many_arguments)]
     fn load(
         &mut self,
@@ -861,18 +894,25 @@ impl<'a> Machine<'a> {
         rs1: u8,
         imm: i32,
         width: u32,
-        extend: fn(u32) -> u32,
+        extend: fn(u64) -> u64,
     ) -> Result<(), EmuError> {
-        let addr = self.read(c, Role::Rs1, rs1).wrapping_add(imm as u32);
+        let addr = self.read(c, Role::Rs1, rs1).wrapping_add(imm as i64 as u64);
         let word = self.data_word(pc, addr, width)?;
         let value = self.word(word);
-        c.stage(Role::Load, word, value, value);
-        self.write(c, rd, extend(value >> (8 * (addr & 3))));
+        c.stage(Role::Load, word, value as u64, value as u64);
+        let mut wide = (value >> (8 * (addr & 3))) as u64;
+        if width == 8 {
+            let high = self.word(word + 4);
+            c.stage(Role::Ram, word + 4, high as u64, high as u64);
+            wide |= (high as u64) << 32;
+        }
+        self.write(c, rd, extend(wide));
         Ok(())
     }
 
-    /// A store: `rs1` at slot 1, `rs2` at slot 2, the word at slot 3 with the
-    /// stored bytes merged into it.
+    /// A store: `rs1` at slot 1, `rs2` at slot 2, then the word with the
+    /// stored bytes merged in — a sub-word store's at slot 3, a word or a
+    /// doubleword's low word at slot 2 and a doubleword's high word at slot 3.
     fn store(
         &mut self,
         c: &mut Cycle,
@@ -882,33 +922,78 @@ impl<'a> Machine<'a> {
         imm: i32,
         width: u32,
     ) -> Result<(), EmuError> {
-        let addr = self.read(c, Role::Rs1, rs1).wrapping_add(imm as u32);
+        let addr = self.read(c, Role::Rs1, rs1).wrapping_add(imm as i64 as u64);
         let value = self.read(c, Role::Rs2, rs2);
         let word = self.data_word(pc, addr, width)?;
-        let shift = 8 * (addr & 3);
-        let mask = (u32::MAX >> (32 - 8 * width)) << shift;
         let old = self.word(word);
-        self.ram_write(c, word, old, (old & !mask) | ((value << shift) & mask));
+        if width >= 4 {
+            self.ram_write(c, Role::Load, word, old, value as u32);
+            if width == 8 {
+                let high = self.word(word + 4);
+                self.ram_write(c, Role::Ram, word + 4, high, (value >> 32) as u32);
+            }
+            return Ok(());
+        }
+        let shift = 8 * (addr & 3) as u32;
+        let mask = (u32::MAX >> (32 - 8 * width)) << shift;
+        let new = (old & !mask) | (((value as u32) << shift) & mask);
+        self.ram_write(c, Role::Ram, word, old, new);
         Ok(())
     }
 
-    /// An AMO: `rs1` at slot 1, `rs2` at slot 2, then at slot 3 the word
-    /// rewritten to `f(old, rs2)` and `rd` given the old value.
+    /// An atomic: `rs1` at slot 1, `rs2` at slot 2 unless it is `lr`, then
+    /// the word at the address rewritten at slot 3 — a `.d` form's high word
+    /// beside it at slot 2 — and `rd` given the old value, sign-extended from
+    /// a `.w` form's word. `sc` stores and writes 0.
+    #[allow(clippy::too_many_arguments)]
     fn amo(
         &mut self,
         c: &mut Cycle,
         pc: u32,
+        op: AmoOp,
+        double: bool,
         rd: u8,
         rs1: u8,
         rs2: u8,
-        f: fn(u32, u32) -> u32,
     ) -> Result<(), EmuError> {
         let addr = self.read(c, Role::Rs1, rs1);
-        let src = self.read(c, Role::Rs2, rs2);
-        let word = self.data_word(pc, addr, 4)?;
-        let old = self.word(word);
-        self.ram_write(c, word, old, f(old, src));
-        self.write(c, rd, old);
+        let src = match op {
+            AmoOp::Lr => 0,
+            _ => self.read(c, Role::Rs2, rs2),
+        };
+        let word = self.data_word(pc, addr, if double { 8 } else { 4 })?;
+        let old_lo = self.word(word);
+        let old_hi = if double { self.word(word + 4) } else { 0 };
+        let old = match double {
+            true => old_lo as u64 | (old_hi as u64) << 32,
+            false => old_lo as i32 as u64,
+        };
+        // Each op over 64 bits; a `.w` form's operands are sign-extended
+        // words, and only the low word is stored.
+        let src = if double {
+            src
+        } else {
+            src as u32 as i32 as u64
+        };
+        let new = match op {
+            AmoOp::Lr => old,
+            AmoOp::Sc | AmoOp::Swap => src,
+            AmoOp::Add => old.wrapping_add(src),
+            AmoOp::Xor => old ^ src,
+            AmoOp::Or => old | src,
+            AmoOp::And => old & src,
+            AmoOp::Min => (old as i64).min(src as i64) as u64,
+            AmoOp::Max => (old as i64).max(src as i64) as u64,
+            AmoOp::Minu if double => old.min(src),
+            AmoOp::Maxu if double => old.max(src),
+            AmoOp::Minu => (old as u32).min(src as u32) as u64,
+            AmoOp::Maxu => (old as u32).max(src as u32) as u64,
+        };
+        if double {
+            self.ram_write(c, Role::Load, word + 4, old_hi, (new >> 32) as u32);
+        }
+        self.ram_write(c, Role::Ram, word, old_lo, new as u32);
+        self.write(c, rd, if op == AmoOp::Sc { 0 } else { old });
         Ok(())
     }
 
@@ -925,15 +1010,20 @@ impl<'a> Machine<'a> {
         let mut row = Cycle::new();
         let number = self.read(&mut row, Role::Rs1, 17);
         let result = match number {
-            ecall::EXIT => {
+            n if n == ecall::EXIT as u64 => {
                 let status = self.read(&mut row, Role::Rs2, 10);
-                self.exit = Some(status as i32);
+                self.exit = Some(status as u32 as i32);
                 status
             }
             // A delegation call: `a0` is the frame base, and the frame is
             // answered in place by an invocation riding this cycle
             // (`constants::delegation`). `a0` is 0 after it.
-            n if program::delegation_family(n).is_some() => {
+            n if u32::try_from(n)
+                .ok()
+                .and_then(program::delegation_family)
+                .is_some() =>
+            {
+                let n = n as u32;
                 let family = program::delegation_family(n).expect("just matched");
                 let base = self.read(&mut row, Role::Rs2, 10);
                 if let Some(recorder) = &self.recorder {
@@ -941,15 +1031,16 @@ impl<'a> Machine<'a> {
                         return Err(EmuError::DelegationFamilyAbsent { pc, number: n });
                     }
                 }
-                row.delegation = Some((family, base, self.delegate(family, pc, base)?));
+                let frame = self.delegate(family, pc, base)?;
+                row.delegation = Some((family, base as u32, frame));
                 0
             }
             // Every other number is unassigned or retired: answered, and the
             // row refused at proving (`docs/spec/ecall-abi.md` §4).
-            _ => ecall::ENOSYS.wrapping_neg(),
+            _ => (ecall::ENOSYS as u64).wrapping_neg(),
         };
         self.write(&mut row, 10, result);
-        let next_pc = if number == ecall::EXIT {
+        let next_pc = if number == ecall::EXIT as u64 {
             memory::HALT_PC
         } else {
             fall
@@ -967,7 +1058,7 @@ impl<'a> Machine<'a> {
         &mut self,
         family: FamilyId,
         pc: u32,
-        base: u32,
+        base: u64,
     ) -> Result<Vec<(u32, u32, u32)>, EmuError> {
         let words = program::delegation_frame_words(family).expect("a delegation family");
         if !base.is_multiple_of(4) {
@@ -977,11 +1068,11 @@ impl<'a> Machine<'a> {
                 width: 4,
             });
         }
-        // In `u64`, because `base + frame bytes` wraps a `u32` at the top.
         let end = guest_memory::RAM_ORIGIN as u64 + guest_memory::RAM_LENGTH as u64;
-        if base < guest_memory::RAM_ORIGIN || base as u64 + 4 * words as u64 > end {
+        if base < guest_memory::RAM_ORIGIN as u64 || base + 4 * words as u64 > end {
             return Err(EmuError::OutOfBounds { pc, addr: base });
         }
+        let base = base as u32;
         let old: Vec<u32> = (0..words).map(|j| self.word(base + 4 * j as u32)).collect();
         let new = frame_function(family)(pc, &old)?;
         Ok((0..words)
@@ -992,6 +1083,11 @@ impl<'a> Machine<'a> {
             })
             .collect())
     }
+}
+
+/// A 32-bit result, sign-extended: what every W form writes.
+fn sext32(v: u32) -> u64 {
+    v as i32 as i64 as u64
 }
 
 /// A delegation's function: from the requesting pc and the frame's words
@@ -1048,8 +1144,8 @@ impl Keep {
         space: AddressSpace,
         addr: u32,
         ts: u64,
-        read_value: u32,
-        write_value: u32,
+        read_value: u64,
+        write_value: u64,
     ) -> MemoryEvent {
         match self {
             Keep::Whole(log) => log.record(space, addr, ts, read_value, write_value),
@@ -1091,13 +1187,15 @@ impl<'a> Recorder<'a> {
     /// order — and route its row to the family that owns its pc.
     fn record(&mut self, cycle: u64, pc: u32, next_pc: u32, instr: Instr, queries: &Cycle) {
         let base = memory::TS_STEP * cycle;
-        self.memory.record(AddressSpace::Pc, 0, base, pc, next_pc);
+        self.memory
+            .record(AddressSpace::Pc, 0, base, pc as u64, next_pc as u64);
         // An invocation's frame accesses ride this cycle at
         // `delegation::FRAME_DELTA`, 0: after the pc query, before the roles.
         if let Some((family, frame_base, frame)) = &queries.delegation {
             let words: Vec<Query> = frame
                 .iter()
                 .map(|&(addr, read, write)| {
+                    let (read, write) = (read as u64, write as u64);
                     let event = self.memory.record(
                         AddressSpace::Ram,
                         addr,
@@ -1319,12 +1417,31 @@ mod tests {
         assert_eq!(full, 1 << 32);
         let (first, last) = (guest_memory::ADVICE_ORIGIN, u32::MAX - 3);
         machine.advice_end = full;
-        assert_eq!(machine.data_word(0, first, 4), Ok(first));
-        assert_eq!(machine.data_word(0, last, 4), Ok(last));
+        assert_eq!(machine.data_word(0, first as u64, 4), Ok(first));
+        assert_eq!(machine.data_word(0, last as u64, 4), Ok(last));
         machine.advice_end = full - 4;
         assert_eq!(
-            machine.data_word(0, last, 4),
-            Err(EmuError::OutOfBounds { pc: 0, addr: last })
+            machine.data_word(0, last as u64, 4),
+            Err(EmuError::OutOfBounds {
+                pc: 0,
+                addr: last as u64
+            })
+        );
+        // A doubleword whose high word is past the advice the host supplied.
+        assert_eq!(
+            machine.data_word(0, last as u64 - 4, 8),
+            Err(EmuError::OutOfBounds {
+                pc: 0,
+                addr: last as u64 - 4
+            })
+        );
+        // And an address at or above 2^32, which no region holds.
+        assert_eq!(
+            machine.data_word(0, 1 << 32, 4),
+            Err(EmuError::OutOfBounds {
+                pc: 0,
+                addr: 1 << 32
+            })
         );
     }
 }

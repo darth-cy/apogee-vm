@@ -69,8 +69,8 @@ pub fn global_tape(vk: &VerifyingKey, statement: &PublicInputs) -> Vec<String> {
 /// | G5 | `absorb PROGRAM_IDENTITY 8` — the identity, a digest of 8 lanes |
 /// | G6 | `absorb PUBLIC_INPUTS 8` — the I/O digest's 8 lanes |
 /// | — | `absorb MEMORY_COMMITMENT n`, once per statement shard in statement order — `n` its family's `M` commitment's lanes |
-/// | G7 | `absorb MEMORY_BOUNDARY 64` |
-/// | G8 | `squeeze MEMORY_CHALLENGE` ×4 |
+/// | G7 | `absorb MEMORY_BOUNDARY 95` |
+/// | G8 | `squeeze MEMORY_CHALLENGE` ×5 |
 /// | G9 | `squeeze GLOBAL_STATE_DIGEST` |
 pub fn expected_global_tape(vk: &VerifyingKey, statement: &PublicInputs) -> Vec<String> {
     let name = |tag: u64| tag_name(tag);
@@ -93,8 +93,9 @@ pub fn expected_global_tape(vk: &VerifyingKey, statement: &PublicInputs) -> Vec<
         let (slices, len) = opening_schedule(artifact).commitment_shape(artifact.memory.len());
         absorb(tags::MEMORY_COMMITMENT, slices * len);
     }
-    absorb(tags::MEMORY_BOUNDARY, 64);
-    for _ in 0..4 {
+    // `docs/spec/memory.md` §4.1's 95 scalars, then §1's five challenges.
+    absorb(tags::MEMORY_BOUNDARY, 95);
+    for _ in 0..5 {
         lines.push(format!("squeeze {}", name(tags::MEMORY_CHALLENGE)));
     }
     lines.push(format!("squeeze {}", name(tags::GLOBAL_STATE_DIGEST)));

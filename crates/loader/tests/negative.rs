@@ -4,7 +4,7 @@
 //! checkers, so this file is the list: one fixture per refusal,
 //! each one a named deviation from `minimal.elf`, which loads.
 //!
-//! The fixtures are hand-built rather than compiled, because no RV32 toolchain
+//! The fixtures are hand-built rather than compiled, because no RV64 toolchain
 //! will emit most of them — `tools/kat-gen/src/loader.rs` writes them and says
 //! what each one is.
 
@@ -58,9 +58,9 @@ fn a_zcmp_encoding_is_refused_with_the_pc() {
     }
 }
 
-/// Dynamic, relocatable and non-RV32 files, each with its own name.
+/// Dynamic, relocatable and non-RV64 files, each with its own name.
 #[test]
-fn dynamic_relocatable_and_non_rv32_files_are_refused() {
+fn dynamic_relocatable_and_non_rv64_files_are_refused() {
     assert!(
         matches!(
             load_elf(&common::bytes("et_dyn.elf")),
@@ -88,10 +88,10 @@ fn dynamic_relocatable_and_non_rv32_files_are_refused() {
     );
     assert!(
         matches!(
-            load_elf(&common::bytes("elf64.elf")),
+            load_elf(&common::bytes("elf32.elf")),
             Err(LoaderError::NotAnElf { .. })
         ),
-        "an ELFCLASS64 file is not a 32-bit ELF"
+        "an ELFCLASS32 file is not a 64-bit ELF"
     );
 
     // The two dynamic refusals must not be the same code path saying the same
@@ -110,7 +110,7 @@ fn the_remaining_refusals_each_have_a_fixture() {
             pc: 0x0001_0000,
             encoding: 0x001f
         }),
-        "bits 4:2 all ones is a 48-bit encoding, which RV32IMAC has none of"
+        "bits 4:2 all ones is a 48-bit encoding, which RV64IMAC has none of"
     );
     assert_eq!(
         load_elf(&common::bytes("text_truncated.elf")),
@@ -146,7 +146,7 @@ fn the_remaining_refusals_each_have_a_fixture() {
 #[test]
 fn truncated_files_are_refused_rather_than_read_past() {
     let good = common::bytes("minimal.elf");
-    for cut in [0, 1, 51, 52, 60, 83] {
+    for cut in [0, 1, 63, 64, 80, 119] {
         assert!(
             load_elf(&good[..cut]).is_err(),
             "a {cut}-byte prefix of minimal.elf was accepted"

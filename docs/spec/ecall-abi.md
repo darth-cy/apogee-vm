@@ -5,7 +5,7 @@ has no file descriptors and no I/O syscall: its public input, journal and advice
 ([public-values.md](public-values.md)), so an ecall ends the execution or hands a frame to a
 delegation.
 `constants::ecall` and `constants::guest_memory` are the numbers' one home; this page describes them,
-and `crates/constants/tests/memory.rs` holds `link.ld`'s `MEMORY` line to the map.
+and `crates/constants/tests/memory.rs` holds `apogee.ld`'s `MEMORY` line to the map.
 
 ## 1. The calling convention
 
@@ -25,7 +25,7 @@ Every number this VM implements.
 
 | Number | Constant | Class | What |
 | --- | --- | --- | --- |
-| 93 | `EXIT` | deterministic | end the execution with status `a0`, the statement's exit status; nonzero is a failed execution, still provable |
+| 93 | `EXIT` | deterministic | end the execution with status `a0`'s low word, read as an `i32`: the statement's exit status; nonzero is a failed execution, still provable |
 
 A class says who chooses the result. **deterministic**: a function of the guest's own state, which
 a circuit proves. **advice**: chosen by the prover; no number has it. A proof admits `EXIT` alone:
@@ -59,14 +59,16 @@ the `ADD_SUB_LUI_AUIPC` fill refuses its row.
 
 ## 5. The memory map
 
-`crates/guest-sdk/link.ld` declares one region, `constants::guest_memory`'s `RAM_ORIGIN` and
+`crates/guest-sdk/apogee.ld` declares one region, `constants::guest_memory`'s `RAM_ORIGIN` and
 `RAM_LENGTH`:
 
 ```ld
 MEMORY { RAM (rwx) : ORIGIN = 0x00010000, LENGTH = 0x7FFF0000 }
 ```
 
-The whole 32-bit address space:
+Addresses are 64-bit registers, but every address a guest reaches is below `2^32`: an effective
+address at or above it is a fatal `OutOfBounds`, a jump target there `NotAnInstruction`, and the ELF's
+entry and segments are refused there ([program.md](program.md) §1). The space below `2^32`:
 
 ```text
 [0x0000_0000, 0x0000_8000)  hole: no family initializes it; an access is a fatal OutOfBounds
@@ -88,7 +90,18 @@ The whole 32-bit address space:
 - `crates/loader` refuses a `PT_LOAD` outside RAM ([program.md](program.md) §1), and a decoded
   table's height bounds how far `.text` reaches ([program.md](program.md) §5).
 - crt0's `_start` sets `sp`, zeroes `[__bss_start, __bss_end)` byte by byte, so that a zero `.bss`
-  is the image's property and not the executor's, calls `main`, and exits 0 if it returns.
+  is the image's property and not the executor's, calls each function pointer in
+  `[__init_array_start, __init_array_end)` in order, calls `__apogee_main`, and exits with what it
+  returned: `entry!`'s `main` returns 0, a C `main` its own status (§7). The pointers are C++'s
+  dynamic initializers and C's constructor functions; `apogee.ld` gathers them in `.data`,
+  prioritised ones first, with C's destructor functions after them in `[__fini_array_start,
+  __fini_array_end)`, and places the small-data sections `.srodata`, `.sdata` and `.sbss` with
+  `.rodata`, `.data` and `.bss`. `__apogee_main` is the guest's `main`, unless the guest has
+  destructors: for one whose image holds `__cxa_atexit` or destructor functions, `apogee.ld` makes
+  it `main`, then the destructors registered with `__cxa_atexit`, the latest first, then the
+  destructor functions, the last first. `__cxa_atexit` is an archive member of its own, which the
+  linker takes only for a reference and keeps under `--gc-sections` only for one from live code.
+  Every other exit, `exit` and a panic among them, skips the destructors.
 - Nothing detects a stack that grows past its reserve after the heap has filled below it.
 
 ### 5.1 The segment layout
@@ -96,7 +109,7 @@ The whole 32-bit address space:
 A guest ELF loads under two loaders. `crates/loader` lays its `PT_LOAD`s into a flat space the
 executor makes addressable whatever the headers say, with no pages and no permissions. A host loader
 maps exactly the `PT_LOAD`s, page by page, at their permissions, and nothing else exists. The
-headers are the image's account of its own memory, read by every tool but this VM, so `link.ld`
+headers are the image's account of its own memory, read by every tool but this VM, so `apogee.ld`
 makes them true:
 
 - **Every writable byte is declared.** `.bss` runs to `ORIGIN(RAM) + LENGTH(RAM)`, so the heap and
@@ -104,7 +117,9 @@ makes them true:
   `.bss`, the 2 GiB reservation being `NOBITS`. Undeclared, the first stack push would fault.
 - **No two segments share a page.** `.text`, `.rodata`, `.data` and `.bss` are each 4096-aligned: a
   page two mappings share takes the second's permissions, stripping execute from `.text`'s tail or
-  putting zero fill on a read-only page, which a host loader refuses.
+  putting zero fill on a read-only page, which a host loader refuses. Every loadable section the
+  compilers emit is listed in one of the four, the unwind tables in `.rodata`: an unlisted one is
+  an orphan the linker places itself, on `.text`'s page once `--gc-sections` empties `.rodata`.
 
 `crates/loader/tests/layout.rs` holds every guest, built from source, to both by parsing its headers.
 
@@ -124,3 +139,25 @@ too, and none is registered); the rest is loads and stores.
 | `exit(code)` | `EXIT`; publishes nothing beyond what was committed |
 | allocator | bumps up from `__heap_start`, never frees; exits 71 when a block would end above `__stack_top − STACK_RESERVE` or the live `sp` |
 | panic handler | exits 101 and writes nothing: a panicking guest is provable, having published what it committed |
+
+## 7. The C ABI
+
+`libapogee_guest.a` is `crates/guest-sdk` built as a static library, and `apogee_guest.h` declares
+what it exports with C linkage: §6's surface for a C or C++ guest, which the library implements by
+calling it.
+
+| C function | §6's item |
+| --- | --- |
+| `const uint8_t *apogee_public_input(size_t *len)` | `public_input()`, its length stored where `len` is not null |
+| `const uint8_t *apogee_advice(size_t *len)` | `advice()` |
+| `void apogee_commit(const void *bytes, size_t len)` | `commit` |
+| `void apogee_exit(int32_t code)` | `exit`, never returning |
+
+The library's `_start` is crt0's (§5): it runs the guest's static initializers and calls its own
+`int main(void)`, exiting with what it returns; the header declares `main` with C linkage, which a
+freestanding C++ compiler does not give it. Its `__cxa_atexit` and `__dso_handle`, an archive
+member of their own (`crates/guest-sdk/cxa`), are what C++ registers a static object's destructor
+with: each registration is one record from the allocator, and the destructors run when `main`
+returns, for a guest whose image holds them (§5). The library also exports `memcpy`, `memmove`,
+`memset`, `memcmp` and the compiler's 128-bit integer helpers, weakly. The toolchain, the bundle
+and a worked guest are [guest-program-manual.md](../guest-program-manual.md) §11.

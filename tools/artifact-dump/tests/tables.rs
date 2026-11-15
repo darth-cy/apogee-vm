@@ -43,23 +43,27 @@ fn fitting(elf: &[u8]) -> ProgramParams {
     panic!("no menu height holds this image's code")
 }
 
-/// A static RV32 executable holding `words` at `0x10000`, built here rather
+/// A static RV64 executable holding `words` at `0x10000`, built here rather
 /// than taken from any fixture: the "arbitrary user-supplied ELF".
 fn elf_of(words: &[u32]) -> Vec<u8> {
     let text: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-    let mut out = vec![0x7f, b'E', b'L', b'F', 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut out = vec![0x7f, b'E', b'L', b'F', 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     for half in [2u16, 243] {
         out.extend_from_slice(&half.to_le_bytes()); // e_type ET_EXEC, e_machine RISC-V
     }
-    for word in [1u32, 0x1_0000, 52, 0, 0] {
-        out.extend_from_slice(&word.to_le_bytes()); // version, entry, phoff, shoff, flags
+    out.extend_from_slice(&1u32.to_le_bytes()); // e_version
+    for word in [0x1_0000u64, 64, 0] {
+        out.extend_from_slice(&word.to_le_bytes()); // entry, phoff, shoff
     }
-    for half in [52u16, 32, 1, 40, 0, 0] {
+    out.extend_from_slice(&0u32.to_le_bytes()); // e_flags
+    for half in [64u16, 56, 1, 64, 0, 0] {
         out.extend_from_slice(&half.to_le_bytes()); // ehsize, phentsize, phnum, ...
     }
-    let len = text.len() as u32;
-    for word in [1u32, 84, 0x1_0000, 0x1_0000, len, len, 5, 4] {
-        out.extend_from_slice(&word.to_le_bytes()); // one PT_LOAD, R|X
+    let len = text.len() as u64;
+    out.extend_from_slice(&1u32.to_le_bytes()); // one PT_LOAD
+    out.extend_from_slice(&5u32.to_le_bytes()); // R|X
+    for word in [120u64, 0x1_0000, 0x1_0000, len, len, 4] {
+        out.extend_from_slice(&word.to_le_bytes()); // offset, vaddr, paddr, sizes, align
     }
     out.extend_from_slice(&text);
     out

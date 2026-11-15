@@ -53,7 +53,12 @@ name = "guest-sdk"
 version = "0.1.0"
 dependencies = [
  "constants",
+ "guest-sdk-cxa",
 ]
+
+[[package]]
+name = "guest-sdk-cxa"
+version = "0.1.0"
 
 [[package]]
 name = "heap"

@@ -25,7 +25,7 @@ pub use statement::{
     absorb_commitment, absorb_statement_descriptor, advice_first_window, boundary_scalars,
     check_memory_windows, global_commit, identity_digest, memory_slots, public_io_words,
     shard_challenges, shard_transcript, shard_window, statement_shards, window_height,
-    GlobalTranscript, ProgramIdentity, VmConfig, TRIVIAL_TS_WINDOW,
+    GlobalTranscript, ProgramIdentity, VmConfig, MEMORY_CHALLENGES, TRIVIAL_TS_WINDOW,
 };
 pub use types::{
     committed_groups, opening_schedule, pcs_setup_len, read_commitment, read_gkr, read_opening,

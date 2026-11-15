@@ -92,12 +92,12 @@ push `2^BITS − 1` out of it. A decoded table has no all-zero
 row, pc 0 being a valid pc, and its `MINUS_ONE` padding rows ([program.md](program.md) §5) are the
 neutral entry.
 
-**Each key a table channel looks up is bounded by the family that looks it up**, because a channel
-proves membership and nothing more. A selected row whose key expression is −1 gates to the
-`ZeroEntry`, and an unbounded key reaches any sub-table of the packed table: an AND key
-`a + AND_BASE` with `a` unbounded lands on a `U16GetSign` row and proves a false AND. Families bound
-their keys with `RANGE16` obligations or build them from bounded columns
-([shift-bitwise.md](shift-bitwise.md) §3 and the other family pages); the decoder's key is §10's.
+**A channel proves membership and nothing more**, so what selects a sub-table must be fixed by
+the family. A selected row whose tag expression is −1 gates to the `ZeroEntry`, which would answer
+any lookup with zeros. Every generic lookup's tag is a literal or a linear form over kind bits under
+a selector that is their sum, so on a live row, whose kind bits the decoder makes one-hot (§10), it
+is one of §9's tags; the tag then bounds the key, each sub-table holding only its own range. The
+decoder's key is §10's.
 
 ## 5. The denominator
 
@@ -172,29 +172,32 @@ a refusal.
 
 ## 9. The generic table
 
-One committed table of `constants::generic_table::WIDTH = 3` columns, a key and two values, packing
-three sub-tables under disjoint key ranges (`program::lookup_tables::generic_table`):
+One committed table of `constants::generic_table::WIDTH = 4` columns — a tag, a key and two values —
+packing four sub-tables, each under its own tag (`program::lookup_tables::generic_table`):
 
 ```text
-row 0                      ZeroEntry    (0, 0, 0)
-rows 1 ..= 2^16            AND          (AND_BASE + a + 1,    b,        a & b)        a, b < 2^8
-rows 2^16+1 ..= 2^17       U16GetSign   (SIGN_BASE + h + 1,   h >> 15,  0)            h < 2^16
-rows 2^17+1 ..= 2^17+32    ShiftPowers  (SHIFT_BASE + s + 1,  2^s,      2^(31 − s))   s < 32
-rows above                 zero
+row 0                        ZeroEntry  (0,          0, 0,                0)
+rows 1 ..= 2^16              AND        (AND + 1,    a, b,                a & b)      a, b < 2^8
+rows 2^16+1 ..= 2^17         SIGN       (SIGN + 1,   h, h >> 15,          0)          h < 2^16
+rows 2^17+1 ..= 2^17+64      POW        (POW + 1,    s, 2^s mod 2^32,     2^s >> 32)  s < 64
+rows 2^17+65 ..= 2^17+96     POW_W      (POW_W + 1,  s, 2^s,              0)          s < 32
+rows above                   zero
 ```
 
-`AND_BASE = 0`, `SIGN_BASE = 256` and `SHIFT_BASE = 65,792` put the keys at `1..=256`,
-`257..=65,792` and `65,793..=65,824`; a lookup's key expression is `x + BASE`, and the gating adds
-the 1. `U16GetSign` serves every sign an execution family computes, AND the bitwise operations of
-`SHIFT_BITWISE` and `ATOMICS`, `ShiftPowers` the shifts. The copower `2^(32 − s)` is stored halved
-(`SHIFT_COPOWER_BITS = 31`), `2^32` not fitting a `u32` column, and the two gates that read it carry
-the factor 2 ([shift-bitwise.md](shift-bitwise.md) §4). 131,105 rows in all (`GENERIC_ROWS`).
+`AND = 0`, `SIGN = 1`, `POW = 2`, `POW_W = 3`; a lookup's tag expression is a linear form over its
+kind bits, and the gating adds the 1. A tuple of one sub-table is never one of another, so naming a
+tag bounds the key by that sub-table's rows: a byte, a halfword, a shift amount below 64 or below 32.
+No family bounds a key of this table with an obligation of its own. `SIGN` serves every sign an
+execution family reads — with a whole word in one column a sign is not a column that already
+exists — AND the bitwise operations of `BITWISE` and `ATOMICS`, and the two power tables a shift's
+multiplier as a register's two words ([mul-div.md](mul-div.md)). 131,169 rows in all
+(`GENERIC_ROWS`).
 
-The table is zero past its entries, so over `2^n` rows it is the same three columns for every
-`n ≥ 18` (`GENERIC_LOG_HEIGHT`). A circuit that reads `GENERIC` names the table as its three setup
+The table is zero past its entries, so over `2^n` rows it is the same four columns for every
+`n ≥ 18` (`GENERIC_LOG_HEIGHT`). A circuit that reads `GENERIC` names the table as its four setup
 columns after the family's own (`FamilyCircuit::reads_generic_table`), and the family's setup
 commitment commits them with the rest, so program identity digests the table once for every
-family that reads it ([program.md](program.md) §8). Every shard's opening checks its three columns
+family that reads it ([program.md](program.md) §8). Every shard's opening checks its four columns
 against that commitment — `checker`'s `a_poisoned_generic_table_row_is_refused` is the twin.
 
 ## 10. The decoder channel

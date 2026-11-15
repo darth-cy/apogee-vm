@@ -1,4 +1,4 @@
-//! Words that are not RV32IMAC instructions are refused.
+//! Words that are not RV64IMAC instructions are refused.
 
 mod common;
 

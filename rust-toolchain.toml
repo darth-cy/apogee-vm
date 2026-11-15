@@ -7,4 +7,4 @@ channel = "1.96.1"
 # rather than from PATH is what pins the disassembler to the same LLVM as the
 # compiler.
 components = ["rustfmt", "clippy", "llvm-tools"]
-targets = ["riscv32imac-unknown-none-elf"]
+targets = ["riscv64imac-unknown-none-elf"]

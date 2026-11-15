@@ -20,7 +20,7 @@ exists; executing twice (§2) costs time instead.
 A shard costs its height times its circuit's width ([circuits.md](circuits.md) §1), however few
 of its rows are live. `gkr::forward` holds every inner layer as `Fp2` elements,
 `16·Σ_{k≥1} w_k·2^{n_k}` bytes over layer `k`'s width and variable count (4.2 GiB for a `2^20`
-`SHIFT_BITWISE` shard), and `gkr::prove` adds a copy of the layer it reduces and an `eq` table.
+`MUL_DIV` shard, 16.4 GiB for a `2^22` `MEM_SUBWORD` one), and `gkr::prove` adds a copy of the layer it reduces and an `eq` table.
 
 ## 2. The two passes
 
@@ -160,7 +160,7 @@ encodings, each refusing a byte too many or too few:
 
 | section | content |
 | --- | --- |
-| `PostCommit` | the statement's `PublicInputs` bytes, its memory commitments in and its roots not; the global transcript after G9 as its `postcard` snapshot ([transcript.md](transcript.md) §3); the four memory challenges; the digest |
+| `PostCommit` | the statement's `PublicInputs` bytes, its memory commitments in and its roots not; the global transcript after G9 as its `postcard` snapshot ([transcript.md](transcript.md) §3); the five memory challenges; the digest |
 | `PostGkr` | per shard, in statement order: family `u32`, index `u32`, `ts_start` and `ts_end` `u64`, the witness commitment, the outputs, the GKR proof, the base claims' point, the shard transcript's snapshot after the GKR proof |
 | `PostOpening` | each shard's `ShardProof` bytes, its opening in them |
 | `Final` | the complete `PublicInputs` bytes, then the proofs |

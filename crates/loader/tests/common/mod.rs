@@ -131,7 +131,7 @@ pub fn to_postcard(image: &ProgramImage) -> Vec<u8> {
 /// Build one guest into a fresh target directory and return its ELF bytes.
 ///
 /// The command is the manual's, typed out: nothing but `cargo build --target
-/// riscv32imac-unknown-none-elf`, from the guest's own directory, with the
+/// riscv64imac-unknown-none-elf`, from the guest's own directory, with the
 /// target and the linker flags coming from
 /// `guests/.cargo/config.toml`.
 ///
@@ -173,7 +173,7 @@ pub fn build_profile(name: &str, slot: &str, profile: &str) -> Vec<u8> {
     let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     command
         .current_dir(&guest_dir)
-        .args(["build", "--target", "riscv32imac-unknown-none-elf"])
+        .args(["build", "--target", "riscv64imac-unknown-none-elf"])
         .env("CARGO_TARGET_DIR", &target_dir);
     if profile == "release" {
         command.arg("--release");
@@ -196,7 +196,7 @@ pub fn build_profile(name: &str, slot: &str, profile: &str) -> Vec<u8> {
     );
 
     let elf = target_dir
-        .join("riscv32imac-unknown-none-elf")
+        .join("riscv64imac-unknown-none-elf")
         .join(profile)
         .join(name);
     let bytes = fs::read(&elf).unwrap_or_else(|e| panic!("reading {}: {e}", elf.display()));

@@ -7,9 +7,9 @@ digests it all as the **program identity** (§8). Every step is a pure function 
 
 ## 1. Loading
 
-`loader::load_elf` accepts a static executable — `ELFCLASS32`, little-endian, `ET_EXEC`,
-`EM_RISCV` — whose `PT_LOAD` segments lie inside guest RAM (`constants::guest_memory`) at even
-addresses, pairwise disjoint, with `p_filesz ≤ p_memsz`, at least one of them executable.
+`loader::load_elf` accepts a static executable — `ELFCLASS64`, little-endian, `ET_EXEC`,
+`EM_RISCV` — whose entry point and `PT_LOAD` segments lie inside guest RAM
+(`constants::guest_memory`, below `2^32`) at even addresses, pairwise disjoint, with `p_filesz ≤ p_memsz`, at least one of them executable.
 Anything else is a named `LoaderError`: `DynamicElf` for `ET_DYN`, `PT_DYNAMIC` or `PT_INTERP`,
 `EntryNotAnInstruction` for an `e_entry` that is not the first halfword of an instruction, and the
 sweep's refusals (§2).
@@ -38,9 +38,10 @@ one cut off by the end of the file bytes (`TextTruncated`) or a halfword `rvc::e
 - **Addresses are never compacted.** A `c.addi` at `0x1002` stays there and occupies two bytes,
   so linker-resolved addresses hold; `compressed`, the instruction's length, is the only record of
   whether the next pc is `pc + 2` or `pc + 4`.
-- `rvc::expand` takes the base C extension in its RV32 form and refuses the floating-point forms,
-  the RV64-only forms (`c.addw`, `c.subw`, a shift with `shamt[5]`), the reserved code points and
-  the `Zc*` encodings. A HINT such as `c.addi x0, 5` is expanded; its 32-bit form writes `x0`.
+- `rvc::expand` takes the C extension in its RV64 form — `c.ld`, `c.sd`, `c.ldsp`, `c.sdsp`,
+  `c.addiw`, `c.addw`, `c.subw`, six-bit shift amounts, and no `c.jal` — and refuses the
+  floating-point forms, the reserved code points and the `Zc*` encodings. A HINT such as
+  `c.addi x0, 5` is expanded; its 32-bit form writes `x0`.
 - `0x0000`, RVC's defined-illegal encoding, is not refused: LLVM pads unreachable blocks with it.
   Reaching it is fatal at run time.
 
@@ -76,11 +77,11 @@ RAM values are read from it.
 
 ## 4. The instruction set and family routing
 
-`isa::decode` takes 32-bit words only and accepts exactly RV32IMA's 59 instructions — 40 of
-RV32I, 8 of M, 11 of A — with any value in an operand field, `x0` destinations included, and the
-one legal value in every fixed field: `funct7`, `jalr`'s `funct3`, all of `ecall` and `ebreak`, an
-atomic's `.w` width, `lr.w`'s `rs2 = 0`. Everything else is a `DecodeError`: RV64 encodings, F, D,
-Zicsr, `fence.i`, privileged instructions. `crates/isa/tests/sweep.rs` holds it, over all `2^30`
+`isa::decode` takes 32-bit words only and accepts exactly RV64IMA's 87 instructions — RV64I's 52,
+M's 13, A's 22 — with any value in an operand field, `x0` destinations included, and the one legal
+value in every fixed field: `funct7` (`funct6` beside a six-bit shift amount), `jalr`'s `funct3`,
+all of `ecall` and `ebreak`, an atomic's `.w` or `.d` width, `lr`'s `rs2 = 0`. Everything else is
+a `DecodeError`: RV128 encodings, F, D, Zicsr, `fence.i`, privileged instructions. `crates/isa/tests/sweep.rs` holds it, over all `2^30`
 words with low bits `11`, to accepted counts derived from the ISA's tables and to an independent
 encoder.
 
@@ -88,21 +89,25 @@ encoder.
   `rs1`, `fm`, `pred` and `succ`: the ISA has a base implementation treat a reserved setting as a
   normal fence (`llvm-objdump` prints those `<unknown>`), and on one hart a fence does nothing.
 - An immediate is the value the instruction uses: sign-extended for I, S, B and J, the shifted
-  word for U, the amount for a shift immediate. B and J displacements are even by encoding;
-  nothing asks for 4-byte alignment.
+  word for U — sign-extended to 64 bits like every other — the amount for a shift immediate. B
+  and J displacements are even by encoding; nothing asks for 4-byte alignment.
 
 `program::row_kind`, a total function, routes an instruction to one family and one bit of that
 family's mask (§6):
 
 | id | family | mnemonics, from mask bit 0 up |
 | --- | --- | --- |
-| 0 | `ADD_SUB_LUI_AUIPC` | *system* (`ecall ebreak fence`), `addi auipc add sub lui` |
+| 0 | `ADD_SUB_LUI_AUIPC` | *system* (`ecall ebreak fence`), `addi auipc add sub lui addiw addw subw` |
 | 1 | `JUMP_BRANCH_SLT` | `slti sltiu slt sltu beq bne blt bge bltu bgeu jalr jal` |
-| 2 | `SHIFT_BITWISE` | `slli xori srli srai ori andi sll xor srl sra or and` |
-| 3 | `MUL_DIV` | `mul mulh mulhsu mulhu div divu rem remu` |
-| 4 | `MEM_WORD` | `lw sw` |
+| 2 | `BITWISE` | `xori ori andi xor or and` |
+| 3 | `MUL_DIV` | `mul mulh mulhsu mulhu div divu rem remu mulw divw divuw remw remuw slli srli srai slliw srliw sraiw sll srl sra sllw srlw sraw` |
+| 4 | `MEM_WORD` | `lw sw ld sd lwu` |
 | 5 | `MEM_SUBWORD` | `lb lh lbu lhu sb sh` |
-| 6 | `ATOMICS` | `amoadd amoswap lr sc amoxor amoor amoand amomin amomax amominu amomaxu`, each `.w` |
+| 6 | `ATOMICS` | `amoadd amoswap lr sc amoxor amoor amoand amomin amomax amominu amomaxu`, each `.w`, then each `.d` |
+
+Within a family the 64-bit-only forms follow the forms they extend. The shifts
+are a multiply or a floor division by `2^s` ([mul-div.md](mul-div.md)), which is why they route to
+`MUL_DIV`.
 
 ## 5. Decoded tables
 
@@ -116,10 +121,10 @@ tables have none.
   height `h` (§7).
 - **A live row** holds one of the family's instructions in the fields of its lookup tuple
   (`program::lookup_tuple`): `pc, next_pc, rs1, rs2, rd, imm, extra_mask`, without `imm` for
-  `MUL_DIV` and `ATOMICS`; no tuple holds `funct3`, the mask saying more. `next_pc` is the
-  fall-through, `pc + 2` or `pc + 4` by the slot's length, never a branch target. A register the
-  form lacks is 0; `imm` is the two's complement of §4's value, 0 where the form has none, or a
-  system code (§6).
+  `ATOMICS`; no tuple holds `funct3`, the mask saying more. `next_pc` is the fall-through,
+  `pc + 2` or `pc + 4` by the slot's length, never a branch target. A register the form lacks is
+  0; `imm` is the low word of §4's value, 0 where the form has none, or a system code (§6), and
+  its sign is the mask's bit 31.
 - **Every other row is padding, `Fp::MINUS_ONE` in every field** (`FamilyTable::column_poly`).
   An all-zero row would be a claimable instruction at pc 0 with an empty mask; a live field is
   below `2^32`, so no live row is the padding row.
@@ -136,8 +141,11 @@ has no row, so reaching it is fatal and unprovable ([execution-trace.md](executi
 
 ## 6. The extra mask
 
-A tuple's last field, `family_extra_mask`, is `1 << kind`, the kind being the instruction's
-position in its row of §4's table (`constants::extra_mask`). A kind is a mnemonic, except family
+A tuple's last field, `family_extra_mask`, is `1 << kind | neg << 31`, the kind being the
+instruction's position in its row of §4's table (`constants::extra_mask`) and `neg`
+(`extra_mask::IMM_NEGATIVE`) the immediate's sign: the instruction uses the immediate sign-extended
+to 64 bits, whose high word is `(2^32 − 1)·neg`. A family whose immediate can be negative commits
+`neg` as the bit `imm_negative`, which its `decoded_mask_bits` gate adds at weight `2^31`. A kind is a mnemonic, except family
 0's bit 0, the **system** kind, whose three instructions are told apart by `imm`
 (`constants::extra_mask::system_code`): `ecall` 0, `ebreak` 1, `fence` 2. A fence's `fm`, `pred`
 and `succ`, and an atomic's `aq` and `rl`, are not recorded; on one hart they order nothing.
@@ -193,7 +201,7 @@ A digest, `ProgramIdentity`, on the wire its 8 lanes' canonical bytes in order, 
 
 | # | tag | message |
 | --- | --- | --- |
-| 1 | `PROGRAM_IDENTITY` | `[code_version]`: `constants::family::CODE_VERSION`, 0, the only one derivation builds (`UnsupportedCodeVersion`) |
+| 1 | `PROGRAM_IDENTITY` | `[code_version]`: `constants::family::CODE_VERSION`, 1, the only one derivation builds (`UnsupportedCodeVersion`) |
 | 2 | `VM_CONFIG` | §7's |
 | 3 | `PROGRAM_ENTRY` | `[entry_pc]` |
 | 4 | `SETUP_COMMITMENT` | once per family of the config, in its order: its setup commitment's payloads, empty for a family with none |
@@ -201,7 +209,7 @@ A digest, `ProgramIdentity`, on the wire its 8 lanes' canonical bytes in order, 
 A family's **setup columns** (`program::setup_columns`) are an instruction family's decoded-table
 columns in tuple order, or `INIT_TEARDOWN`'s **image column** (`program::image_init_column`), row
 `y` being `image.initial_word(4y)` over RAM window 0; then, for a family that reads the generic
-channel, the packed generic table's 3 columns ([lookup.md](lookup.md) §9). They are committed by
+channel, the packed generic table's 4 columns ([lookup.md](lookup.md) §9). They are committed by
 Akita under the family's opening schedule (`program::setup_openers`, [pcs.md](pcs.md) §3), the key
 carries the commitments, and every shard opens its setup columns against its family's
 ([proof.md](proof.md) §3, §5), which ties the tables a proof reads to the identity. Computing an

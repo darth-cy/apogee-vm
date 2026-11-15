@@ -227,11 +227,11 @@ fn segments_must_lie_inside_the_guest_ram_window() {
     let good = common::bytes("minimal.elf");
     assert!(load_elf(&good).is_ok());
 
-    // p_memsz is the sixth word of the one program header, which starts at 52.
-    let memsz_at = 52 + 20;
-    for memsz in [0x7fff_ffffu32, 0xffff_ffff, 0x8000_0000] {
+    // p_memsz is at byte 40 of the one program header, which starts at 64.
+    let memsz_at = 64 + 40;
+    for memsz in [0x7fff_ffffu64, 0xffff_ffff, 0x8000_0000, 1 << 40, u64::MAX] {
         let mut bad = good.clone();
-        bad[memsz_at..memsz_at + 4].copy_from_slice(&memsz.to_le_bytes());
+        bad[memsz_at..memsz_at + 8].copy_from_slice(&memsz.to_le_bytes());
         assert!(
             matches!(load_elf(&bad), Err(LoaderError::BadSegment { .. })),
             "a segment claiming {memsz:#x} bytes of memory was accepted, so the \
@@ -241,8 +241,8 @@ fn segments_must_lie_inside_the_guest_ram_window() {
 
     // And a segment below the window.
     let mut bad = good.clone();
-    bad[52 + 8..52 + 12].copy_from_slice(&0u32.to_le_bytes());
-    bad[52 + 12..52 + 16].copy_from_slice(&0u32.to_le_bytes());
+    bad[64 + 16..64 + 24].copy_from_slice(&0u64.to_le_bytes());
+    bad[64 + 24..64 + 32].copy_from_slice(&0u64.to_le_bytes());
     assert!(matches!(
         load_elf(&bad),
         Err(LoaderError::BadSegment { .. })

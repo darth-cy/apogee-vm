@@ -2,7 +2,7 @@
 #
 # It defines `#[panic_handler]` and `#[global_allocator]`, which are lang items
 # a host build cannot link twice, and it only ever compiles for
-# `riscv32imac-unknown-none-elf`. Keeping it out means `cargo test --workspace`
+# `riscv64imac-unknown-none-elf`. Keeping it out means `cargo test --workspace`
 # never tries to build a host test harness for it.
 #
 # The toolchain still comes from the repository root's `rust-toolchain.toml`:
@@ -16,6 +16,8 @@ edition = "2021"
 publish = false
 
 [dependencies]
-# The one dependency, and the reason it exists: every ecall number and range
-# boundary has a single source, and this is it.
+# Every ecall number and range boundary has a single source, and this is it.
 constants = { path = "../constants" }
+# `__cxa_atexit`, in a crate of its own so it is an archive member of its own
+# (`cxa/Cargo.toml` says why).
+guest-sdk-cxa = { path = "cxa" }

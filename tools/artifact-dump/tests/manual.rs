@@ -67,7 +67,7 @@ fn guest_members() -> Vec<String> {
 /// Build one guest the way section 4 says to, into a fresh target directory.
 ///
 /// The command is the manual's, typed out: `cargo build --target
-/// riscv32imac-unknown-none-elf`, run from the guest's own directory, with the
+/// riscv64imac-unknown-none-elf`, run from the guest's own directory, with the
 /// target and the two linker flags coming from `guests/.cargo/config.toml` and
 /// nothing coming from here.
 ///
@@ -85,7 +85,7 @@ fn build(name: &str, slot: &str) -> PathBuf {
     let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     command
         .current_dir(&guest_dir)
-        .args(["build", "--target", "riscv32imac-unknown-none-elf"])
+        .args(["build", "--target", "riscv64imac-unknown-none-elf"])
         .env("CARGO_TARGET_DIR", &target_dir);
     for key in [
         "RUSTFLAGS",
@@ -105,7 +105,7 @@ fn build(name: &str, slot: &str) -> PathBuf {
     );
 
     let elf = target_dir
-        .join("riscv32imac-unknown-none-elf/debug")
+        .join("riscv64imac-unknown-none-elf/debug")
         .join(name);
     assert!(
         elf.is_file(),

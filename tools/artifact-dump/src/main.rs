@@ -2,7 +2,7 @@
 //! §3), and a report of that artifact a person can read — or print its decoded
 //! tables.
 //!
-//!     cargo run -p artifact-dump -- guests/target/riscv32imac-unknown-none-elf/debug/fib
+//!     cargo run -p artifact-dump -- guests/target/riscv64imac-unknown-none-elf/debug/fib
 //!     cargo run -p artifact-dump -- <elf> --out artifacts/
 //!     cargo run --release -p artifact-dump -- tables <elf>
 //!

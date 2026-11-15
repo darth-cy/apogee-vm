@@ -97,7 +97,7 @@ fn every_compressed_form_expands_to_its_uncompressed_twin() {
     );
     assert!(
         rvc.len() >= 40,
-        "the fixture covers only {} forms, which is not the RV32C table",
+        "the fixture covers only {} forms, which is not the RV64C table",
         rvc.len()
     );
     assert!(
@@ -189,8 +189,12 @@ fn the_fixture_covers_the_required_compressed_forms() {
             (0x03, 0b010) => "c.lw",
             (0x23, 0b010) if rs1 == 2 => "c.swsp",
             (0x23, 0b010) => "c.sw",
-            (0x6f, _) if rd == 1 => "c.jal",
-            (0x6f, _) => "c.j",
+            (0x03, 0b011) if rs1 == 2 => "c.ldsp",
+            (0x03, 0b011) => "c.ld",
+            (0x23, 0b011) if rs1 == 2 => "c.sdsp",
+            (0x23, 0b011) => "c.sd",
+            (0x1b, 0b000) => "c.addiw",
+            (0x6f, _) if rd == 0 => "c.j",
             (0x63, 0b000) if rs2 == 0 => "c.beqz",
             (0x63, 0b001) if rs2 == 0 => "c.bnez",
             _ => continue,
@@ -199,7 +203,8 @@ fn the_fixture_covers_the_required_compressed_forms() {
     }
 
     for required in [
-        "c.lw", "c.sw", "c.lwsp", "c.swsp", "c.jal", "c.j", "c.beqz", "c.bnez",
+        "c.lw", "c.sw", "c.lwsp", "c.swsp", "c.ld", "c.sd", "c.ldsp", "c.sdsp", "c.addiw", "c.j",
+        "c.beqz", "c.bnez",
     ] {
         assert!(
             seen.contains(required),

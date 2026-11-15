@@ -1,111 +1,26 @@
 //! The `ADD_SUB_LUI_AUIPC` family's circuit: `add`, `sub`, `addi`, `lui`,
-//! `auipc`, and the system row kind with its one provable ecall, `exit`.
+//! `auipc`, their 32-bit forms `addw`, `subw`, `addiw`, and the system row
+//! kind with its one provable ecall, `exit`.
 //!
 //! `docs/spec/add-sub.md` specifies it: the columns, the gates, the lookups
-//! and the argument. This file is that page as data, assembled by
-//! `memory::frame_with_channels_artifact` beside the memory frame.
-//!
-//! ```text
-//! frame     M[0..21], W[0..7]: pc rs1 rs2 rd at slots 0..4
-//! W[7..13]  the claimed decoded row: next_pc rs1 rs2 rd imm mask
-//! W[13..19] the mask's six bits; W[19], W[20] is_ecall, is_fence
-//! W[21..25] wrap, rd_hi, pc_wrap, next_pc_hi
-//! W[25..28] one multiplicity per channel: timestamp, range16, decoder
-//! S[0..7]   the decoded table, program::lookup_tuple order
-//! ```
+//! and the argument. This file is that page as data, on `crate::family`'s
+//! builder beside the memory frame.
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
 use alloc::vec::Vec;
-
 use constants::extra_mask::add_sub_lui_auipc as kind;
 use constants::extra_mask::system_code;
-use constants::{family, lookup_channel, memory as mem};
-use field::Fp;
 
+use constants::{ecall, family, memory as mem};
+
+use crate::family::{sum, Expr, Family, Imm, T32};
 use crate::lookup::ChannelSpec;
-use crate::memory::{
-    frame, frame_queries, frame_with_channels_artifact, rd_selected, FamilySpec, FIELD_ADDR,
-    FIELD_MASK, FIELD_READ_VALUE, FIELD_WRITE_VALUE, PC, RD, RS1, RS2,
-};
-use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
+use crate::memory::{RD, RS1, RS2};
+use crate::CircuitArtifact;
 
-/// The family's queries, in slot order: its frame is `memory::frame_queries`'
-/// list, and this file addresses its columns by these slots.
-const QUERIES: [usize; 4] = [PC, RS1, RS2, RD];
-const SLOT_PC: usize = 0;
-const SLOT_RS1: usize = 1;
-const SLOT_RS2: usize = 2;
-const SLOT_RD: usize = 3;
-
-/// The frame's own witness columns: four gap chunks, then the x0 gadget's
-/// three. Everything this file adds follows them.
-const FRAME_WITNESS: u32 = 4 + 3;
-
-const fn w(i: u32) -> PolyAddress {
-    PolyAddress::Witness(i)
-}
-
-/// `W[7..13]`: the claimed decoded row, `next_pc, rs1, rs2, rd, imm, mask` —
-/// `program::lookup_tuple` after `pc`, which the frame's own pc column is.
-pub const DECODED: [PolyAddress; 6] = [
-    w(FRAME_WITNESS),
-    w(FRAME_WITNESS + 1),
-    w(FRAME_WITNESS + 2),
-    w(FRAME_WITNESS + 3),
-    w(FRAME_WITNESS + 4),
-    w(FRAME_WITNESS + 5),
+/// The kinds, in `constants::extra_mask::add_sub_lui_auipc` order.
+pub const KINDS: [&str; 9] = [
+    "system", "addi", "auipc", "add", "sub", "lui", "addiw", "addw", "subw",
 ];
-const DECODED_NEXT_PC: PolyAddress = DECODED[0];
-const DECODED_RS1: PolyAddress = DECODED[1];
-const DECODED_RS2: PolyAddress = DECODED[2];
-const DECODED_RD: PolyAddress = DECODED[3];
-const DECODED_IMM: PolyAddress = DECODED[4];
-const DECODED_MASK: PolyAddress = DECODED[5];
-
-/// `W[13..19]`: the packed mask's bits, bit `k` at index `k` —
-/// `constants::extra_mask::add_sub_lui_auipc`'s order: system, addi, auipc,
-/// add, sub, lui.
-pub const KINDS: [PolyAddress; 6] = [
-    w(FRAME_WITNESS + 6),
-    w(FRAME_WITNESS + 7),
-    w(FRAME_WITNESS + 8),
-    w(FRAME_WITNESS + 9),
-    w(FRAME_WITNESS + 10),
-    w(FRAME_WITNESS + 11),
-];
-const KIND_SYSTEM: PolyAddress = KINDS[kind::SYSTEM as usize];
-const KIND_ADDI: PolyAddress = KINDS[kind::ADDI as usize];
-const KIND_AUIPC: PolyAddress = KINDS[kind::AUIPC as usize];
-const KIND_ADD: PolyAddress = KINDS[kind::ADD as usize];
-const KIND_SUB: PolyAddress = KINDS[kind::SUB as usize];
-const KIND_LUI: PolyAddress = KINDS[kind::LUI as usize];
-
-/// `W[19]`: 1 exactly on a system row whose code is `ecall`, which can only
-/// be `exit`.
-pub const IS_ECALL: PolyAddress = w(FRAME_WITNESS + 12);
-/// `W[20]`: 1 exactly on a system row whose code is `fence`.
-pub const IS_FENCE: PolyAddress = w(FRAME_WITNESS + 13);
-/// `W[21]`: the sum's carry, or the difference's borrow.
-pub const WRAP: PolyAddress = w(FRAME_WITNESS + 14);
-/// `W[22]`: the computed `rd` value's high halfword.
-pub const RD_HI: PolyAddress = w(FRAME_WITNESS + 15);
-/// `W[23]`: `next_pc`'s wrap, 0 on every honest row.
-pub const PC_WRAP: PolyAddress = w(FRAME_WITNESS + 16);
-/// `W[24]`: `next_pc`'s high halfword.
-pub const NEXT_PC_HI: PolyAddress = w(FRAME_WITNESS + 17);
-/// `W[25..28]`: the channels' multiplicities, in channel order — timestamp,
-/// range16, decoder — last in the witness subtree (`docs/spec/lookup.md` §7).
-pub const MULTIPLICITIES: [PolyAddress; 3] = [
-    w(FRAME_WITNESS + 18),
-    w(FRAME_WITNESS + 19),
-    w(FRAME_WITNESS + 20),
-];
-
-/// The decoded table's width, `program::lookup_tuple(ADD_SUB_LUI_AUIPC)`:
-/// `pc next_pc rs1 rs2 rd imm extra_mask`, at `S[0..7]`.
-pub const TABLE_WIDTH: usize = 7;
 
 /// `ecall_code` is `is_ecall·imm`, which says "the code is `ECALL`" only
 /// because that code is 0.
@@ -117,355 +32,107 @@ const A7: u64 = 17;
 /// `rd`.
 const A0: u64 = 10;
 
-fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fp::from_u64(v))
-}
+fn spec() -> Family {
+    let mut f = Family::new(family::ADD_SUB_LUI_AUIPC, &KINDS, Imm::Signed);
+    let b = |j: u32| f.kinds[j as usize];
+    let (system, addi, auipc, add, sub, lui) = (
+        b(kind::SYSTEM),
+        b(kind::ADDI),
+        b(kind::AUIPC),
+        b(kind::ADD),
+        b(kind::SUB),
+        b(kind::LUI),
+    );
+    let (addiw, addw, subw) = (b(kind::ADDIW), b(kind::ADDW), b(kind::SUBW));
+    let (imm, neg) = (f.imm.expect("an imm"), f.neg.expect("a signed imm"));
+    let (v1, v2, vh1, vh2) = (f.v(RS1), f.v(RS2), f.vh(RS1), f.vh(RS2));
+    let (sel, sel_hi, pc) = (f.sel(), f.sel_hi(), f.pc());
+    let ones = T32 - 1;
 
-fn neg(v: u64) -> Coeff {
-    Coeff::Literal(-Fp::from_u64(v))
-}
+    let is_ecall = f.bit("is_ecall");
+    let is_fence = f.bit("is_fence");
+    f.gate("system_split", is_ecall + is_fence - system);
+    f.gate("ecall_code", is_ecall * imm);
+    f.gate(
+        "fence_code",
+        is_fence * imm - is_fence * system_code::FENCE as u64,
+    );
+    // An ecall row is an exit, and `a7` is its number, 64 bits of it.
+    f.gate(
+        "ecall_is_exit",
+        is_ecall * v1 - is_ecall * ecall::EXIT as u64,
+    );
+    f.gate("ecall_is_exit_hi", is_ecall * vh1);
 
-fn two_32() -> Fp {
-    Fp::from_u64(1 << 32)
-}
+    let reads_rs1 = sum(&[add, sub, addi, addw, subw, addiw, is_ecall]);
+    let reads_rs2 = sum(&[add, sub, addw, subw, is_ecall]);
+    let writes = sum(&[add, sub, addi, auipc, lui, addiw, addw, subw, is_ecall]);
+    f.mask_rule(RS1, reads_rs1);
+    f.mask_rule(RS2, reads_rs2);
+    f.mask_rule(RD, writes);
+    let (d1, d2, dd) = (f.rs1, f.rs2, f.rd);
+    f.addr_rule(RS1, d1 + is_ecall * A7);
+    f.addr_rule(RS2, d2 + is_ecall * A0);
+    f.addr_rule(RD, dd + is_ecall * A0);
+    f.value_masked(RS1);
+    f.value_masked(RS2);
 
-/// `Σ a·x + Σ b·y·z`, constant 0, literal coefficients.
-fn quadratic(
-    linear: Vec<(Coeff, PolyAddress)>,
-    products: Vec<(Coeff, PolyAddress, PolyAddress)>,
-) -> GateDef {
-    GateDef::Quadratic {
-        constant: lit(0),
-        linear,
-        products,
-    }
-}
+    let c0 = f.bit("c0");
+    let c1 = f.bit("c1");
+    // The low word: one addition, its carry c0, for every kind that adds; an
+    // absent operand reads 0 and an R-type row's imm is the table's 0, so each
+    // kind sees its own two addends, auipc's pc among them.
+    let adds = sum(&[add, addi, auipc, addw, addiw]);
+    f.gate(
+        "add_lo",
+        adds * (v1 + v2 + imm - sel - c0 * T32) + auipc * pc,
+    );
+    f.gate("sub_lo", sum(&[sub, subw]) * (v1 - v2 - sel + c0 * T32));
+    f.gate("lui_lo", lui * (imm - sel));
+    // The high word of a 64-bit kind: the operands' high words, the carry in,
+    // and an immediate's high word `(2^32 − 1)·neg`.
+    let adds64 = sum(&[add, addi, auipc]);
+    f.gate(
+        "add_hi",
+        adds64.clone() * (vh1 + vh2 + c0 - sel_hi - c1 * T32) + adds64 * neg * ones,
+    );
+    f.gate("sub_hi", sub * (vh1 - vh2 - c0 - sel_hi + c1 * T32));
+    f.gate("lui_hi", lui * neg * ones - lui * sel_hi);
+    // A W kind writes its 32-bit result sign-extended.
+    let (_, w_sign) = f.signed_word("rd_lo", sel.into());
+    f.gate(
+        "w_extend",
+        sum(&[addw, addiw, subw]) * (Expr::from(sel_hi) - w_sign * ones),
+    );
+    f.word("rd_hi", sel_hi.into());
+    // The exit row's `a0` write is its read.
+    let (v_rd, vh_rd) = (f.v(RD), f.vh(RD));
+    f.gate("exit_status", is_ecall * v_rd - is_ecall * sel);
+    f.gate("exit_status_hi", is_ecall * vh_rd - is_ecall * sel_hi);
 
-fn linear(terms: Vec<(Coeff, PolyAddress)>) -> GateDef {
-    GateDef::Linear {
-        terms,
-        constant: lit(0),
-    }
-}
-
-/// `x − x·x`.
-fn booleanity(x: PolyAddress) -> GateDef {
-    quadratic(vec![(lit(1), x)], vec![(neg(1), x, x)])
-}
-
-/// `x` alone, a lookup expression.
-fn column(x: PolyAddress) -> GateDef {
-    linear(vec![(lit(1), x)])
-}
-
-/// `m_q − m_pc·Σ uses`: query `q` is present exactly on a live row whose kind
-/// uses it.
-fn mask_rule(mask: PolyAddress, uses: &[PolyAddress]) -> GateDef {
-    let m_pc = frame(SLOT_PC, FIELD_MASK);
-    quadratic(
-        vec![(lit(1), mask)],
-        uses.iter().map(|u| (neg(1), m_pc, *u)).collect(),
-    )
-}
-
-/// `m_q·(a_q − decoded − register·is_ecall)`: a present query's address is the
-/// decoded one, or `register` on an ecall row, whose decoded registers are 0.
-fn addr_rule(slot: usize, decoded: PolyAddress, register: u64) -> GateDef {
-    let m = frame(slot, FIELD_MASK);
-    quadratic(
-        vec![],
-        vec![
-            (lit(1), m, frame(slot, FIELD_ADDR)),
-            (neg(1), m, decoded),
-            (neg(register), m, IS_ECALL),
-        ],
-    )
-}
-
-/// `v_q − m_q·v_q`: an absent operand reads 0.
-fn value_masked(slot: usize) -> GateDef {
-    let (m, v) = (frame(slot, FIELD_MASK), frame(slot, FIELD_READ_VALUE));
-    quadratic(vec![(lit(1), v)], vec![(neg(1), m, v)])
-}
-
-/// A `RANGE16` obligation under the row's pc mask.
-fn range16(name: &str, expression: GateDef) -> LookupExpr {
-    LookupExpr {
-        name: name.to_string(),
-        channel: lookup_channel::RANGE16,
-        selector: frame(SLOT_PC, FIELD_MASK),
-        tuple: vec![expression],
-    }
-}
-
-/// `x − 2^16·hi`, the low halfword of a value bounded by the range convention
-/// of `docs/spec/memory.md` §7.
-fn low_half(x: PolyAddress, hi: PolyAddress) -> GateDef {
-    linear(vec![
-        (lit(1), x),
-        (Coeff::Literal(-Fp::from_u64(1 << 16)), hi),
-    ])
-}
-
-fn names(list: &[&str]) -> Vec<String> {
-    list.iter().map(|s| s.to_string()).collect()
+    // next_pc + 2^32·pc_wrap = decoded_next_pc, or HALT_PC on the exit row.
+    let pc_wrap = f.bit("pc_wrap");
+    let (next_pc, seq) = (f.next_pc(), f.seq);
+    f.gate(
+        "next_pc_rule",
+        next_pc + pc_wrap * T32 - seq + is_ecall * seq - is_ecall * mem::HALT_PC as u64,
+    );
+    f.word("next_pc", next_pc.into());
+    f
 }
 
 /// The family's circuit over `2^trace_vars` rows, `docs/spec/add-sub.md`.
 /// `trace_vars` is at least 19, the timestamp channel's width, which the
-/// assembly refuses below.
-///
-/// Panics if the family's frame is not the four queries this file addresses,
-/// or if any obligation count is not `docs/spec/add-sub.md` §3's — 8
-/// timestamp (two a query), 4 `RANGE16`, 1 decoder — and on every refusal of
-/// the assembly.
+/// registry refuses below. Panics on every refusal of the assembly.
 pub fn artifact(trace_vars: u32) -> CircuitArtifact {
-    let (wrap, rd_hi, pc_wrap, next_pc_hi) = (WRAP, RD_HI, PC_WRAP, NEXT_PC_HI);
-    assert_eq!(
-        frame_queries(family::ADD_SUB_LUI_AUIPC),
-        &QUERIES,
-        "add_sub: the family's frame is the four queries this circuit addresses by slot"
-    );
-    let m_pc = frame(SLOT_PC, FIELD_MASK);
-    let pc = frame(SLOT_PC, FIELD_READ_VALUE);
-    let next_pc = frame(SLOT_PC, FIELD_WRITE_VALUE);
-    let v_rs1 = frame(SLOT_RS1, FIELD_READ_VALUE);
-    let v_rs2 = frame(SLOT_RS2, FIELD_READ_VALUE);
-    let v_rd = frame(SLOT_RD, FIELD_READ_VALUE);
-    let sel = rd_selected(QUERIES.len());
-
-    let mut witness = names(&[
-        "decoded_next_pc",
-        "decoded_rs1",
-        "decoded_rs2",
-        "decoded_rd",
-        "decoded_imm",
-        "decoded_mask",
-        "kind_system",
-        "kind_addi",
-        "kind_auipc",
-        "kind_add",
-        "kind_sub",
-        "kind_lui",
-        "is_ecall",
-        "is_fence",
-    ]);
-    witness.extend(names(&["wrap", "rd_hi", "pc_wrap", "next_pc_hi"]));
-    witness.extend(
-        [
-            lookup_channel::TIMESTAMP,
-            lookup_channel::RANGE16,
-            lookup_channel::DECODER,
-        ]
-        .iter()
-        .map(|c| format!("mult_{}", lookup_channel::NAMES[*c as usize])),
-    );
-    let setup = names(&[
-        "table_pc",
-        "table_next_pc",
-        "table_rs1",
-        "table_rs2",
-        "table_rd",
-        "table_imm",
-        "table_extra_mask",
-    ]);
-
-    let kind_names = ["system", "addi", "auipc", "add", "sub", "lui"];
-    let mut enforcing: Vec<(String, GateDef)> = Vec::new();
-    for (k, bit) in KINDS.iter().enumerate() {
-        enforcing.push((format!("kind_{}_boolean", kind_names[k]), booleanity(*bit)));
-    }
-    // One degree-1 constraint ties the packed mask to its bits; one-hotness is
-    // the decoder table's domain and nothing else (`docs/spec/lookup.md` §10).
-    let mut bits: Vec<(Coeff, PolyAddress)> = KINDS
-        .iter()
-        .enumerate()
-        .map(|(k, bit)| (lit(1 << k), *bit))
-        .collect();
-    bits.push((neg(1), DECODED_MASK));
-    enforcing.push(("decoded_mask_bits".into(), linear(bits)));
-    enforcing.push(("is_ecall_boolean".into(), booleanity(IS_ECALL)));
-    enforcing.push(("is_fence_boolean".into(), booleanity(IS_FENCE)));
-    enforcing.push((
-        "system_split".into(),
-        linear(vec![
-            (lit(1), IS_ECALL),
-            (lit(1), IS_FENCE),
-            (neg(1), KIND_SYSTEM),
-        ]),
-    ));
-    enforcing.push((
-        "ecall_code".into(),
-        quadratic(vec![], vec![(lit(1), IS_ECALL, DECODED_IMM)]),
-    ));
-    enforcing.push((
-        "fence_code".into(),
-        quadratic(
-            vec![(neg(system_code::FENCE as u64), IS_FENCE)],
-            vec![(lit(1), IS_FENCE, DECODED_IMM)],
-        ),
-    ));
-    // An ecall row is an exit, and `a7` is its number: `is_ecall·(a7 − EXIT)`.
-    enforcing.push((
-        "ecall_is_exit".into(),
-        quadratic(
-            vec![(neg(constants::ecall::EXIT as u64), IS_ECALL)],
-            vec![(lit(1), IS_ECALL, v_rs1)],
-        ),
-    ));
-
-    enforcing.push((
-        "rs1_mask_rule".into(),
-        mask_rule(
-            frame(SLOT_RS1, FIELD_MASK),
-            &[KIND_ADD, KIND_SUB, KIND_ADDI, IS_ECALL],
-        ),
-    ));
-    enforcing.push((
-        "rs2_mask_rule".into(),
-        mask_rule(frame(SLOT_RS2, FIELD_MASK), &[KIND_ADD, KIND_SUB, IS_ECALL]),
-    ));
-    enforcing.push((
-        "rd_mask_rule".into(),
-        mask_rule(
-            frame(SLOT_RD, FIELD_MASK),
-            &[
-                KIND_ADD, KIND_SUB, KIND_ADDI, KIND_AUIPC, KIND_LUI, IS_ECALL,
-            ],
-        ),
-    ));
-    enforcing.push(("rs1_addr_rule".into(), addr_rule(SLOT_RS1, DECODED_RS1, A7)));
-    enforcing.push(("rs2_addr_rule".into(), addr_rule(SLOT_RS2, DECODED_RS2, A0)));
-    enforcing.push(("rd_addr_rule".into(), addr_rule(SLOT_RD, DECODED_RD, A0)));
-    enforcing.push(("rs1_value_masked".into(), value_masked(SLOT_RS1)));
-    enforcing.push(("rs2_value_masked".into(), value_masked(SLOT_RS2)));
-
-    // (add + addi + auipc)·(rs1 + rs2 + imm − sel − 2^32·wrap) + auipc·pc: an
-    // R-type row's imm is 0, an I-type or U-type row's absent rs2 reads 0, and
-    // an auipc row's absent rs1 reads 0, so each kind sees its own two addends.
-    let mut sum = Vec::new();
-    for bit in [KIND_ADD, KIND_ADDI, KIND_AUIPC] {
-        sum.push((lit(1), bit, v_rs1));
-        sum.push((lit(1), bit, v_rs2));
-        sum.push((lit(1), bit, DECODED_IMM));
-        sum.push((neg(1), bit, sel));
-        sum.push((Coeff::Literal(-two_32()), bit, wrap));
-    }
-    sum.push((lit(1), KIND_AUIPC, pc));
-    enforcing.push(("add_addi_auipc".into(), quadratic(vec![], sum)));
-    enforcing.push((
-        "sub".into(),
-        quadratic(
-            vec![],
-            vec![
-                (lit(1), KIND_SUB, v_rs1),
-                (neg(1), KIND_SUB, v_rs2),
-                (neg(1), KIND_SUB, sel),
-                (Coeff::Literal(two_32()), KIND_SUB, wrap),
-            ],
-        ),
-    ));
-    enforcing.push((
-        "lui".into(),
-        quadratic(
-            vec![],
-            vec![(lit(1), KIND_LUI, DECODED_IMM), (neg(1), KIND_LUI, sel)],
-        ),
-    ));
-    // The exit row's `a0` write is its read.
-    enforcing.push((
-        "exit_status".into(),
-        quadratic(
-            vec![],
-            vec![(lit(1), IS_ECALL, v_rd), (neg(1), IS_ECALL, sel)],
-        ),
-    ));
-    enforcing.push(("wrap_boolean".into(), booleanity(wrap)));
-    enforcing.push(("pc_wrap_boolean".into(), booleanity(pc_wrap)));
-    // next_pc + 2^32·pc_wrap = decoded_next_pc, or HALT_PC on the exit row.
-    enforcing.push((
-        "next_pc_rule".into(),
-        quadratic(
-            vec![
-                (lit(1), next_pc),
-                (Coeff::Literal(two_32()), pc_wrap),
-                (neg(1), DECODED_NEXT_PC),
-                (neg(mem::HALT_PC as u64), IS_ECALL),
-            ],
-            vec![(lit(1), IS_ECALL, DECODED_NEXT_PC)],
-        ),
-    ));
-
-    let mut decode = vec![column(pc)];
-    decode.extend(DECODED.iter().map(|x| column(*x)));
-    let lookups = vec![
-        range16("rd_hi_range", column(rd_hi)),
-        range16("rd_lo_range", low_half(sel, rd_hi)),
-        range16("next_pc_hi_range", column(next_pc_hi)),
-        range16("next_pc_lo_range", low_half(next_pc, next_pc_hi)),
-        LookupExpr {
-            name: "decode_row".into(),
-            channel: lookup_channel::DECODER,
-            selector: m_pc,
-            tuple: decode,
-        },
-    ];
-
-    let a = frame_with_channels_artifact(
-        &QUERIES,
-        trace_vars,
-        FamilySpec {
-            witness,
-            setup,
-            virtuals: vec![
-                (VirtualKind::Range19, "range19".into()),
-                (VirtualKind::Range16, "range16".into()),
-            ],
-            enforcing,
-            lookups,
-            channels: channels(),
-        },
-    );
-    // Every obligation is built above and then handed over, so a count per
-    // channel is what shows none was dropped on the way.
-    for (channel, want) in [
-        (lookup_channel::TIMESTAMP, 2 * QUERIES.len()),
-        (lookup_channel::RANGE16, 4),
-        (lookup_channel::DECODER, 1),
-    ] {
-        let got = a.lookups.iter().filter(|l| l.channel == channel).count();
-        assert_eq!(
-            got,
-            want,
-            "add_sub: channel `{}` carries {got} obligations, not {want}",
-            lookup_channel::NAMES[channel as usize]
-        );
-    }
-    a
+    spec().artifact(trace_vars)
 }
 
-/// The family's three channels, in output order: the timestamp gaps over
-/// `V[range19]`, the 16-bit halves over `V[range16]`, and the decoder over the
-/// family's decoded table at `S[0..7]`.
+/// The family's channels, in output order: the timestamp gaps over
+/// `V[range19]`, the halfwords over `V[range16]`, the sign over the generic
+/// table and the decoder over the family's decoded table.
 pub fn channels() -> Vec<ChannelSpec> {
-    let multiplicities = MULTIPLICITIES;
-    vec![
-        ChannelSpec {
-            channel: lookup_channel::TIMESTAMP,
-            table: vec![PolyAddress::Virtual(VirtualKind::Range19)],
-            multiplicity: multiplicities[0],
-        },
-        ChannelSpec {
-            channel: lookup_channel::RANGE16,
-            table: vec![PolyAddress::Virtual(VirtualKind::Range16)],
-            multiplicity: multiplicities[1],
-        },
-        ChannelSpec {
-            channel: lookup_channel::DECODER,
-            table: (0..TABLE_WIDTH as u32).map(PolyAddress::Setup).collect(),
-            multiplicity: multiplicities[2],
-        },
-    ]
+    spec().channels()
 }
 
 #[cfg(test)]

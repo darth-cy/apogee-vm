@@ -27,7 +27,7 @@ pub use log::{
 pub use lookup::{build_multiplicities, check_multiplicities};
 pub use memory::{
     build_boundary_finals, build_frame_witness, build_init_teardown_columns, build_memory_columns,
-    build_value_window_columns,
+    build_value_window_columns, column,
 };
 
 use program::{FamilyId, VmConfig};

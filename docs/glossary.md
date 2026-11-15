@@ -29,7 +29,7 @@ the literature fixes (GKR, LogUp, RISC-V) are not listed.
 | frame | an execution family's queries | [memory.md §2](spec/memory.md) |
 | gate list, row-wise, halving | the gates from layer `k` to `k + 1`, keeping the height or halving it | [gkr.md §1](spec/gkr.md) |
 | gated key, neutral tuple | a lookup tuple under its selector; off, it reads a neutral table row | [lookup.md §4](spec/lookup.md) |
-| generic table | the table of `ZeroEntry`, AND, `U16GetSign`, `ShiftPowers` | [lookup.md §9](spec/lookup.md) |
+| generic table | the tagged table of `ZeroEntry`, `AND`, `SIGN`, `POW`, `POW_W` | [lookup.md §9](spec/lookup.md) |
 | global transcript, global state digest | G1–G9: the statement, then the memory challenges; G9 seeds each shard | [proof.md §2](spec/proof.md) |
 | `HALT_PC` | 1: the exit row's `next_pc`, the pc's final value | [memory.md §5](spec/memory.md) |
 | height | a family's rows a shard: `2^12`, `2^16`, `2^18`, `2^20` or `2^22` | [program.md §7](spec/program.md) |

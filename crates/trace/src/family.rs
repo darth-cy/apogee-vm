@@ -61,8 +61,9 @@ impl Role {
 pub struct Query {
     pub addr: u32,
     pub read_ts: u64,
-    pub read_value: u32,
-    pub write_value: u32,
+    /// A register's 64 bits, or a RAM word's 32.
+    pub read_value: u64,
+    pub write_value: u64,
 }
 
 impl Query {
@@ -207,8 +208,8 @@ impl<'a> FrameSlice<'a> {
 pub struct WordSlice<'a> {
     pub addr: &'a [u32],
     pub read_ts: &'a [u64],
-    pub read_value: &'a [u32],
-    pub write_value: &'a [u32],
+    pub read_value: &'a [u64],
+    pub write_value: &'a [u64],
 }
 
 /// One role's four columns.
@@ -216,8 +217,8 @@ pub struct WordSlice<'a> {
 pub struct QueryColumns {
     pub addr: Vec<u32>,
     pub read_ts: Vec<u64>,
-    pub read_value: Vec<u32>,
-    pub write_value: Vec<u32>,
+    pub read_value: Vec<u64>,
+    pub write_value: Vec<u64>,
 }
 
 /// One family's rows, column-major: every column has one entry per row, and

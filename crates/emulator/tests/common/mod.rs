@@ -121,9 +121,9 @@ pub fn input_of(name: &str) -> Vec<u8> {
 pub fn exit_code_of(name: &str) -> i32 {
     match name {
         "addsub" => 42,
-        "control" => 16,
-        "alu" => 96,
-        "mem" => 50,
+        "control" => 17,
+        "alu" => 144,
+        "mem" => 66,
         "shards" => 2,
         _ => 0,
     }
@@ -201,7 +201,7 @@ pub fn guest_profile() -> String {
 /// directory, and return the ELF bytes.
 ///
 /// The command is the manual's: `cargo build --target
-/// riscv32imac-unknown-none-elf` from the guest's own directory, with the
+/// riscv64imac-unknown-none-elf` from the guest's own directory, with the
 /// target and the linker flags coming from
 /// `guests/.cargo/config.toml`, and nothing from the ambient environment that
 /// could reach rustc.
@@ -222,7 +222,7 @@ pub fn build_guest(name: &str, profile: &str) -> Vec<u8> {
     let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     command
         .current_dir(&guest_dir)
-        .args(["build", "--target", "riscv32imac-unknown-none-elf"])
+        .args(["build", "--target", "riscv64imac-unknown-none-elf"])
         .env("CARGO_TARGET_DIR", &target_dir);
     if profile == "release" {
         command.arg("--release");
@@ -245,7 +245,7 @@ pub fn build_guest(name: &str, profile: &str) -> Vec<u8> {
     );
 
     let elf = target_dir
-        .join("riscv32imac-unknown-none-elf")
+        .join("riscv64imac-unknown-none-elf")
         .join(profile)
         .join(name);
     let bytes = fs::read(&elf).unwrap_or_else(|e| panic!("reading {}: {e}", elf.display()));

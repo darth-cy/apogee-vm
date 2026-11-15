@@ -12,9 +12,11 @@
 //!
 //! ```text
 //! frame      M[0] cycle; M[1 + 5s + f] the query at slot s, field f;
-//!            W[s] <q>_gap_hi; W[w] rd_inv, W[w+1] rd_is_zero, W[w+2] rd_selected
+//!            M[1 + 5w + 2r], M[2 + 5w + 2r] the r-th register query's high words;
+//!            W[s] <q>_gap_hi; W[w] rd_inv, W[w+1] rd_is_zero,
+//!            W[w+2] rd_selected, W[w+3] rd_selected_hi
 //! list 0     L{1}[0..w] read_<q>, then 1s to a power of two; likewise write_<q>;
-//!            enforcing: w booleanity, one write-back per read-only query, 4 x0
+//!            enforcing: w booleanity, two write-backs per read-only query, 5 x0
 //! lists 1-k  L{k+1}[j] = L{k}[2j]·L{k}[2j+1], halving the width to 2
 //!
 //! windows    M[0] teardown_ts, M[1] teardown_value, V[row];
@@ -53,7 +55,8 @@ pub const FIELD_ADDR: u32 = 1;
 pub const FIELD_READ_TS: u32 = 2;
 /// A frame query's field: the value it reads.
 pub const FIELD_READ_VALUE: u32 = 3;
-/// A frame query's field: the value it writes, at `4·cycle + Δ`.
+/// A frame query's field: the value it writes, at `4·cycle + Δ`. A register
+/// query's is its low word, its high word being [`frame_hi`]'s.
 pub const FIELD_WRITE_VALUE: u32 = 4;
 
 /// The query table's size: the pc query, then the five roles of
@@ -71,17 +74,20 @@ pub const PC: usize = 0;
 pub const RS1: usize = 1;
 /// `rs2`; an ecall row's `a0` — its one argument, the exit status.
 pub const RS2: usize = 2;
-/// A load's word, at `Δ = 2`.
+/// A RAM word at `Δ = 2`: a sub-word load's; `MEM_WORD`'s word at the
+/// address, which its stores write; an atomic doubleword's high word.
 pub const LOAD: usize = 3;
-/// A store's or an atomic's word, at `Δ = 3`.
+/// A RAM word at `Δ = 3`: a sub-word store's; `MEM_WORD`'s doubleword high
+/// word; an atomic's word at the address.
 pub const RAM: usize = 4;
 
 /// Each query's name, which its columns, leaves and obligations are named after.
 pub const FRAME_NAMES: [&str; FRAME_QUERIES] = ["pc", "rs1", "rs2", "load", "ram", "rd"];
 
-/// The read-only queries, which write back what they read: `rs1` through
-/// `load`. `docs/spec/memory.md` §2.4.
-pub const FRAME_READ_ONLY: [usize; 3] = [RS1, RS2, LOAD];
+/// The read-only queries, which write back what they read: `rs1` and `rs2`.
+/// A family that reads RAM states what its `load` writes, a doubleword
+/// store writing through it (`docs/spec/memory.md` §2.4).
+pub const FRAME_READ_ONLY: [usize; 2] = [RS1, RS2];
 
 /// Each query's address space, `constants::address_space`.
 pub const FRAME_SPACE: [u8; FRAME_QUERIES] = [
@@ -118,6 +124,27 @@ pub fn frame(slot: usize, field: u32) -> PolyAddress {
     PolyAddress::Memory(1 + 5 * slot as u32 + field)
 }
 
+/// The high word of the register query at slot `at` of `queries`: its read,
+/// or with `write` its write, `M[1 + 5w + 2r + write]` for the `r`-th register
+/// query of the frame. A register is 64 bits as two words; `frame(at,
+/// FIELD_READ_VALUE)` and `frame(at, FIELD_WRITE_VALUE)` are the low ones.
+/// `docs/spec/memory.md` §2.1.
+///
+/// Panics if the query at `at` is not a register query.
+pub fn frame_hi(queries: &[usize], at: usize, write: bool) -> PolyAddress {
+    assert_eq!(
+        FRAME_SPACE[queries[at]],
+        address_space::REG,
+        "frame_hi: {} is not a register query, so it has no high word",
+        FRAME_NAMES[queries[at]]
+    );
+    let rank = queries[..at]
+        .iter()
+        .filter(|&&q| FRAME_SPACE[q] == address_space::REG)
+        .count();
+    PolyAddress::Memory(1 + 5 * queries.len() as u32 + 2 * rank as u32 + write as u32)
+}
+
 /// `W[slot]`: the high chunk of a query's timestamp gap, `gap >> 19`.
 pub fn gap_hi(slot: usize) -> PolyAddress {
     PolyAddress::Witness(slot as u32)
@@ -132,9 +159,13 @@ pub fn rd_inv(width: usize) -> PolyAddress {
 pub fn rd_is_zero(width: usize) -> PolyAddress {
     PolyAddress::Witness(width as u32 + 1)
 }
-/// `W[width + 2]`: the value `rd` writes where its address is not 0.
+/// `W[width + 2]`: the low word of what `rd` writes where its address is not 0.
 pub fn rd_selected(width: usize) -> PolyAddress {
     PolyAddress::Witness(width as u32 + 2)
+}
+/// `W[width + 3]`: the high word of what `rd` writes where its address is not 0.
+pub fn rd_selected_hi(width: usize) -> PolyAddress {
+    PolyAddress::Witness(width as u32 + 3)
 }
 
 /// The query `rd`, whose writes the x0 gadget masks.
@@ -164,12 +195,14 @@ pub fn frame_queries(family: u32) -> &'static [usize] {
         family::ADD_SUB_LUI_AUIPC => &[PC, RS1, RS2, RD],
         // Register-register, register-immediate, branches and jumps: no RAM
         // query at all.
-        family::JUMP_BRANCH_SLT | family::SHIFT_BITWISE | family::MUL_DIV => &[PC, RS1, RS2, RD],
-        // A load's word at slot 2, a store's at slot 3.
+        family::JUMP_BRANCH_SLT | family::BITWISE | family::MUL_DIV => &[PC, RS1, RS2, RD],
+        // Two RAM words: a sub-word load's at slot 2 and a store's at slot 3,
+        // or a word and a doubleword's high word (`docs/spec/memory-ops.md` §2).
         family::MEM_WORD | family::MEM_SUBWORD => &[PC, RS1, RS2, LOAD, RAM, RD],
-        // The whole A extension keeps its RAM query at slot 3, `lr.w` included
-        // (`docs/spec/execution-trace.md` §7), so it has no `load`.
-        family::ATOMICS => &[PC, RS1, RS2, RAM, RD],
+        // The whole A extension keeps a word's access at slot 3, `lr` included
+        // (`docs/spec/execution-trace.md` §7); a `.d` form's high word is its
+        // `load`, at slot 2.
+        family::ATOMICS => &[PC, RS1, RS2, LOAD, RAM, RD],
         family::INIT_TEARDOWN | family::ZERO_WINDOWS => panic!(
             "family {family} initializes RAM and runs no cycles, so it has no frame; \
              `docs/spec/memory.md` §3.3 is its artifact"
@@ -190,23 +223,26 @@ fn slot(s: u32) -> Coeff {
     Coeff::Challenge(s)
 }
 
-/// Query `query`'s tuple, unmasked, over the frame's columns: its read tuple,
-/// or with `write` its write tuple. Each part's terms go in slot
-/// `constants::memory::PART_*` and are emitted in slot order:
+/// The tuple of the query at slot `at` of `queries`, unmasked, over the
+/// frame's columns: its read tuple, or with `write` its write tuple. Each
+/// part's terms go in slot `constants::memory::PART_*` and are emitted in slot
+/// order:
 ///
 /// ```text
-/// PART_AS    (AS, m)
-/// PART_ADDR  (α_addr, addr)
-/// PART_TS    read: (α_ts, read_ts)       write: (α_ts, cycle) × 4, (α_ts, m) × Δ
-/// PART_VAL   read: (α_val, read_value)   write: (α_val, write_value)
+/// PART_AS      (AS, m)
+/// PART_ADDR    (α_addr, addr)
+/// PART_TS      read: (α_ts, read_ts)       write: (α_ts, cycle) × 4, (α_ts, m) × Δ
+/// PART_VAL     read: (α_val, read_value)   write: (α_val, write_value)
+/// PART_VAL_HI  a register query's: (α_hi, read_hi) or (α_hi, write_hi)
 /// ```
 ///
 /// A coefficient is one literal or one slot, so `α_ts·4·cycle` is a term
 /// repeated four times and `α_ts·Δ·m` one repeated `Δ` times. The read tuple
 /// has one term per part, so its term `PART_*` is that part.
-fn tuple(query: usize, at: usize, write: bool) -> GateDef {
+fn tuple(queries: &[usize], at: usize, write: bool) -> GateDef {
+    let query = queries[at];
     let mask = frame(at, FIELD_MASK);
-    let mut parts: [Vec<(Coeff, PolyAddress)>; 4] = Default::default();
+    let mut parts: [Vec<(Coeff, PolyAddress)>; 5] = Default::default();
     parts[memory::PART_AS] = vec![(lit(FRAME_SPACE[query] as u64), mask)];
     parts[memory::PART_ADDR] = vec![(slot(challenge_slot::MEM_ALPHA_ADDR), frame(at, FIELD_ADDR))];
     let alpha_ts = slot(challenge_slot::MEM_ALPHA_TS);
@@ -223,6 +259,12 @@ fn tuple(query: usize, at: usize, write: bool) -> GateDef {
         true => FIELD_WRITE_VALUE,
     };
     parts[memory::PART_VAL] = vec![(slot(challenge_slot::MEM_ALPHA_VAL), frame(at, value))];
+    if FRAME_SPACE[query] == address_space::REG {
+        parts[memory::PART_VAL_HI] = vec![(
+            slot(challenge_slot::MEM_ALPHA_HI),
+            frame_hi(queries, at, write),
+        )];
+    }
     GateDef::Linear {
         terms: parts.concat(),
         constant: slot(challenge_slot::MEM_GAMMA),
@@ -230,16 +272,17 @@ fn tuple(query: usize, at: usize, write: bool) -> GateDef {
 }
 
 /// Query `query`'s read tuple, unmasked: `γ_M + AS·m + α_addr·addr +
-/// α_ts·read_ts + α_val·read_value`, a `Linear` over the frame's columns whose
-/// term `PART_*` is that part. With `m = 1` it is exactly
-/// `T(AS, addr, read_ts, read_value)` of `docs/spec/memory.md` §1. The
-/// verifier's boundary evaluates it too, at operand values placed by `PART_*`:
-/// `query` 0 is a PC tuple, 1 a REG one.
-/// `query` names both the query and its slot, so this is the tuple as a frame
-/// holding every query would address it. The verifier's boundary reads only
-/// the coefficients and their `PART_*` positions, which no slot changes.
+/// α_ts·read_ts + α_val·read_value`, and `+ α_hi·read_hi` for a register, a
+/// `Linear` over the frame's columns whose term `PART_*` is that part. With
+/// `m = 1` it is exactly `T(AS, addr, read_ts, read_value)` of
+/// `docs/spec/memory.md` §1. The verifier's boundary evaluates it too, at
+/// operand values placed by `PART_*`: `query` 0 is a PC tuple, 1 a REG one.
+/// This is the tuple as a frame holding every query would address it. The
+/// verifier's boundary reads only the coefficients and their `PART_*`
+/// positions, which no slot changes.
 pub fn read_tuple(query: usize) -> GateDef {
-    tuple(query, query, false)
+    let all: [usize; FRAME_QUERIES] = core::array::from_fn(|q| q);
+    tuple(&all, query, false)
 }
 
 /// A product-tree leaf, one flat `Quadratic`: at `mask = 1` the tuple, at
@@ -288,14 +331,10 @@ fn booleanity(mask: PolyAddress) -> GateDef {
     }
 }
 
-/// `write_value − read_value = 0`: a read-only query, `rs1` through `load`,
-/// writes back what it read.
-fn write_back(at: usize) -> GateDef {
+/// `write − read = 0`: what a read-only query writes back is what it read.
+pub fn write_back(read: PolyAddress, write: PolyAddress) -> GateDef {
     GateDef::Linear {
-        terms: vec![
-            (lit(1), frame(at, FIELD_WRITE_VALUE)),
-            (Coeff::Literal(Fp::MINUS_ONE), frame(at, FIELD_READ_VALUE)),
-        ],
+        terms: vec![(lit(1), write), (Coeff::Literal(Fp::MINUS_ONE), read)],
         constant: lit(0),
     }
 }
@@ -303,29 +342,35 @@ fn write_back(at: usize) -> GateDef {
 /// The x0 rule on `rd`, `docs/spec/memory.md` §2.4, with its names:
 ///
 /// ```text
-/// addr·rd_inv + z − m = 0          rd_is_zero_inverse
-/// addr·z = 0                       rd_is_zero_at_nonzero
-/// z − z·z = 0                      rd_is_zero_boolean
-/// write_value − sel + z·sel = 0    rd_write_masked
+/// addr·rd_inv + z − m = 0                rd_is_zero_inverse
+/// addr·z = 0                             rd_is_zero_at_nonzero
+/// z − z·z = 0                            rd_is_zero_boolean
+/// write_value − sel + z·sel = 0          rd_write_masked
+/// write_hi − sel_hi + z·sel_hi = 0       rd_write_masked_hi
 /// ```
 ///
 /// The first two are `gadgets::is_zero` over `addr`, enabled by the mask.
-fn x0_gates(at: usize, width: usize) -> [(&'static str, GateDef); 4] {
+fn x0_gates(queries: &[usize], at: usize) -> [(&'static str, GateDef); 5] {
+    let width = queries.len();
     let (addr, m) = (frame(at, FIELD_ADDR), frame(at, FIELD_MASK));
-    let (inv, z, sel) = (rd_inv(width), rd_is_zero(width), rd_selected(width));
-    let minus = Coeff::Literal(Fp::MINUS_ONE);
+    let (inv, z) = (rd_inv(width), rd_is_zero(width));
     let [inverse, at_nonzero] = gadgets::is_zero(&[(lit(1), addr)], inv, z, m);
+    let masked = |write: PolyAddress, sel: PolyAddress| GateDef::Quadratic {
+        constant: lit(0),
+        linear: vec![(lit(1), write), (Coeff::Literal(Fp::MINUS_ONE), sel)],
+        products: vec![(lit(1), z, sel)],
+    };
     [
         ("rd_is_zero_inverse", inverse),
         ("rd_is_zero_at_nonzero", at_nonzero),
         ("rd_is_zero_boolean", booleanity(z)),
         (
             "rd_write_masked",
-            GateDef::Quadratic {
-                constant: lit(0),
-                linear: vec![(lit(1), frame(at, FIELD_WRITE_VALUE)), (minus, sel)],
-                products: vec![(lit(1), z, sel)],
-            },
+            masked(frame(at, FIELD_WRITE_VALUE), rd_selected(width)),
+        ),
+        (
+            "rd_write_masked_hi",
+            masked(frame_hi(queries, at, true), rd_selected_hi(width)),
         ),
     ]
 }
@@ -389,10 +434,10 @@ fn gap_lookups(query: usize, at: usize) -> [LookupExpr; 2] {
 
 /// The memory subtree an execution family carries, `docs/spec/memory.md` §2,
 /// over `2^trace_vars` rows and the `queries` of [`frame_queries`]: with
-/// `w = queries.len()`, `1 + 5w` `M` columns, `w + 3` `W` columns, `2w` leaves
-/// padded to the next power of two a side, `w` booleanity gates, one
-/// write-back gate per read-only query, the four x0 gates and `2w` gap
-/// obligations. Validated and held to [`check_memory`]; panics if either
+/// `w = queries.len()`, `1 + 5w` `M` columns and two per register query,
+/// `w + 4` `W` columns, `2w` leaves padded to the next power of two a side,
+/// `w` booleanity gates, two write-back gates per read-only query, the five x0
+/// gates and `2w` gap obligations. Validated and held to [`check_memory`]; panics if either
 /// refuses it, or if `queries` is not the pc query followed by a strictly
 /// ascending subset of the table.
 pub fn frame_artifact(queries: &[usize], trace_vars: u32) -> CircuitArtifact {
@@ -416,7 +461,7 @@ pub fn family_frame_artifact(family: u32, trace_vars: u32) -> CircuitArtifact {
 /// them.
 ///
 /// The frame's own columns come first in every subtree, so `witness` starts at
-/// `W[w + 3]` (or `W[w]` for a frame without an `rd` query) and `setup` at
+/// `W[w + 4]` (or `W[w]` for a frame without an `rd` query) and `setup` at
 /// `S[0]`. The frame's `2w` gap obligations come first in the lookup list, so
 /// `lookups` follows them. An empty `FamilySpec` is [`frame_artifact`], the
 /// bare memory frame.
@@ -493,13 +538,20 @@ fn frame_body(
             columns.push(format!("{}_{field}", FRAME_NAMES[query]));
         }
     }
+    for &query in queries {
+        if FRAME_SPACE[query] == address_space::REG {
+            for field in ["read_hi", "write_hi"] {
+                columns.push(format!("{}_{field}", FRAME_NAMES[query]));
+            }
+        }
+    }
     let mut witness: Vec<String> = queries
         .iter()
         .map(|&query| format!("{}_gap_hi", FRAME_NAMES[query]))
         .collect();
     let rd = queries.iter().position(|&query| query == RD);
     if rd.is_some() {
-        for name in ["rd_inv", "rd_is_zero", "rd_selected"] {
+        for name in ["rd_inv", "rd_is_zero", "rd_selected", "rd_selected_hi"] {
             witness.push(String::from(name));
         }
     }
@@ -519,20 +571,31 @@ fn frame_body(
     let mut lookups = gaps;
     for (at, &query) in queries.iter().enumerate() {
         let (name, mask) = (FRAME_NAMES[query], frame(at, FIELD_MASK));
-        reads.push((format!("read_{name}"), leaf(&tuple(query, at, false), mask)));
-        writes.push((format!("write_{name}"), leaf(&tuple(query, at, true), mask)));
+        reads.push((
+            format!("read_{name}"),
+            leaf(&tuple(queries, at, false), mask),
+        ));
+        writes.push((
+            format!("write_{name}"),
+            leaf(&tuple(queries, at, true), mask),
+        ));
         enforcing.push((format!("{name}_mask_boolean"), booleanity(mask)));
     }
     for (at, &query) in queries.iter().enumerate() {
         if FRAME_READ_ONLY.contains(&query) {
+            let name = FRAME_NAMES[query];
             enforcing.push((
-                format!("{}_writes_back", FRAME_NAMES[query]),
-                write_back(at),
+                format!("{name}_writes_back"),
+                write_back(frame(at, FIELD_READ_VALUE), frame(at, FIELD_WRITE_VALUE)),
+            ));
+            enforcing.push((
+                format!("{name}_writes_back_hi"),
+                write_back(frame_hi(queries, at, false), frame_hi(queries, at, true)),
             ));
         }
     }
     if let Some(at) = rd {
-        for (name, gate) in x0_gates(at, width) {
+        for (name, gate) in x0_gates(queries, at) {
             enforcing.push((String::from(name), gate));
         }
     }
@@ -771,10 +834,12 @@ pub(crate) fn assemble(
 // The construction-time rules
 // ---------------------------------------------------------------------------
 
-/// Whether `c` is one of the memory argument's slots, 1 through 5.
+/// Whether `c` is one of the memory argument's slots: 1 through 5, and
+/// `MEM_ALPHA_HI`.
 fn global(c: &Coeff) -> bool {
     let memory_slots = challenge_slot::MEM_GAMMA..=challenge_slot::MEM_WINDOW_CONSTANT;
-    matches!(c, Coeff::Challenge(s) if memory_slots.contains(s))
+    matches!(c, Coeff::Challenge(s)
+        if memory_slots.contains(s) || *s == challenge_slot::MEM_ALPHA_HI)
 }
 
 /// `(names a global slot, reads a W column)` for `gate`, from its own

@@ -24,12 +24,12 @@ use std::fmt;
 pub mod lookup_tables;
 
 use constants::extra_mask::{
-    add_sub_lui_auipc as alu, atomics, jump_branch_slt as jbs, mem_subword, mem_word, mul_div,
-    shift_bitwise as sb, system_code,
+    add_sub_lui_auipc as alu, atomics, bitwise as bw, jump_branch_slt as jbs, mem_subword,
+    mem_word, mul_div as md, system_code, IMM_NEGATIVE,
 };
 use constants::{delegation, family, guest_memory};
 use field::Fp;
-use isa::{decode, Instr};
+use isa::{decode, AmoOp, Instr};
 use loader::{ProgramImage, Slot};
 use pcs::{commit, Commitment, Opener, Setup, Source};
 use poly::{MultilinearPoly, PolyBacking};
@@ -46,7 +46,7 @@ pub type FamilyId = u32;
 pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::ADD_SUB_LUI_AUIPC,
     family::JUMP_BRANCH_SLT,
-    family::SHIFT_BITWISE,
+    family::BITWISE,
     family::MUL_DIV,
     family::MEM_WORD,
     family::MEM_SUBWORD,
@@ -91,7 +91,7 @@ pub fn family_name(family: FamilyId) -> &'static str {
     match family {
         family::ADD_SUB_LUI_AUIPC => "ADD_SUB_LUI_AUIPC",
         family::JUMP_BRANCH_SLT => "JUMP_BRANCH_SLT",
-        family::SHIFT_BITWISE => "SHIFT_BITWISE",
+        family::BITWISE => "BITWISE",
         family::MUL_DIV => "MUL_DIV",
         family::MEM_WORD => "MEM_WORD",
         family::MEM_SUBWORD => "MEM_SUBWORD",
@@ -111,13 +111,14 @@ pub fn family_name(family: FamilyId) -> &'static str {
 /// A total function of the instruction, so a pc can be claimed by one family
 /// and no other. `ecall`, `ebreak` and `fence` share the add/sub/lui/auipc
 /// family's system kind, bit 0; their rows tell them apart by
-/// `constants::extra_mask::system_code` in the `imm` field.
+/// `constants::extra_mask::system_code` in the `imm` field. Every shift is
+/// `MUL_DIV`'s: a product or a quotient by a power of two.
 pub fn row_kind(instr: &Instr) -> (FamilyId, u32) {
     use Instr::*;
-    let (alu_f, jbs_f, sb_f) = (
+    let (alu_f, jbs_f, bw_f) = (
         family::ADD_SUB_LUI_AUIPC,
         family::JUMP_BRANCH_SLT,
-        family::SHIFT_BITWISE,
+        family::BITWISE,
     );
     let (md_f, mw_f, msw_f, at_f) = (
         family::MUL_DIV,
@@ -132,6 +133,9 @@ pub fn row_kind(instr: &Instr) -> (FamilyId, u32) {
         Add { .. } => (alu_f, alu::ADD),
         Sub { .. } => (alu_f, alu::SUB),
         Lui { .. } => (alu_f, alu::LUI),
+        Addiw { .. } => (alu_f, alu::ADDIW),
+        Addw { .. } => (alu_f, alu::ADDW),
+        Subw { .. } => (alu_f, alu::SUBW),
 
         Slti { .. } => (jbs_f, jbs::SLTI),
         Sltiu { .. } => (jbs_f, jbs::SLTIU),
@@ -146,30 +150,44 @@ pub fn row_kind(instr: &Instr) -> (FamilyId, u32) {
         Jalr { .. } => (jbs_f, jbs::JALR),
         Jal { .. } => (jbs_f, jbs::JAL),
 
-        Slli { .. } => (sb_f, sb::SLLI),
-        Xori { .. } => (sb_f, sb::XORI),
-        Srli { .. } => (sb_f, sb::SRLI),
-        Srai { .. } => (sb_f, sb::SRAI),
-        Ori { .. } => (sb_f, sb::ORI),
-        Andi { .. } => (sb_f, sb::ANDI),
-        Sll { .. } => (sb_f, sb::SLL),
-        Xor { .. } => (sb_f, sb::XOR),
-        Srl { .. } => (sb_f, sb::SRL),
-        Sra { .. } => (sb_f, sb::SRA),
-        Or { .. } => (sb_f, sb::OR),
-        And { .. } => (sb_f, sb::AND),
+        Xori { .. } => (bw_f, bw::XORI),
+        Ori { .. } => (bw_f, bw::ORI),
+        Andi { .. } => (bw_f, bw::ANDI),
+        Xor { .. } => (bw_f, bw::XOR),
+        Or { .. } => (bw_f, bw::OR),
+        And { .. } => (bw_f, bw::AND),
 
-        Mul { .. } => (md_f, mul_div::MUL),
-        Mulh { .. } => (md_f, mul_div::MULH),
-        Mulhsu { .. } => (md_f, mul_div::MULHSU),
-        Mulhu { .. } => (md_f, mul_div::MULHU),
-        Div { .. } => (md_f, mul_div::DIV),
-        Divu { .. } => (md_f, mul_div::DIVU),
-        Rem { .. } => (md_f, mul_div::REM),
-        Remu { .. } => (md_f, mul_div::REMU),
+        Mul { .. } => (md_f, md::MUL),
+        Mulh { .. } => (md_f, md::MULH),
+        Mulhsu { .. } => (md_f, md::MULHSU),
+        Mulhu { .. } => (md_f, md::MULHU),
+        Div { .. } => (md_f, md::DIV),
+        Divu { .. } => (md_f, md::DIVU),
+        Rem { .. } => (md_f, md::REM),
+        Remu { .. } => (md_f, md::REMU),
+        Mulw { .. } => (md_f, md::MULW),
+        Divw { .. } => (md_f, md::DIVW),
+        Divuw { .. } => (md_f, md::DIVUW),
+        Remw { .. } => (md_f, md::REMW),
+        Remuw { .. } => (md_f, md::REMUW),
+        Slli { .. } => (md_f, md::SLLI),
+        Srli { .. } => (md_f, md::SRLI),
+        Srai { .. } => (md_f, md::SRAI),
+        Slliw { .. } => (md_f, md::SLLIW),
+        Srliw { .. } => (md_f, md::SRLIW),
+        Sraiw { .. } => (md_f, md::SRAIW),
+        Sll { .. } => (md_f, md::SLL),
+        Srl { .. } => (md_f, md::SRL),
+        Sra { .. } => (md_f, md::SRA),
+        Sllw { .. } => (md_f, md::SLLW),
+        Srlw { .. } => (md_f, md::SRLW),
+        Sraw { .. } => (md_f, md::SRAW),
 
         Lw { .. } => (mw_f, mem_word::LW),
         Sw { .. } => (mw_f, mem_word::SW),
+        Ld { .. } => (mw_f, mem_word::LD),
+        Sd { .. } => (mw_f, mem_word::SD),
+        Lwu { .. } => (mw_f, mem_word::LWU),
 
         Lb { .. } => (msw_f, mem_subword::LB),
         Lh { .. } => (msw_f, mem_subword::LH),
@@ -178,18 +196,15 @@ pub fn row_kind(instr: &Instr) -> (FamilyId, u32) {
         Sb { .. } => (msw_f, mem_subword::SB),
         Sh { .. } => (msw_f, mem_subword::SH),
 
-        AmoaddW { .. } => (at_f, atomics::AMOADD_W),
-        AmoswapW { .. } => (at_f, atomics::AMOSWAP_W),
-        LrW { .. } => (at_f, atomics::LR_W),
-        ScW { .. } => (at_f, atomics::SC_W),
-        AmoxorW { .. } => (at_f, atomics::AMOXOR_W),
-        AmoorW { .. } => (at_f, atomics::AMOOR_W),
-        AmoandW { .. } => (at_f, atomics::AMOAND_W),
-        AmominW { .. } => (at_f, atomics::AMOMIN_W),
-        AmomaxW { .. } => (at_f, atomics::AMOMAX_W),
-        AmominuW { .. } => (at_f, atomics::AMOMINU_W),
-        AmomaxuW { .. } => (at_f, atomics::AMOMAXU_W),
+        // `AmoOp` is numbered as the `.w` kinds are.
+        Amo { op, double, .. } => (at_f, amo_kind(*op, *double)),
     }
+}
+
+/// An atomic's kind bit: its `.w` form's, raised by `atomics::DOUBLE` for `.d`.
+fn amo_kind(op: AmoOp, double: bool) -> u32 {
+    const _: () = assert!(atomics::LR_W == AmoOp::Lr as u32 && atomics::AMOMAXU_W == 10);
+    op as u32 + if double { atomics::DOUBLE } else { 0 }
 }
 
 /// One field of a decoded-table row.
@@ -231,10 +246,11 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
     match family {
         family::ADD_SUB_LUI_AUIPC
         | family::JUMP_BRANCH_SLT
-        | family::SHIFT_BITWISE
+        | family::BITWISE
+        | family::MUL_DIV
         | family::MEM_WORD
         | family::MEM_SUBWORD => &[Pc, NextPc, Rs1, Rs2, Rd, Imm, ExtraMask],
-        family::MUL_DIV | family::ATOMICS => &[Pc, NextPc, Rs1, Rs2, Rd, ExtraMask],
+        family::ATOMICS => &[Pc, NextPc, Rs1, Rs2, Rd, ExtraMask],
         family::INIT_TEARDOWN
         | family::ZERO_WINDOWS
         | family::PUBLIC_INPUT
@@ -288,9 +304,10 @@ pub fn field_mask(family: FamilyId) -> u8 {
 /// A field the form has no use for is 0 — register `x0`, immediate 0 — and
 /// only the fields of the owning family's tuple reach its table. `imm` is the
 /// two's-complement `u32` of the value the instruction uses, or the system
-/// code on a system row. `next_pc` is the sequential fall-through, never a
-/// branch target: `pc + 2` for an instruction that is two bytes in memory,
-/// `pc + 4` otherwise.
+/// code on a system row; the mask's bit `IMM_NEGATIVE` is its sign, the
+/// instruction using its sign extension to 64 bits. `next_pc` is the
+/// sequential fall-through, never a branch target: `pc + 2` for an instruction
+/// that is two bytes in memory, `pc + 4` otherwise.
 fn row_values(instr: &Instr, pc: u32, compressed: bool) -> [u32; 8] {
     let (_, kind) = row_kind(instr);
     let fields = instr.fields();
@@ -308,7 +325,7 @@ fn row_values(instr: &Instr, pc: u32, compressed: bool) -> [u32; 8] {
         fields.rd.unwrap_or(0) as u32,
         imm,
         fields.funct3.unwrap_or(0) as u32,
-        1 << kind,
+        1 << kind | (imm >> 31) << IMM_NEGATIVE,
     ]
 }
 

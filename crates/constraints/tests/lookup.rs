@@ -22,8 +22,8 @@ use field::Fp;
 const FAMILY: u32 = family::JUMP_BRANCH_SLT;
 const VARS: u32 = 20;
 const MASK_BITS: usize = 12;
-/// One `<q>_gap_hi` per query, then the x0 gadget's three.
-const FRAME_WITNESS: u32 = 4 + 3;
+/// One `<q>_gap_hi` per query, then the x0 gadget's four.
+const FRAME_WITNESS: u32 = 4 + 4;
 
 fn lit(v: u64) -> Coeff {
     Coeff::Literal(Fp::from_u64(v))
@@ -415,7 +415,7 @@ fn toy_specs() -> Vec<ChannelSpec> {
         },
         ChannelSpec {
             channel: lookup_channel::GENERIC,
-            table: table(&["generic_key", "generic_v1", "generic_v2"]),
+            table: table(&["generic_tag", "generic_key", "generic_v1", "generic_v2"]),
             multiplicity: mult(lookup_channel::GENERIC),
         },
         ChannelSpec {
@@ -588,7 +588,7 @@ fn a_lookup_narrower_than_its_channels_table_is_refused() {
 /// gate before it validates, so its own assertion is what a caller sees; the
 /// test below is the same rule on a **decoded** artifact, where `validate` is.
 #[test]
-#[should_panic(expected = "expression 1 weights W[10] by a coefficient other than 1")]
+#[should_panic(expected = "expression 1 weights W[11] by a coefficient other than 1")]
 fn a_scaled_term_above_tuple_position_zero_is_refused() {
     build(VARS, |e| {
         e.lookups[1].tuple[1] = GateDef::Linear {

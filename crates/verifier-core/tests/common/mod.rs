@@ -133,7 +133,7 @@ pub fn finals(status: u32) -> BoundaryFinals {
         reg_values: [0; 31],
     };
     b.reg_ts[10] = 4 * 30 + 3;
-    b.reg_values[9] = status;
+    b.reg_values[9] = status.into();
     b
 }
 

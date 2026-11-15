@@ -103,7 +103,7 @@ pub struct StreamingReport {
 /// `max_in_flight` is the backpressure: the number of workers, each holding at
 /// most one shard at a time, and therefore what bounds the peak. It is an
 /// argument and not a constant because the caller is the only one that knows
-/// the machine — a `2^20` `SHIFT_BITWISE` shard's forward pass alone is
+/// the machine — a `2^20` `BITWISE` shard's forward pass alone is
 /// 4.2 GiB (`docs/spec/streaming.md` §1). The work inside each shard runs on
 /// rayon's pool, so
 /// `RAYON_NUM_THREADS` is the cores the shards share and `max_in_flight` is
@@ -243,12 +243,12 @@ fn pass1(
     // proof that verifies, and an answer to a different question. A run whose
     // guest aborted should not need a careful reading to say so, and on this
     // path there is no statement phase to say it anywhere else.
-    if boundary.reg_values[9] != 0 {
+    if (boundary.reg_values[9] as u32) != 0 {
         dlog!(
             Phase,
             "apogee ABORTED  the guest exited {} (x10), journal={}B: this proves an \
              execution that failed, not one that succeeded",
-            boundary.reg_values[9],
+            (boundary.reg_values[9] as u32),
             done.execution.io.output.len()
         );
     }
@@ -256,7 +256,7 @@ fn pass1(
     let statement = PublicInputs {
         input: done.execution.io.input.clone(),
         output: done.execution.io.output.clone(),
-        exit_status: boundary.reg_values[9],
+        exit_status: (boundary.reg_values[9] as u32),
         shard_counts: counts,
         windows,
         boundary,

@@ -156,7 +156,7 @@ tag on no proof path.
 | 18 | `MEMORY_BOUNDARY` | S | G7 |
 | 19 | `PROGRAM_ENTRY` | S | identity: `[entry_pc]` |
 | 20 | `LOOKUP_CHALLENGE` | C | shard: `g`, then `β` ([lookup.md](lookup.md) §2) |
-| 21 | `MEMORY_CHALLENGE` | C | G8, four times |
+| 21 | `MEMORY_CHALLENGE` | C | G8, five times |
 | 22 | `GLOBAL_STATE_DIGEST` | C | G9 |
 | 23 | `SHARD_SEED` | S | shard: `[digest.c0, digest.c1, family, index]` |
 | 24 | `SHARD_TS_WINDOW` | S | shard: `[start, end]` |

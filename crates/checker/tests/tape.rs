@@ -173,7 +173,7 @@ fn swapping_two_absorptions_is_caught_and_changes_every_challenge() {
     let honest = global_commit(&vk, &statement);
 
     let mut forked = swapped_global_commit(&vk, &statement);
-    let mut memory = [Fp2::ZERO; 4];
+    let mut memory = [Fp2::ZERO; 5];
     for slot in memory.iter_mut() {
         *slot = forked.challenge(tags::MEMORY_CHALLENGE);
     }

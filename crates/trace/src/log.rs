@@ -67,8 +67,9 @@ pub struct MemoryEvent {
     /// When the value read was written: the address's previous query, or 0
     /// for its initial value.
     pub read_ts: u64,
-    pub read_value: u32,
-    pub write_value: u32,
+    /// A register's 64 bits, a RAM word's 32, the pc.
+    pub read_value: u64,
+    pub write_value: u64,
 }
 
 impl MemoryEvent {
@@ -89,7 +90,7 @@ pub struct FinalValue {
     pub space: AddressSpace,
     pub addr: u32,
     pub ts: u64,
-    pub value: u32,
+    pub value: u64,
 }
 
 /// Why [`MemoryEventLog::self_check`] refused a log, and where.
@@ -130,11 +131,11 @@ impl fmt::Display for SelfCheckError {
 #[derive(Clone, Debug, Default)]
 pub struct MemoryState {
     /// Per register: the last write's `(ts, value)`, or `None` if untouched.
-    regs: [Option<(u64, u32)>; 32],
-    pc: Option<(u64, u32)>,
+    regs: [Option<(u64, u64)>; 32],
+    pc: Option<(u64, u64)>,
     /// Per RAM word address. A hash map because it is only ever looked up;
     /// everything that reads it out sorts first.
-    ram: HashMap<u32, (u64, u32)>,
+    ram: HashMap<u32, (u64, u64)>,
     /// The last timestamp recorded, so the order rule holds without the events.
     last_ts: Option<u64>,
 }
@@ -157,8 +158,8 @@ impl MemoryState {
         space: AddressSpace,
         addr: u32,
         ts: u64,
-        read_value: u32,
-        write_value: u32,
+        read_value: u64,
+        write_value: u64,
     ) -> MemoryEvent {
         assert!(
             space.holds(addr),
@@ -201,17 +202,17 @@ impl MemoryState {
     }
 
     /// Register `r`'s last write, or `None` if it was never queried.
-    pub fn reg(&self, r: u32) -> Option<(u64, u32)> {
+    pub fn reg(&self, r: u32) -> Option<(u64, u64)> {
         self.regs[r as usize]
     }
 
     /// The pc's last write, or `None` if the execution ran no cycle.
-    pub fn pc(&self) -> Option<(u64, u32)> {
+    pub fn pc(&self) -> Option<(u64, u64)> {
         self.pc
     }
 
     /// RAM word `addr`'s last write, or `None` if it was never written.
-    pub fn ram(&self, addr: u32) -> Option<(u64, u32)> {
+    pub fn ram(&self, addr: u32) -> Option<(u64, u64)> {
         self.ram.get(&addr).copied()
     }
 
@@ -282,7 +283,7 @@ impl MemoryState {
         out
     }
 
-    fn last(&self, space: AddressSpace, addr: u32) -> Option<(u64, u32)> {
+    fn last(&self, space: AddressSpace, addr: u32) -> Option<(u64, u64)> {
         match space {
             AddressSpace::Reg => self.regs[addr as usize],
             AddressSpace::Pc => self.pc,
@@ -334,8 +335,8 @@ impl MemoryEventLog {
         space: AddressSpace,
         addr: u32,
         ts: u64,
-        read_value: u32,
-        write_value: u32,
+        read_value: u64,
+        write_value: u64,
     ) -> MemoryEvent {
         let event = self.state.record(space, addr, ts, read_value, write_value);
         self.events.push(event);
@@ -445,8 +446,8 @@ impl MemoryEventLog {
         }
 
         // +1 per write, -1 per read, keyed by the whole tuple.
-        let mut balance: BTreeMap<(AddressSpace, u32, u64, u32), i64> = BTreeMap::new();
-        let mut last: BTreeMap<(AddressSpace, u32), (u64, u32)> = BTreeMap::new();
+        let mut balance: BTreeMap<(AddressSpace, u32, u64, u64), i64> = BTreeMap::new();
+        let mut last: BTreeMap<(AddressSpace, u32), (u64, u64)> = BTreeMap::new();
         for e in &self.events {
             *balance
                 .entry((e.space, e.addr, e.ts, e.write_value))
@@ -504,11 +505,11 @@ impl MemoryEventLog {
 /// An address's value before the first cycle: 0 for a register, the entry
 /// point for the pc, and the image's bytes for a RAM word — zero wherever no
 /// segment has a file byte.
-fn initial_value(initial: &InitialMemory, space: AddressSpace, addr: u32) -> u32 {
+fn initial_value(initial: &InitialMemory, space: AddressSpace, addr: u32) -> u64 {
     match space {
         AddressSpace::Reg => 0,
-        AddressSpace::Pc => initial.image.entry,
-        AddressSpace::Ram => initial.word(addr),
+        AddressSpace::Pc => initial.image.entry as u64,
+        AddressSpace::Ram => initial.word(addr) as u64,
     }
 }
 

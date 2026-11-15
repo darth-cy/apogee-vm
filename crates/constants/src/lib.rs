@@ -8,7 +8,7 @@
 //! Changing any value here is a protocol change.
 
 /// Protocol version
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// **One tag, one message kind.** The typed layer frames every message as
 /// `tag, length, payload...` and nothing more, so injectivity of the absorbed
@@ -234,8 +234,8 @@ pub mod challenge_slot {
     /// `docs/spec/memory.md` §1.
     pub const MEM_ALPHA_TS: u32 = 3;
 
-    /// `α_val`, the weight of a memory tuple's value. Drawn.
-    /// `docs/spec/memory.md` §1.
+    /// `α_val`, the weight of a memory tuple's value, or of its low word for a
+    /// register. Drawn. `docs/spec/memory.md` §1.
     pub const MEM_ALPHA_VAL: u32 = 4;
 
     /// A RAM window shard's constant `γ_M + RAM + α_addr·4h·w`. **Derived,
@@ -287,8 +287,13 @@ pub mod challenge_slot {
     /// constant.
     pub const LOOKUP_DECODER_NEUTRAL: u32 = 13;
 
+    /// `α_hi`, the weight of a register value's high word: a register holds 64
+    /// bits as two words, and one weighted sum of both would not be injective
+    /// below `p`. Drawn, right after [`MEM_ALPHA_VAL`]. `docs/spec/memory.md` §1.
+    pub const MEM_ALPHA_HI: u32 = 14;
+
     /// Every slot's display name, indexed by slot number.
-    pub const NAMES: [&str; 14] = [
+    pub const NAMES: [&str; 15] = [
         "toy",
         "mem_gamma",
         "mem_alpha_addr",
@@ -303,6 +308,7 @@ pub mod challenge_slot {
         "lookup_beta_5",
         "lookup_beta_6",
         "lookup_decoder_neutral",
+        "mem_alpha_hi",
     ];
 }
 
@@ -358,48 +364,40 @@ pub mod lookup_channel {
     pub const MAX_TUPLE: usize = 7;
 }
 
-/// The generic channel's packed table: its width and key bases.
+/// The generic channel's table: its width and sub-table tags.
 /// `crates/program`'s `lookup_tables` builds the table; its numbers live here
-/// because a circuit, which cannot depend on `program`, builds keys into it.
+/// because a circuit, which cannot depend on `program`, names them.
 /// `docs/spec/lookup.md` §9.
 ///
+/// Every row is `(tag + 1, key, v1, v2)`, and the tag names its sub-table, so a
+/// lookup's key is bounded by the sub-table it names and never by an
+/// obligation of its own:
+///
 /// ```text
-/// row 0                     the ZeroEntry, all zero
-/// rows 1 ..= 2^16           AND:         (AND_BASE   + a + 1,  b,        a & b)
-/// rows 2^16+1 ..= 2^17      U16GetSign:  (SIGN_BASE  + h + 1,  h >> 15,  0)
-/// rows 2^17+1 ..= 2^17+32   ShiftPowers: (SHIFT_BASE + s + 1,  2^s,      2^(31−s))
+/// row 0                        the ZeroEntry, all zero
+/// rows 1 ..= 2^16              AND:     (AND + 1,    a, b,       a & b)     a, b < 2^8
+/// rows 2^16+1 ..= 2^17         SIGN:    (SIGN + 1,   h, h >> 15, 0)         h < 2^16
+/// rows 2^17+1 ..= 2^17+64      POW:     (POW + 1,    s, 2^s as (lo, hi))    s < 64
+/// rows 2^17+65 ..= 2^17+96     POW_W:   (POW_W + 1,  s, 2^s,     0)         s < 32
 /// ```
 pub mod generic_table {
-    /// The table's tuple width: a key and two values.
-    pub const WIDTH: usize = 3;
+    /// The table's tuple width: a tag, a key and two values.
+    pub const WIDTH: usize = 4;
 
-    /// The AND byte table's key base: its keys are `AND_BASE + a + 1` for
-    /// `a < 256`.
-    pub const AND_BASE: u32 = 0;
+    /// The AND byte table: `(a, b, a & b)` over bytes.
+    pub const AND: u32 = 0;
 
-    /// `U16GetSign`'s key base, one past the AND table's highest key: its keys
-    /// are `SIGN_BASE + h + 1` for every halfword `h`, disjoint from AND's.
-    pub const SIGN_BASE: u32 = 256;
+    /// `SIGN`: a halfword and its bit 15.
+    pub const SIGN: u32 = 1;
 
-    /// `ShiftPowers`' key base, one past `U16GetSign`'s highest key: its keys
-    /// are `SHIFT_BASE + s + 1` for every shift amount `s < 32`, disjoint from
-    /// both ranges below it.
-    pub const SHIFT_BASE: u32 = SIGN_BASE + (1 << 16);
+    /// The 64-bit shift powers: an amount below 64 and `2^s` as a register's
+    /// two words.
+    pub const POW: u32 = 2;
 
-    /// `ShiftPowers`' rows: one per shift amount a RV32 shift can take and
-    /// none other, so a key past the last of them matches no row of the packed
-    /// table at all (`docs/spec/shift-bitwise.md` §3.1).
-    pub const SHIFT_ROWS: usize = 32;
-
-    /// The exponent `ShiftPowers`' two values sum to: row `s` is
-    /// `(2^s, 2^(SHIFT_COPOWER_BITS − s))`, so their product is
-    /// `2^SHIFT_COPOWER_BITS` on every row.
-    ///
-    /// **It is 31, not 32.** The copower a residue bound needs is `2^(32 − s)`,
-    /// which at `s = 0` is `2^32` and does not fit the packed table's `u32`
-    /// columns; the table stores half of it and the two gates that read it
-    /// carry the compensating factor 2 (`docs/spec/shift-bitwise.md` §3.1).
-    pub const SHIFT_COPOWER_BITS: u32 = 31;
+    /// The 32-bit shift powers: an amount below 32 and `2^s`, the high word 0.
+    /// A sub-table of its own so a W shift's amount is bounded below 32 by the
+    /// tag it names (`docs/spec/mul-div.md` §2).
+    pub const POW_W: u32 = 3;
 }
 
 /// The circuit families, by number. A family number is never reassigned.
@@ -419,15 +417,16 @@ pub mod family {
     pub const ADD_SUB_LUI_AUIPC: u32 = 0;
     /// `jal`, `jalr`, the six branches, `slt`, `sltu`, `slti`, `sltiu`.
     pub const JUMP_BRANCH_SLT: u32 = 1;
-    /// The six shifts and the six bitwise operations.
-    pub const SHIFT_BITWISE: u32 = 2;
-    /// The eight M-extension operations.
+    /// `and`, `or`, `xor` and their immediate forms.
+    pub const BITWISE: u32 = 2;
+    /// The M extension, its W forms, and every shift: a product or a quotient
+    /// by a power of two.
     pub const MUL_DIV: u32 = 3;
-    /// `lw`, `sw`.
+    /// `ld`, `sd`, `lw`, `lwu`, `sw`.
     pub const MEM_WORD: u32 = 4;
     /// `lb`, `lh`, `lbu`, `lhu`, `sb`, `sh`.
     pub const MEM_SUBWORD: u32 = 5;
-    /// `lr.w`, `sc.w` and the nine AMOs.
+    /// `lr`, `sc` and the nine AMOs, each in `.w` and `.d`.
     pub const ATOMICS: u32 = 6;
     /// Memory initialisation and teardown of RAM window 0, the image window:
     /// exactly one shard. Claims no pc; present in every `VmConfig`, at the
@@ -512,7 +511,7 @@ pub mod family {
     pub const CYCLE_OWNING: [bool; COUNT as usize] = [
         true,  // ADD_SUB_LUI_AUIPC
         true,  // JUMP_BRANCH_SLT
-        true,  // SHIFT_BITWISE
+        true,  // BITWISE
         true,  // MUL_DIV
         true,  // MEM_WORD
         true,  // MEM_SUBWORD
@@ -553,7 +552,7 @@ pub mod family {
     pub const DEFAULT_HEIGHTS: [u32; COUNT as usize] = [
         1 << 22, // ADD_SUB_LUI_AUIPC
         1 << 22, // JUMP_BRANCH_SLT
-        1 << 22, // SHIFT_BITWISE
+        1 << 22, // BITWISE
         1 << 20, // MUL_DIV
         1 << 22, // MEM_WORD
         1 << 22, // MEM_SUBWORD
@@ -571,7 +570,7 @@ pub mod family {
 
     /// The version of the decoded-table construction. Absorbed first into the
     /// program-identity sponge. Changing it re-registers every program.
-    pub const CODE_VERSION: u32 = 0;
+    pub const CODE_VERSION: u32 = 1;
 }
 
 /// The bit positions of `family_extra_mask`, per family. A bit position is
@@ -586,8 +585,16 @@ pub mod family {
 ///
 /// Within a family the bits are in canonical ascending order: ascending
 /// `(opcode, funct3, funct7)` of the encoding, `funct5` for the atomics. The
-/// system kind is pinned to bit 0 ahead of that order.
+/// system kind is pinned to bit 0 ahead of that order. The 64-bit-only forms
+/// follow the forms they extend.
+///
+/// Bit [`IMM_NEGATIVE`] is the row's immediate's sign, not a kind.
 pub mod extra_mask {
+    /// The bit a live row sets when its immediate is negative: the instruction
+    /// uses the 64-bit sign extension of the table's `imm` word, whose high
+    /// word is `2^32 − 1` times this bit (`docs/spec/program.md` §6).
+    pub const IMM_NEGATIVE: u32 = 31;
+
     /// `family::ADD_SUB_LUI_AUIPC`.
     pub mod add_sub_lui_auipc {
         pub const SYSTEM: u32 = 0;
@@ -596,6 +603,9 @@ pub mod extra_mask {
         pub const ADD: u32 = 3;
         pub const SUB: u32 = 4;
         pub const LUI: u32 = 5;
+        pub const ADDIW: u32 = 6;
+        pub const ADDW: u32 = 7;
+        pub const SUBW: u32 = 8;
     }
 
     /// `family::JUMP_BRANCH_SLT`.
@@ -614,20 +624,14 @@ pub mod extra_mask {
         pub const JAL: u32 = 11;
     }
 
-    /// `family::SHIFT_BITWISE`.
-    pub mod shift_bitwise {
-        pub const SLLI: u32 = 0;
-        pub const XORI: u32 = 1;
-        pub const SRLI: u32 = 2;
-        pub const SRAI: u32 = 3;
-        pub const ORI: u32 = 4;
-        pub const ANDI: u32 = 5;
-        pub const SLL: u32 = 6;
-        pub const XOR: u32 = 7;
-        pub const SRL: u32 = 8;
-        pub const SRA: u32 = 9;
-        pub const OR: u32 = 10;
-        pub const AND: u32 = 11;
+    /// `family::BITWISE`.
+    pub mod bitwise {
+        pub const XORI: u32 = 0;
+        pub const ORI: u32 = 1;
+        pub const ANDI: u32 = 2;
+        pub const XOR: u32 = 3;
+        pub const OR: u32 = 4;
+        pub const AND: u32 = 5;
     }
 
     /// `family::MUL_DIV`.
@@ -640,12 +644,32 @@ pub mod extra_mask {
         pub const DIVU: u32 = 5;
         pub const REM: u32 = 6;
         pub const REMU: u32 = 7;
+        pub const MULW: u32 = 8;
+        pub const DIVW: u32 = 9;
+        pub const DIVUW: u32 = 10;
+        pub const REMW: u32 = 11;
+        pub const REMUW: u32 = 12;
+        pub const SLLI: u32 = 13;
+        pub const SRLI: u32 = 14;
+        pub const SRAI: u32 = 15;
+        pub const SLLIW: u32 = 16;
+        pub const SRLIW: u32 = 17;
+        pub const SRAIW: u32 = 18;
+        pub const SLL: u32 = 19;
+        pub const SRL: u32 = 20;
+        pub const SRA: u32 = 21;
+        pub const SLLW: u32 = 22;
+        pub const SRLW: u32 = 23;
+        pub const SRAW: u32 = 24;
     }
 
     /// `family::MEM_WORD`.
     pub mod mem_word {
         pub const LW: u32 = 0;
         pub const SW: u32 = 1;
+        pub const LD: u32 = 2;
+        pub const SD: u32 = 3;
+        pub const LWU: u32 = 4;
     }
 
     /// `family::MEM_SUBWORD`.
@@ -658,8 +682,9 @@ pub mod extra_mask {
         pub const SH: u32 = 5;
     }
 
-    /// `family::ATOMICS`, ascending `funct5`. `aq` and `rl` are not recorded:
-    /// on a single hart they order nothing.
+    /// `family::ATOMICS`, ascending `funct5`, the `.w` forms and then the `.d`
+    /// ones in the same order, bit `k + DOUBLE` being bit `k`'s `.d` form. `aq`
+    /// and `rl` are not recorded: on a single hart they order nothing.
     pub mod atomics {
         pub const AMOADD_W: u32 = 0;
         pub const AMOSWAP_W: u32 = 1;
@@ -672,6 +697,19 @@ pub mod extra_mask {
         pub const AMOMAX_W: u32 = 8;
         pub const AMOMINU_W: u32 = 9;
         pub const AMOMAXU_W: u32 = 10;
+        /// How far a `.d` form's bit sits above its `.w` form's.
+        pub const DOUBLE: u32 = 11;
+        pub const AMOADD_D: u32 = AMOADD_W + DOUBLE;
+        pub const AMOSWAP_D: u32 = AMOSWAP_W + DOUBLE;
+        pub const LR_D: u32 = LR_W + DOUBLE;
+        pub const SC_D: u32 = SC_W + DOUBLE;
+        pub const AMOXOR_D: u32 = AMOXOR_W + DOUBLE;
+        pub const AMOOR_D: u32 = AMOOR_W + DOUBLE;
+        pub const AMOAND_D: u32 = AMOAND_W + DOUBLE;
+        pub const AMOMIN_D: u32 = AMOMIN_W + DOUBLE;
+        pub const AMOMAX_D: u32 = AMOMAX_W + DOUBLE;
+        pub const AMOMINU_D: u32 = AMOMINU_W + DOUBLE;
+        pub const AMOMAXU_D: u32 = AMOMAXU_W + DOUBLE;
     }
 
     /// The `imm` of a system row, which is how its one mask bit tells its
@@ -687,7 +725,7 @@ pub mod extra_mask {
 
 /// The guest memory map.
 ///
-/// RAM is the one region a program is loaded into. `crates/guest-sdk/link.ld`
+/// RAM is the one region a program is loaded into. `crates/guest-sdk/apogee.ld`
 /// states the same two numbers for the linker, and
 /// `crates/constants/tests/memory.rs` holds it to these.
 ///
@@ -709,7 +747,7 @@ pub mod guest_memory {
     /// `STACK_RESERVE` bytes below `RAM_ORIGIN + RAM_LENGTH`, nor one above
     /// the live `sp`. 8 MiB: a native main thread's default stack on Linux and
     /// macOS, so a program whose call depth fits on the host fits here. Not
-    /// part of the linker's map — `link.ld` has no symbol for it — but a
+    /// part of the linker's map — `apogee.ld` has no symbol for it — but a
     /// number the SDK and its documents agree on.
     pub const STACK_RESERVE: u32 = 0x0080_0000;
 
@@ -809,7 +847,9 @@ pub mod ecall {
 /// with `REG = 0` it would be the all-zero tuple — the same reason the decoded
 /// tables pad with `MINUS_ONE` rather than 0. A tag is never reassigned.
 pub mod address_space {
-    /// The 32 registers. A query's address is the register index, `0..32`.
+    /// The 32 registers. A query's address is the register index, `0..32`,
+    /// and its value a 64-bit register as two words: the one space whose tuples
+    /// carry a high word (`docs/spec/memory.md` §1).
     pub const REG: u8 = 1;
     /// Guest RAM, word-granular. A query's address is the byte address of the
     /// 4-aligned word, so always a multiple of 4.
@@ -842,8 +882,9 @@ pub mod memory {
     pub const HALT_PC: u32 = 1;
 
     /// A memory tuple's parts, in order: `AS`, added unweighted; then `ADDR`,
-    /// `TS` and `VAL`, weighted by `α_addr`, `α_ts` and `α_val`.
-    /// `docs/spec/memory.md` §1.
+    /// `TS`, `VAL` and `VAL_HI`, weighted by `α_addr`, `α_ts`, `α_val` and
+    /// `α_hi`. `VAL_HI` is a register's high word, absent from a `RAM` or `PC`
+    /// tuple. `docs/spec/memory.md` §1.
     pub const PART_AS: usize = 0;
     /// The tuple's address part.
     pub const PART_ADDR: usize = 1;
@@ -851,6 +892,8 @@ pub mod memory {
     pub const PART_TS: usize = 2;
     /// The tuple's value part.
     pub const PART_VAL: usize = 3;
+    /// The tuple's high-word part: a register's bits 32–63.
+    pub const PART_VAL_HI: usize = 4;
 
     /// The output-map position of every memory artifact's read root: the
     /// product of its read tuples. `docs/spec/memory.md` §1.

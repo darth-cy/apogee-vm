@@ -37,7 +37,7 @@ fn the_vm_config_wire_form_is_frozen_and_round_trips() {
     for (f, h) in [
         (family::ADD_SUB_LUI_AUIPC, 1 << 22),
         (family::JUMP_BRANCH_SLT, 1 << 22),
-        (family::SHIFT_BITWISE, 1 << 22),
+        (family::BITWISE, 1 << 22),
         (family::MUL_DIV, 1 << 20),
         (family::MEM_WORD, 1 << 22),
         (family::MEM_SUBWORD, 1 << 22),

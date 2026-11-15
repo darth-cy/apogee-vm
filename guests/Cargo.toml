@@ -1,10 +1,10 @@
 # The guest workspace. Separate from the repository's root workspace because
-# every member compiles for `riscv32imac-unknown-none-elf` and links a
+# every member compiles for `riscv64imac-unknown-none-elf` and links a
 # `#[panic_handler]`; `cargo test --workspace` at the root must not reach them.
 #
 # Build a guest from *its own directory*:
 #
-#     cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
+#     cd guests/fib && cargo build --target riscv64imac-unknown-none-elf
 #
 # `.cargo/config.toml` beside this file supplies the target and the pinned
 # linker flags; `rust-toolchain.toml` at the repository root supplies the

@@ -2,7 +2,7 @@
 //! §4: a window shard's derived challenge, the register and PC boundary, and
 //! the reconciliation of every shard's roots.
 
-use constants::memory::{HALT_PC, PART_ADDR, PART_AS, PART_TS, PART_VAL};
+use constants::memory::{HALT_PC, PART_ADDR, PART_AS, PART_TS, PART_VAL, PART_VAL_HI};
 use constants::{address_space, challenge_slot};
 use constraints::memory::read_tuple;
 use constraints::MAX_TRACE_VARS;
@@ -10,12 +10,12 @@ use field::{Fp, Fp2};
 
 use crate::{eval_gate, ExternalChallenges};
 
-/// The register and PC finals a proof carries: `docs/spec/memory.md` §4.1's 64
+/// The register and PC finals a proof carries: `docs/spec/memory.md` §4.1's 95
 /// boundary scalars, which the `MEMORY_BOUNDARY` message absorbs in this order:
-/// `reg_ts[0..32]` (`t_0 … t_31`), `pc_ts` (`t_pc`), `reg_values[0..31]`
-/// (`v_1 … v_31`). `reg_values[i]` is register `x_{i+1}`'s; `x0`'s final value
-/// is the constant 0 and the pc's the constant `HALT_PC`, and neither is
-/// carried.
+/// `reg_ts[0..32]` (`t_0 … t_31`), `pc_ts` (`t_pc`), the low words of
+/// `reg_values[0..31]` (`v_1 … v_31`), then their high words.
+/// `reg_values[i]` is register `x_{i+1}`'s; `x0`'s final value is the constant
+/// 0 and the pc's the constant `HALT_PC`, and neither is carried.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BoundaryFinals {
     /// Register `x_r`'s final timestamp: its last query's write, 0 if never
@@ -24,7 +24,7 @@ pub struct BoundaryFinals {
     /// The pc's final timestamp: the last cycle's pc write. Not a cycle count.
     pub pc_ts: u64,
     /// Register `x_{i+1}`'s final value: its last write, 0 if never queried.
-    pub reg_values: [u32; 31],
+    pub reg_values: [u64; 31],
 }
 
 /// The challenges one RAM window shard's artifact reads: slots `MEM_GAMMA`
@@ -78,8 +78,9 @@ pub fn window_challenges(
 /// Every tuple is the circuits' own tuple gate through the kernel:
 /// `constraints::memory::read_tuple` of query 0 (PC) or 1 (REG), whose term
 /// `PART_*` is that part, at operand values placed by the same constants: the
-/// mask 1 at `PART_AS`, then `addr`, `ts` and `value`. `memory` holds slots 1
-/// to 4; the kernel panics on a missing one.
+/// mask 1 at `PART_AS`, then `addr`, `ts`, the value's low word and its high
+/// word, which a PC tuple has no term for. `memory` holds slots 1 to 4 and
+/// `MEM_ALPHA_HI`; the kernel panics on a missing one.
 pub fn boundary_factors(
     memory: &ExternalChallenges,
     entry_pc: u32,
@@ -87,11 +88,12 @@ pub fn boundary_factors(
 ) -> (Fp2, Fp2) {
     let (pc, reg) = (read_tuple(0), read_tuple(1));
     let tuple = |gate, addr: u64, ts: u64, value: u64| {
-        let mut values = [Fp2::ZERO; 4];
+        let mut values = [Fp2::ZERO; 5];
         values[PART_AS] = Fp2::ONE;
         values[PART_ADDR] = Fp::from_u64(addr).into();
         values[PART_TS] = Fp::from_u64(ts).into();
-        values[PART_VAL] = Fp::from_u64(value).into();
+        values[PART_VAL] = Fp::from_u64(value & u32::MAX as u64).into();
+        values[PART_VAL_HI] = Fp::from_u64(value >> 32).into();
         eval_gate(gate, &values, memory)
     };
     let mut write = tuple(&pc, 0, 0, entry_pc as u64);
@@ -99,7 +101,7 @@ pub fn boundary_factors(
     for r in 0..32 {
         let value = if r == 0 { 0 } else { finals.reg_values[r - 1] };
         write *= tuple(&reg, r as u64, 0, 0);
-        read *= tuple(&reg, r as u64, finals.reg_ts[r], value as u64);
+        read *= tuple(&reg, r as u64, finals.reg_ts[r], value);
     }
     (write, read)
 }

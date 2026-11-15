@@ -3,7 +3,7 @@
 #
 # Fields: word (hex, as an integer), format, why. Near misses of every
 # format that has a fixed field -- R, I, S, B, AMO, SYSTEM, MISC-MEM --
-# plus encodings of extensions RV32IMAC does not have -- `extension` inside
+# plus encodings of extensions RV64IMAC does not have -- `extension` inside
 # its own opcodes, `opcode` for foreign major opcodes -- and the
 # compressed shapes the loader expands before anything is decoded. U
 # and J have no entry: every non-opcode bit of theirs is an operand, so
@@ -13,42 +13,46 @@
 403170b3 R OP funct7 0100000 with funct3 111
 803100b3 R OP funct7 1000000 names nothing
 063100b3 R OP funct7 0000011, one bit from mul
-40511093 I slli funct7 0100000
-02511093 I slli with shamt[5] set: RV64 only
-02515093 I srli with shamt[5] set: RV64 only
-42515093 I srai with shamt[5] set: RV64 only
-04515093 I shift-right funct7 0000010 names nothing
-00813083 I load funct3 011 is RV64's ld
-00816083 I load funct3 110 is RV64's lwu
-00817083 I load funct3 111 is reserved
+003120bb R OP-32 funct3 010: there is no sltw
+023110bb R OP-32 funct7 0000001 with funct3 001: there is no mulhw
+403110bb R OP-32 funct7 0100000 with funct3 001
+40511093 I slli funct6 010000
+04515093 I shift-right funct6 000001 names nothing
+0251109b I slliw with shamt[5] set: a word shift has five bits
+0251509b I srliw with shamt[5] set
+4251509b I sraiw with shamt[5] set
+4051109b I slliw funct7 0100000
+0081209b I OP-IMM-32 funct3 010: there is no sltiw
+0081709b I OP-IMM-32 funct3 111: there is no andiw
+00817083 I load funct3 111 is RV128's ldu
 008110e7 I jalr funct3 001
 008170e7 I jalr funct3 111
-00313423 S store funct3 011 is RV64's sd
-00314423 S store funct3 100 is reserved
+00314423 S store funct3 100 is RV128's sq
 00317423 S store funct3 111 is reserved
 00312463 B branch funct3 010 is reserved
 00313463 B branch funct3 011 is reserved
-003130af AMO amoadd.d: funct3 011 is RV64's width
-003100af AMO amoadd.b: Zabha's byte width, which RV32IMAC does not have
+003140af AMO amoadd.q: funct3 100 is RV128's width
+003100af AMO amoadd.b: Zabha's byte width, which RV64IMAC does not have
 105120af AMO lr.w with rs2 = x5: rs2 must be x0
-283120af AMO amocas.w: Zacas, which RV32IMAC does not have
+105130af AMO lr.d with rs2 = x5: rs2 must be x0
+283130af AMO amocas.d: Zacas, which RV64IMAC does not have
 fe3120af AMO AMO funct5 11111 names nothing
 000000f3 SYSTEM ecall with rd = x1
 00008073 SYSTEM ecall with rs1 = x1
 001000f3 SYSTEM ebreak with rd = x1
-00200073 SYSTEM funct12 2: uret, which RV32IMAC does not have
+00200073 SYSTEM funct12 2: uret, which RV64IMAC does not have
 30200073 extension mret: privileged
 10500073 extension wfi: privileged
 12000073 SYSTEM sfence.vma: privileged
 c0002573 extension csrrs a0, cycle, zero: Zicsr
 0000100f MISC-MEM fence.i: Zifencei
-0000200f MISC-MEM cbo.inval: Zicbom, which RV32IMAC does not have
+0000200f MISC-MEM cbo.inval: Zicbom, which RV64IMAC does not have
 0005a507 opcode flw: F extension
 00a5a027 opcode fsw: F extension
 00b57553 opcode fadd.s: F extension
 60000043 opcode fmadd: F extension
-0015051b opcode addiw: RV64's OP-IMM-32
-00b5053b opcode addw: RV64's OP-32
+0000005b opcode OP-IMM-64: RV128's, custom-2 elsewhere
+0000007b opcode OP-64: RV128's, custom-3 elsewhere
 0000000b opcode custom-0
 00000057 opcode OP-V: the vector extension
 0000001f opcode bits 4:2 = 111: a 48-bit encoding

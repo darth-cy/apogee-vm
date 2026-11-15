@@ -345,13 +345,13 @@ pub struct StatementInputs {
 
 /// What the global commit phase yields, and every shard's proof starts from:
 /// the statement it committed — a `PublicInputs` with no roots yet — the
-/// global transcript after its last squeeze, the four memory challenges and
+/// global transcript after its last squeeze, the five memory challenges and
 /// the global state digest.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GlobalCommitState {
     pub statement: PublicInputs,
     pub transcript: TranscriptSnapshot,
-    pub memory_challenges: [Fp2; 4],
+    pub memory_challenges: [Fp2; verifier_core::MEMORY_CHALLENGES],
     pub digest: Fp2,
 }
 
@@ -424,7 +424,7 @@ pub fn statement_inputs(
         windows,
         archive.io_streams().input.len(),
         archive.io_streams().output.len(),
-        boundary.reg_values[9],
+        (boundary.reg_values[9] as u32),
         archive.cycle_profile().total()
     );
     // **A nonzero exit status, on a line of its own.** It is one field among
@@ -432,12 +432,12 @@ pub fn statement_inputs(
     // published whatever it had committed so far — a journal that decodes, a
     // proof that verifies, and an answer to a different question. A run whose
     // guest aborted should not need a careful reading of a dense line to say so.
-    if boundary.reg_values[9] != 0 {
+    if (boundary.reg_values[9] as u32) != 0 {
         dlog!(
             Phase,
             "apogee ABORTED  the guest exited {} (x10), journal={}B: this proves an \
              execution that failed, not one that succeeded",
-            boundary.reg_values[9],
+            (boundary.reg_values[9] as u32),
             archive.io_streams().output.len()
         );
     }
@@ -457,7 +457,7 @@ pub fn statement_inputs(
     Ok(StatementInputs {
         input: io.input.clone(),
         output: io.output.clone(),
-        exit_status: boundary.reg_values[9],
+        exit_status: (boundary.reg_values[9] as u32),
         shard_counts: counts,
         windows,
         boundary,
@@ -524,7 +524,7 @@ pub(crate) fn global_commit_of(vk: &VerifyingKey, statement: PublicInputs) -> Gl
         Phase,
         "apogee commit   done digest={} memory-challenges={}",
         debug::hex(&global.digest.to_bytes()),
-        debug::fp2s(&global.memory, 4)
+        debug::fp2s(&global.memory, verifier_core::MEMORY_CHALLENGES)
     );
     GlobalCommitState {
         statement,

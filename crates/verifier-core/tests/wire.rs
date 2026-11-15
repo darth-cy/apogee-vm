@@ -106,7 +106,7 @@ fn the_layouts_are_the_specs() {
     let public = statement();
     let b = public.to_bytes();
     // input (4 + 3), output (4), status, counts (4 + 24 — six families),
-    // windows (4), then the 64 boundary scalars of 8 bytes: x10's value is
+    // windows (4), then the 95 boundary scalars of 8 bytes: x10's low word is
     // scalar 33 + 9.
     let boundary = 7 + 4 + 4 + (4 + 4 * 6) + 4;
     assert_eq!(u32::from_le_bytes(b[11..15].try_into().unwrap()), 42);
@@ -116,7 +116,7 @@ fn the_layouts_are_the_specs() {
     );
     // Four shards' memory commitments, then their root pairs of two 16-byte
     // `Fp2` values: the init window, add/sub, and the two public windows.
-    let commitments = boundary + 64 * 8;
+    let commitments = boundary + 95 * 8;
     assert_eq!(
         u32::from_le_bytes(b[commitments..commitments + 4].try_into().unwrap()),
         4
@@ -232,7 +232,8 @@ fn the_readers_refuse_rather_than_panic() {
     // range: refused, not truncated to the honest statement.
     for (at, reason) in [
         (boundary + 10 * 8, "a boundary timestamp is not below 2^38"),
-        (boundary + 42 * 8, "a boundary value is not below 2^32"),
+        (boundary + 42 * 8, "a boundary value word is not below 2^32"),
+        (boundary + 73 * 8, "a boundary value word is not below 2^32"),
     ] {
         let mut wide = public.clone();
         wide[at + 7] ^= 1;
@@ -243,13 +244,17 @@ fn the_readers_refuse_rather_than_panic() {
             at + 7
         );
     }
-    let mut v = public.clone();
-    let v1 = boundary + 33 * 8;
-    v[v1..v1 + 8].copy_from_slice(&Fp::from_u64(1 << 32).to_bytes());
-    assert_eq!(
-        PublicInputs::from_bytes(&v),
-        Err("a boundary value is not below 2^32")
-    );
+    // x1's low word, then its high word, at 2^32: each scalar is one word.
+    for at in [33, 64] {
+        let mut v = public.clone();
+        let word = boundary + at * 8;
+        v[word..word + 8].copy_from_slice(&Fp::from_u64(1 << 32).to_bytes());
+        assert_eq!(
+            PublicInputs::from_bytes(&v),
+            Err("a boundary value word is not below 2^32"),
+            "scalar {at}"
+        );
+    }
 
     // Both keys, `jbs_vk`'s with its family reading the generic table.
     for honest in [vk(), jbs_vk()] {
@@ -300,8 +305,8 @@ fn a_key_that_breaks_a_load_rule_is_refused() {
     let mut cases: Vec<(&str, VerifyingKey)> = Vec::new();
 
     let mut k = honest.clone();
-    k.code_version = 1;
-    cases.push(("code version 1", k));
+    k.code_version = 2;
+    cases.push(("code version 2", k));
     let mut k = honest.clone();
     k.identity.0[0] += Fp::ONE;
     cases.push(("the identity is not the digest", k));

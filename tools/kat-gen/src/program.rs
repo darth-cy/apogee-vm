@@ -13,9 +13,10 @@ pub fn generate() {
     mul_free();
 }
 
-/// A program with no M and no A instruction: base loads and stores, both
-/// memory families, a branch, a jump, an ecall — so its derived config holds
-/// every instruction family except mul/div and atomics.
+/// A program with no M, no A and no shift instruction: base loads and stores,
+/// both memory families, a branch, a jump, an ecall — so its derived config
+/// holds every instruction family except mul/div (which the shifts route to)
+/// and atomics.
 fn mul_free() {
     let words = [
         i(10, 0, 0b000, 10, 0x13),     // addi a0, zero, 10
@@ -25,7 +26,7 @@ fn mul_free() {
         i(0, 2, 0b010, 11, 0x03),      // lw a1, 0(sp)
         i(1, 2, 0b100, 12, 0x03),      // lbu a2, 1(sp)
         r(0, 12, 11, 0b100, 13, 0x33), // xor a3, a1, a2
-        i(2, 13, 0b001, 13, 0x13),     // slli a3, a3, 2
+        i(2, 13, 0b000, 13, 0x1b),     // addiw a3, a3, 2
         b(8, 0, 13, 0b000),            // beq a3, zero, +8
         j(4, 0),                       // jal zero, +4
         i(93, 0, 0b000, 17, 0x13),     // addi a7, zero, 93
@@ -36,7 +37,7 @@ fn mul_free() {
         .expect("creating crates/program/tests/vectors");
     crate::write_bytes(
         "crates/program/tests/vectors/mul_free.elf",
-        &ElfBuilder::rv32_exec(&text).build(),
+        &ElfBuilder::rv64_exec(&text).build(),
     );
 }
 

@@ -1,4 +1,4 @@
-//! `crates/isa`'s fixtures: a hand-encoded corpus of every RV32IMA mnemonic,
+//! `crates/isa`'s fixtures: a hand-encoded corpus of every RV64IMA mnemonic,
 //! llvm-objdump's reading of it, and a corpus of words that must not decode.
 //!
 //! The corpus words are built by the small field encoders below, and **the
@@ -59,8 +59,9 @@ pub(crate) fn j(imm: i32, rd: u32) -> u32 {
         | 0x6f
 }
 
-fn amo(funct5: u32, aq: u32, rl: u32, rs2: u32, rs1: u32, rd: u32) -> u32 {
-    r(funct5 << 2 | aq << 1 | rl, rs2, rs1, 0b010, rd, 0x2f)
+/// An AMO: `width` is funct3, 010 for `.w` and 011 for `.d`.
+fn amo(funct5: u32, aq: u32, rl: u32, rs2: u32, rs1: u32, width: u32, rd: u32) -> u32 {
+    r(funct5 << 2 | aq << 1 | rl, rs2, rs1, width, rd, 0x2f)
 }
 
 fn fence(fm: u32, pred: u32, succ: u32) -> u32 {
@@ -109,13 +110,13 @@ fn corpus() -> Vec<u32> {
             words.push(b(*imm, rs2, rs1, f3));
         }
     }
-    for f3 in [0b000, 0b001, 0b010, 0b100, 0b101] {
+    for f3 in [0b000, 0b001, 0b010, 0b011, 0b100, 0b101, 0b110] {
         for (k, imm) in IMM12.iter().enumerate() {
             let (rd, rs1, _) = regs(k + f3 as usize);
             words.push(i(*imm, rs1, f3, rd, 0x03)); // loads
         }
     }
-    for f3 in [0b000, 0b001, 0b010] {
+    for f3 in [0b000, 0b001, 0b010, 0b011] {
         for (k, imm) in IMM12.iter().enumerate() {
             let (_, rs1, rs2) = regs(k + f3 as usize);
             words.push(s(*imm, rs2, rs1, f3)); // stores
@@ -127,14 +128,26 @@ fn corpus() -> Vec<u32> {
             words.push(i(*imm, rs1, f3, rd, 0x13)); // addi .. andi
         }
     }
-    for (funct7, f3) in [
-        (0b000_0000, 0b001),
-        (0b000_0000, 0b101),
-        (0b010_0000, 0b101),
+    for (k, imm) in IMM12.iter().enumerate() {
+        let (rd, rs1, _) = regs(k);
+        words.push(i(*imm, rs1, 0b000, rd, 0x1b)); // addiw
+    }
+    // The shifts: funct6 and a six-bit shamt on OP-IMM, funct7 and a five-bit
+    // one on OP-IMM-32. `r` takes the shamt's low five bits as rs2 and its
+    // sixth as funct7's low bit.
+    for (opcode, shamts) in [
+        (0x13, &[0u32, 1, 17, 31, 32, 63][..]),
+        (0x1b, &[0, 1, 17, 31]),
     ] {
-        for (k, shamt) in [0u32, 1, 17, 31].iter().enumerate() {
-            let (rd, rs1, _) = regs(k + f3 as usize);
-            words.push(r(funct7, *shamt, rs1, f3, rd, 0x13)); // slli srli srai
+        for (funct7, f3) in [
+            (0b000_0000, 0b001),
+            (0b000_0000, 0b101),
+            (0b010_0000, 0b101),
+        ] {
+            for (k, shamt) in shamts.iter().enumerate() {
+                let (rd, rs1, _) = regs(k + f3 as usize);
+                words.push(r(funct7 | shamt >> 5, shamt & 31, rs1, f3, rd, opcode));
+            }
         }
     }
     let register_ops: [(u32, u32); 18] = [
@@ -163,6 +176,25 @@ fn corpus() -> Vec<u32> {
             words.push(r(*funct7, rs2, rs1, *f3, rd, 0x33));
         }
     }
+    // OP-32: addw subw sllw srlw sraw, then mulw divw divuw remw remuw.
+    let word_ops: [(u32, u32); 10] = [
+        (0b000_0000, 0b000),
+        (0b010_0000, 0b000),
+        (0b000_0000, 0b001),
+        (0b000_0000, 0b101),
+        (0b010_0000, 0b101),
+        (0b000_0001, 0b000),
+        (0b000_0001, 0b100),
+        (0b000_0001, 0b101),
+        (0b000_0001, 0b110),
+        (0b000_0001, 0b111),
+    ];
+    for (n, (funct7, f3)) in word_ops.iter().enumerate() {
+        for k in 0..REGS.len() {
+            let (rd, rs1, rs2) = regs(k + n);
+            words.push(r(*funct7, rs2, rs1, *f3, rd, 0x3b));
+        }
+    }
     // Every fence llvm-objdump will spell. pred and succ are `iorw`, bit 3
     // first; fm 1000 with rw,rw is fence.tso.
     for (fm, pred, succ) in [
@@ -185,12 +217,14 @@ fn corpus() -> Vec<u32> {
     .iter()
     .enumerate()
     {
-        for aq in 0..2 {
-            for rl in 0..2 {
-                let (rd, rs1, rs2) = regs(n + 2 * aq as usize + rl as usize);
-                // lr.w has no rs2: the field must be zero.
-                let rs2 = if *funct5 == 0b00010 { 0 } else { rs2 };
-                words.push(amo(*funct5, aq, rl, rs2, rs1, rd));
+        for width in [0b010, 0b011] {
+            for aq in 0..2 {
+                for rl in 0..2 {
+                    let (rd, rs1, rs2) = regs(n + width as usize + 2 * aq as usize + rl as usize);
+                    // lr has no rs2: the field must be zero.
+                    let rs2 = if *funct5 == 0b00010 { 0 } else { rs2 };
+                    words.push(amo(*funct5, aq, rl, rs2, rs1, width, rd));
+                }
             }
         }
     }
@@ -202,7 +236,7 @@ fn corpus() -> Vec<u32> {
 // ---------------------------------------------------------------------------
 
 /// `(word, format, why)`: words one field away from a real instruction, plus
-/// the encodings of extensions RV32IMAC does not have.
+/// the encodings of extensions RV64IMAC does not have.
 ///
 /// The U and J formats have no entry because they have no near miss: every
 /// bit that is not the opcode is immediate or `rd`, so every word with those
@@ -235,66 +269,98 @@ fn negatives() -> Vec<(u32, &'static str, &'static str)> {
             "OP funct7 0000011, one bit from mul",
         ),
         (
+            r(0b000_0000, 3, 2, 0b010, 1, 0x3b),
+            "R",
+            "OP-32 funct3 010: there is no sltw",
+        ),
+        (
+            r(0b000_0001, 3, 2, 0b001, 1, 0x3b),
+            "R",
+            "OP-32 funct7 0000001 with funct3 001: there is no mulhw",
+        ),
+        (
+            r(0b010_0000, 3, 2, 0b001, 1, 0x3b),
+            "R",
+            "OP-32 funct7 0100000 with funct3 001",
+        ),
+        (
             r(0b010_0000, 5, 2, 0b001, 1, 0x13),
             "I",
-            "slli funct7 0100000",
-        ),
-        (
-            r(0b000_0001, 5, 2, 0b001, 1, 0x13),
-            "I",
-            "slli with shamt[5] set: RV64 only",
-        ),
-        (
-            r(0b000_0001, 5, 2, 0b101, 1, 0x13),
-            "I",
-            "srli with shamt[5] set: RV64 only",
-        ),
-        (
-            r(0b010_0001, 5, 2, 0b101, 1, 0x13),
-            "I",
-            "srai with shamt[5] set: RV64 only",
+            "slli funct6 010000",
         ),
         (
             r(0b000_0010, 5, 2, 0b101, 1, 0x13),
             "I",
-            "shift-right funct7 0000010 names nothing",
+            "shift-right funct6 000001 names nothing",
         ),
-        (i(8, 2, 0b011, 1, 0x03), "I", "load funct3 011 is RV64's ld"),
         (
-            i(8, 2, 0b110, 1, 0x03),
+            r(0b000_0001, 5, 2, 0b001, 1, 0x1b),
             "I",
-            "load funct3 110 is RV64's lwu",
+            "slliw with shamt[5] set: a word shift has five bits",
         ),
-        (i(8, 2, 0b111, 1, 0x03), "I", "load funct3 111 is reserved"),
+        (
+            r(0b000_0001, 5, 2, 0b101, 1, 0x1b),
+            "I",
+            "srliw with shamt[5] set",
+        ),
+        (
+            r(0b010_0001, 5, 2, 0b101, 1, 0x1b),
+            "I",
+            "sraiw with shamt[5] set",
+        ),
+        (
+            r(0b010_0000, 5, 2, 0b001, 1, 0x1b),
+            "I",
+            "slliw funct7 0100000",
+        ),
+        (
+            i(8, 2, 0b010, 1, 0x1b),
+            "I",
+            "OP-IMM-32 funct3 010: there is no sltiw",
+        ),
+        (
+            i(8, 2, 0b111, 1, 0x1b),
+            "I",
+            "OP-IMM-32 funct3 111: there is no andiw",
+        ),
+        (
+            i(8, 2, 0b111, 1, 0x03),
+            "I",
+            "load funct3 111 is RV128's ldu",
+        ),
         (i(8, 2, 0b001, 1, 0x67), "I", "jalr funct3 001"),
         (i(8, 2, 0b111, 1, 0x67), "I", "jalr funct3 111"),
-        (s(8, 3, 2, 0b011), "S", "store funct3 011 is RV64's sd"),
-        (s(8, 3, 2, 0b100), "S", "store funct3 100 is reserved"),
+        (s(8, 3, 2, 0b100), "S", "store funct3 100 is RV128's sq"),
         (s(8, 3, 2, 0b111), "S", "store funct3 111 is reserved"),
         (b(8, 3, 2, 0b010), "B", "branch funct3 010 is reserved"),
         (b(8, 3, 2, 0b011), "B", "branch funct3 011 is reserved"),
         (
-            r(0b00000 << 2, 3, 2, 0b011, 1, 0x2f),
+            amo(0b00000, 0, 0, 3, 2, 0b100, 1),
             "AMO",
-            "amoadd.d: funct3 011 is RV64's width",
+            "amoadd.q: funct3 100 is RV128's width",
         ),
         (
-            r(0b00000 << 2, 3, 2, 0b000, 1, 0x2f),
+            amo(0b00000, 0, 0, 3, 2, 0b000, 1),
             "AMO",
-            "amoadd.b: Zabha's byte width, which RV32IMAC does not have",
+            "amoadd.b: Zabha's byte width, which RV64IMAC does not have",
         ),
         (
-            amo(0b00010, 0, 0, 5, 2, 1),
+            amo(0b00010, 0, 0, 5, 2, 0b010, 1),
             "AMO",
             "lr.w with rs2 = x5: rs2 must be x0",
         ),
         (
-            amo(0b00101, 0, 0, 3, 2, 1),
+            amo(0b00010, 0, 0, 5, 2, 0b011, 1),
             "AMO",
-            "amocas.w: Zacas, which RV32IMAC does not have",
+            "lr.d with rs2 = x5: rs2 must be x0",
         ),
         (
-            amo(0b11111, 1, 1, 3, 2, 1),
+            amo(0b00101, 0, 0, 3, 2, 0b011, 1),
+            "AMO",
+            "amocas.d: Zacas, which RV64IMAC does not have",
+        ),
+        (
+            amo(0b11111, 1, 1, 3, 2, 0b010, 1),
             "AMO",
             "AMO funct5 11111 names nothing",
         ),
@@ -304,7 +370,7 @@ fn negatives() -> Vec<(u32, &'static str, &'static str)> {
         (
             0x0020_0073,
             "SYSTEM",
-            "funct12 2: uret, which RV32IMAC does not have",
+            "funct12 2: uret, which RV64IMAC does not have",
         ),
         (0x3020_0073, "extension", "mret: privileged"),
         (0x1050_0073, "extension", "wfi: privileged"),
@@ -314,14 +380,18 @@ fn negatives() -> Vec<(u32, &'static str, &'static str)> {
         (
             0x0000_200f,
             "MISC-MEM",
-            "cbo.inval: Zicbom, which RV32IMAC does not have",
+            "cbo.inval: Zicbom, which RV64IMAC does not have",
         ),
         (0x0005_a507, "opcode", "flw: F extension"),
         (0x00a5_a027, "opcode", "fsw: F extension"),
         (0x00b5_7553, "opcode", "fadd.s: F extension"),
         (0x6000_0043, "opcode", "fmadd: F extension"),
-        (0x0015_051b, "opcode", "addiw: RV64's OP-IMM-32"),
-        (0x00b5_053b, "opcode", "addw: RV64's OP-32"),
+        (
+            0x0000_005b,
+            "opcode",
+            "OP-IMM-64: RV128's, custom-2 elsewhere",
+        ),
+        (0x0000_007b, "opcode", "OP-64: RV128's, custom-3 elsewhere"),
         (0x0000_000b, "opcode", "custom-0"),
         (0x0000_0057, "opcode", "OP-V: the vector extension"),
         (0x0000_001f, "opcode", "bits 4:2 = 111: a 48-bit encoding"),
@@ -363,7 +433,7 @@ pub fn generate() {
 
     let words = corpus();
     let text: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-    let elf = ElfBuilder::rv32_exec(&text).build();
+    let elf = ElfBuilder::rv64_exec(&text).build();
     crate::write_bytes("crates/isa/tests/vectors/isa_corpus.elf", &elf);
 
     // The synthetic ELF carries no `.riscv.attributes`, so the disassembler is
@@ -402,7 +472,7 @@ pub fn generate() {
             "# `llvm-objdump -d -M no-aliases --mattr=+m,+a,+c` of isa_corpus.elf.\n\
              # Generated by `cargo run -p kat-gen -- isa`. Do not edit.\n\
              #\n\
-             # Every RV32IMA mnemonic, hand-encoded with varied registers and\n\
+             # Every RV64IMA mnemonic, hand-encoded with varied registers and\n\
              # boundary immediates. Fields: address, encoding, disassembly. The\n\
              # test decodes each encoding and compares with the disassembly.\n\
              #\n\
@@ -417,7 +487,7 @@ pub fn generate() {
          #\n\
          # Fields: word (hex, as an integer), format, why. Near misses of every\n\
          # format that has a fixed field -- R, I, S, B, AMO, SYSTEM, MISC-MEM --\n\
-         # plus encodings of extensions RV32IMAC does not have -- `extension` inside\n\
+         # plus encodings of extensions RV64IMAC does not have -- `extension` inside\n\
          # its own opcodes, `opcode` for foreign major opcodes -- and the\n\
          # compressed shapes the loader expands before anything is decoded. U\n\
          # and J have no entry: every non-opcode bit of theirs is an operand, so\n\

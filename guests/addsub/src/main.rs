@@ -1,9 +1,9 @@
 #![no_std]
 #![no_main]
-//! A tiny guest: a straight-line chain of 32-bit additions and
-//! subtractions over the add/sub family's roster — `add`, `sub`, `addi`, `lui`,
-//! `auipc`, and the system kind's `fence` and `ecall` — that exits with its
-//! result word. `crates/prover/tests/acceptance.rs` proves it end to end
+//! A tiny guest: a straight-line chain of 64-bit additions and subtractions
+//! over the add/sub family's roster — `add`, `sub`, `addi`, `lui`, `auipc`,
+//! their 32-bit forms `addw`, `subw`, `addiw`, and the system kind's `fence`
+//! and `ecall` — that exits with its result word. `crates/prover/tests/acceptance.rs` proves it end to end
 //! (`docs/spec/proof.md`).
 //!
 //! Everything in its image is an instruction of that family, which is what
@@ -12,7 +12,8 @@
 //! is required of a `no_std` binary and is unreachable, so the linker drops it.
 //!
 //! The chain covers every row shape the family's circuit distinguishes:
-//! each kind, with and without a carry or a borrow; `rd = x0`, whose computed
+//! each kind, with and without a carry or a borrow out of either word, a W
+//! form's result sign-extended both ways; `rd = x0`, whose computed
 //! value is nonzero and discarded; an operand of `x0`; both instruction
 //! lengths, so the decoder's fall-through is `pc + 2` on some rows and `pc + 4`
 //! on others; a fence; and the exit.
@@ -25,7 +26,8 @@
 //! # The result
 //!
 //! The exit status, `a0`, which is 42: `(t0 + t1) − t1 − t0` wraps twice back
-//! to 0, and the compressed rows add 4 and the last `addi` 38.
+//! to 0, the compressed rows add 4 and the last `addi` 38; the W rows write
+//! registers nothing reads.
 
 use core::arch::global_asm;
 
@@ -35,14 +37,22 @@ global_asm!(
     "_start:",
     ".option norvc",
     // Two operands whose sum carries and whose difference borrows.
-    "  lui   t0, 0xfffff",   // t0 = 0xfffff000
-    "  addi  t0, t0, -1",    // t0 = 0xffffefff; the addition carries
+    "  lui   t0, 0xfffff",   // t0 = 0xffff_ffff_ffff_f000, lui sign-extends
+    "  addi  t0, t0, -1",    // t0 = 0xffff_ffff_ffff_efff; the addition carries
     "  lui   t1, 0x12345",   // t1 = 0x12345000
     "  addi  t1, t1, 0x678", // t1 = 0x12345678
-    "  add   t2, t0, t1",    // t2 = 0x12344677, carrying
+    "  add   t2, t0, t1",    // t2 = 0x12344677, carrying out of both words
     "  add   t3, t1, t1",    // t3 = 0x2468acf0, not carrying
     "  sub   t4, t1, t0",    // t4 = 0x12346679, borrowing
-    "  sub   t5, t0, t1",    // t5 = 0xedcb9987, not borrowing
+    "  sub   t5, t0, t1",    // t5 = 0xffff_ffff_edcb_9987, not borrowing
+    // The W forms: the low words' sum or difference, sign-extended.
+    "  addw  s3, t1, t1",    // 0x2468acf0, positive
+    "  addiw s4, t1, 0x7ff", // 0x12345e77
+    "  addw  s5, t3, t3",    // 0x48d159e0
+    "  addw  s5, s5, s5",    // 0x91a2b3c0, past 2^31: sign-extended negative
+    "  subw  s5, s5, t3",    // 0x6d3a06d0, positive again, borrowing
+    "  addiw s6, s5, -2048", // 0x6d39fed0
+    "  subw  s5, s5, s5",    // 0
     // Computed values that x0 discards: the circuit still proves them.
     "  add   x0, t0, t1",
     "  sub   x0, t1, t0",
@@ -64,6 +74,9 @@ global_asm!(
     "  c.li   sp, 16",        // sp is written before it is read: nothing sets it here
     "  c.addi16sp sp, 32",    // sp = 48
     "  c.addi4spn a4, sp, 8", // a4 = 56
+    "  c.addiw a5, -1",       // addiw a5, a5, -1: a5 = -1
+    "  c.addw  a4, a5",       // a4 = 55
+    "  c.subw  a4, a5",       // a4 = 56
     ".option norvc",
     // The result: (t0 + t1) − t1 − t0 = 0, wrapping twice, plus 4, plus 38.
     "  sub   a0, t2, t1", // a0 = t0, borrowing

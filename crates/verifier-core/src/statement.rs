@@ -401,22 +401,33 @@ pub(crate) fn groups(config: &VmConfig, shard_counts: &[u32]) -> Vec<(u32, u32)>
     init.chain(zero).chain(rest).collect()
 }
 
-/// The 64 boundary scalars in `MEMORY_BOUNDARY`'s order,
-/// `docs/spec/memory.md` §4.1: `t_0 … t_31`, `t_pc`, `v_1 … v_31`.
+/// The 95 boundary scalars in `MEMORY_BOUNDARY`'s order,
+/// `docs/spec/memory.md` §4.1: `t_0 … t_31`, `t_pc`, the low words of
+/// `v_1 … v_31`, then their high words.
 pub fn boundary_scalars(finals: &BoundaryFinals) -> Vec<Fp> {
-    let mut out = Vec::with_capacity(64);
+    let mut out = Vec::with_capacity(95);
     out.extend(finals.reg_ts.iter().map(|t| Fp::from_u64(*t)));
     out.push(Fp::from_u64(finals.pc_ts));
-    out.extend(finals.reg_values.iter().map(|v| Fp::from_u64(*v as u64)));
+    out.extend(
+        finals
+            .reg_values
+            .iter()
+            .map(|v| Fp::from_u64(*v & u32::MAX as u64)),
+    );
+    out.extend(finals.reg_values.iter().map(|v| Fp::from_u64(*v >> 32)));
     out
 }
 
+/// How many memory challenges the global transcript draws: `γ_M, α_addr,
+/// α_ts, α_val, α_hi`.
+pub const MEMORY_CHALLENGES: usize = 5;
+
 /// What the global transcript yields: the transcript after its last squeeze,
-/// the four memory challenges `γ_M, α_addr, α_ts, α_val`, and the global state
-/// digest.
+/// the five memory challenges `γ_M, α_addr, α_ts, α_val, α_hi`, and the global
+/// state digest.
 pub struct GlobalTranscript {
     pub transcript: Transcript,
-    pub memory: [Fp2; 4],
+    pub memory: [Fp2; MEMORY_CHALLENGES],
     pub digest: Fp2,
 }
 
@@ -458,7 +469,7 @@ pub(crate) fn global_transcript(
         &boundary_scalars(&statement.boundary),
     );
 
-    let mut memory = [Fp2::ZERO; 4];
+    let mut memory = [Fp2::ZERO; MEMORY_CHALLENGES];
     for slot in memory.iter_mut() {
         *slot = t.challenge(tags::MEMORY_CHALLENGE);
     }
@@ -501,15 +512,16 @@ pub fn shard_transcript(
     (t, g, beta)
 }
 
-/// Slots 1 to 4, `γ_M, α_addr, α_ts, α_val`, from the global transcript's four
-/// memory challenges.
-pub fn memory_slots(memory: &[Fp2; 4]) -> ExternalChallenges {
+/// Slots 1 to 4 and 14, `γ_M, α_addr, α_ts, α_val, α_hi`, from the global
+/// transcript's five memory challenges.
+pub fn memory_slots(memory: &[Fp2; MEMORY_CHALLENGES]) -> ExternalChallenges {
     let mut drawn = ExternalChallenges::new();
     let slots = [
         challenge_slot::MEM_GAMMA,
         challenge_slot::MEM_ALPHA_ADDR,
         challenge_slot::MEM_ALPHA_TS,
         challenge_slot::MEM_ALPHA_VAL,
+        challenge_slot::MEM_ALPHA_HI,
     ];
     for (slot, value) in slots.iter().zip(memory) {
         drawn.insert(*slot, *value);
@@ -545,7 +557,7 @@ pub fn shard_challenges(
     circuit: &constraints::FamilyCircuit,
     index: u32,
     windows: &[u32],
-    memory: &[Fp2; 4],
+    memory: &[Fp2; MEMORY_CHALLENGES],
     g: Fp2,
     beta: Fp2,
 ) -> ExternalChallenges {
@@ -652,18 +664,23 @@ mod tests {
         );
     }
 
-    /// The boundary message is `t_0 … t_31, t_pc, v_1 … v_31`.
+    /// The boundary message is `t_0 … t_31, t_pc, v_1 … v_31, u_1 … u_31`: the
+    /// values' low words, then their high words.
     #[test]
     fn the_boundary_scalars_are_in_the_frozen_order() {
         let mut f = empty_finals();
         f.reg_ts[31] = 5;
         f.pc_ts = 6;
-        f.reg_values[0] = 7;
+        f.reg_values[0] = 7 | 8 << 32;
+        f.reg_values[30] = 9 << 32;
         let s = boundary_scalars(&f);
-        assert_eq!(s.len(), 64);
+        assert_eq!(s.len(), 95);
         assert_eq!(s[31], Fp::from_u64(5));
         assert_eq!(s[32], Fp::from_u64(6));
         assert_eq!(s[33], Fp::from_u64(7));
+        assert_eq!(s[63], Fp::ZERO);
+        assert_eq!(s[64], Fp::from_u64(8));
+        assert_eq!(s[94], Fp::from_u64(9));
     }
 
     /// The trivial window is the 38-bit clock.
