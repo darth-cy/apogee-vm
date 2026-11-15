@@ -32,7 +32,15 @@ SECTIONS {
      unaligned .bss would put zero-fill on a read-only page, which is refused
      outright. The zkVM executor is indifferent -- it has no pages -- so this
      costs three pages of address space to keep one ELF running under both. */
-  .text   : ALIGN(4096) { *(.text._start) *(.text*) } > RAM
+  .text   : ALIGN(4096) {
+    *(.text._start)
+    /* __cxa_atexit alone, between two symbols the teardown's selection below
+       compares. */
+    __apogee_cxa_atexit_start = .;
+    *(.text.apogee.cxa_atexit)
+    __apogee_cxa_atexit_end = .;
+    *(.text*)
+  } > RAM
   .rodata : ALIGN(4096) {
     *(.rodata*)
     *(.srodata*)
@@ -79,14 +87,14 @@ SECTIONS {
 }
 
 /* What crt0 calls: the guest's main, or, for a guest with destructors, main
-   followed by them: those C++ registers through __cxa_atexit, which it
-   references for each static object that has one, then C's destructor
-   functions. The library defines the registration as __apogee_cxa_atexit, and
-   PROVIDE gives it the C++ name only where a reference to that name is
-   otherwise unresolved, so for a guest with no destructor crt0 calls main
-   itself and runs no teardown at all. The first PROVIDE comes first because
-   DEFINED counts a script's definition only above it. The second is a PROVIDE
-   so that a guest which is its own _start, with no crt0 and no main, links. */
-PROVIDE(__cxa_atexit = __apogee_cxa_atexit);
-PROVIDE(__apogee_main = (DEFINED(__cxa_atexit) || __fini_array_end != __fini_array_start)
+   followed by them: those C++ registers through __cxa_atexit, which it calls
+   for each static object that has one, then C's destructor functions. The
+   library's __cxa_atexit is an archive member of its own (crates/guest-sdk/cxa),
+   which a linker takes only for a reference, and keeps under --gc-sections only
+   for a reference from live code; so it is in the image exactly when this guest
+   can register a destructor, and a guest with no destructor has crt0 call main
+   itself and runs no teardown at all. A PROVIDE, so that a guest which is its
+   own _start, with no crt0 and no main, links. */
+PROVIDE(__apogee_main = (__apogee_cxa_atexit_end != __apogee_cxa_atexit_start
+                         || __fini_array_end != __fini_array_start)
   ? __apogee_main_then_destructors : main);

@@ -16,6 +16,8 @@ edition = "2021"
 publish = false
 
 [dependencies]
-# The one dependency, and the reason it exists: every ecall number and range
-# boundary has a single source, and this is it.
+# Every ecall number and range boundary has a single source, and this is it.
 constants = { path = "../constants" }
+# `__cxa_atexit`, in a crate of its own so it is an archive member of its own
+# (`cxa/Cargo.toml` says why).
+guest-sdk-cxa = { path = "cxa" }

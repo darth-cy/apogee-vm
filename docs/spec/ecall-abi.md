@@ -97,10 +97,11 @@ entry and segments are refused there ([program.md](program.md) §1). The space b
   prioritised ones first, with C's destructor functions after them in `[__fini_array_start,
   __fini_array_end)`, and places the small-data sections `.srodata`, `.sdata` and `.sbss` with
   `.rodata`, `.data` and `.bss`. `__apogee_main` is the guest's `main`, unless the guest has
-  destructors: for one that references `__cxa_atexit` or has destructor functions, `apogee.ld`
-  makes it `main`, then the destructors registered with `__cxa_atexit`, the latest first, then the
-  destructor functions, the last first. Every other exit, `exit` and a panic among them, skips the
-  destructors.
+  destructors: for one whose image holds `__cxa_atexit` or destructor functions, `apogee.ld` makes
+  it `main`, then the destructors registered with `__cxa_atexit`, the latest first, then the
+  destructor functions, the last first. `__cxa_atexit` is an archive member of its own, which the
+  linker takes only for a reference and keeps under `--gc-sections` only for one from live code.
+  Every other exit, `exit` and a panic among them, skips the destructors.
 - Nothing detects a stack that grows past its reserve after the heap has filled below it.
 
 ### 5.1 The segment layout
@@ -154,10 +155,9 @@ calling it.
 
 The library's `_start` is crt0's (§5): it runs the guest's static initializers and calls its own
 `int main(void)`, exiting with what it returns; the header declares `main` with C linkage, which a
-freestanding C++ compiler does not give it. Its `__cxa_atexit` and `__dso_handle` are what C++
-registers a static object's destructor with: each registration is one record from the allocator,
-and the destructors run when `main` returns. `apogee.ld` gives `__cxa_atexit` that name only for a
-guest that references it, and returns from `main` into destructors only for a guest that has some
-(§5). The library also exports `memcpy`, `memmove`, `memset`, `memcmp` and the compiler's 128-bit
-integer helpers, weakly. The toolchain, the bundle and a worked guest are
-[guest-program-manual.md](../guest-program-manual.md) §11.
+freestanding C++ compiler does not give it. Its `__cxa_atexit` and `__dso_handle`, an archive
+member of their own (`crates/guest-sdk/cxa`), are what C++ registers a static object's destructor
+with: each registration is one record from the allocator, and the destructors run when `main`
+returns, for a guest whose image holds them (§5). The library also exports `memcpy`, `memmove`,
+`memset`, `memcmp` and the compiler's 128-bit integer helpers, weakly. The toolchain, the bundle
+and a worked guest are [guest-program-manual.md](../guest-program-manual.md) §11.

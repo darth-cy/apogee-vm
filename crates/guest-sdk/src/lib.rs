@@ -492,11 +492,16 @@ fn delegate(declared: &'static [u8; delegation::MARKER_BYTES], frame: &mut [u32]
 //
 // What `include/apogee_guest.h` declares, for a C or C++ guest that links this
 // crate built as a static library, `libapogee_guest.a`: crt0 above calls its
-// `main`, and these four are the whole surface it calls. After them comes what
-// a C++ compiler calls for a static object's destructor: `__cxa_atexit`, which
-// `apogee.ld` names only for a guest that references it, and `__dso_handle`.
-// Last in the file, for the same reason the delegation shims are: a Rust guest
-// that calls none links none.
+// `main`, and these four are the whole surface it calls. After them come the
+// destructors: their registration, which `guest-sdk-cxa`'s `__cxa_atexit` calls,
+// and the teardown that runs them and C's destructor functions. Last in the
+// file, for the same reason the delegation shims are: a Rust guest that calls
+// none links none.
+
+// Linked for its `__cxa_atexit`, which nothing in this crate calls: an archive
+// member of its own, in an image only where a guest calls it (`cxa/Cargo.toml`,
+// `apogee.ld`).
+extern crate guest_sdk_cxa;
 
 /// `public_input()`: its address, its length through `len` where not null.
 ///
@@ -558,21 +563,17 @@ struct Destructor {
 #[link_section = ".data"]
 static mut DESTRUCTORS: *mut Destructor = core::ptr::null_mut();
 
-/// `__cxa_atexit`: register `f(arg)` to run when `main` returns. C++ calls it
-/// once for each static object whose type has a non-trivial destructor, after
-/// constructing it. `apogee.ld` gives this function that name only for a guest
-/// that references it, and only such a guest's `main` returns into
-/// `__apogee_main_then_destructors`. The record comes from the bump
+/// Record `f(arg)` to run when `main` returns: `__cxa_atexit`'s body, which
+/// `guest-sdk-cxa`'s `__cxa_atexit` calls. The record comes from the bump
 /// allocator, so registering more than the heap holds exits 71, like any
 /// allocation.
 ///
 /// # Safety
 /// `f` may be called once with `arg` after `main` returns.
 #[no_mangle]
-pub unsafe extern "C" fn __apogee_cxa_atexit(
+unsafe extern "C" fn __apogee_register_destructor(
     f: unsafe extern "C" fn(*mut u8),
     arg: *mut u8,
-    _dso: *mut u8,
 ) -> i32 {
     let record = ALLOCATOR
         .alloc(Layout::new::<Destructor>())
@@ -586,12 +587,6 @@ pub unsafe extern "C" fn __apogee_cxa_atexit(
     *head = record;
     0
 }
-
-/// The handle `__cxa_atexit`'s last argument points at. A static image is one
-/// object, so nothing compares it with another.
-#[no_mangle]
-#[allow(non_upper_case_globals)]
-pub static __dso_handle: u8 = 0;
 
 extern "C" {
     /// The guest's entry: a C guest's own, or the one `entry!` exports.
@@ -614,9 +609,9 @@ extern "C" fn __apogee_main_then_destructors() -> i32 {
     // and in `entry!`'s alike.
     let status = unsafe { main() };
     // SAFETY: the guest is single-threaded. Each record was written whole by
-    // `__apogee_cxa_atexit` and is never freed. It is unlinked before its
-    // function runs, so a destructor that registers another, or exits, leaves
-    // the list well formed.
+    // `__apogee_register_destructor` and is never freed. It is unlinked before
+    // its function runs, so a destructor that registers another, or exits,
+    // leaves the list well formed.
     unsafe {
         let head = core::ptr::addr_of_mut!(DESTRUCTORS);
         while let Some(d) = (*head).as_ref() {

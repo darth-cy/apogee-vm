@@ -32,7 +32,7 @@ jobs:
       - name: clippy
         run: |
           cargo clippy --workspace --all-targets -- -D warnings
-          (cd crates/guest-sdk && cargo clippy --target riscv64imac-unknown-none-elf -- -D warnings)
+          (cd crates/guest-sdk && cargo clippy --workspace --target riscv64imac-unknown-none-elf -- -D warnings)
           (cd guests && cargo clippy --bins -- -D warnings)
           # `debug-info` is the workspace's one cargo feature. A configuration
           # nobody builds is broken and undiscovered, so this one is built,
