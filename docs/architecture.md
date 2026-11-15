@@ -29,10 +29,10 @@ before its lookup challenges ([proof.md](spec/proof.md) §3). The suites that pr
 A verifier holds two things it does not take from the prover's word, one of them from a channel the
 prover does not control ([proof.md](spec/proof.md) §1, §3):
 
-- the **program identity**, a digest of eight field elements: of the code version, the program's
-  `VmConfig` — the circuit families it uses and their heights — its entry pc, and the commitments
-  to its instruction tables, its initial memory image and the generic lookup table
-  ([program.md](spec/program.md) §8);
+- the **program identity**, a digest of eight field elements: of the code version and the circuit
+  revision, the program's `VmConfig` — the circuit families it uses and their heights — its entry
+  pc, and the commitments to its instruction tables, its initial memory image and the generic lookup
+  table ([program.md](spec/program.md) §8);
 - a **verifying key**: that config, those commitments and each family's circuit. Loading it
   recomputes the identity from its own contents and holds its circuits to the registry's bytes
   ([proof.md](spec/proof.md) §7).

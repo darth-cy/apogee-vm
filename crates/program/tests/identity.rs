@@ -71,7 +71,10 @@ fn the_identity_is_the_documented_recipe() {
 
     let fp = |x: u32| Fp::from_u64(x as u64);
     let mut tr = Transcript::new();
-    tr.append_scalar(tags::PROGRAM_IDENTITY, fp(family::CODE_VERSION));
+    tr.append_scalars(
+        tags::PROGRAM_IDENTITY,
+        &[fp(family::CODE_VERSION), fp(family::CIRCUIT_REVISION)],
+    );
     let mut vm: Vec<Fp> = config.families.iter().map(|(f, _)| fp(*f)).collect();
     vm.extend(config.families.iter().map(|(_, h)| fp(*h)));
     vm.push(fp(config.bytecode_size_words));

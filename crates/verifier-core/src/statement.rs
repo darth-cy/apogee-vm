@@ -326,7 +326,7 @@ impl ProgramIdentity {
 /// The identity digest: what a verifying-key loader recomputes. A fresh typed
 /// transcript absorbs, in this order (`docs/spec/program.md` §8):
 ///
-/// 1. `PROGRAM_IDENTITY`: `code_version`, one scalar;
+/// 1. `PROGRAM_IDENTITY`: `[code_version, CIRCUIT_REVISION]`;
 /// 2. `VM_CONFIG`: the family ids, their heights, `bytecode_size_words`;
 /// 3. `PROGRAM_ENTRY`: `entry_pc`, one scalar;
 /// 4. `SETUP_COMMITMENT`, once per family of `config` in its order: the
@@ -334,8 +334,9 @@ impl ProgramIdentity {
 ///    image column, the packed generic table — empty for a family with none;
 /// 5. `digest()`, which is the identity.
 ///
-/// So the identity binds every instruction and every image word: they are
-/// setup columns.
+/// So the identity binds every instruction and every image word, which are
+/// setup columns, and the registry's revision, so a key whose circuits are
+/// another registry's names another program.
 pub fn identity_digest(
     code_version: u32,
     config: &VmConfig,
@@ -343,7 +344,13 @@ pub fn identity_digest(
     setup_commitments: &[Commitment],
 ) -> ProgramIdentity {
     let mut tr = Transcript::new();
-    tr.append_scalar(tags::PROGRAM_IDENTITY, Fp::from_u64(code_version as u64));
+    tr.append_scalars(
+        tags::PROGRAM_IDENTITY,
+        &[
+            Fp::from_u64(code_version as u64),
+            Fp::from_u64(family::CIRCUIT_REVISION as u64),
+        ],
+    );
     absorb_vm_config(&mut tr, config);
     tr.append_scalar(tags::PROGRAM_ENTRY, Fp::from_u64(entry_pc as u64));
     for c in setup_commitments {

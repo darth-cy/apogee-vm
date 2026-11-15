@@ -180,8 +180,8 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
 // ---------------------------------------------------------------------------
 
 /// A delegation shard's frame columns by name, `constraints::delegation::frame`:
-/// `live`, `cycle`, `number`, each word's four and its two gap chunks. Returns
-/// the shard's calls and the witness to add to.
+/// `live`, `cycle`, `number`, each word's four and its two gap chunks, and the
+/// room's halfword. Returns the shard's calls and the witness to add to.
 fn frame_fill<'a>(
     src: &ShardSource<'a>,
     fam: FamilyId,
@@ -226,6 +226,15 @@ fn frame_fill<'a>(
             }
         }
     }
+    let room = w.col("room_h16");
+    for r in 0..calls.len() {
+        let cycle = calls.cycles()[r];
+        let end = calls.word(0).addr[r] as u64 + 4 * words as u64;
+        let left = (guest_memory::ADVICE_ORIGIN as u64)
+            .checked_sub(end)
+            .ok_or_else(|| format!("the frame at cycle {cycle} reaches the advice"))?;
+        w.put(room, r, left >> 16);
+    }
     Ok((calls, w))
 }
 
@@ -243,13 +252,15 @@ fn lane(calls: &FrameSlice, i: usize, r: usize, write: bool) -> Fp {
     Fp::from_u64(frame_word(calls, 2 * i, r, write) | frame_word(calls, 2 * i + 1, r, write) << 32)
 }
 
-/// `POSEIDON2`, `docs/spec/precompiles.md` §3: the frame, the key, the input
-/// after `M_E`, the output, and each output lane's halfwords and top test.
+/// `POSEIDON2`, `docs/spec/precompiles.md` §3: the frame, the last boundary's
+/// stamp, the input after `M_E`, the output, and each output lane's halfwords
+/// and top test.
 fn poseidon2(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constraints::poseidon2::{stamp, LAST};
     use transcript::WIDTH;
     let fam = family::POSEIDON2;
     let (calls, mut w) = frame_fill(src, fam)?;
-    let key = w.col("key");
+    let last = w.col("last");
     let u: Vec<usize> = (0..WIDTH).map(|j| w.fcol(&format!("u{j}"))).collect();
     let o: Vec<usize> = (0..WIDTH).map(|l| w.col(&format!("o{l}"))).collect();
     let halves: Vec<[usize; 4]> = (0..WIDTH)
@@ -263,7 +274,7 @@ fn poseidon2(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, S
         })
         .collect();
     for r in 0..calls.len() {
-        w.put(key, r, 8 * calls.cycles()[r]);
+        w.put(last, r, stamp(LAST));
         let mut x: [Fp; WIDTH] = std::array::from_fn(|i| lane(&calls, i, r, false));
         transcript::external(&mut x);
         for (j, c) in u.iter().enumerate() {
@@ -298,12 +309,13 @@ fn poseidon2(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, S
 /// `POSEIDON2_ROUNDS`, `docs/spec/precompiles.md` §3: sixteen rows a call, row
 /// `k` taking the state at boundary `k` through its rounds, the last idle.
 fn poseidon2_rounds(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
-    use constraints::poseidon2::{internal, round_constant, PARTIAL, ROWS};
+    use constraints::poseidon2::{internal, round_constant, stamp, PARTIAL, ROWS};
     use transcript::WIDTH;
     let fam = family::POSEIDON2_ROUNDS;
     let calls = *src.invocations(fam)?;
     let mut w = Witness::new(fam, ROWS * calls.len());
-    let [live, key, round, ext, int] = ["live", "key", "round", "ext", "int"].map(|c| w.col(c));
+    let [live, cycle, stamp_col, ext, int] =
+        ["live", "cycle", "stamp", "ext", "int"].map(|c| w.col(c));
     let kinds: Vec<usize> = (0..ROWS - 1).map(|k| w.col(&format!("row{k}"))).collect();
     let lanes = |prefix: &str, w: &mut Witness| -> Vec<usize> {
         (0..WIDTH)
@@ -330,8 +342,8 @@ fn poseidon2_rounds(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPo
                 r,
                 &[
                     (live, 1),
-                    (key, 8 * calls.cycles()[c]),
-                    (round, k as u64),
+                    (cycle, calls.cycles()[c]),
+                    (stamp_col, stamp(k as u64)),
                     (*kind_col, 1),
                     (ext, 1 - kind),
                     (int, kind),

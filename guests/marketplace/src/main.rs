@@ -7,7 +7,8 @@
 //!
 //! **A database a proof follows by its root.** The table is `2^DEPTH` listing
 //! slots, the leaves of a fixed-depth binary tree whose every node is
-//! [`poseidon2_compress`], the Poseidon2 precompile. The public input carries the
+//! [`poseidon2_compress`], the Poseidon2 precompile, over [`Digest`]s, whose
+//! lanes are each below `p`. The public input carries the
 //! root before the batch and the batch; the advice carries, for each operation,
 //! the slot's listing and its `DEPTH` siblings, a Merkle proof. Nothing advised
 //! is trusted: the guest rebuilds the root from the proof before it reads the
@@ -23,7 +24,7 @@
 //! # The leaf
 //!
 //! A listing is 56 bytes, packed seven to a lane, below `2^56 < p`, so the
-//! packing is injective. Its leaf is `compress(lanes, [LEAF, 0, …])`, the tag
+//! packing is injective. Its leaf is `compress(lanes, [1, 0, …])`, the tag
 //! keeping a leaf's preimage from an internal node's. An empty slot holds the
 //! all-zero listing.
 //!
@@ -37,7 +38,7 @@
 //! # The public input
 //!
 //! ```text
-//! header     0..64   root      8 lanes, u64 LE: the table before the batch
+//! header     0..64   root      8 lanes, u64 LE, each below p: the table before the batch
 //!           64..68   fee_bps   u32, at most 1000
 //!           68..72   n_ops     u32, at most MAX_OPS
 //! op         0..4    kind      u32: 0 list, 1 reprice, 2 buy, 3 delist
@@ -51,7 +52,7 @@
 //! # The advice
 //!
 //! For each op, in order: the slot's listing, then its `DEPTH` siblings from the
-//! leaf up, 64 bytes each, under the root the ops before it left.
+//! leaf up, 64 bytes each, a digest, under the root the ops before it left.
 //!
 //! # The journal
 //!
@@ -66,11 +67,11 @@
 //!
 //! An op that breaks a rule — a slot already listed, an account not the
 //! listing's seller, a purchase past the stock or by the seller — is rejected
-//! and counted, and leaves the table as it was. A malformed batch, and a proof
-//! that does not open the root, panic.
+//! and counted, and leaves the table as it was. A malformed batch, a digest
+//! with a lane at or above `p`, and a proof that does not open the root, panic.
 
 use constants::guest_memory;
-use guest_sdk::{poseidon2_compress, U256};
+use guest_sdk::{poseidon2_compress, Digest, U256};
 
 guest_sdk::entry!(main);
 
@@ -82,10 +83,8 @@ const OP: usize = 64;
 /// As many ops as fit the public input window beside the header.
 const MAX_OPS: usize = (guest_memory::PUBLIC_PAYLOAD_BYTES as usize - HEADER) / OP;
 const MAX_FEE_BPS: u32 = 1_000;
-/// The tag lane of a leaf's preimage.
-const LEAF: u64 = 1;
-
-type Digest = [u64; 8];
+/// What a leaf's preimage is compressed beside: the tag lane 1, then zeros.
+const LEAF: Digest = Digest::new([1, 0, 0, 0, 0, 0, 0, 0]).expect("canonical");
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct Listing {
@@ -111,14 +110,13 @@ impl Listing {
         bytes[8..16].copy_from_slice(&self.item.to_le_bytes());
         bytes[16..48].copy_from_slice(&self.price.to_le_bytes());
         bytes[48..].copy_from_slice(&self.stock.to_le_bytes());
-        let lanes: Digest = core::array::from_fn(|i| {
+        let lanes = core::array::from_fn(|i| {
             let mut lane = [0u8; 8];
             lane[..7].copy_from_slice(&bytes[7 * i..7 * i + 7]);
             u64::from_le_bytes(lane)
         });
-        let mut tag = [0u64; 8];
-        tag[0] = LEAF;
-        poseidon2_compress(&lanes, &tag)
+        let lanes = Digest::new(lanes).expect("seven bytes are below p");
+        poseidon2_compress(&lanes, &LEAF)
     }
 
     fn is_empty(&self) -> bool {
@@ -224,7 +222,7 @@ fn main() {
             "marketplace: a slot outside the table"
         );
         let listing = Listing::decode(take(advice, &mut at, LISTING));
-        let mut path = [[0u64; 8]; DEPTH];
+        let mut path = [Digest::default(); DEPTH];
         for sibling in path.iter_mut() {
             *sibling = digest_at(take(advice, &mut at, 64), 0);
         }
@@ -246,7 +244,7 @@ fn main() {
     }
 
     let mut out = [0u8; 200];
-    for (i, lane) in before.iter().chain(&table).enumerate() {
+    for (i, lane) in before.lanes().iter().chain(table.lanes()).enumerate() {
         out[8 * i..8 * i + 8].copy_from_slice(&lane.to_le_bytes());
     }
     out[128..132].copy_from_slice(&applied.to_le_bytes());
@@ -273,6 +271,9 @@ fn u256_at(b: &[u8], at: usize) -> U256 {
     U256::from_le_bytes(b[at..at + 32].try_into().expect("32 bytes"))
 }
 
+/// The digest at `at`, or a panic: a lane at or above `p` is a second encoding
+/// of a node, which no proof may open.
 fn digest_at(b: &[u8], at: usize) -> Digest {
-    core::array::from_fn(|i| u64_at(b, at + 8 * i))
+    Digest::new(core::array::from_fn(|i| u64_at(b, at + 8 * i)))
+        .expect("marketplace: a digest's lane is not below p")
 }

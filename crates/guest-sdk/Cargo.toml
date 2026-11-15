@@ -18,6 +18,8 @@ publish = false
 [dependencies]
 # Every ecall number and range boundary has a single source, and this is it.
 constants = { path = "../constants" }
+# The field's modulus, below which a `Digest`'s every lane lies.
+field = { path = "../field" }
 # `__cxa_atexit`, in a crate of its own so it is an archive member of its own
 # (`cxa/Cargo.toml` says why).
 guest-sdk-cxa = { path = "cxa" }

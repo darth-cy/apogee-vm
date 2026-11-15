@@ -14,7 +14,7 @@
 //!   refused by its row alone;
 //! - **the statement reconciles**: every shard forwarded, and the roots of all
 //!   of them and the boundary multiply out, the anchors and the Poseidon2 state
-//!   included. A round row moved to another call's key keeps every row-local
+//!   included. A round row moved to another call's cycle keeps every row-local
 //!   relation and does not.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -46,10 +46,11 @@ fn f(v: u64) -> Fp {
     Fp::from_u64(v)
 }
 
-/// Lane `j` of leaf `i`: arbitrary, and the top lane at `2^64 − 1`, read mod p.
+/// Lane `j` of leaf `i`: arbitrary below `p`, and the top lane at `p − 1`, the
+/// largest a digest holds.
 fn leaf(i: usize, j: usize) -> u64 {
     match j {
-        7 => u64::MAX,
+        7 => field::A64_C5 - 1,
         _ => (i as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ j as u64,
     }
 }
@@ -539,18 +540,19 @@ fn the_statement_reconciles_and_a_round_moved_to_another_call_does_not() {
         &roots(&program, &archive, &|_, _, _| {})
     ));
 
-    // Call 1's first round row, keyed to call 0: every row-local relation of
-    // the row still holds — a key has no gate on a round row — and the
-    // state it reads and writes is now call 0's twice and call 1's never.
+    // Call 1's first round row, moved to call 0's cycle: every row-local
+    // relation of the row still holds — a cycle has no gate on a round row —
+    // and the state it reads and writes is now call 0's twice and call 1's
+    // never.
     let s = Shard::new(&program, &archive, family::POSEIDON2_ROUNDS);
-    let (key, row) = (s.at("key"), 16);
+    let (cycle, row) = (s.at("cycle"), 16);
     let mut moved = s.row(row);
-    moved[key] = s.row(0)[key];
+    moved[cycle] = s.row(0)[cycle];
     assert!(
         s.refused(&moved, row).is_empty(),
         "the moved row is a valid round"
     );
-    let at = s.a.column("key").expect("a key column");
+    let at = s.a.column("cycle").expect("a cycle column");
     let edit = |fam: u32, index: u32, columns: &mut [(PolyAddress, MultilinearPoly)]| {
         if (fam, index) != (family::POSEIDON2_ROUNDS, 0) {
             return;
@@ -558,7 +560,7 @@ fn the_statement_reconciles_and_a_round_moved_to_another_call_does_not() {
         let (_, c) = columns
             .iter_mut()
             .find(|(x, _)| *x == at)
-            .expect("the key column");
+            .expect("the cycle column");
         let mut values: Vec<Fp> = (0..c.len()).map(|i| c.get_base(i)).collect();
         values[row] = values[0];
         *c = MultilinearPoly::new(PolyBacking::Fp(values));

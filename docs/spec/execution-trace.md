@@ -24,7 +24,7 @@ count is the instruction count.
 | 2 | `RAM` | the byte address of a 4-aligned word in RAM, a public window or the advice region | the image's bytes in RAM, 0 past them; the public input's and the advice's layouts; 0 in the journal |
 | 3 | `PC` | 0 | the entry point |
 | 4 | `DELEGATION` | a delegation call's frame base | nothing: a request's anchor, read by its invocation |
-| 5 | `POSEIDON2` | `8·cycle + j`, a call's lane pair `j` | nothing: the state between its rows |
+| 5 | `POSEIDON2` | a call's cycle, its lane pair `j` at boundary `b` the timestamp `8b + j` | nothing: the state between its rows |
 
 The tags are nonzero so that no real tuple is all zeros, as `x0`'s initial write would be; 6 is the
 tag the next space takes. Spaces 4 and 5 are the precompile circuits' alone and no event is logged

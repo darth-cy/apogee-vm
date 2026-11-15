@@ -8,6 +8,7 @@
 //! a frame        M[1] cycle, M[2] number, then per frame word j
 //!                M[..] w{j}_addr w{j}_read_ts w{j}_read_value [w{j}_write_value]
 //!                W[..] w{j}_gap_c0 w{j}_gap_c1, RANGE16 chunks of 4·cycle − 1 − read_ts
+//!                W[..] room_h16: ADVICE_ORIGIN − 4·words − addr_0 is a word
 //!   read leaves  word j (RAM, addr_j, read_ts_j, read_value_j); the anchor
 //!                (DELEGATION, addr_0, cycle, number)
 //!   write leaves word j (RAM, addr_j, 4·cycle + FRAME_DELTA, write_value_j), the
@@ -23,7 +24,9 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use constants::{address_space, challenge_slot, delegation, lookup_channel, memory as mem};
+use constants::{
+    address_space, challenge_slot, delegation, guest_memory, lookup_channel, memory as mem,
+};
 use field::Fp;
 
 use crate::family::{Expr, T16};
@@ -313,13 +316,20 @@ pub struct Frame {
 /// ```text
 /// number_rule   number − NUMBER·live
 /// addr_w{j}     addr_j − addr_0 − 4j·live                      j ≥ 1
+/// room          ADVICE_ORIGIN·live − 4·words·live − addr_0, a word
 /// gap_w{j}      4·cycle + FRAME_DELTA − 1 − read_ts_j ∈ [0, 2^38)
 /// ```
 ///
-/// No gate bounds the base: a word whose address no window initializes, being
-/// unaligned or outside the four regions, reads a tuple nothing wrote, and the
-/// memory argument refuses it (`docs/spec/memory.md` §9). The anchor read pairs
-/// the row with the ecall that requested it, its `(base, cycle, number)`.
+/// `room` keeps the frame below the advice region, where every value is a
+/// word: its init is the image's, the public input's or 0, and every family
+/// writes words. So a frame's reads need no bound of their own; a word advice
+/// initialized could be any field element. `addr_0` is the anchor's `a0`, a
+/// word, so `room` is one exactly when the frame ends at or below
+/// `ADVICE_ORIGIN`. A
+/// word off initialized memory there, unaligned or in the hole, reads a tuple
+/// nothing wrote, and the memory argument refuses it (`docs/spec/memory.md`
+/// §9). The anchor read pairs the row with the ecall that requested it, its
+/// `(base, cycle, number)`.
 ///
 /// **UNFINISHED: A64-C5 CHARACTERISTIC**, as `memory::gap_lookups`: nothing
 /// bounds `cycle`, so the gap makes no timestamp an integer.
@@ -344,6 +354,8 @@ pub fn frame(b: &mut Builder, number: u32, words: usize, written: impl Fn(usize)
             write,
         });
     }
+    let end = guest_memory::ADVICE_ORIGIN as u64 - 4 * words as u64;
+    b.word("room", live * end - out[0].addr);
     for (j, w) in out.iter().enumerate() {
         if j > 0 {
             b.gate(

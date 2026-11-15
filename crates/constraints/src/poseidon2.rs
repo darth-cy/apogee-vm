@@ -14,7 +14,9 @@
 //!   is the kind's form under `ext` or `int` and no row mixes them.
 //!
 //! Lane pair `j` of the call at `cycle` at boundary `b` is the tuple
-//! `(POSEIDON2, 8·cycle + j, b, lane 2j, lane 2j + 1)`.
+//! `(POSEIDON2, cycle, 8b + j, lane 2j, lane 2j + 1)`: the call in the address
+//! and the place in the timestamp, so two calls' states are apart whenever
+//! their cycles are.
 
 use alloc::format;
 use alloc::vec::Vec;
@@ -35,7 +37,12 @@ pub const PARTIAL: usize = 14;
 /// The boundary the frame row receives the output at, the last live row's.
 pub const LAST: u64 = ROWS as u64 - 1;
 /// The state's lane pairs: tuple `j` carries lanes `2j` and `2j + 1`.
-const PAIRS: usize = WIDTH / 2;
+pub const PAIRS: usize = WIDTH / 2;
+
+/// Boundary `b`'s stamp: lane pair `j` of it is at timestamp `stamp(b) + j`.
+pub const fn stamp(boundary: u64) -> u64 {
+    PAIRS as u64 * boundary
+}
 
 const _: () = {
     assert!(3 * PARTIAL == RC_PARTIAL.len());
@@ -98,12 +105,13 @@ pub fn internal_forms() -> ([Form; PARTIAL], [Form; WIDTH]) {
     (inputs, state)
 }
 
-/// `POSEIDON2_ROUNDS`: a row reads lane pair `j` at boundary `round`, applies
-/// row `round`'s rounds, and writes it at `round + 1`.
+/// `POSEIDON2_ROUNDS`: row `k` of the call at `cycle` reads lane pair `j` at
+/// `stamp + j`, boundary `k`'s, applies its rounds, and writes it at
+/// `stamp + 8 + j`, boundary `k + 1`'s.
 ///
 /// ```text
 /// one_kind      Σ_k row_k − live                 the kind bits, one-hot on a live row
-/// round_rule    round − Σ_k k·row_k
+/// stamp_rule    stamp − Σ_k 8k·row_k
 /// ext_rule      ext − Σ_{k external} row_k        int_rule   int − live + ext
 /// y{j}_rule     y_j − ext·s_j − int·L_j(s, z) − Σ_k row_k·c_k[j]
 /// y{j}_sq_rule  y2_j − y_j²                       y{j}_cube_rule   z_j − y2_j·y_j
@@ -115,17 +123,17 @@ pub fn internal_forms() -> ([Form; PARTIAL], [Form; WIDTH]) {
 fn rounds() -> Builder {
     let mut b = Builder::new(family::POSEIDON2_ROUNDS);
     let live = b.live;
-    let key = b.mcol("key");
-    let round = b.mcol("round");
+    let cycle = b.mcol("cycle");
+    let stamp_col = b.mcol("stamp");
     let s: Vec<PolyAddress> = (0..WIDTH).map(|i| b.mcol(&format!("s{i}"))).collect();
     let o: Vec<PolyAddress> = (0..WIDTH).map(|i| b.mcol(&format!("o{i}"))).collect();
     let kinds: Vec<PolyAddress> = (0..ROWS - 1).map(|k| b.bit(&format!("row{k}"))).collect();
     b.gate("one_kind", sum(&kinds) - live);
-    let mut at = Expr::from(round);
+    let mut at = Expr::from(stamp_col);
     for (k, x) in kinds.iter().enumerate() {
-        at = at - *x * k as u64;
+        at = at - *x * stamp(k as u64);
     }
-    b.gate("round_rule", at);
+    b.gate("stamp_rule", at);
     let ext = b.col("ext");
     let int = b.col("int");
     let external: Vec<PolyAddress> = (0..ROWS - 1)
@@ -173,8 +181,8 @@ fn rounds() -> Builder {
             &format!("read_s{j}"),
             space,
             [
-                Part::plus(key, j as u64),
-                Part::of(round),
+                Part::of(cycle),
+                Part::plus(stamp_col, j as u64),
                 Part::of(s[2 * j]),
                 Part::of(s[2 * j + 1]),
             ],
@@ -184,8 +192,8 @@ fn rounds() -> Builder {
             &format!("write_o{j}"),
             space,
             [
-                Part::plus(key, j as u64),
-                Part::plus(round, 1),
+                Part::of(cycle),
+                Part::plus(stamp_col, stamp(1) + j as u64),
                 Part::of(o[2 * j]),
                 Part::of(o[2 * j + 1]),
             ],
@@ -198,7 +206,7 @@ fn rounds() -> Builder {
 /// output lanes received as boundary 15 and written canonical.
 ///
 /// ```text
-/// key_rule      key − 8·cycle
+/// last_rule     last − 120·live                  boundary 15's stamp
 /// u{j}_rule     u_j − Σ_k M_E[j][k]·(read_{2k} + 2^32·read_{2k+1})
 /// o{l}_rule     o_l − write_{2l} − 2^32·write_{2l+1}
 /// o{l}_top      is_zero(3·0xFFFF − h1 − h0 − l1, inv, top): both words' halfwords
@@ -213,8 +221,8 @@ fn frame_row() -> Builder {
     let mut b = Builder::new(family::POSEIDON2);
     let live = b.live;
     let f = frame(&mut b, ecall::POSEIDON2, 2 * WIDTH, |_| true);
-    let key = b.mcol("key");
-    b.gate("key_rule", key - f.cycle * 8);
+    let last = b.mcol("last");
+    b.gate("last_rule", last - live * stamp(LAST));
     let u: Vec<PolyAddress> = (0..WIDTH).map(|j| b.mcol(&format!("u{j}"))).collect();
     let o: Vec<PolyAddress> = (0..WIDTH).map(|l| b.mcol(&format!("o{l}"))).collect();
     for (j, uj) in u.iter().enumerate() {
@@ -254,8 +262,8 @@ fn frame_row() -> Builder {
             &format!("send_u{j}"),
             space,
             [
-                Part::plus(key, j as u64),
-                Part::default(),
+                Part::of(f.cycle),
+                Part::constant(j as u64),
                 Part::of(u[2 * j]),
                 Part::of(u[2 * j + 1]),
             ],
@@ -265,8 +273,8 @@ fn frame_row() -> Builder {
             &format!("receive_o{j}"),
             space,
             [
-                Part::plus(key, j as u64),
-                Part::constant(LAST),
+                Part::of(f.cycle),
+                Part::plus(last, j as u64),
                 Part::of(o[2 * j]),
                 Part::of(o[2 * j + 1]),
             ],

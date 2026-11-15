@@ -16,7 +16,8 @@ sweep's refusals (§2).
 
 Of a program header it reads `p_type`, `p_offset`, `p_vaddr`, `p_filesz`, `p_memsz` and the `PF_X`
 bit, and nothing else: the VM has no pages, and all of RAM is addressable whatever the segments
-declare. The address map, and the segment layout a guest ELF keeps for host loaders, are
+declare. Of the section headers it reads one section, the delegation declarations, by its name
+(§3). The address map, and the segment layout a guest ELF keeps for host loaders, are
 [ecall-abi.md](ecall-abi.md) §5.
 
 ## 2. RVC expansion and slots
@@ -55,19 +56,25 @@ sequence assembled compressed and not: a wrong expansion would be a valid proof 
 
 ## 3. `ProgramImage` and its wire form
 
-The wire form is `postcard` over `ProgramImage`'s four fields in order, with no header; every
+The wire form is `postcard` over `ProgramImage`'s five fields in order, with no header; every
 integer but `kind` is a LEB128 varint:
 
 ```text
-ProgramImage = entry ‖ n ‖ n × Segment ‖ slot_base ‖ m ‖ m × Slot
+ProgramImage = entry ‖ n ‖ n × Segment ‖ slot_base ‖ m ‖ m × Slot ‖ d ‖ d × number
 Segment      = vaddr ‖ mem_len ‖ len ‖ bytes    mem_len is p_memsz; bytes, the p_filesz file bytes
 Slot         = kind: u8 ‖ word                  kind 0 a four-byte instruction, 1 a two-byte one,
                                                 2 MidInstruction, 3 NonInstruction; word 0 for 2, 3
+number       a declared delegation's ecall number
 ```
 
-The reader re-checks what `load_elf` establishes — segments at even addresses, sorted, disjoint
-and inside RAM; `slot_base` the lowest segment's address; each four-byte `Instruction` followed by
-its `MidInstruction`; `entry` an `Instruction` slot — but not `slots` against the bytes.
+`delegations`, the numbers, are the `u32` records of the ELF section
+`constants::delegation::SECTION`, `.apogee.delegations`, ascending and distinct: `load_elf` finds it
+by name in the section headers, refuses one that is not `PROGBITS` holding whole records within the
+file (`MalformedDelegations`), and reads nothing else for it, an ELF without it declaring nothing
+([precompiles.md](precompiles.md) §1). The reader re-checks what `load_elf` establishes — segments
+at even addresses, sorted, disjoint and inside RAM; `slot_base` the lowest segment's address; each
+four-byte `Instruction` followed by its `MidInstruction`; `entry` an `Instruction` slot; the numbers
+ascending and distinct — but not `slots` against the bytes.
 `artifact-dump` writes this form ([tools.md](../tools.md) §5); no prover or verifier reads it,
 `host::setup` starting from the ELF.
 
@@ -166,9 +173,9 @@ the family set, and nothing selects it:
 2. a **window** family, whose rows are memory locations — `INIT_TEARDOWN` (7), `ZERO_WINDOWS` (8),
    `PUBLIC_INPUT` (9), `PUBLIC_OUTPUT` (10), `ADVICE_WINDOWS` (11) — is always present;
 3. a **delegation** family (12–14), whose rows are precompile calls, is present when the image
-   declares its number (`program::declared_delegations`: a record `MARKER_MAGIC ‖ number` in a
-   file-backed byte, each family of the number then present, an unregistered number refused as
-   `UnknownDelegation`; [precompiles.md](precompiles.md) §1).
+   declares its number (`program::declared_delegations`: a number of `image.delegations`, §3, each
+   family of the number then present, an unregistered number refused as `UnknownDelegation`;
+   [precompiles.md](precompiles.md) §1).
 
 A height is a parameter (`ProgramParams::heights`, defaulting to
 `constants::family::DEFAULT_HEIGHTS`, [circuits.md](circuits.md) §1), except the public families',
@@ -206,7 +213,7 @@ A digest, `ProgramIdentity`, on the wire its 8 lanes' canonical bytes in order, 
 
 | # | tag | message |
 | --- | --- | --- |
-| 1 | `PROGRAM_IDENTITY` | `[code_version]`: `constants::family::CODE_VERSION`, 1, the only one derivation builds (`UnsupportedCodeVersion`) |
+| 1 | `PROGRAM_IDENTITY` | `[code_version, circuit_revision]`: `constants::family::CODE_VERSION`, 1, the only one derivation builds (`UnsupportedCodeVersion`), and `CIRCUIT_REVISION`, 1, the registry's |
 | 2 | `VM_CONFIG` | §7's |
 | 3 | `PROGRAM_ENTRY` | `[entry_pc]` |
 | 4 | `SETUP_COMMITMENT` | once per family of the config, in its order: its setup commitment's payloads, empty for a family with none |
@@ -221,16 +228,19 @@ carries the commitments, and every shard opens its setup columns against its fam
 identity commits every setup column, so it needs every family's circuit: `program_identity` refuses
 a config with a family no circuit proves at its height (`NoCircuit`).
 
-**It binds** the entry pc; the family set, every height, `bytecode_size_words` and the code
-version; every instruction the sweep found, with its pc, length, operands and kind, and that no
-other pc holds one; every file byte of the image (`.text`, `.rodata`, `.data`); and the generic
-table. One ELF at two settings of the heights has two identities.
+**It binds** the entry pc; the family set, every height, `bytecode_size_words`, the code version and
+the circuit revision; every instruction the sweep found, with its pc, length, operands and kind, and
+that no other pc holds one; every file byte of the image (`.text`, `.rodata`, `.data`); and the
+generic table. One ELF at two settings of the heights has two identities.
 `crates/program/tests/identity.rs`' `every_code_and_image_byte_moves_the_identity` holds an
 instruction word, a `.rodata` byte and a `.data` byte to it.
 
 **It does not bind**:
 
-- the circuits, which a key's load holds to the registry ([proof.md](proof.md) §7);
+- the circuits themselves, which a key's load holds to the registry ([proof.md](proof.md) §7). Their
+  revision names them: `CIRCUIT_REVISION` moves with every change to a registry circuit, so a key
+  made by another registry has another identity, and a key cached by identity is never another
+  registry's;
 - anything an execution chooses: its input, advice, shard counts, window list;
 - memory past a segment's file bytes (`.bss`, the heap and the stack): `mem_len` enters nothing,
   and such memory starts at zero whatever is declared;

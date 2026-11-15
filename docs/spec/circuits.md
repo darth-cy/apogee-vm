@@ -38,9 +38,9 @@ lists (the halving ones are `n`), inner columns, artifact bytes, and a shard pro
 | 9 | `PUBLIC_INPUT` | 12 | 3 | 0 | 0 | 0 | — | 1 | 26 | 1,759 | 5,992 |
 | 10 | `PUBLIC_OUTPUT` | 12 | 2 | 0 | 0 | 0 | — | 1 | 26 | 1,714 | 5,976 |
 | 11 | `ADVICE_WINDOWS` | 22 | 3 | 0 | 0 | 0 | — | 1 | 46 | 2,839 | 17,912 |
-| 12 | `POSEIDON2` | 16 | 164 | 129 | 0 | 98 | 0/208/0/0 | 9 | 1,344 | 211,128 | 44,360 |
-| 13 | `POSEIDON2_ROUNDS` | 16 | 35 | 65 | 0 | 84 | — | 4 | 62 | 57,151 | 15,088 |
-| 14 | `MUL_DIV_U256` | 16 | 91 | 134 | 0 | 48 | 0/237/0/0 | 9 | 1,218 | 180,671 | 41,256 |
+| 12 | `POSEIDON2` | 16 | 164 | 130 | 0 | 98 | 0/210/0/0 | 9 | 1,344 | 208,518 | 44,376 |
+| 13 | `POSEIDON2_ROUNDS` | 16 | 35 | 65 | 0 | 84 | — | 4 | 62 | 58,609 | 15,088 |
+| 14 | `MUL_DIV_U256` | 16 | 91 | 135 | 0 | 48 | 0/239/0/0 | 9 | 1,218 | 180,932 | 41,272 |
 
 The bytes are the GKR pass and outputs; the witness commitment and the opening come on top
 ([proof.md](proof.md) §9, [pcs.md](pcs.md) §7).

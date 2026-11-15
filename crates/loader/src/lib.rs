@@ -14,6 +14,8 @@
 //! 3. Sweep every **executable** segment linearly, halfword by halfword,
 //!    expanding each compressed instruction to the exact 32-bit instruction it
 //!    abbreviates.
+//! 4. Read the delegation declarations from the one section named
+//!    `constants::delegation::SECTION`, and from nothing else.
 //!
 //! # Addresses are preserved, never compacted
 //!
@@ -54,7 +56,7 @@ mod symbols;
 
 pub use symbols::{function_symbols, symbol_names, FuncSymbol};
 
-use constants::guest_memory;
+use constants::{delegation, guest_memory};
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -110,6 +112,9 @@ pub enum LoaderError {
     /// A 32-bit instruction whose second halfword lies past the end of its
     /// segment.
     TextTruncated { pc: u32 },
+    /// The `constants::delegation::SECTION` section is not `PROGBITS` holding
+    /// a whole number of `u32` records within the file.
+    MalformedDelegations,
 }
 
 // ---------------------------------------------------------------------------
@@ -146,11 +151,12 @@ pub enum Slot {
     NonInstruction,
 }
 
-/// A loaded program: the post-load memory image, the entry pc, and the
-/// expanded instruction stream at halfword granularity.
+/// A loaded program: the post-load memory image, the entry pc, the expanded
+/// instruction stream at halfword granularity, and the delegations it
+/// declares.
 ///
 /// Fields and serialization are a fixed format (`docs/spec/program.md` §3).
-/// The wire form is `postcard` over these four fields in declaration order —
+/// The wire form is `postcard` over these five fields in declaration order —
 /// sorted vectors, never a hash map — so two loads of the same ELF serialize
 /// to the same bytes on any machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -167,6 +173,10 @@ pub struct ProgramImage {
     /// [`Slot::NonInstruction`], so the vector stops and [`ProgramImage::slot_at`]
     /// answers `None`.
     pub slots: Vec<Slot>,
+    /// The delegation ecall numbers the ELF declares, ascending and distinct:
+    /// the `u32` records of its `constants::delegation::SECTION` section, none
+    /// where it has no such section (`docs/spec/precompiles.md` §1).
+    pub delegations: Vec<u32>,
 }
 
 impl ProgramImage {
@@ -282,6 +292,7 @@ pub fn load_elf(bytes: &[u8]) -> Result<ProgramImage, LoaderError> {
         segments: loaded.into_iter().map(|(s, _)| s).collect(),
         slot_base,
         slots,
+        delegations: delegations(bytes)?,
     };
 
     // A program whose first instruction is not an instruction is a
@@ -290,6 +301,27 @@ pub fn load_elf(bytes: &[u8]) -> Result<ProgramImage, LoaderError> {
         Some(Slot::Instruction { .. }) => Ok(image),
         _ => Err(LoaderError::EntryNotAnInstruction { entry }),
     }
+}
+
+/// The records of the section `constants::delegation::SECTION` names, read
+/// by name and nowhere else, so no other byte of the image declares anything:
+/// each the ecall number of a shim the guest links, ascending and distinct.
+fn delegations(bytes: &[u8]) -> Result<Vec<u32>, LoaderError> {
+    const SHT_PROGBITS: u32 = 1;
+    let Some(section) = symbols::section_named(bytes, delegation::SECTION) else {
+        return Ok(Vec::new());
+    };
+    let records = (section.kind == SHT_PROGBITS && section.size % 4 == 0)
+        .then(|| symbols::slice(bytes, section.offset, section.size))
+        .flatten()
+        .ok_or(LoaderError::MalformedDelegations)?;
+    let mut numbers: Vec<u32> = records
+        .chunks_exact(4)
+        .map(|r| u32::from_le_bytes([r[0], r[1], r[2], r[3]]))
+        .collect();
+    numbers.sort_unstable();
+    numbers.dedup();
+    Ok(numbers)
 }
 
 /// Read and validate the ELF header. Returns `(entry, phoff, phentsize, phnum)`.
@@ -779,6 +811,43 @@ impl<'de> Visitor<'de> for SlotsVisitor {
     }
 }
 
+/// A `&[u32]` written as a sequence.
+struct Numbers<'a>(&'a [u32]);
+
+impl serde::Serialize for Numbers<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(self.0.iter())
+    }
+}
+
+struct NumbersVisitor;
+
+impl<'de> Visitor<'de> for NumbersVisitor {
+    type Value = Vec<u32>;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("the declared delegation numbers")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<u32>, A::Error> {
+        let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+        while let Some(x) = seq.next_element::<u32>()? {
+            out.push(x);
+        }
+        Ok(out)
+    }
+}
+
+struct NumbersSeed;
+
+impl<'de> serde::de::DeserializeSeed<'de> for NumbersSeed {
+    type Value = Vec<u32>;
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> Result<Vec<u32>, D::Error> {
+        d.deserialize_seq(NumbersVisitor)
+    }
+}
+
 /// Reads the sequences through their visitors inside the image's tuple.
 struct SegmentsSeed;
 
@@ -802,11 +871,12 @@ impl<'de> serde::de::DeserializeSeed<'de> for SlotsSeed {
 
 impl serde::Serialize for ProgramImage {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut t = s.serialize_tuple(4)?;
+        let mut t = s.serialize_tuple(5)?;
         t.serialize_element(&self.entry)?;
         t.serialize_element(&Segments(&self.segments))?;
         t.serialize_element(&self.slot_base)?;
         t.serialize_element(&Slots(&self.slots))?;
+        t.serialize_element(&Numbers(&self.delegations))?;
         t.end()
     }
 }
@@ -829,11 +899,15 @@ impl<'de> Visitor<'de> for ProgramImageVisitor {
         let slots = seq
             .next_element_seed(SlotsSeed)?
             .ok_or_else(|| A::Error::custom("malformed program image: missing slots"))?;
+        let delegations = seq
+            .next_element_seed(NumbersSeed)?
+            .ok_or_else(|| A::Error::custom("malformed program image: missing delegations"))?;
         let image = ProgramImage {
             entry,
             segments,
             slot_base,
             slots,
+            delegations,
         };
         validate(&image).map_err(A::Error::custom)?;
         Ok(image)
@@ -842,7 +916,7 @@ impl<'de> Visitor<'de> for ProgramImageVisitor {
 
 impl<'de> serde::Deserialize<'de> for ProgramImage {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<ProgramImage, D::Error> {
-        d.deserialize_tuple(4, ProgramImageVisitor)
+        d.deserialize_tuple(5, ProgramImageVisitor)
     }
 }
 
@@ -853,6 +927,9 @@ impl<'de> serde::Deserialize<'de> for ProgramImage {
 /// what program identity is derived from and the emulator executes. A field
 /// the reader accepts is a field every later step will believe.
 fn validate(image: &ProgramImage) -> Result<(), &'static str> {
+    if image.delegations.windows(2).any(|w| w[0] >= w[1]) {
+        return Err("malformed program image: the delegations are not ascending and distinct");
+    }
     if !image.slot_base.is_multiple_of(2) {
         return Err("malformed program image: slot_base is odd");
     }

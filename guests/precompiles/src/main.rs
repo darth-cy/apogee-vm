@@ -10,7 +10,7 @@
 //!
 //! ```text
 //!           0..4     n               u32 LE, a power of two, at most 16
-//!           4..      n leaves        8 lanes of u64 LE each
+//!           4..      n leaves        8 lanes of u64 LE each, each below p
 //! ```
 //!
 //! # The journal
@@ -24,7 +24,7 @@
 //!                                   then q and r, 32 bytes LE each, zero if refused
 //! ```
 
-use guest_sdk::{poseidon2_compress, poseidon2_permute, U256};
+use guest_sdk::{poseidon2_compress, poseidon2_permute, Digest, U256};
 
 guest_sdk::entry!(main);
 
@@ -58,12 +58,13 @@ fn main() {
         n.is_power_of_two() && n <= 16,
         "precompiles: n is a power of two to 16"
     );
-    let mut level = [[0u64; 8]; 16];
+    let mut level = [Digest::default(); 16];
     for (i, leaf) in level.iter_mut().take(n).enumerate() {
-        for (j, lane) in leaf.iter_mut().enumerate() {
+        let lanes = core::array::from_fn(|j| {
             let at = 4 + 64 * i + 8 * j;
-            *lane = u64::from_le_bytes(input[at..at + 8].try_into().expect("a lane"));
-        }
+            u64::from_le_bytes(input[at..at + 8].try_into().expect("a lane"))
+        });
+        *leaf = Digest::new(lanes).expect("precompiles: a leaf lane is not below p");
     }
     let mut width = n;
     while width > 1 {
@@ -72,9 +73,9 @@ fn main() {
         }
         width /= 2;
     }
-    level[0].iter().for_each(|l| put(&l.to_le_bytes()));
+    level[0].lanes().iter().for_each(|l| put(&l.to_le_bytes()));
     let mut state = [0u64; 16];
-    state[..8].copy_from_slice(&level[0]);
+    state[..8].copy_from_slice(level[0].lanes());
     for _ in 0..CHAIN {
         poseidon2_permute(&mut state);
     }

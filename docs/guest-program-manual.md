@@ -127,9 +127,10 @@ Two operations are not RV64IMAC code but a circuit each, which a guest reaches t
 `mul_div` that a token balance's arithmetic is built on.
 
 ```rust
-use guest_sdk::{poseidon2_compress, U256};
+use guest_sdk::{poseidon2_compress, Digest, U256};
 
-let node = poseidon2_compress(&left, &right); // [u64; 8] digests, a Merkle node
+let sibling = Digest::new(lanes).expect("a lane below p"); // 8 canonical lanes, from advice say
+let node = poseidon2_compress(&leaf, &sibling); // a Merkle node, a Digest
 let share = U256::from(amount).mul_div(U256::from(total), U256::from(reserve)); // Option<U256>
 ```
 
@@ -137,6 +138,12 @@ let share = U256::from(amount).mul_div(U256::from(total), U256::from(reserve)); 
   operators panic on overflow and on a zero divisor; `checked_*` and `overflowing_*` do not.
 - Division and `mul_div` are one precompile call each; addition, comparison and multiplication are
   a few instructions a limb. `mul_div` is `None` for a zero divisor or a quotient past `2^256`.
+- A `Digest`'s lanes are each below `p`: `Digest::new` refuses any other, as a lane `x + p` would be
+  a second encoding of the node `x` opens. Decode every digest from advice or input through it; a
+  node `poseidon2_compress` returns is one already.
+- A precompile's frame is the guest's own memory below the advice region, which the SDK's calls
+  always are: advice is copied in before it is hashed, and a frame reaching the advice is the fatal
+  `OutOfBounds`.
 - A guest that links a precompile pays one shard of each family it declares, at `2^16` rows: worth
   it once the call replaces more instructions than that ([circuits.md](spec/circuits.md) §1).
 - `guests/marketplace` is the worked example of a table a proof follows by its root: a listings
@@ -180,7 +187,7 @@ fit its decoded table (§8). The identity you publish is the release image's.
 cargo run -p artifact-dump -- guests/target/riscv64imac-unknown-none-elf/debug/hello --out artifacts
 ```
 
-This writes `artifacts/hello.img`, `postcard` over `ProgramImage`'s four fields with no header
+This writes `artifacts/hello.img`, `postcard` over `ProgramImage`'s five fields with no header
 ([program.md](spec/program.md) §3), and `artifacts/hello.img.txt`, its report, and prints the entry,
 the segment and instruction counts and the artifact's size and SHA-256. The tool first serializes
 the image, reads it back through the validating reader and compares; on a difference, or an ELF the

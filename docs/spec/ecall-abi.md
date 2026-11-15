@@ -33,8 +33,9 @@ A class says who chooses the result. **deterministic**: a function of the guest'
 a circuit proves. **advice**: chosen by the prover; no number has it. A proof admits these three:
 `ADD_SUB_LUI_AUIPC` holds an exit row's `a7` to 93, and a delegation call's row writes an anchor only
 the family of its number reads ([precompiles.md](precompiles.md) §2). A delegation call preserves
-`a0`, as every register; its frame is any word-aligned span a store could write, each word checked
-as one.
+`a0`, as every register; its frame is a word-aligned span a store could write, each word checked as
+one, below `ADVICE_ORIGIN` (§5): a frame reaching the advice is the fatal `OutOfBounds`
+([precompiles.md](precompiles.md) §1).
 
 ## 3. Retired numbers
 
@@ -142,7 +143,7 @@ ecall; the rest is loads and stores.
 | `exit(code)` | `EXIT`; publishes nothing beyond what was committed |
 | allocator | bumps up from `__heap_start`, never frees; exits 71 when a block would end above `__stack_top − STACK_RESERVE` or the live `sp` |
 | panic handler | exits 101 and writes nothing: a panicking guest is provable, having published what it committed |
-| `poseidon2_permute(state)`, `poseidon2_compress(l, r)` | `POSEIDON2` over a `[u64; 16]`, and a Merkle node over two 8-lane digests ([precompiles.md](precompiles.md) §5) |
+| `poseidon2_permute(state)`, `Digest`, `poseidon2_compress(l, r)` | `POSEIDON2` over a `[u64; 16]`; 8 lanes, each below `p`; and a Merkle node over two `Digest`s ([precompiles.md](precompiles.md) §5) |
 | `U256` | a 256-bit integer; its division and `mul_div` are `MUL_DIV_U256` |
 
 ## 7. The C ABI

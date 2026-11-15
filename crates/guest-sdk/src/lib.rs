@@ -30,7 +30,7 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::arch::global_asm;
 
-use constants::{delegation, ecall, guest_memory};
+use constants::{ecall, guest_memory};
 
 // ---------------------------------------------------------------------------
 // crt0
@@ -434,52 +434,28 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 // Last in the file, so a guest that calls no delegation links none of it and
 // the line numbers -- the panic locations -- of everything above stay put.
 
-/// A declaration record (`constants::delegation`): the magic, then `number`
-/// little-endian. `const`-evaluated, so it is `.rodata` and not code.
-const fn record(number: u32) -> [u8; delegation::MARKER_BYTES] {
-    let magic = delegation::MARKER_MAGIC;
-    let number = number.to_le_bytes();
-    let mut out = [0u8; delegation::MARKER_BYTES];
-    let mut i = 0;
-    while i < delegation::MARKER_BYTES {
-        out[i] = if i < magic.len() {
-            magic[i]
-        } else {
-            number[i - magic.len()]
-        };
-        i += 1;
-    }
-    out
-}
+// A shim's record is a `static`, its ecall number, in a section of its own,
+// `.apogee.delegations.<name>`, which `apogee.ld` gathers into
+// `constants::delegation::SECTION`: the linker keeps or drops sections whole,
+// so two records in one would declare both families for a guest that reaches
+// either. And no `#[used]`: a record must be in the image exactly when its
+// shim is, so what keeps it is the shim reading its ecall number out of it.
 
-// A shim's record is a `static` in a section of its own,
-// `.rodata.apogee.delegations.<name>`: the linker keeps or drops sections
-// whole, so two records in one would declare both families for a guest that
-// reaches either. And no `#[used]`: a record must be in the image exactly when
-// its shim is, so what keeps it is the shim reading its ecall number out of it.
+#[link_section = ".apogee.delegations.poseidon2"]
+static POSEIDON2: u32 = ecall::POSEIDON2;
 
-#[link_section = ".rodata.apogee.delegations.poseidon2"]
-static POSEIDON2: [u8; delegation::MARKER_BYTES] = record(ecall::POSEIDON2);
-
-#[link_section = ".rodata.apogee.delegations.mul_div_u256"]
-static MUL_DIV_U256: [u8; delegation::MARKER_BYTES] = record(ecall::MUL_DIV_U256);
+#[link_section = ".apogee.delegations.mul_div_u256"]
+static MUL_DIV_U256: u32 = ecall::MUL_DIV_U256;
 
 /// One delegation call over the frame at `frame`, its ecall number read back
 /// out of `declared`. Through `black_box`: folded to an immediate, the read
 /// would leave the record unreferenced and the declaration out of the image.
 ///
 /// # Safety
-/// `frame` is word-aligned, and valid for reads and writes of the whole frame
-/// `declared`'s family reads and writes in place.
-unsafe fn delegate(declared: &'static [u8; delegation::MARKER_BYTES], frame: *mut u32) {
-    let declared = core::hint::black_box(declared);
-    let n = delegation::MARKER_MAGIC.len();
-    let number = u32::from_le_bytes([
-        declared[n],
-        declared[n + 1],
-        declared[n + 2],
-        declared[n + 3],
-    ]);
+/// `frame` is word-aligned, below the advice region, and valid for reads and
+/// writes of the whole frame `declared`'s family reads and writes in place.
+unsafe fn delegate(declared: &'static u32, frame: *mut u32) {
+    let number = *core::hint::black_box(declared);
     // `a0` is preserved, and the default options let the call read and write
     // the memory `frame` reaches.
     core::arch::asm!("ecall", in("a7") number as usize, in("a0") frame as usize);
@@ -493,16 +469,43 @@ pub fn poseidon2_permute(state: &mut [u64; 16]) {
     unsafe { delegate(&POSEIDON2, state.as_mut_ptr().cast()) }
 }
 
+/// Eight lanes, each canonical, below `p = 2^64 − 59` (`field::A64_C5`): a
+/// digest, the transcript's width, and what [`poseidon2_compress`] takes. The
+/// call reads a lane mod `p`, so `x` and `x + p` would be two encodings of one
+/// node, and a `Digest` has one: a digest decoded from input or advice is
+/// [`Digest::new`]'s to check, once, and a node the call wrote is canonical
+/// already.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Digest([u64; 8]);
+
+impl Digest {
+    /// `lanes`, if every one is below `p`.
+    pub const fn new(lanes: [u64; 8]) -> Option<Digest> {
+        let mut i = 0;
+        while i < lanes.len() {
+            if lanes[i] >= field::A64_C5 {
+                return None;
+            }
+            i += 1;
+        }
+        Some(Digest(lanes))
+    }
+
+    pub const fn lanes(&self) -> &[u64; 8] {
+        &self.0
+    }
+}
+
 /// A Merkle node: the first 8 lanes of the permutation of `left ‖ right`,
-/// truncated with no feed-forward. A digest is 8 lanes, the transcript's.
-pub fn poseidon2_compress(left: &[u64; 8], right: &[u64; 8]) -> [u64; 8] {
+/// truncated with no feed-forward.
+pub fn poseidon2_compress(left: &Digest, right: &Digest) -> Digest {
     let mut state = [0u64; 16];
-    state[..8].copy_from_slice(left);
-    state[8..].copy_from_slice(right);
+    state[..8].copy_from_slice(&left.0);
+    state[8..].copy_from_slice(&right.0);
     poseidon2_permute(&mut state);
     let mut out = [0u64; 8];
     out.copy_from_slice(&state[..8]);
-    out
+    Digest(out)
 }
 
 /// `(floor(a·b/d), a·b mod d)` by the precompile (`docs/spec/precompiles.md`

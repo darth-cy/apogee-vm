@@ -47,7 +47,8 @@ __attribute__((noreturn)) void apogee_exit(int32_t code);
 
 /* The Poseidon2-A64-C5 permutation of the 16 lanes at `state`, in place, by
  * the precompile: each lane read mod p = 2^64 - 59 and written below it.
- * `state` is 8-aligned. */
+ * `state` is 8-aligned and below the advice region: copy advice in before
+ * hashing it. */
 void apogee_poseidon2_permute(uint64_t state[16]);
 
 /* q = floor(a*b/d) and r = a*b mod d over the full 512-bit product, by the

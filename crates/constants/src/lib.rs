@@ -59,9 +59,9 @@ pub mod transcript_tags {
     /// changes the digest. `docs/spec/public-values.md` §5.
     pub const PUBLIC_OUTPUT_STREAM: u64 = 8;
 
-    /// Scalars. The first message of the program-identity sponge: the single
-    /// element `code version`. It is what opens that sponge, so the identity
-    /// is domain-separated from every other digest in the protocol.
+    /// Scalars. The first message of the program-identity sponge: `[code
+    /// version, circuit revision]`. It is what opens that sponge, so the
+    /// identity is domain-separated from every other digest in the protocol.
     /// `docs/spec/program.md` §8. Also the global transcript's G5 message, the
     /// identity's 8 lanes (`docs/spec/proof.md` §2).
     pub const PROGRAM_IDENTITY: u64 = 9;
@@ -590,6 +590,13 @@ pub mod family {
     /// The version of the decoded-table construction. Absorbed first into the
     /// program-identity sponge. Changing it re-registers every program.
     pub const CODE_VERSION: u32 = 1;
+
+    /// The registry's revision: the circuit `constraints::family_circuit`
+    /// builds for each family at each height, which a key carries and its load
+    /// holds to the registry. Absorbed beside [`CODE_VERSION`], so a key from
+    /// a registry of another revision is another program's; bumped with every
+    /// change to a registry circuit. Changing it re-registers every program.
+    pub const CIRCUIT_REVISION: u32 = 1;
 }
 
 /// The bit positions of `family_extra_mask`, per family. A bit position is
@@ -893,7 +900,7 @@ pub mod address_space {
     /// else reaches it.
     pub const DELEGATION: u8 = 4;
     /// The Poseidon2 state between rows: lane pair `j` of the call at `cycle`,
-    /// at boundary `b`, is the tuple `(POSEIDON2, 8·cycle + j, b, lane 2j,
+    /// at boundary `b`, is the tuple `(POSEIDON2, cycle, 8b + j, lane 2j,
     /// lane 2j + 1)` (`docs/spec/precompiles.md` §3).
     pub const POSEIDON2: u8 = 5;
 }
@@ -954,8 +961,8 @@ pub mod memory {
 /// **invocation**: a row of the number's frame family, which reads and writes
 /// every frame word at the requesting cycle's timestamp plus [`FRAME_DELTA`],
 /// and the rows a family expanding it adds. A delegation family claims no pc,
-/// so a guest **declares** what it links: each SDK shim emits a record
-/// ([`MARKER_MAGIC`], then the ecall number) and `program` puts exactly the
+/// so a guest **declares** what it links: each SDK shim emits a record, its
+/// ecall number, in the ELF section [`SECTION`], and `program` puts exactly the
 /// declared families in the `VmConfig`.
 ///
 /// [`TYPES`] is the registry. A new delegation is a row here and one arm each
@@ -970,12 +977,11 @@ pub mod delegation {
     /// `(RAM, 0)` is a pair no query of `constraints::memory`'s frame holds.
     pub const FRAME_DELTA: u64 = 0;
 
-    /// The eight bytes that open a declaration record.
-    pub const MARKER_MAGIC: [u8; 8] = *b"APOGDEL1";
-
-    /// A declaration record's length: [`MARKER_MAGIC`], then the declared
-    /// ecall number as a little-endian `u32`.
-    pub const MARKER_BYTES: usize = 12;
+    /// The ELF section of the declaration records, each the declared ecall
+    /// number as a little-endian `u32`. A shim's record is an input section
+    /// `.apogee.delegations.<name>` of its own, which `apogee.ld` gathers here
+    /// and `loader::load_elf` reads by this name, never by content.
+    pub const SECTION: &str = ".apogee.delegations";
 
     /// Every delegation family as `(family, ecall number, frame words, rows a
     /// call)`, ascending by family. A row is never reassigned.

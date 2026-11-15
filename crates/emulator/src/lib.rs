@@ -96,7 +96,7 @@ pub enum EmuError {
     Misaligned { pc: u32, addr: u64, width: u32 },
     /// A data access outside the addressable regions — RAM, the two public
     /// windows, and the advice words the host supplied — or a delegation frame
-    /// not wholly in RAM.
+    /// that reaches the advice region.
     OutOfBounds { pc: u32, addr: u64 },
     /// Cycle `cycle`'s timestamps would pass the 38-bit clock.
     ClockOverflow { cycle: u64 },
@@ -1047,9 +1047,9 @@ impl<'a> Machine<'a> {
     /// Execute delegation `family` over the frame at `base`, in place,
     /// returning each frame word as `(address, old, new)`.
     ///
-    /// Every frame word must be one a store could write; anything else is a
-    /// fatal guest error, as a misaligned store is. What the call computes is
-    /// [`frame_function`]'s.
+    /// Every frame word must be one a store could write, below the advice
+    /// region; anything else is a fatal guest error, as a misaligned store is.
+    /// What the call computes is [`frame_function`]'s.
     fn delegate(
         &mut self,
         family: FamilyId,
@@ -1057,13 +1057,14 @@ impl<'a> Machine<'a> {
         base: u64,
     ) -> Result<Vec<(u32, u32, u32)>, EmuError> {
         let words = program::delegation_frame_words(family).expect("a delegation family");
-        // Every word is checked as a store's is: aligned, and in a region a
-        // guest may write. The circuit bounds no base; a word off initialized
-        // memory would read a tuple nothing wrote.
-        for j in 0..words as u64 {
-            let addr = base
-                .checked_add(4 * j)
-                .ok_or(EmuError::OutOfBounds { pc, addr: base })?;
+        // The frame ends at or below the advice, the circuit's `room`, and
+        // every word is checked as a store's is: aligned, and in a region a
+        // guest may write.
+        let end = base
+            .checked_add(4 * words as u64)
+            .filter(|end| *end <= guest_memory::ADVICE_ORIGIN as u64)
+            .ok_or(EmuError::OutOfBounds { pc, addr: base })?;
+        for addr in (base..end).step_by(4) {
             self.data_word(pc, addr, 4)?;
         }
         let base = base as u32;
@@ -1496,6 +1497,7 @@ mod tests {
                 },
                 Slot::MidInstruction,
             ],
+            delegations: Vec::new(),
         }
     }
 
