@@ -36,16 +36,17 @@ use constants::{delegation, ecall, guest_memory};
 // ---------------------------------------------------------------------------
 
 // `_start` sits in its own `.text._start` section so the linker script places
-// it first, at ORIGIN(RAM). It does exactly six things: point `sp` at
+// it first, at ORIGIN(RAM). It does exactly five things: point `sp` at
 // `__stack_top`, zero `.bss`, call each initializer in
-// `__init_array_start..__init_array_end` in order, call `main`, run the
-// destructors `__cxa_atexit` registered, and exit with what `main` returned in
-// `a0` — C's `int main(void)`, and 0 from the `entry!` wrapper. The
-// initializers are C++'s dynamic initialization and C's constructor functions,
-// and the destructors are its static objects'. A Rust guest has neither, and
-// pays a few instructions for each empty step. The pointers are walked in `s0`
-// and `s1`, and `main`'s status is kept in `s0`: callee-saved registers, which
-// every initializer and destructor preserves.
+// `__init_array_start..__init_array_end` in order, call `__apogee_main`, and
+// exit with what it returned in `a0`. `apogee.ld` makes `__apogee_main` the
+// guest's `main` — C's `int main(void)`, and 0 from the `entry!` wrapper —
+// unless the guest has destructors: C++'s, registered through `__cxa_atexit`
+// for its static objects, or C's destructor functions. Then it is `main`
+// followed by them, `__apogee_main_then_destructors`. The initializers are
+// C++'s dynamic initialization and C's constructor functions; a Rust guest has
+// none, and pays five instructions for the empty loop and none for destructors.
+// The pointers are walked in `s0` and `s1`, which every initializer preserves.
 //
 // The `.bss` loop is byte-wise on purpose. `__bss_start` is aligned to the
 // output section's alignment and `__bss_end` is not aligned at all, so a
@@ -80,16 +81,12 @@ global_asm!(
     "  addi s0, s0, 8",
     "  j    3b",
     "4:",
-    "  call main",
-    "  mv   s0, a0",
-    "  call {destructors}",
-    "  mv   a0, s0",
+    "  call __apogee_main",
     "  li   a7, {exit}",
     "  ecall",
     "5:",
     "  j    5b",
     exit = const ecall::EXIT,
-    destructors = sym run_destructors,
 );
 
 /// Give a function the `main` symbol that crt0 calls.
@@ -495,10 +492,11 @@ fn delegate(declared: &'static [u8; delegation::MARKER_BYTES], frame: &mut [u32]
 //
 // What `include/apogee_guest.h` declares, for a C or C++ guest that links this
 // crate built as a static library, `libapogee_guest.a`: crt0 above calls its
-// `main`, and these four are the whole surface it calls. `__cxa_atexit` and
-// `__dso_handle`, after them, are what a C++ compiler calls for a static
-// object's destructor. Last in the file, for the same reason the delegation
-// shims are: a Rust guest that calls none links none.
+// `main`, and these four are the whole surface it calls. After them comes what
+// a C++ compiler calls for a static object's destructor: `__cxa_atexit`, which
+// `apogee.ld` names only for a guest that references it, and `__dso_handle`.
+// Last in the file, for the same reason the delegation shims are: a Rust guest
+// that calls none links none.
 
 /// `public_input()`: its address, its length through `len` where not null.
 ///
@@ -560,15 +558,18 @@ struct Destructor {
 #[link_section = ".data"]
 static mut DESTRUCTORS: *mut Destructor = core::ptr::null_mut();
 
-/// Register `f(arg)` to run when `main` returns. C++ calls this once for each
-/// static object whose type has a non-trivial destructor, after constructing
-/// it. The record comes from the bump allocator, so registering more than the
-/// heap holds exits 71, like any allocation.
+/// `__cxa_atexit`: register `f(arg)` to run when `main` returns. C++ calls it
+/// once for each static object whose type has a non-trivial destructor, after
+/// constructing it. `apogee.ld` gives this function that name only for a guest
+/// that references it, and only such a guest's `main` returns into
+/// `__apogee_main_then_destructors`. The record comes from the bump
+/// allocator, so registering more than the heap holds exits 71, like any
+/// allocation.
 ///
 /// # Safety
 /// `f` may be called once with `arg` after `main` returns.
 #[no_mangle]
-pub unsafe extern "C" fn __cxa_atexit(
+pub unsafe extern "C" fn __apogee_cxa_atexit(
     f: unsafe extern "C" fn(*mut u8),
     arg: *mut u8,
     _dso: *mut u8,
@@ -592,15 +593,30 @@ pub unsafe extern "C" fn __cxa_atexit(
 #[allow(non_upper_case_globals)]
 pub static __dso_handle: u8 = 0;
 
-/// Run the registered destructors, the latest first, each once. crt0 calls
-/// this after `main` returns. A destructor that registers another one runs it
-/// next, in the order C++ requires. `apogee_exit`, a panic and every other exit
-/// skip them, like C's `_Exit`.
-extern "C" fn run_destructors() {
+extern "C" {
+    /// The guest's entry: a C guest's own, or the one `entry!` exports.
+    fn main() -> i32;
+    /// The bounds of `.fini_array`, C's destructor functions. Defined by
+    /// `apogee.ld`.
+    static __fini_array_start: u8;
+    static __fini_array_end: u8;
+}
+
+/// What crt0 calls for a guest with destructors (`apogee.ld`): `main`; then
+/// the destructors `__cxa_atexit` registered, the latest first, each once;
+/// then the destructor functions, the last in `.fini_array` first; and `main`'s
+/// status. A destructor that registers another one runs it next, in the order
+/// C++ requires. `apogee_exit`, a panic and every other exit skip them all,
+/// like C's `_Exit`.
+#[no_mangle]
+extern "C" fn __apogee_main_then_destructors() -> i32 {
+    // SAFETY: `main` takes nothing and returns the exit status, in its C form
+    // and in `entry!`'s alike.
+    let status = unsafe { main() };
     // SAFETY: the guest is single-threaded. Each record was written whole by
-    // `__cxa_atexit` and is never freed. It is unlinked before its function
-    // runs, so a destructor that registers another, or exits, leaves the list
-    // well formed.
+    // `__apogee_cxa_atexit` and is never freed. It is unlinked before its
+    // function runs, so a destructor that registers another, or exits, leaves
+    // the list well formed.
     unsafe {
         let head = core::ptr::addr_of_mut!(DESTRUCTORS);
         while let Some(d) = (*head).as_ref() {
@@ -608,4 +624,14 @@ extern "C" fn run_destructors() {
             (d.f)(d.arg);
         }
     }
+    let start = core::ptr::addr_of!(__fini_array_start) as usize;
+    let mut at = core::ptr::addr_of!(__fini_array_end) as usize;
+    while at > start {
+        at -= core::mem::size_of::<unsafe extern "C" fn()>();
+        // SAFETY: `apogee.ld` lays `.fini_array` out between the two symbols
+        // as 8-aligned function pointers, each one the compiler emitted for a
+        // destructor function.
+        unsafe { (*(at as *const unsafe extern "C" fn()))() };
+    }
+    status
 }

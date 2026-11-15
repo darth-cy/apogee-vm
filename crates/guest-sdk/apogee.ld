@@ -1,10 +1,12 @@
 /* The guest memory map, which `docs/spec/ecall-abi.md` §5 documents, symbols
    included.
 
-   The symbol names __init_array_start, __init_array_end, __bss_start,
-   __bss_end, __heap_start and __stack_top are referenced by name: crt0 in
-   src/lib.rs zeroes the bss range, then calls each initializer in the array,
-   and the bump allocator lives between the last two.
+   The symbol names __init_array_start, __init_array_end, __fini_array_start,
+   __fini_array_end, __bss_start, __bss_end, __heap_start, __stack_top and
+   __apogee_main are referenced by name: crt0 in src/lib.rs zeroes the bss
+   range and calls the init array's functions, then __apogee_main, which runs
+   the fini array's in reverse when it is not main itself; the bump allocator
+   lives between __heap_start and __stack_top.
 
    The input sections are the ones Rust and Clang emit for RV64, the small-data
    `.srodata`, `.sdata` and `.sbss` included: Clang puts a global of eight bytes
@@ -31,7 +33,17 @@ SECTIONS {
      outright. The zkVM executor is indifferent -- it has no pages -- so this
      costs three pages of address space to keep one ELF running under both. */
   .text   : ALIGN(4096) { *(.text._start) *(.text*) } > RAM
-  .rodata : ALIGN(4096) { *(.rodata*) *(.srodata*) } > RAM
+  .rodata : ALIGN(4096) {
+    *(.rodata*)
+    *(.srodata*)
+    /* Unwind tables, which both compilers emit without exceptions. Unlisted,
+       they are an orphan, and once --gc-sections leaves .rodata empty the
+       linker puts that orphan straight after .text, a read-only segment on
+       .text's page. */
+    *(.eh_frame_hdr)
+    *(.eh_frame)
+    *(.gcc_except_table*)
+  } > RAM
   .data   : ALIGN(4096) {
     *(.data*)
     *(.sdata*)
@@ -43,6 +55,12 @@ SECTIONS {
     KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*)))
     KEEP(*(.init_array))
     __init_array_end = .;
+    /* C's destructor functions, laid out the same way and called in reverse
+       after main. */
+    __fini_array_start = .;
+    KEEP(*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
+    KEEP(*(.fini_array))
+    __fini_array_end = .;
   } > RAM
   .bss    : ALIGN(4096) {
     __bss_start = .;
@@ -59,3 +77,16 @@ SECTIONS {
   } > RAM
   __stack_top = ORIGIN(RAM) + LENGTH(RAM);
 }
+
+/* What crt0 calls: the guest's main, or, for a guest with destructors, main
+   followed by them: those C++ registers through __cxa_atexit, which it
+   references for each static object that has one, then C's destructor
+   functions. The library defines the registration as __apogee_cxa_atexit, and
+   PROVIDE gives it the C++ name only where a reference to that name is
+   otherwise unresolved, so for a guest with no destructor crt0 calls main
+   itself and runs no teardown at all. The first PROVIDE comes first because
+   DEFINED counts a script's definition only above it. The second is a PROVIDE
+   so that a guest which is its own _start, with no crt0 and no main, links. */
+PROVIDE(__cxa_atexit = __apogee_cxa_atexit);
+PROVIDE(__apogee_main = (DEFINED(__cxa_atexit) || __fini_array_end != __fini_array_start)
+  ? __apogee_main_then_destructors : main);

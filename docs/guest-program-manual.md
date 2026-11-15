@@ -361,7 +361,8 @@ with spaces.
 Globals are ordinary. Initialized, zero-initialized and small-data globals are where `apogee.ld`
 puts them; C++ dynamic initializers and `__attribute__((constructor))` functions run before
 `main`, prioritised ones first; and static objects' destructors run when `main` returns, the
-latest constructed first. `apogee_exit` ends the run without them, as C's `_Exit` does.
+latest constructed first, then `__attribute__((destructor))` functions. `apogee_exit` ends the run
+without them, as C's `_Exit` does, and a guest with no destructor runs no instruction for them.
 
 Building against this repository instead of a release: `cargo rustc --lib --release --crate-type
 staticlib --target riscv64imac-unknown-none-elf` in `crates/guest-sdk` builds the library, and

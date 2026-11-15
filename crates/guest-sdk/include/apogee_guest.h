@@ -4,8 +4,8 @@
  * (`cmake/apogee-rv64.cmake` does both) and define `int main(void)`: the
  * library's startup zeroes `.bss`, runs the static initializers (C++ dynamic
  * initialization and constructor functions), calls `main`, runs the static
- * objects' destructors, the latest constructed first, and exits with what
- * `main` returned.
+ * objects' destructors, the latest constructed first, then the destructor
+ * functions, and exits with what `main` returned.
  *
  * An Apogee guest has no files and no streams. Its public input, advice and
  * journal are memory the proof binds — or, for advice, does not — and these

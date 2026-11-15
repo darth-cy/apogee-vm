@@ -91,12 +91,16 @@ entry and segments are refused there ([program.md](program.md) §1). The space b
   table's height bounds how far `.text` reaches ([program.md](program.md) §5).
 - crt0's `_start` sets `sp`, zeroes `[__bss_start, __bss_end)` byte by byte, so that a zero `.bss`
   is the image's property and not the executor's, calls each function pointer in
-  `[__init_array_start, __init_array_end)` in order, calls `main`, runs the destructors registered
-  with `__cxa_atexit`, the latest first, and exits with what `main` returned: `entry!`'s `main`
-  returns 0, a C `main` its own status (§7). The pointers are C++'s dynamic initializers and C's
-  constructor functions; `apogee.ld` gathers them in `.data`, prioritised ones first, and places the
-  small-data sections `.srodata`, `.sdata` and `.sbss` with `.rodata`, `.data` and `.bss`. Every
-  other exit, `exit` and a panic among them, skips the destructors.
+  `[__init_array_start, __init_array_end)` in order, calls `__apogee_main`, and exits with what it
+  returned: `entry!`'s `main` returns 0, a C `main` its own status (§7). The pointers are C++'s
+  dynamic initializers and C's constructor functions; `apogee.ld` gathers them in `.data`,
+  prioritised ones first, with C's destructor functions after them in `[__fini_array_start,
+  __fini_array_end)`, and places the small-data sections `.srodata`, `.sdata` and `.sbss` with
+  `.rodata`, `.data` and `.bss`. `__apogee_main` is the guest's `main`, unless the guest has
+  destructors: for one that references `__cxa_atexit` or has destructor functions, `apogee.ld`
+  makes it `main`, then the destructors registered with `__cxa_atexit`, the latest first, then the
+  destructor functions, the last first. Every other exit, `exit` and a panic among them, skips the
+  destructors.
 - Nothing detects a stack that grows past its reserve after the heap has filled below it.
 
 ### 5.1 The segment layout
@@ -112,7 +116,9 @@ makes them true:
   `.bss`, the 2 GiB reservation being `NOBITS`. Undeclared, the first stack push would fault.
 - **No two segments share a page.** `.text`, `.rodata`, `.data` and `.bss` are each 4096-aligned: a
   page two mappings share takes the second's permissions, stripping execute from `.text`'s tail or
-  putting zero fill on a read-only page, which a host loader refuses.
+  putting zero fill on a read-only page, which a host loader refuses. Every loadable section the
+  compilers emit is listed in one of the four, the unwind tables in `.rodata`: an unlisted one is
+  an orphan the linker places itself, on `.text`'s page once `--gc-sections` empties `.rodata`.
 
 `crates/loader/tests/layout.rs` holds every guest, built from source, to both by parsing its headers.
 
@@ -150,6 +156,8 @@ The library's `_start` is crt0's (§5): it runs the guest's static initializers 
 `int main(void)`, exiting with what it returns; the header declares `main` with C linkage, which a
 freestanding C++ compiler does not give it. Its `__cxa_atexit` and `__dso_handle` are what C++
 registers a static object's destructor with: each registration is one record from the allocator,
-and the destructors run when `main` returns. The library also exports `memcpy`, `memmove`, `memset`, `memcmp` and the compiler's
-128-bit integer helpers, weakly. The toolchain, the bundle and a worked guest are
+and the destructors run when `main` returns. `apogee.ld` gives `__cxa_atexit` that name only for a
+guest that references it, and returns from `main` into destructors only for a guest that has some
+(§5). The library also exports `memcpy`, `memmove`, `memset`, `memcmp` and the compiler's 128-bit
+integer helpers, weakly. The toolchain, the bundle and a worked guest are
 [guest-program-manual.md](../guest-program-manual.md) §11.
