@@ -367,4 +367,5 @@ without them, as C's `_Exit` does, and a guest with no destructor runs no instru
 Building against this repository instead of a release: `cargo rustc --lib --release --crate-type
 staticlib --target riscv64imac-unknown-none-elf` in `crates/guest-sdk` builds the library, and
 `-DAPOGEE_GUEST_LIB=…`, `-DAPOGEE_LINKER_SCRIPT=…` and `-DAPOGEE_INCLUDE_DIR=…` point the toolchain
-file at the tree's pieces. `test_support::guest_elf` builds `guests/cpp-primes` that way.
+file, and every configure check it runs, at the tree's pieces. `test_support::guest_elf` builds
+`guests/cpp-primes` that way.

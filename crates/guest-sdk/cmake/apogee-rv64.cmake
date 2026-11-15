@@ -30,6 +30,13 @@ find_program(APOGEE_CLANG NAMES clang HINTS ${_apogee_hints} REQUIRED)
 find_program(APOGEE_CLANGXX NAMES clang++ HINTS ${_apogee_hints} REQUIRED)
 find_program(APOGEE_LLD NAMES ld.lld HINTS ${_apogee_hints} REQUIRED)
 
+# A configure check — check_c_source_compiles, any try_compile — builds a
+# project of its own with this file and none of this project's cache: these
+# carry this project's choices into it.
+list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
+     APOGEE_INCLUDE_DIR APOGEE_GUEST_LIB APOGEE_LINKER_SCRIPT
+     APOGEE_CLANG APOGEE_CLANGXX APOGEE_LLD)
+
 # What a guest cannot be built without is each compiler's own mandatory
 # arguments and the end of every link line, so CMAKE_<LANG>_FLAGS and
 # CMAKE_EXE_LINKER_FLAGS, from a project or the command line, add to it and
