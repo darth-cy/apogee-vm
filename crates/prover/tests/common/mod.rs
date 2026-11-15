@@ -164,6 +164,22 @@ pub fn public_io_program() -> Program {
     )
 }
 
+/// `guests/precompiles`, which calls both precompiles: its execution families at
+/// `2^20`, the rest — its three delegation families among them — at `2^16`.
+pub fn precompiles_program() -> Program {
+    program_of(
+        "precompiles",
+        &heights(&[
+            family::ADD_SUB_LUI_AUIPC,
+            family::JUMP_BRANCH_SLT,
+            family::BITWISE,
+            family::MUL_DIV,
+            family::MEM_WORD,
+            family::MEM_SUBWORD,
+        ]),
+    )
+}
+
 pub fn public_io_setup() -> ProverSetup {
     ProverSetup::new(public_io_program()).expect("public-io registers")
 }

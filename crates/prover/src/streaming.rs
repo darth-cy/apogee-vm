@@ -49,7 +49,7 @@ use std::time::Instant;
 
 use emulator::{GuestIo, ShardChunk, StreamedExecution, StreamingRun};
 use rayon::prelude::*;
-use trace::{build_boundary_finals, init_windows, plan_shards, RowSlice};
+use trace::{build_boundary_finals, init_windows, plan_shards, FrameSlice, RowSlice};
 use verifier_core::{
     statement_shards, window_height, BlockProof, Commitment, PublicInputs, ShardProof,
 };
@@ -288,7 +288,10 @@ fn chunk_source<'a>(
     chunk: &'a ShardChunk,
     height: u32,
 ) -> ShardSource<'a> {
-    let rows = ShardRows::Cycles(RowSlice::shard(&chunk.rows, 0, height as usize));
+    let rows = match &chunk.calls {
+        Some(calls) => ShardRows::Invocations(FrameSlice::shard(calls, 0, height as usize)),
+        None => ShardRows::Cycles(RowSlice::shard(&chunk.rows, 0, height as usize)),
+    };
     ShardSource {
         program: &setup.program,
         input: &io.input,
@@ -747,7 +750,8 @@ impl<'a> Source<'a> {
     ///
     /// **At most one waits per family, and this is where that is enforced.** The
     /// executor steps only when nothing is waiting; one step fills at most one
-    /// buffer, and the exit fills at most one per family. So a
+    /// buffer a family — its cycle's, and a delegation call's families' — and the
+    /// exit fills at most one per family. So a
     /// second shard of a family arriving while the first waits would mean
     /// production had run ahead of demand, which is the one thing it may not do.
     fn admit(&mut self, filled: Vec<ShardChunk>) {

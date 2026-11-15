@@ -298,6 +298,9 @@ pub fn family_name(f: FamilyId) -> String {
         family::PUBLIC_INPUT => "PUBLIC_INPUT".to_string(),
         family::PUBLIC_OUTPUT => "PUBLIC_OUTPUT".to_string(),
         family::ADVICE_WINDOWS => "ADVICE_WINDOWS".to_string(),
+        family::POSEIDON2 => "POSEIDON2".to_string(),
+        family::POSEIDON2_ROUNDS => "POSEIDON2_ROUNDS".to_string(),
+        family::MUL_DIV_U256 => "MUL_DIV_U256".to_string(),
         other => format!("family({other})"),
     }
 }

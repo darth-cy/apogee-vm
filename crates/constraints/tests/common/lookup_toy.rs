@@ -278,6 +278,7 @@ pub fn lookup_toy() -> CircuitArtifact {
             enforcing,
             lookups,
             channels,
+            ..FamilySpec::default()
         },
     )
 }

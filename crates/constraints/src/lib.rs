@@ -34,6 +34,8 @@ pub mod mem_subword;
 pub mod mem_word;
 pub mod memory;
 pub mod mul_div;
+pub mod mul_div_u256;
+pub mod poseidon2;
 mod wire;
 
 pub use laws::ConstraintError;
@@ -127,8 +129,11 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
             // differ only in what the verifier does with the init column: holds
             // it to the statement's `input`, or to nothing at all.
             f::PUBLIC_INPUT | f::ADVICE_WINDOWS => (memory::value_window_artifact, Vec::new()),
-            // A delegation family is an arm here, its circuit over
-            // `delegation`'s frame (`constants::delegation`).
+            // The delegation families (`constants::delegation`), each on
+            // `delegation`'s builder.
+            f::POSEIDON2 => (poseidon2::artifact, poseidon2::channels()),
+            f::POSEIDON2_ROUNDS => (poseidon2::rounds_artifact, poseidon2::rounds_channels()),
+            f::MUL_DIV_U256 => (mul_div_u256::artifact, mul_div_u256::channels()),
             _ => return None,
         };
     if trace_vars < minimum_trace_vars(&channels) {

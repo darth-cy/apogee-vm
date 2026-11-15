@@ -317,6 +317,31 @@ fn leaf(tuple: &GateDef, mask: PolyAddress) -> GateDef {
     }
 }
 
+/// Two leaves under exclusive masks as one: `a + b − 1`, each `1 + m·(T − 1)`.
+fn fold_leaf(a: GateDef, b: &GateDef) -> GateDef {
+    let (
+        GateDef::Quadratic {
+            linear: la,
+            products: pa,
+            ..
+        },
+        GateDef::Quadratic {
+            constant,
+            linear: lb,
+            products: pb,
+        },
+    ) = (a, b)
+    else {
+        panic!("fold_leaf: a leaf is a Quadratic");
+    };
+    assert_eq!(*constant, lit(1), "fold_leaf: a leaf's constant is 1");
+    GateDef::Quadratic {
+        constant: lit(1),
+        linear: la.into_iter().chain(lb.iter().copied()).collect(),
+        products: pa.into_iter().chain(pb.iter().copied()).collect(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The gadgets
 // ---------------------------------------------------------------------------
@@ -467,12 +492,19 @@ pub fn family_frame_artifact(family: u32, trace_vars: u32) -> CircuitArtifact {
 /// bare memory frame.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FamilySpec {
+    /// The family's own `M` columns, after the frame's.
+    pub memory: Vec<String>,
     pub witness: Vec<String>,
     pub setup: Vec<String>,
     pub virtuals: Vec<(VirtualKind, String)>,
     pub enforcing: Vec<(String, GateDef)>,
     pub lookups: Vec<LookupExpr>,
     pub channels: Vec<lookup::ChannelSpec>,
+    /// A leaf folded into `rd`'s write leaf, `mask·T + 1 − mask` with a mask
+    /// exclusive of `rd`'s: the leaf `1 + m_rd·(T_rd − 1) + mask·(T − 1)`, a
+    /// second tuple a row writes where it writes no `rd` and pays no leaf of
+    /// its own (`docs/spec/precompiles.md` §2).
+    pub rd_write_fold: Option<GateDef>,
 }
 
 /// An execution family's circuit: `docs/spec/memory.md` §2's frame over
@@ -545,6 +577,7 @@ fn frame_body(
             }
         }
     }
+    columns.extend(family_spec.memory);
     let mut witness: Vec<String> = queries
         .iter()
         .map(|&query| format!("{}_gap_hi", FRAME_NAMES[query]))
@@ -575,10 +608,11 @@ fn frame_body(
             format!("read_{name}"),
             leaf(&tuple(queries, at, false), mask),
         ));
-        writes.push((
-            format!("write_{name}"),
-            leaf(&tuple(queries, at, true), mask),
-        ));
+        let mut write = leaf(&tuple(queries, at, true), mask);
+        if let (RD, Some(fold)) = (query, &family_spec.rd_write_fold) {
+            write = fold_leaf(write, fold);
+        }
+        writes.push((format!("write_{name}"), write));
         enforcing.push((format!("{name}_mask_boolean"), booleanity(mask)));
     }
     for (at, &query) in queries.iter().enumerate() {

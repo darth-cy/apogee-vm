@@ -9,6 +9,8 @@ publish.workspace = true
 # `challenge_slot::NAMES`: the slots a coefficient may name.
 constants.workspace = true
 field.workspace = true
+# The Poseidon2-A64-C5 constants the precompile's circuit is the permutation of.
+transcript.workspace = true
 # The artifact's one wire form. Both featureless, as everywhere in the
 # workspace: writing goes through `to_extend` into a plain `Vec`, reading
 # through the two hand-written visitors in `src/wire.rs`.

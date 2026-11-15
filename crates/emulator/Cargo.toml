@@ -6,6 +6,9 @@ publish.workspace = true
 
 [dependencies]
 constants.workspace = true
+# The Poseidon2 precompile's function is the transcript's permutation.
+field.workspace = true
+transcript.workspace = true
 isa.workspace = true
 loader.workspace = true
 program.workspace = true

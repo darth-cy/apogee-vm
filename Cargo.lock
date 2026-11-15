@@ -191,6 +191,7 @@ dependencies = [
  "field",
  "postcard",
  "serde",
+ "transcript",
 ]
 
 [[package]]
@@ -260,6 +261,7 @@ name = "emulator"
 version = "0.1.0"
 dependencies = [
  "constants",
+ "field",
  "isa",
  "loader",
  "program",

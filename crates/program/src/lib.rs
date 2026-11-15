@@ -56,24 +56,51 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::PUBLIC_INPUT,
     family::PUBLIC_OUTPUT,
     family::ADVICE_WINDOWS,
+    family::POSEIDON2,
+    family::POSEIDON2_ROUNDS,
+    family::MUL_DIV_U256,
 ];
 
-/// The delegation family that answers ecall `number`, or `None`. The registry
-/// is `constants::delegation::TYPES`.
+/// The **frame family** of ecall `number`, the one whose row reads the frame
+/// and the anchor, or `None`. The registry is `constants::delegation::TYPES`.
 pub fn delegation_family(number: u32) -> Option<FamilyId> {
+    delegation_families(number).next()
+}
+
+/// Every family recording a call of ecall `number`, its frame family first.
+pub fn delegation_families(number: u32) -> impl Iterator<Item = FamilyId> {
     delegation::TYPES
         .iter()
-        .find(|(_, n, ..)| *n == number)
+        .filter(move |(_, n, ..)| *n == number)
         .map(|(f, ..)| *f)
 }
 
 /// `family`'s frame in 32-bit words, or `None` if it is not a delegation
-/// family.
+/// family. A family expanding a call holds the call's frame too.
 pub fn delegation_frame_words(family: FamilyId) -> Option<usize> {
     delegation::TYPES
         .iter()
         .find(|(f, ..)| *f == family)
-        .map(|(.., words)| *words)
+        .map(|(_, _, words, _)| *words)
+}
+
+/// How many rows a delegation family takes a call: 1 for a frame family.
+/// Panics on a family that is not a delegation family.
+pub fn delegation_rows(family: FamilyId) -> u32 {
+    delegation::TYPES
+        .iter()
+        .find(|(f, ..)| *f == family)
+        .map(|(.., rows)| *rows)
+        .unwrap_or_else(|| panic!("family {family} is not a delegation family"))
+}
+
+/// Whether delegation `family` is its number's frame family: the one whose
+/// rows read and write RAM.
+pub fn is_frame_family(family: FamilyId) -> bool {
+    delegation::TYPES
+        .iter()
+        .find(|(f, ..)| *f == family)
+        .is_some_and(|(_, n, ..)| delegation_family(*n) == Some(family))
 }
 
 /// Whether `family`'s rows are cycles, and so whether the decoder routes
@@ -101,6 +128,9 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::PUBLIC_INPUT => "PUBLIC_INPUT",
         family::PUBLIC_OUTPUT => "PUBLIC_OUTPUT",
         family::ADVICE_WINDOWS => "ADVICE_WINDOWS",
+        family::POSEIDON2 => "POSEIDON2",
+        family::POSEIDON2_ROUNDS => "POSEIDON2_ROUNDS",
+        family::MUL_DIV_U256 => "MUL_DIV_U256",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -255,7 +285,10 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::ZERO_WINDOWS
         | family::PUBLIC_INPUT
         | family::PUBLIC_OUTPUT
-        | family::ADVICE_WINDOWS => &[],
+        | family::ADVICE_WINDOWS
+        | family::POSEIDON2
+        | family::POSEIDON2_ROUNDS
+        | family::MUL_DIV_U256 => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -596,12 +629,16 @@ pub fn declared_delegations(image: &ProgramImage) -> Result<Vec<FamilyId>, Progr
                 bytes[at + n + 2],
                 bytes[at + n + 3],
             ]);
-            let family = delegation_family(number).ok_or(ProgramError::UnknownDelegation {
-                addr: segment.vaddr.wrapping_add(at as u32),
-                number,
-            })?;
-            if !found.contains(&family) {
-                found.push(family);
+            if delegation_family(number).is_none() {
+                return Err(ProgramError::UnknownDelegation {
+                    addr: segment.vaddr.wrapping_add(at as u32),
+                    number,
+                });
+            }
+            for family in delegation_families(number) {
+                if !found.contains(&family) {
+                    found.push(family);
+                }
             }
         }
     }

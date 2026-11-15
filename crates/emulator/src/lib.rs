@@ -33,6 +33,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use constants::{delegation, ecall, guest_memory, memory};
+use field::Fp;
 use isa::{decode, AmoOp, Instr};
 use loader::{ProgramImage, Slot};
 use program::{row_kind, DecodedTables, FamilyId, VmConfig};
@@ -252,12 +253,16 @@ pub fn trace_run(
 /// run's shards are the same shards `trace::plan_shards` counts and the same
 /// cut every family fill makes.
 ///
-/// Only a cycle-owning family's shards are chunks: a window family's rows are
-/// addresses, and what fills them is the final [`MemoryState`].
+/// A cycle-owning family's shards and a delegation family's are chunks: a
+/// window family's rows are addresses, and what fills them is the final
+/// [`MemoryState`]. A delegation family's chunk carries its calls in `calls`
+/// and no `rows`, its shard being `docs/spec/streaming.md` §4's cut of its rows
+/// at `program::delegation_rows` a call.
 pub struct ShardChunk {
     pub family: FamilyId,
     pub index: u32,
     pub rows: FamilyTrace,
+    pub calls: Option<DelegationTrace>,
 }
 
 /// What a streaming execution leaves behind when it ends: the last-access
@@ -304,15 +309,6 @@ impl<'a> StreamingRun<'a> {
                     .zip(&config.families)
                     .all(|(t, (f, h))| t.family == *f && t.height == *h),
             "StreamingRun: the decoded tables and the VmConfig describe different VMs"
-        );
-        // UNFINISHED: a delegation family's invocations are not cut into
-        // streamed shards; only `trace_run`'s whole-run path carries them.
-        assert!(
-            config
-                .families
-                .iter()
-                .all(|(f, _)| program::delegation_frame_words(*f).is_none()),
-            "StreamingRun: a delegation family is not streamed yet"
         );
         check_io(io)?;
         let mut machine = Machine::new(image, io);
@@ -417,9 +413,9 @@ struct Cycle {
     delegation: Option<Invocation>,
 }
 
-/// One delegation invocation: the family, the frame base, and one
+/// One delegation invocation: the ecall number, the frame base, and one
 /// `(address, old, new)` per frame word, in frame order.
-type Invocation = (FamilyId, u32, Vec<(u32, u32, u32)>);
+type Invocation = (u32, u32, Vec<(u32, u32, u32)>);
 
 impl Cycle {
     fn new() -> Cycle {
@@ -1009,6 +1005,9 @@ impl<'a> Machine<'a> {
     fn ecall(&mut self, instr: Instr, pc: u32, fall: u32) -> Result<(), EmuError> {
         let mut row = Cycle::new();
         let number = self.read(&mut row, Role::Rs1, 17);
+        let delegation = u32::try_from(number)
+            .ok()
+            .filter(|n| program::delegation_family(*n).is_some());
         let result = match number {
             n if n == ecall::EXIT as u64 => {
                 let status = self.read(&mut row, Role::Rs2, 10);
@@ -1017,14 +1016,11 @@ impl<'a> Machine<'a> {
             }
             // A delegation call: `a0` is the frame base, and the frame is
             // answered in place by an invocation riding this cycle
-            // (`constants::delegation`). `a0` is 0 after it.
-            n if u32::try_from(n)
-                .ok()
-                .and_then(program::delegation_family)
-                .is_some() =>
-            {
-                let n = n as u32;
-                let family = program::delegation_family(n).expect("just matched");
+            // (`constants::delegation`). `a0` is preserved, so the row
+            // writes no register.
+            _ if delegation.is_some() => {
+                let n = delegation.expect("just matched");
+                let family = program::delegation_family(n).expect("a frame family");
                 let base = self.read(&mut row, Role::Rs2, 10);
                 if let Some(recorder) = &self.recorder {
                     if recorder.traces.delegation(family).is_none() {
@@ -1032,8 +1028,8 @@ impl<'a> Machine<'a> {
                     }
                 }
                 let frame = self.delegate(family, pc, base)?;
-                row.delegation = Some((family, base as u32, frame));
-                0
+                row.delegation = Some((n, base as u32, frame));
+                return self.commit(&row, instr, pc, fall);
             }
             // Every other number is unassigned or retired: answered, and the
             // row refused at proving (`docs/spec/ecall-abi.md` §4).
@@ -1051,9 +1047,9 @@ impl<'a> Machine<'a> {
     /// Execute delegation `family` over the frame at `base`, in place,
     /// returning each frame word as `(address, old, new)`.
     ///
-    /// The frame must be word-aligned and wholly in RAM, the circuit's two
-    /// frame checks; both are fatal guest errors, as a misaligned load is.
-    /// What the call computes is [`frame_function`]'s.
+    /// Every frame word must be one a store could write; anything else is a
+    /// fatal guest error, as a misaligned store is. What the call computes is
+    /// [`frame_function`]'s.
     fn delegate(
         &mut self,
         family: FamilyId,
@@ -1061,16 +1057,14 @@ impl<'a> Machine<'a> {
         base: u64,
     ) -> Result<Vec<(u32, u32, u32)>, EmuError> {
         let words = program::delegation_frame_words(family).expect("a delegation family");
-        if !base.is_multiple_of(4) {
-            return Err(EmuError::Misaligned {
-                pc,
-                addr: base,
-                width: 4,
-            });
-        }
-        let end = guest_memory::RAM_ORIGIN as u64 + guest_memory::RAM_LENGTH as u64;
-        if base < guest_memory::RAM_ORIGIN as u64 || base + 4 * words as u64 > end {
-            return Err(EmuError::OutOfBounds { pc, addr: base });
+        // Every word is checked as a store's is: aligned, and in a region a
+        // guest may write. The circuit bounds no base; a word off initialized
+        // memory would read a tuple nothing wrote.
+        for j in 0..words as u64 {
+            let addr = base
+                .checked_add(4 * j)
+                .ok_or(EmuError::OutOfBounds { pc, addr: base })?;
+            self.data_word(pc, addr, 4)?;
         }
         let base = base as u32;
         let old: Vec<u32> = (0..words).map(|j| self.word(base + 4 * j as u32)).collect();
@@ -1095,15 +1089,90 @@ fn sext32(v: u32) -> u64 {
 /// family answers (`EmuError::DelegationFrame`).
 type FrameFn = fn(u32, &[u32]) -> Result<Vec<u32>, EmuError>;
 
-/// The function delegation `family` performs. The one dispatch: a family with
-/// no arm here is a `constants::delegation::TYPES` row nobody implemented.
-///
-/// **UNFINISHED: no delegation is registered**, so the refusal is the only arm.
-#[allow(clippy::match_single_binding)]
+/// The function delegation `family`, a frame family, performs. The one
+/// dispatch: a family with no arm here is a `constants::delegation::TYPES` row
+/// nobody implemented.
 fn frame_function(family: FamilyId) -> FrameFn {
     match family {
+        constants::family::POSEIDON2 => poseidon2_frame,
+        constants::family::MUL_DIV_U256 => mul_div_u256_frame,
         other => panic!("emulator: delegation family {other} has no implementation"),
     }
+}
+
+/// `transcript::poseidon2_permute` over 16 lanes, lane `i` words `2i` and
+/// `2i + 1` little-endian, read mod `p` and written canonical.
+fn poseidon2_frame(_pc: u32, words: &[u32]) -> Result<Vec<u32>, EmuError> {
+    let mut state: [Fp; 16] = std::array::from_fn(|i| {
+        Fp::from_u64(words[2 * i] as u64 | (words[2 * i + 1] as u64) << 32)
+    });
+    transcript::poseidon2_permute(&mut state);
+    Ok(state
+        .iter()
+        .flat_map(|x| [x.to_u64() as u32, (x.to_u64() >> 32) as u32])
+        .collect())
+}
+
+/// `a`, `b`, `d` at words 0, 8, 16 become `floor(a·b/d)`, `a·b mod d`, `d`.
+/// Refuses `d = 0` and a quotient at or above `2^256`, which no witness
+/// proves.
+fn mul_div_u256_frame(pc: u32, words: &[u32]) -> Result<Vec<u32>, EmuError> {
+    let limbs = |at: usize| -> [u64; 4] {
+        std::array::from_fn(|i| words[at + 2 * i] as u64 | (words[at + 2 * i + 1] as u64) << 32)
+    };
+    let (a, b, d) = (limbs(0), limbs(8), limbs(16));
+    if d == [0; 4] {
+        return Err(EmuError::DelegationFrame {
+            pc,
+            detail: "mul_div_u256 by a zero divisor",
+        });
+    }
+    // The product, eight limbs, schoolbook.
+    let mut p = [0u64; 8];
+    for i in 0..4 {
+        let mut carry = 0u128;
+        for j in 0..4 {
+            let t = a[i] as u128 * b[j] as u128 + p[i + j] as u128 + carry;
+            p[i + j] = t as u64;
+            carry = t >> 64;
+        }
+        p[i + 4] = carry as u64;
+    }
+    let below = |x: &[u64], y: &[u64; 4]| {
+        (0..4)
+            .rev()
+            .find(|&i| x[i] != y[i])
+            .is_some_and(|i| x[i] < y[i])
+    };
+    if !below(&p[4..], &d) {
+        return Err(EmuError::DelegationFrame {
+            pc,
+            detail: "mul_div_u256's quotient is not below 2^256",
+        });
+    }
+    // Restoring division, one bit of the product at a time: the remainder
+    // stays below `d`, its doubling's carry out deciding the subtraction.
+    let (mut q, mut r) = ([0u64; 4], [0u64; 4]);
+    for bit in (0..512).rev() {
+        let carry = r[3] >> 63;
+        for i in (1..4).rev() {
+            r[i] = r[i] << 1 | r[i - 1] >> 63;
+        }
+        r[0] = r[0] << 1 | (p[bit / 64] >> (bit % 64)) & 1;
+        if carry == 1 || !below(&r, &d) {
+            let mut borrow = 0u64;
+            for i in 0..4 {
+                let (x, o1) = r[i].overflowing_sub(d[i]);
+                let (x, o2) = x.overflowing_sub(borrow);
+                r[i] = x;
+                borrow = (o1 | o2) as u64;
+            }
+            debug_assert!(bit < 256, "the precondition keeps the quotient below 2^256");
+            q[bit / 64] |= 1 << (bit % 64);
+        }
+    }
+    let words = |x: [u64; 4]| x.into_iter().flat_map(|v| [v as u32, (v >> 32) as u32]);
+    Ok(words(q).chain(words(r)).chain(words(d)).collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -1119,6 +1188,8 @@ struct Recorder<'a> {
     /// Rows pushed per `traces.families[i]`, flushed shards included, so the
     /// cycle profile survives a buffer being handed away.
     family_rows: Vec<u64>,
+    /// Calls pushed per `traces.delegations[i]`, likewise.
+    calls: Vec<u64>,
     /// Shards a streaming run has filled and the caller has not taken.
     /// [`Keep::Whole`] never fills it: it holds every row to the end.
     ready: Vec<ShardChunk>,
@@ -1178,6 +1249,7 @@ impl<'a> Recorder<'a> {
             tables,
             memory,
             family_rows: vec![0; traces.families.len()],
+            calls: vec![0; traces.delegations.len()],
             traces,
             ready: Vec::new(),
         }
@@ -1191,7 +1263,8 @@ impl<'a> Recorder<'a> {
             .record(AddressSpace::Pc, 0, base, pc as u64, next_pc as u64);
         // An invocation's frame accesses ride this cycle at
         // `delegation::FRAME_DELTA`, 0: after the pc query, before the roles.
-        if let Some((family, frame_base, frame)) = &queries.delegation {
+        // Every family of the number records the call.
+        if let Some((number, frame_base, frame)) = &queries.delegation {
             let words: Vec<Query> = frame
                 .iter()
                 .map(|&(addr, read, write)| {
@@ -1211,12 +1284,17 @@ impl<'a> Recorder<'a> {
                     }
                 })
                 .collect();
-            self.traces
-                .delegations
-                .iter_mut()
-                .find(|t| t.family == *family)
-                .expect("the ecall checked the family is in the config")
-                .push(cycle, *frame_base, &words);
+            for family in program::delegation_families(*number) {
+                let at = self
+                    .traces
+                    .delegations
+                    .iter()
+                    .position(|t| t.family == family)
+                    .expect("a declared number declares all its families");
+                self.traces.delegations[at].push(cycle, *frame_base, &words);
+                self.calls[at] += 1;
+                self.flush_calls(at);
+            }
         }
         let mut row = Row {
             cycle,
@@ -1273,6 +1351,31 @@ impl<'a> Recorder<'a> {
             family,
             index: (rows / height as u64 - 1) as u32,
             rows: full,
+            calls: None,
+        });
+    }
+
+    /// Hand `traces.delegations[at]` away if it holds a shard's calls: its
+    /// height over the family's rows a call. As [`Recorder::flush_family`].
+    fn flush_calls(&mut self, at: usize) {
+        if !matches!(self.memory, Keep::Streaming(_)) {
+            return;
+        }
+        let buffer = &self.traces.delegations[at];
+        let per = (buffer.height / program::delegation_rows(buffer.family)) as usize;
+        if buffer.len() < per {
+            return;
+        }
+        let (family, height, words) = (buffer.family, buffer.height, buffer.words.len());
+        let full = std::mem::replace(
+            &mut self.traces.delegations[at],
+            DelegationTrace::new(family, height, words),
+        );
+        self.ready.push(ShardChunk {
+            family,
+            index: (self.calls[at] / per as u64 - 1) as u32,
+            rows: FamilyTrace::new(family, height),
+            calls: Some(full),
         });
     }
 
@@ -1290,6 +1393,21 @@ impl<'a> Recorder<'a> {
                 family,
                 index: (self.family_rows[at] / height as u64) as u32,
                 rows: full,
+                calls: None,
+            });
+        }
+        for (at, buffer) in self.traces.delegations.iter_mut().enumerate() {
+            if buffer.is_empty() {
+                continue;
+            }
+            let (family, height, words) = (buffer.family, buffer.height, buffer.words.len());
+            let per = (height / program::delegation_rows(family)) as u64;
+            let full = std::mem::replace(buffer, DelegationTrace::new(family, height, words));
+            out.push(ShardChunk {
+                family,
+                index: (self.calls[at] / per) as u32,
+                rows: FamilyTrace::new(family, height),
+                calls: Some(full),
             });
         }
         out
@@ -1309,7 +1427,8 @@ impl<'a> Recorder<'a> {
                 self.traces
                     .delegations
                     .iter()
-                    .map(|t| (t.family, t.len() as u64)),
+                    .zip(&self.calls)
+                    .map(|(t, n)| (t.family, n * program::delegation_rows(t.family) as u64)),
             )
             .collect();
         counts.sort_by_key(|(f, _)| *f);

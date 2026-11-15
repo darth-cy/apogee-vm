@@ -87,6 +87,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "precompiles"
+version = "0.1.0"
+dependencies = [
+ "guest-sdk",
+]
+
+[[package]]
 name = "public-io"
 version = "0.1.0"
 dependencies = [

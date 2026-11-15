@@ -16,7 +16,6 @@ use constants::extra_mask::mem_word as kind_mem;
 use constants::extra_mask::mul_div as md;
 use constants::extra_mask::system_code;
 use constants::{delegation, ecall, family, guest_memory, memory};
-use constraints::delegation as deleg;
 use constraints::memory::{frame_queries, rd_selected, rd_selected_hi};
 use constraints::PolyAddress;
 use field::Fp;
@@ -128,9 +127,7 @@ impl<'a> ShardSource<'a> {
     }
 
     /// This shard's invocations, or why it has none of `family`'s. A
-    /// delegation family's fill reads them; UNFINISHED, as
-    /// [`delegation_frame_range16`].
-    #[allow(dead_code)]
+    /// delegation family's fill reads them.
     fn invocations(&self, family: FamilyId) -> Result<&FrameSlice<'a>, String> {
         match &self.rows {
             ShardRows::Invocations(frames) if frames.family() == family => Ok(frames),
@@ -171,90 +168,301 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
         family::INIT_TEARDOWN | family::ZERO_WINDOWS | family::PUBLIC_OUTPUT => Some(window),
         family::PUBLIC_INPUT => Some(public_input),
         family::ADVICE_WINDOWS => Some(advice),
+        family::POSEIDON2 => Some(poseidon2),
+        family::POSEIDON2_ROUNDS => Some(poseidon2_rounds),
+        family::MUL_DIV_U256 => Some(mul_div_u256),
         _ => None,
     }
 }
 
-/// The frame's columns for a family that range-checks through `RANGE16`.
-///
-/// The `M` side is `delegation_frame`'s exactly; the witness side is two gap
-/// chunks a word and one value plus one halfword for each of the base's two
-/// decompositions, where that one writes 38 bits a word and 29 plus 31.
-///
-/// **UNFINISHED: no delegation is registered** (`constants::delegation`), so
-/// no fill calls this yet.
-#[allow(dead_code)]
-fn delegation_frame_range16(
-    frames: &FrameSlice,
-    h: usize,
-    words: usize,
-    frame_bytes: u64,
-    chunk: fn(usize, usize) -> PolyAddress,
-    base: [PolyAddress; 4],
-) -> Vec<(PolyAddress, MultilinearPoly)> {
-    let rows = 0..frames.len();
-    let mut out: Vec<(PolyAddress, MultilinearPoly)> = Vec::new();
-    let cycles: Vec<Fp> = frames.cycles().iter().map(|c| Fp::from_u64(*c)).collect();
-    out.push((deleg::CYCLE, fp_column(cycles, h)));
-    out.push((
-        deleg::LIVE,
-        u32_column(rows.clone().map(|_| 1).collect(), h),
-    ));
-    out.push((deleg::BASE, u32_column(frames.bases().to_vec(), h)));
-    out.push((deleg::ANCHOR_VALUE, u32_column(Vec::new(), h)));
-    for j in 0..words {
-        let w = frames.word(j);
-        for (field, values) in [
-            (
-                deleg::WORD_ADDR,
-                rows.clone().map(|r| w.addr[r]).collect::<Vec<u32>>(),
-            ),
-            (
-                deleg::WORD_READ_VALUE,
-                rows.clone().map(|r| w.read_value[r] as u32).collect(),
-            ),
-            (
-                deleg::WORD_WRITE_VALUE,
-                rows.clone().map(|r| w.write_value[r] as u32).collect(),
-            ),
-        ] {
-            out.push((deleg::word(j, field), u32_column(values, h)));
-        }
-        let read_ts: Vec<Fp> = rows.clone().map(|r| Fp::from_u64(w.read_ts[r])).collect();
-        out.push((deleg::word(j, deleg::WORD_READ_TS), fp_column(read_ts, h)));
+// ---------------------------------------------------------------------------
+// The delegation families' fills
+// ---------------------------------------------------------------------------
+
+/// A delegation shard's frame columns by name, `constraints::delegation::frame`:
+/// `live`, `cycle`, `number`, each word's four and its two gap chunks. Returns
+/// the shard's calls and the witness to add to.
+fn frame_fill<'a>(
+    src: &ShardSource<'a>,
+    fam: FamilyId,
+) -> Result<(FrameSlice<'a>, Witness), String> {
+    let calls = *src.invocations(fam)?;
+    let mut w = Witness::new(fam, calls.len());
+    let number = delegation::TYPES
+        .iter()
+        .find(|(f, ..)| *f == fam)
+        .map(|(_, n, ..)| *n as u64)
+        .expect("a delegation family");
+    let [live, cycle, n] = ["live", "cycle", "number"].map(|c| w.col(c));
+    for (r, c) in calls.cycles().iter().enumerate() {
+        w.row(r, &[(live, 1), (cycle, *c), (n, number)]);
     }
+    let words = program::delegation_frame_words(fam).expect("a delegation family");
     for j in 0..words {
-        for c in 0..2 {
-            let values: Vec<u32> = rows
-                .clone()
-                .map(|r| {
-                    let ts = memory::TS_STEP * frames.cycles()[r] + delegation::FRAME_DELTA;
-                    let gap = ts - frames.word(j).read_ts[r] - 1;
-                    ((gap >> (16 * (c as u32 + 1))) & 0xffff) as u32
-                })
-                .collect();
-            out.push((chunk(j, c), u32_column(values, h)));
+        let word = calls.word(j);
+        let written = names(fam).contains_key(&format!("w{j}_write_value"));
+        let cols = [
+            w.col(&format!("w{j}_addr")),
+            w.col(&format!("w{j}_read_ts")),
+            w.col(&format!("w{j}_read_value")),
+        ];
+        let write = written.then(|| w.col(&format!("w{j}_write_value")));
+        let chunks = [0, 1].map(|c| w.col(&format!("w{j}_gap_c{c}")));
+        for r in 0..calls.len() {
+            let ts = memory::TS_STEP * calls.cycles()[r] + delegation::FRAME_DELTA;
+            let gap = ts - word.read_ts[r] - 1;
+            w.row(
+                r,
+                &[
+                    (cols[0], word.addr[r] as u64),
+                    (cols[1], word.read_ts[r]),
+                    (cols[2], word.read_value[r]),
+                    (chunks[0], (gap >> 16) & 0xffff),
+                    (chunks[1], gap >> 32),
+                ],
+            );
+            if let Some(c) = write {
+                w.put(c, r, word.write_value[r]);
+            }
         }
     }
-    let low: Vec<u32> = rows
-        .clone()
-        .map(|r| (frames.bases()[r] - guest_memory::RAM_ORIGIN) / 4)
+    Ok((calls, w))
+}
+
+/// A frame word's value as written, `j` counted from the frame's first.
+fn frame_word(calls: &FrameSlice, j: usize, r: usize, write: bool) -> u64 {
+    let word = calls.word(j);
+    match write {
+        true => word.write_value[r],
+        false => word.read_value[r],
+    }
+}
+
+/// Lane `i` of a Poseidon2 frame, words `2i` and `2i + 1`, mod `p`.
+fn lane(calls: &FrameSlice, i: usize, r: usize, write: bool) -> Fp {
+    Fp::from_u64(frame_word(calls, 2 * i, r, write) | frame_word(calls, 2 * i + 1, r, write) << 32)
+}
+
+/// `POSEIDON2`, `docs/spec/precompiles.md` §3: the frame, the key, the input
+/// after `M_E`, the output, and each output lane's halfwords and top test.
+fn poseidon2(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use transcript::WIDTH;
+    let fam = family::POSEIDON2;
+    let (calls, mut w) = frame_fill(src, fam)?;
+    let key = w.col("key");
+    let u: Vec<usize> = (0..WIDTH).map(|j| w.fcol(&format!("u{j}"))).collect();
+    let o: Vec<usize> = (0..WIDTH).map(|l| w.col(&format!("o{l}"))).collect();
+    let halves: Vec<[usize; 4]> = (0..WIDTH)
+        .map(|l| {
+            [
+                w.col(&format!("o{l}_lo_h16")),
+                w.col(&format!("o{l}_hi_h16")),
+                w.fcol(&format!("o{l}_inv")),
+                w.col(&format!("o{l}_top")),
+            ]
+        })
         .collect();
-    out.push((base[0], u32_column(low.clone(), h)));
-    out.push((
-        base[1],
-        u32_column(low.iter().map(|v| v >> 16).collect(), h),
-    ));
-    let room: Vec<u32> = rows
-        .clone()
-        .map(|r| ((1u64 << 31) - frame_bytes - frames.bases()[r] as u64) as u32)
+    for r in 0..calls.len() {
+        w.put(key, r, 8 * calls.cycles()[r]);
+        let mut x: [Fp; WIDTH] = std::array::from_fn(|i| lane(&calls, i, r, false));
+        transcript::external(&mut x);
+        for (j, c) in u.iter().enumerate() {
+            w.put_fp(*c, r, x[j]);
+        }
+        let mut out: [Fp; WIDTH] = std::array::from_fn(|i| lane(&calls, i, r, false));
+        transcript::poseidon2_permute(&mut out);
+        for l in 0..WIDTH {
+            let (lo_w, hi_w) = (
+                frame_word(&calls, 2 * l, r, true),
+                frame_word(&calls, 2 * l + 1, r, true),
+            );
+            assert_eq!(
+                lo_w | hi_w << 32,
+                out[l].to_u64(),
+                "cycle {}: the trace's Poseidon2 output is not the permutation's",
+                calls.cycles()[r]
+            );
+            w.put(o[l], r, out[l].to_u64());
+            let [l1, h1, inv, top] = halves[l];
+            w.row(r, &[(l1, lo_w >> 16), (h1, hi_w >> 16)]);
+            let all_ones = 3 * 0xffff - (hi_w >> 16) - (hi_w & 0xffff) - (lo_w >> 16);
+            match Fp::from_u64(all_ones).inverse() {
+                Some(i) => w.put_fp(inv, r, i),
+                None => w.put(top, r, 1),
+            }
+        }
+    }
+    Ok(w.finish(src.height))
+}
+
+/// `POSEIDON2_ROUNDS`, `docs/spec/precompiles.md` §3: sixteen rows a call, row
+/// `k` taking the state at boundary `k` through its rounds, the last idle.
+fn poseidon2_rounds(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constraints::poseidon2::{internal, round_constant, PARTIAL, ROWS};
+    use transcript::WIDTH;
+    let fam = family::POSEIDON2_ROUNDS;
+    let calls = *src.invocations(fam)?;
+    let mut w = Witness::new(fam, ROWS * calls.len());
+    let [live, key, round, ext, int] = ["live", "key", "round", "ext", "int"].map(|c| w.col(c));
+    let kinds: Vec<usize> = (0..ROWS - 1).map(|k| w.col(&format!("row{k}"))).collect();
+    let lanes = |prefix: &str, w: &mut Witness| -> Vec<usize> {
+        (0..WIDTH)
+            .map(|i| w.fcol(&format!("{prefix}{i}")))
+            .collect()
+    };
+    let (s, o) = (lanes("s", &mut w), lanes("o", &mut w));
+    let y: Vec<[usize; 3]> = (0..WIDTH)
+        .map(|j| {
+            [
+                w.fcol(&format!("y{j}")),
+                w.fcol(&format!("y{j}_sq")),
+                w.fcol(&format!("y{j}_cube")),
+            ]
+        })
         .collect();
-    out.push((base[2], u32_column(room.clone(), h)));
-    out.push((
-        base[3],
-        u32_column(room.iter().map(|v| v >> 16).collect(), h),
-    ));
-    out
+    for c in 0..calls.len() {
+        let mut state: [Fp; WIDTH] = std::array::from_fn(|i| lane(&calls, i, c, false));
+        transcript::external(&mut state);
+        for (k, kind_col) in kinds.iter().enumerate() {
+            let r = ROWS * c + k;
+            let kind = internal(k) as u64;
+            w.row(
+                r,
+                &[
+                    (live, 1),
+                    (key, 8 * calls.cycles()[c]),
+                    (round, k as u64),
+                    (*kind_col, 1),
+                    (ext, 1 - kind),
+                    (int, kind),
+                ],
+            );
+            for (i, col) in s.iter().enumerate() {
+                w.put_fp(*col, r, state[i]);
+            }
+            let sbox = |j: usize, x: Fp, w: &mut Witness| {
+                let [a, b, z] = y[j];
+                w.put_fp(a, r, x);
+                w.put_fp(b, r, x * x);
+                w.put_fp(z, r, x * x * x);
+                x * x * x
+            };
+            if internal(k) {
+                for m in 0..PARTIAL {
+                    state[0] = sbox(m, state[0] + round_constant(k, m), &mut w);
+                    transcript::internal(&mut state);
+                }
+            } else {
+                for (j, x) in state.iter_mut().enumerate() {
+                    *x = sbox(j, *x + round_constant(k, j), &mut w);
+                }
+                transcript::external(&mut state);
+            }
+            for (i, col) in o.iter().enumerate() {
+                w.put_fp(*col, r, state[i]);
+            }
+        }
+        let mut out: [Fp; WIDTH] = std::array::from_fn(|i| lane(&calls, i, c, false));
+        transcript::poseidon2_permute(&mut out);
+        assert_eq!(state, out, "the rounds' last state is the permutation");
+    }
+    Ok(w.finish(src.height))
+}
+
+/// `MUL_DIV_U256`, `docs/spec/precompiles.md` §4: the frame, every word's high
+/// halfword, the chunk carries and the bound's borrows and words.
+fn mul_div_u256(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constraints::mul_div_u256::{CARRY_OFFSET, WORDS};
+    let fam = family::MUL_DIV_U256;
+    let (calls, mut w) = frame_fill(src, fam)?;
+    let names_of = |p: &str| -> Vec<String> { (0..WORDS).map(|k| format!("{p}{k}_h16")).collect() };
+    let h16: Vec<Vec<usize>> = ["a", "b", "d", "q", "r"]
+        .iter()
+        .map(|p| names_of(p).iter().map(|n| w.col(n)).collect())
+        .collect();
+    let carries: Vec<[usize; 2]> = (0..2 * WORDS - 1)
+        .map(|k| [w.fcol(&format!("carry{k}")), w.col(&format!("carry{k}_c0"))])
+        .collect();
+    let borrows: Vec<usize> = (0..WORDS - 1)
+        .map(|k| w.col(&format!("borrow{k}")))
+        .collect();
+    let bounds: Vec<usize> = (0..WORDS)
+        .map(|k| w.col(&format!("bound{k}_h16")))
+        .collect();
+    for r in 0..calls.len() {
+        let get = |at: usize, write: bool| -> Vec<u64> {
+            (0..WORDS)
+                .map(|k| frame_word(&calls, at + k, r, write))
+                .collect()
+        };
+        let words = [
+            get(0, false),
+            get(WORDS, false),
+            get(2 * WORDS, false),
+            get(0, true),
+            get(WORDS, true),
+        ];
+        for (cols, ws) in h16.iter().zip(&words) {
+            for (c, v) in cols.iter().zip(ws) {
+                w.put(*c, r, v >> 16);
+            }
+        }
+        let limbs = |ws: &[u64]| -> Vec<i128> {
+            ws.iter()
+                .flat_map(|v| [(v & 0xffff) as i128, (v >> 16) as i128])
+                .collect()
+        };
+        let [a, b, d, q, _] = &words;
+        let (la, lb, ld, lq) = (limbs(a), limbs(b), limbs(d), limbs(q));
+        let at = |x: &[i128], y: &[i128], m: usize| -> i128 {
+            (0..x.len())
+                .filter(|i| m >= *i && m - i < y.len())
+                .map(|i| x[i] * y[m - i])
+                .sum()
+        };
+        let mut carry = 0i128;
+        for k in 0..2 * WORDS {
+            let mut v = at(&la, &lb, 2 * k) + (at(&la, &lb, 2 * k + 1) << 16)
+                - at(&lq, &ld, 2 * k)
+                - (at(&lq, &ld, 2 * k + 1) << 16)
+                + carry;
+            if k < WORDS {
+                v -= words[4][k] as i128;
+            }
+            assert_eq!(
+                v & 0xffff_ffff,
+                0,
+                "cycle {}: the trace's quotient and remainder are not a·b's by d",
+                calls.cycles()[r]
+            );
+            carry = v >> 32;
+            if k < 2 * WORDS - 1 {
+                let [c, c0] = carries[k];
+                w.put_fp(c, r, signed(carry));
+                w.put(c0, r, ((carry + CARRY_OFFSET as i128) >> 16) as u64);
+            } else {
+                assert_eq!(carry, 0, "the product and q·d + r agree past 2^512");
+            }
+        }
+        let mut borrow = 0i64;
+        for k in 0..WORDS {
+            let g = d[k] as i64 - words[4][k] as i64 - (k == 0) as i64 - borrow;
+            borrow = (g < 0) as i64;
+            let g = (g + (borrow << 32)) as u64;
+            if k < WORDS - 1 {
+                w.put(borrows[k], r, borrow as u64);
+            } else {
+                assert_eq!(
+                    borrow,
+                    0,
+                    "cycle {}: the remainder is not below d",
+                    calls.cycles()[r]
+                );
+            }
+            w.put(bounds[k], r, g >> 16);
+        }
+    }
+    Ok(w.finish(src.height))
 }
 
 /// A RAM window shard: `trace::build_init_teardown_columns` over its window,
@@ -305,11 +513,6 @@ fn advice(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Stri
     ))
 }
 
-fn u32_column(mut values: Vec<u32>, height: usize) -> MultilinearPoly {
-    values.resize(height, 0);
-    MultilinearPoly::new(PolyBacking::U32(values))
-}
-
 fn fp_column(mut values: Vec<Fp>, height: usize) -> MultilinearPoly {
     values.resize(height, Fp::ZERO);
     MultilinearPoly::new(PolyBacking::Fp(values))
@@ -356,10 +559,11 @@ fn fill(bit: u64) -> u64 {
 /// Every `M` and `W` column of `family`'s circuit by name, from its artifact
 /// at the floor of the height menu: a name does not depend on the height.
 fn names(family: FamilyId) -> &'static HashMap<String, PolyAddress> {
-    static NAMES: [OnceLock<HashMap<String, PolyAddress>>; 7] = [const { OnceLock::new() }; 7];
+    static NAMES: [OnceLock<HashMap<String, PolyAddress>>; family::COUNT as usize] =
+        [const { OnceLock::new() }; family::COUNT as usize];
     NAMES[family as usize].get_or_init(|| {
         let a = constraints::family_circuit(family, 20)
-            .expect("every execution family has a circuit at 2^20")
+            .expect("every execution and delegation family has a circuit at 2^20")
             .artifact;
         let memory = a.memory.iter().enumerate();
         let memory = memory.map(|(i, n)| (n.clone(), PolyAddress::Memory(i as u32)));
@@ -614,10 +818,11 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     use constraints::add_sub::KINDS;
     let fam = family::ADD_SUB_LUI_AUIPC;
     let (rows, mut w, mut out) = prelude(src, fam, &KINDS)?;
-    let [sel, sel_hi, is_ecall, is_fence, c0, c1, pc_wrap] = [
+    let [sel, sel_hi, is_exit, delegates, is_fence, c0, c1, pc_wrap] = [
         "rd_selected",
         "rd_selected_hi",
-        "is_ecall",
+        "is_exit",
+        "delegates",
         "is_fence",
         "c0",
         "c1",
@@ -646,7 +851,7 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
             (x.wrapping_sub(y), borrow, (high < 0) as u64)
         };
         let word = |(v, c, _): (u64, u64, u64)| (sext32(v), c, 0);
-        let (mut ecall_row, mut fence_row) = (0, 0);
+        let (mut ecall_row, mut delegation_row, mut fence_row) = (0, 0, 0);
         let (value, carry, carry_hi) = match d.kind {
             kind::ADD => add(a, b),
             kind::ADDI => add(a, imm),
@@ -660,6 +865,16 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
                 system_code::ECALL if a == ecall::EXIT as u64 => {
                     ecall_row = 1;
                     (d.read(Role::Rd), 0, 0)
+                }
+                // A request writes no register, its anchor in rd's place.
+                system_code::ECALL
+                    if u32::try_from(a)
+                        .ok()
+                        .and_then(program::delegation_family)
+                        .is_some() =>
+                {
+                    delegation_row = 1;
+                    (0, 0, 0)
                 }
                 system_code::ECALL => {
                     return Err(format!(
@@ -685,7 +900,8 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
             &[
                 (sel, lo(value)),
                 (sel_hi, hi(value)),
-                (is_ecall, ecall_row),
+                (is_exit, ecall_row),
+                (delegates, delegation_row),
                 (is_fence, fence_row),
                 (c0, carry),
                 (c1, carry_hi),

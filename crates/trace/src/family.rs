@@ -159,10 +159,13 @@ pub struct FrameSlice<'a> {
 }
 
 impl<'a> FrameSlice<'a> {
-    /// Shard `index`'s invocations of `trace` at `height`.
+    /// Shard `index`'s invocations of `trace` at `height` rows: `height`
+    /// divided by the family's rows a call (`program::delegation_rows`), a
+    /// power of two that a height always holds whole.
     pub fn shard(trace: &'a DelegationTrace, index: u32, height: usize) -> FrameSlice<'a> {
-        let start = (index as usize * height).min(trace.len());
-        let len = (start + height).min(trace.len()) - start;
+        let per = height / program::delegation_rows(trace.family) as usize;
+        let start = (index as usize * per).min(trace.len());
+        let len = (start + per).min(trace.len()) - start;
         FrameSlice { trace, start, len }
     }
 
@@ -333,6 +336,11 @@ impl DelegationTrace {
         self.cycle.len()
     }
 
+    /// How many rows they take: `program::delegation_rows` each.
+    pub fn rows(&self) -> u64 {
+        self.len() as u64 * program::delegation_rows(self.family) as u64
+    }
+
     pub fn is_empty(&self) -> bool {
         self.cycle.is_empty()
     }
@@ -382,13 +390,14 @@ impl FamilyTraces {
     }
 
     /// Every buffer's row count, ascending by family id: the shape a
-    /// `CycleProfile` has.
+    /// `CycleProfile` has. A delegation buffer's is its calls times the
+    /// family's rows a call.
     pub fn row_counts(&self) -> Vec<(FamilyId, u64)> {
         let mut out: Vec<(FamilyId, u64)> = self
             .families
             .iter()
             .map(|t| (t.family, t.len() as u64))
-            .chain(self.delegations.iter().map(|t| (t.family, t.len() as u64)))
+            .chain(self.delegations.iter().map(|t| (t.family, t.rows())))
             .collect();
         out.sort_by_key(|(f, _)| *f);
         out

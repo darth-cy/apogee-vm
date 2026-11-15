@@ -258,7 +258,9 @@ pub enum Imm {
 pub struct Family {
     pub family: u32,
     pub queries: &'static [usize],
+    memory: Vec<String>,
     witness: Vec<String>,
+    rd_write_fold: Option<GateDef>,
     enforcing: Vec<(String, GateDef)>,
     lookups: Vec<LookupExpr>,
     setup: Vec<String>,
@@ -287,7 +289,9 @@ impl Family {
         let mut f = Family {
             family,
             queries: frame_queries(family),
+            memory: Vec::new(),
             witness: Vec::new(),
+            rd_write_fold: None,
             enforcing: Vec::new(),
             lookups: Vec::new(),
             setup: Vec::new(),
@@ -392,6 +396,38 @@ impl Family {
         // The frame's witness columns come first: a gap chunk per query, then
         // the x0 gadget's four.
         PolyAddress::Witness((self.queries.len() + 4 + self.witness.len() - 1) as u32)
+    }
+
+    /// A new `M` column of the family's own, after the frame's: one a memory
+    /// leaf may read. Held boolean by `<name>_boolean`.
+    pub fn mbit(&mut self, name: &str) -> PolyAddress {
+        assert!(
+            !self.memory.iter().chain(&self.witness).any(|n| n == name),
+            "{}: a second column named `{name}`",
+            self.family
+        );
+        self.memory.push(name.to_string());
+        let regs = self
+            .queries
+            .iter()
+            .filter(|&&q| FRAME_SPACE[q] == address_space::REG)
+            .count();
+        let x = PolyAddress::Memory(
+            (1 + 5 * self.queries.len() + 2 * regs + self.memory.len() - 1) as u32,
+        );
+        self.gate(&format!("{name}_boolean"), x - x * x);
+        x
+    }
+
+    /// Fold `leaf`, a masked memory leaf whose mask excludes `rd`'s, into
+    /// `rd`'s write leaf (`memory::FamilySpec::rd_write_fold`).
+    pub fn fold_rd_write(&mut self, leaf: GateDef) {
+        assert!(
+            self.rd_write_fold.is_none(),
+            "{}: a second fold",
+            self.family
+        );
+        self.rd_write_fold = Some(leaf);
     }
 
     /// A new witness column held boolean by `<name>_boolean`.
@@ -628,12 +664,14 @@ impl Family {
             self.queries,
             trace_vars,
             FamilySpec {
+                memory: self.memory,
                 witness: self.witness,
                 setup: self.setup,
                 virtuals,
                 enforcing: self.enforcing,
                 lookups: self.lookups,
                 channels,
+                rd_write_fold: self.rd_write_fold,
             },
         );
         assert!(

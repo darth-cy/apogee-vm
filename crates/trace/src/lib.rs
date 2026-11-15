@@ -37,9 +37,9 @@ use program::{FamilyId, VmConfig};
 ///
 /// A cycle-owning family's count is its cycles, and those counts sum to the
 /// execution's cycle count — [`CycleProfile::total`]. A delegation family's
-/// count is its invocations, which ride cycles already counted and so are
-/// outside that sum. The count is what [`plan_shards`] divides by the family's
-/// height.
+/// count is its rows, its calls times `program::delegation_rows`, which ride
+/// cycles already counted and so are outside that sum. The count is what
+/// [`plan_shards`] divides by the family's height.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CycleProfile {
     pub counts: Vec<(FamilyId, u64)>,

@@ -405,9 +405,9 @@ pub mod generic_table {
 /// A family is one arithmetization shape covering a set of program counters.
 /// The number is what everything else cites: canonical ordering is ascending
 /// `FamilyId`, the program-identity digest absorbs families in that order, and
-/// shard transcripts are seeded with it. Ids 0–6 are the execution families
-/// and 7–11 the window families (`docs/spec/circuits.md` §1); a delegation
-/// family ([`crate::delegation`]) would follow them.
+/// shard transcripts are seeded with it. Ids 0–6 are the execution families,
+/// 7–11 the window families and 12–14 the delegation families
+/// ([`crate::delegation`], `docs/spec/circuits.md` §1).
 ///
 /// Which mnemonic each instruction family claims is `crates/program`'s
 /// `row_kind`, and `docs/spec/program.md` §4 is the table.
@@ -464,9 +464,22 @@ pub mod family {
     /// prover chose; a guest owes a check of it against something public
     /// (`docs/spec/public-values.md` §6).
     pub const ADVICE_WINDOWS: u32 = 11;
+    /// The Poseidon2-A64-C5 permutation's **frame** row, one a call: the
+    /// anchor, the 32-word frame read and written in place, the initial
+    /// external layer, and the state sent to and received from
+    /// [`POSEIDON2_ROUNDS`] in `address_space::POSEIDON2`
+    /// (`docs/spec/precompiles.md` §3).
+    pub const POSEIDON2: u32 = 12;
+    /// The permutation's rounds, 16 rows a call: an external row is one full
+    /// round, an internal row fourteen partial rounds, the last row idle.
+    /// Touches no RAM and reads no lookup.
+    pub const POSEIDON2_ROUNDS: u32 = 13;
+    /// `floor(a·b/d)` and `a·b mod d` over 256-bit words, one row a call
+    /// (`docs/spec/precompiles.md` §4).
+    pub const MUL_DIV_U256: u32 = 14;
 
     /// How many families this table defines.
-    pub const COUNT: u32 = 12;
+    pub const COUNT: u32 = 15;
 
     /// The pinned height of [`PUBLIC_INPUT`] and [`PUBLIC_OUTPUT`].
     ///
@@ -521,6 +534,9 @@ pub mod family {
         false, // PUBLIC_INPUT
         false, // PUBLIC_OUTPUT
         false, // ADVICE_WINDOWS
+        false, // POSEIDON2
+        false, // POSEIDON2_ROUNDS
+        false, // MUL_DIV_U256
     ];
 
     /// The trace-height menu, ascending: the heights the registries build
@@ -562,6 +578,9 @@ pub mod family {
         1 << 12, // PUBLIC_INPUT, and it is the only admissible one
         1 << 12, // PUBLIC_OUTPUT, likewise
         1 << 22, // ADVICE_WINDOWS, at the window height
+        1 << 16, // POSEIDON2, the floor of its RANGE16 channel
+        1 << 16, // POSEIDON2_ROUNDS
+        1 << 16, // MUL_DIV_U256, likewise
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -832,6 +851,17 @@ pub mod ecall {
     /// number is 93, and nothing downstream reads any meaning into the value.
     pub const EXIT: u32 = 93;
 
+    /// A delegation call: the Poseidon2-A64-C5 permutation of the 16 lanes at
+    /// `a0`, each two little-endian words, in place (`docs/spec/precompiles.md`
+    /// §3). `a0` is preserved.
+    pub const POSEIDON2: u32 = 0x0510;
+
+    /// A delegation call: the 256-bit words `a`, `b`, `d` at `a0`, eight
+    /// little-endian words each, become `floor(a·b/d)`, `a·b mod d`, `d`
+    /// (`docs/spec/precompiles.md` §4). The caller owes `d ≠ 0` and a quotient
+    /// below `2^256`; an executor refuses either. `a0` is preserved.
+    pub const MUL_DIV_U256: u32 = 0x0511;
+
     /// Linux `ENOSYS`. Every number but [`EXIT`] and the delegation calls
     /// returns `-ENOSYS` in `a0`: a number nobody has assigned, or a retired
     /// one (`docs/spec/ecall-abi.md` §4). Such a call executes and cannot be
@@ -857,6 +887,15 @@ pub mod address_space {
     /// The program counter: one address, `0`. Every cycle reads `pc` and
     /// writes `next_pc` here.
     pub const PC: u8 = 3;
+    /// The delegation anchors: a delegation ecall row writes `(DELEGATION,
+    /// a0, cycle, a7)` and the frame row of the family its number names reads
+    /// it, pairing the two one to one (`docs/spec/precompiles.md` §2). Nothing
+    /// else reaches it.
+    pub const DELEGATION: u8 = 4;
+    /// The Poseidon2 state between rows: lane pair `j` of the call at `cycle`,
+    /// at boundary `b`, is the tuple `(POSEIDON2, 8·cycle + j, b, lane 2j,
+    /// lane 2j + 1)` (`docs/spec/precompiles.md` §3).
+    pub const POSEIDON2: u8 = 5;
 }
 
 /// The memory argument's clock and its own numbers.
@@ -908,37 +947,28 @@ pub mod memory {
 }
 
 /// The delegation ABI: an ecall that hands a fixed-width frame of RAM words to
-/// a circuit other than the CPU's.
+/// a circuit other than the CPU's (`docs/spec/precompiles.md`).
 ///
-/// The ecall is one cycle of the requesting family, `a0` the frame's
-/// word-aligned base. The work is one **invocation**: a row of the delegation
-/// family, which reads and writes every frame word at the requesting cycle's
-/// timestamp plus [`FRAME_DELTA`]. A delegation family claims no pc, so a
-/// guest **declares** what it links: each SDK shim emits a record
+/// The ecall is one cycle of `ADD_SUB_LUI_AUIPC`, `a7` the number and `a0`
+/// the frame's word-aligned base, which the call preserves. The work is one
+/// **invocation**: a row of the number's frame family, which reads and writes
+/// every frame word at the requesting cycle's timestamp plus [`FRAME_DELTA`],
+/// and the rows a family expanding it adds. A delegation family claims no pc,
+/// so a guest **declares** what it links: each SDK shim emits a record
 /// ([`MARKER_MAGIC`], then the ecall number) and `program` puts exactly the
 /// declared families in the `VmConfig`.
 ///
 /// [`TYPES`] is the registry. A new delegation is a row here and one arm each
 /// in `constraints::family_circuit` (its circuit, over
-/// `constraints::delegation`'s frame), `emulator`'s `delegate` (the function),
-/// `prover`'s `family_fill` (its witness) and a `guest_sdk` shim (the record
-/// and the call).
+/// `constraints::delegation`'s frame), `emulator`'s `frame_function` (the
+/// function), `prover`'s `family_fill` (its witness) and a `guest_sdk` shim
+/// (the record and the call).
 pub mod delegation {
+    use super::{ecall, family};
+
     /// The in-cycle slot of every frame access an invocation makes: 0.
     /// `(RAM, 0)` is a pair no query of `constraints::memory`'s frame holds.
     pub const FRAME_DELTA: u64 = 0;
-
-    /// The in-cycle slot at which an invocation's anchor tuple is read back,
-    /// the requesting row's slot 3: the invocation writes
-    /// `(space, base, 0, 0)`, the request is to consume it and write
-    /// `(space, base, 4·cycle + ANCHOR_DELTA, value)`, which the invocation
-    /// reads, pairing the two one to one.
-    ///
-    /// **UNFINISHED: the request side.** The add/sub circuit holds every ecall
-    /// row's `a7` to `EXIT` and has no delegation query, so its fill refuses a
-    /// delegation's ecall row and no row meets either anchor leaf: an
-    /// execution that delegates runs and traces, and is not provable.
-    pub const ANCHOR_DELTA: u64 = 3;
 
     /// The eight bytes that open a declaration record.
     pub const MARKER_MAGIC: [u8; 8] = *b"APOGDEL1";
@@ -947,16 +977,17 @@ pub mod delegation {
     /// ecall number as a little-endian `u32`.
     pub const MARKER_BYTES: usize = 12;
 
-    /// Every delegation as `(family, ecall number, anchor space, frame
-    /// words)`, ascending by family. The anchor space is a
-    /// [`super::address_space`] tag of the delegation's own: not memory, but
-    /// the space whose tuple pairs an invocation with the ecall that requested
-    /// it ([`ANCHOR_DELTA`]). A row is never reassigned.
+    /// Every delegation family as `(family, ecall number, frame words, rows a
+    /// call)`, ascending by family. A row is never reassigned.
     ///
-    /// **UNFINISHED: no delegation is registered.** The mechanism waits for
-    /// its first row: the declaration scan in `program`, the dispatch in
-    /// `emulator`, the invocation buffer in `trace`, the frame in
-    /// `constraints::delegation`, its fill in `prover` and the call in
-    /// `guest_sdk`.
-    pub const TYPES: [(u32, u32, u8, usize); 0] = [];
+    /// Each family of a number records every call of it. The first is the
+    /// number's **frame family**, whose row a call reads the frame and the
+    /// anchor through; a later one only expands the call into rows of its own,
+    /// reading the frame's words from its buffer and no memory but its own
+    /// address space.
+    pub const TYPES: [(u32, u32, usize, u32); 3] = [
+        (family::POSEIDON2, ecall::POSEIDON2, 32, 1),
+        (family::POSEIDON2_ROUNDS, ecall::POSEIDON2, 32, 16),
+        (family::MUL_DIV_U256, ecall::MUL_DIV_U256, 24, 1),
+    ];
 }
