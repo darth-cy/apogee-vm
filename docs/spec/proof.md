@@ -285,11 +285,13 @@ another; step 4 holds it to `ts_start ≤ ts_end ≤ 2^38` and nothing more.
 window is non-empty and no shard's `ts_end` exceeds the next shard's `ts_start`; a family's records
 are consecutive and ascending, so neighbours suffice. It is per family because families interleave
 — `ADD_SUB_LUI_AUIPC` may own cycles 1 and 3 and `JUMP_BRANCH_SLT` cycle 2 — and every other family
-is exempt: a window family's rows are words.
+is exempt: a window family's rows are words, a delegation family's calls riding cycles already
+owned.
 
 The prover reads a window off the shard's `M[0]` cycle column (`ts_window`,
 `crates/prover/src/lib.rs`): `[4·c_0, 4·c_max + 4)`, `c_0` row 0's cycle and `c_max` the largest,
-padding rows carrying 0. Window families claim `verifier_core::TRIVIAL_TS_WINDOW = [0, 2^38)`.
+padding rows carrying 0. Window and delegation families claim
+`verifier_core::TRIVIAL_TS_WINDOW = [0, 2^38)`.
 
 **A window binds nothing.** No gate ties it to the rows proved under it, so a prover may claim any
 windows the rule admits; cross-shard order, cycle uniqueness and pc continuity are the memory

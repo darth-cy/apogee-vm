@@ -164,7 +164,11 @@ the family set, and nothing selects it:
 1. an **instruction** family (0–6), whose rows are cycles, is present when the image holds one of
    its instructions;
 2. a **window** family, whose rows are memory locations — `INIT_TEARDOWN` (7), `ZERO_WINDOWS` (8),
-   `PUBLIC_INPUT` (9), `PUBLIC_OUTPUT` (10), `ADVICE_WINDOWS` (11) — is always present.
+   `PUBLIC_INPUT` (9), `PUBLIC_OUTPUT` (10), `ADVICE_WINDOWS` (11) — is always present;
+3. a **delegation** family (12–14), whose rows are precompile calls, is present when the image
+   declares its number (`program::declared_delegations`: a record `MARKER_MAGIC ‖ number` in a
+   file-backed byte, each family of the number then present, an unregistered number refused as
+   `UnknownDelegation`; [precompiles.md](precompiles.md) §1).
 
 A height is a parameter (`ProgramParams::heights`, defaulting to
 `constants::family::DEFAULT_HEIGHTS`, [circuits.md](circuits.md) §1), except the public families',
@@ -177,7 +181,8 @@ things constrain it:
 - the window rules (`verifier_core::window_height`, `WindowRule`; [memory.md](memory.md) §3.5),
   and RAM window 0, `[0, 4·h_w)`, holding every file byte of the image (`ImageOutsideWindow`);
 - the floor of the family's lookup channels, below which the registry has no circuit and no key
-  can be built: `2^20` for an instruction family ([lookup.md](lookup.md) §3).
+  can be built: `2^20` for an instruction family, `2^16` for `POSEIDON2` and `MUL_DIV_U256`
+  ([lookup.md](lookup.md) §3).
 
 `bytecode_size_words`, `2^20` (4 MiB) by default, is a declared ceiling on the words from
 `RAM_ORIGIN` to the image's last file byte (`ProgramTooLarge`); no circuit reads it.

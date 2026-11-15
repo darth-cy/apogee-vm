@@ -15,8 +15,9 @@ directory below the root.
 
 A guest is an Apogee-SDK program, not a Linux one: no file descriptors, streams, clock, entropy or
 diagnostic output. Its public input, its journal and the prover's advice are memory, read and
-written with ordinary loads and stores, and its only ecall is `EXIT`. Any other number answers
-`-ENOSYS` and leaves the run unprovable ([ecall-abi.md](spec/ecall-abi.md) §4).
+written with ordinary loads and stores, and its only ecalls are `EXIT` and the two precompiles the
+SDK calls (§3.1). Any other number answers `-ENOSYS` and leaves the run unprovable
+([ecall-abi.md](spec/ecall-abi.md) §4).
 
 ## 2. Write the guest
 
@@ -50,7 +51,7 @@ fn main() {
 and append it to the list in `guests/Cargo.toml`:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "public-io", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "public-io", "precompiles", "hello"]
 ```
 
 - `#![no_std]`: the target is bare metal. `extern crate alloc;` adds `Vec`, `Box` and `String`
@@ -116,10 +117,28 @@ fn main() {
 - Checking the advice is the guest's job: committing a function of unchecked advice publishes what
   the prover chose ([public-values.md](spec/public-values.md) §6).
 
-`digest` is a collision-resistant hash the guest links — a Poseidon2 sponge over
-`crates/transcript`, say. The SDK carries none, and the VM has
-no precompile: every operation is RV64IMAC code in the guest, proved row by row.
-[ecall-abi.md](spec/ecall-abi.md) §6 lists the SDK.
+`digest` is a collision-resistant hash: a Merkle root of `guest_sdk::poseidon2_compress`, say
+(§3.1). [ecall-abi.md](spec/ecall-abi.md) §6 lists the SDK.
+
+### 3.1 Precompiles and `U256`
+
+Two operations are not RV64IMAC code but a circuit each, which a guest reaches through the SDK
+([precompiles.md](spec/precompiles.md)): the Poseidon2-A64-C5 permutation, and the 256-bit
+`mul_div` that a token balance's arithmetic is built on.
+
+```rust
+use guest_sdk::{poseidon2_compress, U256};
+
+let node = poseidon2_compress(&left, &right); // [u64; 8] digests, a Merkle node
+let share = U256::from(amount).mul_div(U256::from(total), U256::from(reserve)); // Option<U256>
+```
+
+- `U256` is four `u64` limbs, least significant first, with `from_be_bytes` for an EVM word. Its
+  operators panic on overflow and on a zero divisor; `checked_*` and `overflowing_*` do not.
+- Division and `mul_div` are one precompile call each; addition, comparison and multiplication are
+  a few instructions a limb. `mul_div` is `None` for a zero divisor or a quotient past `2^256`.
+- A guest that links a precompile pays one shard of each family it declares, at `2^16` rows: worth
+  it once the call replaces more instructions than that ([circuits.md](spec/circuits.md) §1).
 
 ## 4. Build it
 

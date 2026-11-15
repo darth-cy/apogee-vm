@@ -26,7 +26,8 @@ word and the pc have no `HI`, which is 0 in their tuples. `γ_M, α_addr, α_ts,
 Every memory artifact outputs its read product at `outputs[READ_ROOT = 0]` and its write product
 at `outputs[WRITE_ROOT = 1]` (`constants::memory`), before any channel's roots
 ([lookup.md](lookup.md) §6). All tuples of a statement form one multiset, over `REG`, `RAM` and
-`PC`.
+`PC`, and the precompiles' `DELEGATION` and `POSEIDON2`, which no init or final reaches: their writes
+pair with their reads ([precompiles.md](precompiles.md) §2, §3).
 
 The argument below is sound only because every tuple is fixed before the challenges (§6.1).
 
@@ -278,12 +279,12 @@ its own verification.
 written and finals only read, so a balanced multiset is paths from inits to finals plus loops. An
 edge advances the timestamp by an integer in `[1, 2^38 + 3]` (the gap plus the query's least
 advance, 4 at the pc and 1 elsewhere), so a loop needs at least `p/(2^38 + 3)` edges, and a
-statement has fewer than `2^62` tuples: under `2^32` shards a family (a `u32` count), 12 families,
-at most `2^22` rows (the menu's top), at most 12 tuples a row (`MEM_WORD`'s six queries, both
-sides), and 66 boundary tuples.
+statement has fewer than `2^65` tuples: under `2^32` shards a family (a `u32` count), 15 families,
+at most `2^22` rows (the menu's top), at most 81 tuples a row (`POSEIDON2`'s frame row, both sides),
+and 66 boundary tuples.
 
 **UNFINISHED: A64-C5 CHARACTERISTIC.** At `p = 2^64 − 59` that bound is about `2^26` edges, far
-below `2^62`, so the count excludes no loop. Nothing bounds `cycle`, so a timestamp is an integer
+below `2^65`, so the count excludes no loop. Nothing bounds `cycle`, so a timestamp is an integer
 only modulo `p`, and a loop of that many queries at one address balances with no init: a register
 or RAM read returning a value no write gave. A later stage bounds every write timestamp
 structurally, after which every timestamp on a path is an integer below `2^41` and no loop exists.
@@ -379,7 +380,7 @@ identity (§6.1).
 
 Both sides of §4.2 are products of linear forms in `(γ_M, α_addr, α_ts, α_val, α_hi)`, one per distinct
 tuple, every tuple fixed before those are drawn (§6.1, §8). By Schwartz–Zippel they agree on
-unequal multisets with probability at most `N/|Fp2| = N/p^2`, below `2^−66` at `N < 2^62` (§4.2),
+unequal multisets with probability at most `N/|Fp2| = N/p^2`, below `2^−63` at `N < 2^65` (§4.2),
 and on equal ones §4.2's count gives — **UNFINISHED** at A64-C5's characteristic, which leaves it a
 premise (§4.2):
 
