@@ -567,3 +567,176 @@ fn the_recorded_public_input_is_what_the_host_supplied() {
     let (.., traced) = trace_run(&image, &guest, &tables, &config).unwrap();
     assert_eq!(traced.io.input, window);
 }
+
+/// The host's side of `guests/marketplace`: a sparse table of listings as the
+/// guest commits to it, each node `transcript`'s permutation of two digests,
+/// truncated, each leaf a listing's 56 bytes packed seven to a lane beside a
+/// tag lane of 1.
+mod market {
+    use std::collections::BTreeMap;
+
+    use field::Fp;
+
+    pub const DEPTH: usize = 20;
+    pub type Digest = [u64; 8];
+
+    pub fn compress(l: &Digest, r: &Digest) -> Digest {
+        let mut s: [Fp; 16] =
+            std::array::from_fn(|i| Fp::from_u64(if i < 8 { l[i] } else { r[i - 8] }));
+        transcript::poseidon2_permute(&mut s);
+        std::array::from_fn(|i| s[i].to_u64())
+    }
+
+    pub fn leaf(listing: &[u8; 56]) -> Digest {
+        let lanes: Digest = std::array::from_fn(|i| {
+            let mut lane = [0u8; 8];
+            lane[..7].copy_from_slice(&listing[7 * i..7 * i + 7]);
+            u64::from_le_bytes(lane)
+        });
+        compress(&lanes, &[1, 0, 0, 0, 0, 0, 0, 0])
+    }
+
+    pub fn listing(seller: u64, item: u64, price: u128, stock: u64) -> [u8; 56] {
+        let mut b = [0u8; 56];
+        b[..8].copy_from_slice(&seller.to_le_bytes());
+        b[8..16].copy_from_slice(&item.to_le_bytes());
+        b[16..32].copy_from_slice(&price.to_le_bytes());
+        b[48..].copy_from_slice(&stock.to_le_bytes());
+        b
+    }
+
+    /// The listed slots; every other slot holds the all-zero listing.
+    pub struct Table(pub BTreeMap<u32, [u8; 56]>);
+
+    impl Table {
+        fn node(&self, level: usize, index: u32, empty: &[Digest]) -> Digest {
+            let slots = index << level..(index + 1) << level;
+            match (self.0.range(slots).next(), level) {
+                (None, _) => empty[level],
+                (Some((_, l)), 0) => leaf(l),
+                _ => compress(
+                    &self.node(level - 1, 2 * index, empty),
+                    &self.node(level - 1, 2 * index + 1, empty),
+                ),
+            }
+        }
+
+        fn empty() -> Vec<Digest> {
+            let mut out = vec![leaf(&[0; 56])];
+            for l in 0..DEPTH {
+                out.push(compress(&out[l], &out[l]));
+            }
+            out
+        }
+
+        pub fn root(&self) -> Digest {
+            self.node(DEPTH, 0, &Table::empty())
+        }
+
+        /// `slot`'s listing and its siblings from the leaf up: its proof.
+        pub fn proof(&self, slot: u32) -> Vec<u8> {
+            let empty = Table::empty();
+            let mut out = self.0.get(&slot).copied().unwrap_or([0; 56]).to_vec();
+            for level in 0..DEPTH {
+                let sibling = self.node(level, (slot >> level) ^ 1, &empty);
+                out.extend(sibling.iter().flat_map(|l| l.to_le_bytes()));
+            }
+            out
+        }
+    }
+}
+
+/// `guests/marketplace` follows its listings table by its Merkle root.
+///
+/// Two listings, then ten operations whose outcomes are this table's own
+/// reading of the rules: buy 4 of 10 at 25 (cost 100, fee 0.3 at 30 bps),
+/// buy past the stock, reprice by the seller, reprice by another account, list
+/// over a listing, list an empty slot, buy the last unit at 4 (fee 0.012), buy
+/// from oneself, delist, and an op that does not exist; amounts in units of
+/// `10^18`. Five apply and five are refused, and the journal is both roots and
+/// those totals. The advice is each slot's proof under the table the ops before
+/// it left, and the same advice one sibling off panics.
+#[test]
+fn marketplace_follows_its_table_by_its_root() {
+    use market::{listing, Table};
+    const E18: u128 = 1_000_000_000_000_000_000;
+    let mut table = Table(
+        [
+            (5, listing(1, 100, 25 * E18, 10)),
+            (77_777, listing(2, 200, 3 * E18, 1)),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let before = table.root();
+    let last = (1 << market::DEPTH) - 1;
+    // (kind, slot, account, item, price, quantity), and the slot's listing after
+    // the op where it applies: `Some(None)` empties it.
+    type Op = (u32, u32, u64, u64, u128, u64);
+    let ops: [(Op, Option<Option<[u8; 56]>>); 10] = [
+        ((2, 5, 9, 0, 0, 4), Some(Some(listing(1, 100, 25 * E18, 6)))),
+        ((2, 5, 9, 0, 0, 7), None),
+        (
+            (1, 77_777, 2, 0, 4 * E18, 0),
+            Some(Some(listing(2, 200, 4 * E18, 1))),
+        ),
+        ((1, 77_777, 3, 0, 5 * E18, 0), None),
+        ((0, 5, 4, 300, E18, 1), None),
+        (
+            (0, last, 4, 300, E18, 1000),
+            Some(Some(listing(4, 300, E18, 1000))),
+        ),
+        (
+            (2, 77_777, 9, 0, 0, 1),
+            Some(Some(listing(2, 200, 4 * E18, 0))),
+        ),
+        ((2, 5, 1, 0, 0, 1), None),
+        ((3, 5, 1, 0, 0, 0), Some(None)),
+        ((9, 5, 1, 0, 0, 0), None),
+    ];
+    let mut input: Vec<u8> = before.iter().flat_map(|l| l.to_le_bytes()).collect();
+    input.extend(30u32.to_le_bytes());
+    input.extend((ops.len() as u32).to_le_bytes());
+    let mut advice = Vec::new();
+    for ((kind, slot, account, item, price, quantity), after) in ops {
+        input.extend(kind.to_le_bytes());
+        input.extend(slot.to_le_bytes());
+        input.extend(account.to_le_bytes());
+        input.extend(item.to_le_bytes());
+        input.extend(price.to_le_bytes());
+        input.extend([0u8; 16]);
+        input.extend(quantity.to_le_bytes());
+        advice.extend(table.proof(slot));
+        match after {
+            Some(Some(l)) => {
+                table.0.insert(slot, l);
+            }
+            Some(None) => {
+                table.0.remove(&slot);
+            }
+            None => {}
+        }
+    }
+    let mut journal: Vec<u8> = before
+        .iter()
+        .chain(&table.root())
+        .flat_map(|l| l.to_le_bytes())
+        .collect();
+    journal.extend(5u32.to_le_bytes());
+    journal.extend(5u32.to_le_bytes());
+    for total in [104 * E18, 3 * E18 / 10 + 12 * E18 / 1000] {
+        journal.extend(total.to_le_bytes());
+        journal.extend([0u8; 16]);
+    }
+    let image = image("marketplace");
+    let e = run(&image, &common::with_advice(&input, &advice)).unwrap();
+    assert_eq!(e.exit_code, 0);
+    assert_eq!(to_hex(&e.io.output), to_hex(&journal));
+
+    advice[56] ^= 1;
+    let e = run(&image, &common::with_advice(&input, &advice)).unwrap();
+    assert_eq!(
+        e.exit_code, 101,
+        "a proof one sibling off does not open the table"
+    );
+}

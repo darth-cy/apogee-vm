@@ -51,7 +51,7 @@ fn main() {
 and append it to the list in `guests/Cargo.toml`:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "public-io", "precompiles", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "public-io", "precompiles", "marketplace", "hello"]
 ```
 
 - `#![no_std]`: the target is bare metal. `extern crate alloc;` adds `Vec`, `Box` and `String`
@@ -139,6 +139,10 @@ let share = U256::from(amount).mul_div(U256::from(total), U256::from(reserve)); 
   a few instructions a limb. `mul_div` is `None` for a zero divisor or a quotient past `2^256`.
 - A guest that links a precompile pays one shard of each family it declares, at `2^16` rows: worth
   it once the call replaces more instructions than that ([circuits.md](spec/circuits.md) §1).
+- `guests/marketplace` is the worked example of a table a proof follows by its root: a listings
+  table of `2^20` slots as a Poseidon2 Merkle tree, the root before a batch in the public input,
+  each operation's Merkle proof in the advice, checked before it is used, and the root after the
+  batch in the journal.
 
 ## 4. Build it
 

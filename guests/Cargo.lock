@@ -68,6 +68,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "marketplace"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "guest-sdk",
+]
+
+[[package]]
 name = "mem"
 version = "0.1.0"
 
