@@ -103,7 +103,7 @@ fn specs(a: &CircuitArtifact) -> Vec<ChannelSpec> {
         },
         ChannelSpec {
             channel: lookup_channel::GENERIC,
-            table: table(&["generic_key", "generic_v1", "generic_v2"]),
+            table: table(&["generic_tag", "generic_key", "generic_v1", "generic_v2"]),
             multiplicity: mult(lookup_channel::GENERIC),
         },
         ChannelSpec {

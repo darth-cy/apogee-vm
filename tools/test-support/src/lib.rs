@@ -248,7 +248,7 @@ pub fn guest_elf(name: &str) -> Vec<u8> {
 /// `include/apogee_guest.h`, `apogee.ld`, and `libapogee_guest.a`, which is
 /// `crates/guest-sdk` built as a static library — exactly as a C++ developer's
 /// project is built against the published SDK (`docs/guest-program-manual.md`
-/// §8). Needs CMake, Clang and LLD.
+/// §11). Needs CMake, Clang and LLD.
 fn cmake_guest(root: &Path, target: &Path, name: &str) -> Vec<u8> {
     let sdk = root.join("crates/guest-sdk");
     let sdk_target = target.join("sdk");
@@ -266,14 +266,17 @@ fn cmake_guest(root: &Path, target: &Path, name: &str) -> Vec<u8> {
         cargo.env_remove(key);
     }
     let lib = sdk_target.join("riscv64imac-unknown-none-elf/release/libguest_sdk.a");
-    let build = target.join(name);
-    // A fresh tree every time. CMake keeps a configured tree's cache, so a
-    // tree an older toolchain file configured would build with its flags.
-    match fs::remove_dir_all(&build) {
+    // A fresh tree of this process's own, removed once read. CMake keeps a
+    // configured tree's cache, so a tree an older toolchain file configured
+    // would build with its flags; and `guest_elf`'s lock is this process's
+    // alone, so a tree shared with another test process is cleared under it.
+    let build = target.join(format!("{name}-{}", std::process::id()));
+    let clear = || match fs::remove_dir_all(&build) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => panic!("guests/{name}: clearing {}: {e}", build.display()),
-    }
+    };
+    clear();
     let path = |p: &Path| p.to_str().expect("a UTF-8 path").to_string();
     let configure = [
         "-S".into(),
@@ -305,7 +308,9 @@ fn cmake_guest(root: &Path, target: &Path, name: &str) -> Vec<u8> {
         );
     }
     let elf = build.join(name);
-    fs::read(&elf).unwrap_or_else(|e| panic!("reading {}: {e}", elf.display()))
+    let bytes = fs::read(&elf).unwrap_or_else(|e| panic!("reading {}: {e}", elf.display()));
+    clear();
+    bytes
 }
 
 fn cmake(args: &[String]) -> Command {
