@@ -42,7 +42,7 @@ lists (the halving ones are `n`), inner columns, artifact bytes, and a shard pro
 | 13 | `POSEIDON2_ROUNDS` | 16 | 35 | 65 | 0 | 84 | — | 4 | 62 | 58,609 | 15,088 |
 | 14 | `MUL_DIV_U256` | 16 | 91 | 135 | 0 | 48 | 0/239/0/0 | 9 | 1,218 | 180,932 | 41,272 |
 | 15 | `MERKLE_ROOT` | 16 | 94 | 72 | 0 | 54 | 0/120/0/0 | 8 | 704 | 103,449 | 31,056 |
-| 16 | `MERKLE_LEVELS` | 16 | 63 | 34 | 0 | 20 | 0/65/0/0 | 8 | 704 | 135,228 | 29,952 |
+| 16 | `MERKLE_LEVELS` | 16 | 63 | 50 | 0 | 20 | 0/97/0/0 | 8 | 704 | 138,302 | 30,208 |
 | 17 | `MERKLE_ROUNDS` | 16 | 36 | 66 | 0 | 85 | 0/1/0/0 | 4 | 104 | 64,028 | 16,304 |
 
 The bytes are the GKR pass and outputs; the witness commitment and the opening come on top

@@ -111,6 +111,7 @@ fn a2_a_statement_with_precompile_calls_streams_and_verifies() {
             &0u32.to_le_bytes(),
             &16u32.to_le_bytes(),
             &[0u8; 64 * 16],
+            &0u32.to_le_bytes(),
         ]
         .concat(),
         advice: Vec::new(),

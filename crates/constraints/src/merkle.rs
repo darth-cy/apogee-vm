@@ -139,15 +139,18 @@ fn frame_row() -> Builder {
 /// u{j}_rule     u_j − Σ_k M_E[j][k]·n_k − M_E[j][8 + k]·s_k
 ///                   − bit·Σ_k (M_E[j][k] − M_E[j][8 + k])·(s_k − n_k)
 /// w{j}          the sibling's word j at ptr + 4j, read and written back at
-///               4·cycle + FRAME_DELTA, its gap in [0, 2^38)
+///               4·cycle + FRAME_DELTA, its gap in [0, 2^38), and a word: its
+///               two RANGE16 halfwords
 /// receive  (cycle, stamp + s, n_2s, n_2s+1), s < 4     (cycle, stamp + 8, rest, ptr)
 /// send     (cycle, stamp + 16 + s, u_2s, u_2s+1), s < 8
 ///          (cycle, next + 8, rest_next, ptr + 64)
 /// ```
 ///
-/// `s_k = w_2k + 2^32·w_2k+1` is the sibling's lane `k`, read mod `p`: any
-/// field element is a lane, so a sibling may lie in the advice. `u` is
-/// `M_E(n ‖ s)` where the bit is 0, `M_E(s ‖ n)` where it is 1, degree 2.
+/// `s_k = w_2k + 2^32·w_2k+1` is the sibling's lane `k`, read mod `p`. Each
+/// word is bounded as a load bounds the word it reads, so a sibling may lie
+/// in the advice, whose words nothing else bounds: the lane the hash sees is
+/// the one a load of its two words sees. `u` is `M_E(n ‖ s)` where the bit is
+/// 0, `M_E(s ‖ n)` where it is 1, degree 2.
 fn levels() -> Builder {
     let mut b = Builder::new(family::MERKLE_LEVELS);
     let live = b.live;
@@ -190,6 +193,10 @@ fn levels() -> Builder {
             read[j],
             read[j],
         );
+        // A word, as a load holds the word it reads: an advised word could be
+        // any field element, and the hash must see the lane a load of the
+        // same two words would.
+        b.word(&format!("w{j}"), read[j].into());
     }
     let space = address_space::MERKLE;
     for s in 0..NODE_PAIRS {

@@ -481,7 +481,7 @@ fn merkle_root(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>,
 
 /// `MERKLE_LEVELS`, `docs/spec/precompiles.md` §6: one row a level, from its
 /// entry's carry — the node, the slot's bits not yet taken, the level — and
-/// its sibling's words.
+/// its sibling's words, each with its high halfword.
 fn merkle_levels(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     use constants::delegation::merkle::SIBLING;
     use constraints::merkle::LEVEL;
@@ -499,13 +499,14 @@ fn merkle_levels(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)
         "bit",
     ]
     .map(|c| w.col(c));
-    let words: Vec<([usize; 2], [usize; 2])> = (0..SIBLING)
+    let words: Vec<([usize; 2], [usize; 2], usize)> = (0..SIBLING)
         .map(|j| {
             let cols = [
                 w.col(&format!("w{j}_read_ts")),
                 w.col(&format!("w{j}_read_value")),
             ];
-            (cols, [0, 1].map(|c| w.col(&format!("w{j}_gap_c{c}"))))
+            let chunks = [0, 1].map(|c| w.col(&format!("w{j}_gap_c{c}")));
+            (cols, chunks, w.col(&format!("w{j}_h16")))
         })
         .collect();
     let n: Vec<usize> = (0..8).map(|i| w.fcol(&format!("n{i}"))).collect();
@@ -525,8 +526,9 @@ fn merkle_levels(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)
                 (bit, left & 1),
             ],
         );
-        for (j, (cols, chunks)) in words.iter().enumerate() {
+        for (j, (cols, chunks, h16)) in words.iter().enumerate() {
             access(&mut w, *cols, *chunks, &calls, j, r);
+            w.put(*h16, r, calls.word(j).read_value[r] >> 16);
         }
         for (i, c) in n.iter().enumerate() {
             w.put_fp(*c, r, Fp::from_u64(calls.carry(i)[r]));

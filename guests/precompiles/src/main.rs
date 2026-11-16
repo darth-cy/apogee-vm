@@ -4,8 +4,10 @@
 //! answer to without them: the Poseidon2 permutation of the generator's own
 //! input and of sixteen lanes at `2^64 − 1`, a Merkle root over the leaves the
 //! public input carries, `mul_div` where its answer is hand-derived or a
-//! `u128`'s, overflowing, by zero, and at `U256::MAX`, and two Merkle paths by
-//! `merkle_root`, each the fold `poseidon2_compress` gives.
+//! `u128`'s, overflowing, by zero, and at `U256::MAX`, and Merkle paths by
+//! `merkle_root`, the first two each checked against the fold
+//! `poseidon2_compress` gives, then a run of them long enough that a path's
+//! levels straddle a shard.
 //!
 //! # The public input
 //!
@@ -15,6 +17,7 @@
 //!   then    slot     u32 LE          below 2^depth
 //!           depth    u32 LE          16..=32
 //!           path     depth siblings  64 bytes each, each lane below p
+//!   then    runs     u32 LE          depth-32 paths before the last, depth-20 one
 //! ```
 //!
 //! # The journal
@@ -30,7 +33,15 @@
 //!                                   its siblings read in place from the input
 //!   merkle_root                     8 u64: leaf 0 at slot 2^32 − 1, depth 32, up
 //!                                   the leaves in turn, from the guest's memory
+//!   merkle_root                     8 u64: path i < runs from the root before it,
+//!                                   at slot i, up the same 32 siblings; then a
+//!                                   depth-20 one from the last, at slot 0x5a5a5,
+//!                                   up their first 20
 //! ```
+//!
+//! With 126 runs the depth-20 path is levels 4,080 to 4,099: it straddles
+//! level 4,096, where a `MERKLE_ROUNDS` shard ends at `2^12` rows and at
+//! `2^16`.
 
 use guest_sdk::{merkle_root, poseidon2_compress, poseidon2_permute, Digest, U256};
 
@@ -135,6 +146,14 @@ fn main() {
             fold(u32::MAX, level, &node, sibling)
         });
     assert!(root == node, "precompiles: merkle_root is not the fold");
+    root.lanes().iter().for_each(|l| put(&l.to_le_bytes()));
+
+    let runs = word(at_path + 8 + 64 * depth);
+    let mut node = leaves[0];
+    for i in 0..runs {
+        node = merkle_root(i, &node, Digest::bytes(&ram));
+    }
+    let root = merkle_root(0x5a5a5, &node, &Digest::bytes(&ram)[..64 * 20]);
     root.lanes().iter().for_each(|l| put(&l.to_le_bytes()));
     guest_sdk::commit(&out[..at]);
 }

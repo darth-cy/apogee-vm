@@ -211,9 +211,11 @@ word  18      siblings   the address of depth siblings, 64 bytes each, level 0's
 the frame: the emulator refuses any other frame as `EmuError::DelegationFrame` and a sibling word no
 load could read as `OutOfBounds`, and none has a witness. The leaf is read mod `p` and the root
 written canonical. **The siblings are not the frame.** `MERKLE_LEVELS` reads their words at the
-call's timestamp and writes them back unchanged, and takes each lane mod `p`; any field element is
-a lane of a sibling, so a word the advice initialized to a non-word names only a sibling some pair
-of words names as well, and no word anywhere changes. So the siblings may lie anywhere a load
+call's timestamp, writes them back unchanged, and holds each to a word, two `RANGE16` halfwords, as
+a load holds the word it reads. The bound is what lets them lie in the advice, whose init column
+nothing bounds: unbounded, a pair of low word 0 and high word `2^−32` would hash as the lane 1
+while a load of the low word reads 0, a lane no two words give. Bounded, a sibling's lane is the
+one its two words give to every reader, taken mod `p`. So the siblings may lie anywhere a load
 reaches, the advice included, and a guest hashes an advised proof where it lies.
 
 The state between rows is `address_space::MERKLE = 6`, one counter for the whole call: boundary `B`
@@ -250,20 +252,21 @@ One row a level `L`, its stamp `256L`:
 
 ```text
 M   live cycle stamp next rest rest_next ptr  w{j}_read_ts w{j}_read_value (j < 16)  n0..n7 u0..u15
-W   bit  w{j}_gap_c0 w{j}_gap_c1
+W   bit  w{j}_gap_c0 w{j}_gap_c1  w{j}_h16
 level_range   stamp/256 ∈ [0, 2^16)              next_rule   next − stamp − 256
 rest_rule     rest − bit − 2·rest_next           bit boolean
 u{j}_rule     u_j − Σ_k (M_E[j][k]·n_k + M_E[j][8+k]·s_k) − bit·Σ_k (M_E[j][k] − M_E[j][8+k])·(s_k − n_k)
 w{j}          read (RAM, ptr + 4j, read_ts_j, read_j), write (RAM, ptr + 4j, 4·cycle + FRAME_DELTA, read_j),
-              the gap below it in [0, 2^38)
+              the gap below it in [0, 2^38), and read_j a word: w{j}_h16 and read_j − 2^16·w{j}_h16
+              each in [0, 2^16)
 receive  (MERKLE, cycle, stamp + s, n_2s, n_2s+1), s < 4    (MERKLE, cycle, stamp + 8, rest, ptr)
 send     (MERKLE, cycle, stamp + 16 + s, u_2s, u_2s+1), s < 8    (MERKLE, cycle, next + 8, rest_next, ptr + 64)
 ```
 
 `s_k = read_2k + 2^32·read_2k+1` is the sibling's lane `k`, and `u` is `M_E(n ‖ s)` where the bit is
 0 and `M_E(s ‖ n)` where it is 1, degree 2 with no column for either order. A word's address is
-`ptr + 4j` in its leaves, `4j` mask terms (§1's parts) rather than a column. 97 committed columns, 65
-obligations (128 leaves, 62 free), 21 and 25 leaves.
+`ptr + 4j` in its leaves, `4j` mask terms (§1's parts) rather than a column. 113 committed columns,
+97 obligations (128 leaves, 30 free), 21 and 25 leaves.
 
 ### 6.3 `MERKLE_ROUNDS`
 

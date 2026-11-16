@@ -37,7 +37,8 @@ the family of its number reads ([precompiles.md](precompiles.md) §2). A delegat
 `a0`, as every register; its frame is a word-aligned span a store could write, each word checked as
 one, below `ADVICE_ORIGIN` (§5): a frame reaching the advice is the fatal `OutOfBounds`
 ([precompiles.md](precompiles.md) §1). `MERKLE_ROOT`'s siblings are not its frame: it reads them,
-each word checked as a load's, and they may lie anywhere a load reaches, the advice included.
+each word checked and bounded as a load's, and they may lie anywhere a load reaches, the advice
+included.
 
 ## 3. Retired numbers
 
