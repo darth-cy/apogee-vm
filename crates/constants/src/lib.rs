@@ -345,13 +345,19 @@ pub mod lookup_channel {
     /// `lookup_tuple(family)` columns in their fixed order.
     pub const DECODER: u32 = 3;
 
+    /// Table. The byte table `(a, b, a ^ b)`, all 65,536 triples. The one
+    /// table channel whose table is **virtual**: its three columns are closed
+    /// forms of the row index, so it costs no setup column. A delegation
+    /// family reads it through `constraints::delegation::Builder`.
+    pub const XOR8: u32 = 4;
+
     /// How many channels this table defines.
-    pub const COUNT: u32 = 4;
+    pub const COUNT: u32 = 5;
 
     /// Whether channel `i` is a range channel, indexed by channel. A range
     /// channel's table is the closed form of `docs/spec/lookup.md` §3; a table
-    /// channel's is setup columns.
-    pub const IS_RANGE: [bool; COUNT as usize] = [true, true, false, false];
+    /// channel's is setup columns, or for [`XOR8`] a closed form of its own.
+    pub const IS_RANGE: [bool; COUNT as usize] = [true, true, false, false, false];
 
     /// A range channel's bound, as a bit width, indexed by channel; 0 where
     /// [`IS_RANGE`] is false, which is not a bound of `[0, 1)` but the absence
@@ -360,10 +366,11 @@ pub mod lookup_channel {
     /// This is a **bound**, not a table size: what decides the fewest
     /// variables a circuit declaring a channel may be built at is
     /// `constraints::lookup::table_vars`, which reads this for a range channel.
-    pub const BITS: [u32; COUNT as usize] = [19, 16, 0, 0];
+    pub const BITS: [u32; COUNT as usize] = [19, 16, 0, 0, 0];
 
     /// Every channel's display name, indexed by channel.
-    pub const NAMES: [&str; COUNT as usize] = ["timestamp", "range16", "generic", "decoder"];
+    pub const NAMES: [&str; COUNT as usize] =
+        ["timestamp", "range16", "generic", "decoder", "xor8"];
 
     /// The widest lookup tuple any channel carries: `beta` powers exist for
     /// positions `0 .. MAX_TUPLE`, and `challenge_slot::LOOKUP_BETA_POWERS`
@@ -567,9 +574,9 @@ pub mod family {
     ///
     /// What closes a height to a family is a channel whose **table needs more
     /// variables**, not carrying a channel at all: `constraints::lookup::
-    /// table_vars` is 19 for `TIMESTAMP` and 16 for `RANGE16`, while `GENERIC`
-    /// and `DECODER` report **0** — their tables are setup columns rather than
-    /// closed forms, so they raise the floor by nothing.
+    /// table_vars` is 19 for `TIMESTAMP` and 16 for `RANGE16` and `XOR8`, while
+    /// `GENERIC` and `DECODER` report **0** — their tables are setup columns
+    /// rather than closed forms, so they raise the floor by nothing.
     /// `constraints::family_circuit` returns `None` below the widest table its
     /// channels declare, and nothing rests on the two zeros: every family
     /// reading `GENERIC` also carries `TIMESTAMP`, whose 19 puts it at `2^20`

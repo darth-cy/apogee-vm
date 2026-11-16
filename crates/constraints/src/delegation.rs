@@ -4,7 +4,7 @@
 //! words every frame family carries.
 //!
 //! ```text
-//! every family   M[0] live: the row's one mask, every leaf's and every obligation's
+//! every family   M[0] live: every leaf's mask, every obligation's default selector
 //! a frame        M[1] cycle, M[2] number, then per frame word j
 //!                M[..] w{j}_addr w{j}_read_ts w{j}_read_value [w{j}_write_value]
 //!                W[..] w{j}_gap_c0 w{j}_gap_c1, RANGE16 chunks of 4·cycle − 1 − read_ts
@@ -16,8 +16,9 @@
 //! ```
 //!
 //! A row is live or padding: every leaf is masked by `live`, so a padding row,
-//! all zero, is the identity of both products, and every obligation's selector
-//! is `live`. Every enforcing gate is zero on the all-zero row.
+//! all zero, is the identity of both products, and every obligation's selector,
+//! `live` or another boolean column, is 0 there. Every enforcing gate is zero on
+//! the all-zero row.
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -181,11 +182,35 @@ impl Builder {
 
     /// A `RANGE16` obligation under `live`: `e < 2^16`.
     pub fn range16(&mut self, name: &str, e: Expr) {
+        self.range16_under(self.live, name, e);
+    }
+
+    /// A `RANGE16` obligation under `selector`, a committed column gate list 0
+    /// holds boolean (`laws.rs`): `e < 2^16` where it is 1.
+    pub fn range16_under(&mut self, selector: PolyAddress, name: &str, e: Expr) {
         self.lookups.push(LookupExpr {
             name: name.to_string(),
             channel: lookup_channel::RANGE16,
-            selector: self.live,
+            selector,
             tuple: vec![e.gate()],
+        });
+    }
+
+    /// An `XOR8` obligation under `live`: `(a, b, c)` is a row of the byte
+    /// table, so `a` and `b` are bytes and `c = a ^ b`.
+    pub fn xor8(&mut self, name: &str, a: Expr, b: Expr, c: Expr) {
+        self.xor8_under(self.live, name, a, b, c);
+    }
+
+    /// An `XOR8` obligation under `selector`, as [`Builder::range16_under`].
+    /// Each entry is `Linear`, and `b` and `c` weight their columns by 1 and
+    /// carry no constant (`docs/spec/lookup.md` §5).
+    pub fn xor8_under(&mut self, selector: PolyAddress, name: &str, a: Expr, b: Expr, c: Expr) {
+        self.lookups.push(LookupExpr {
+            name: name.to_string(),
+            channel: lookup_channel::XOR8,
+            selector,
+            tuple: vec![a.gate(), b.gate(), c.gate()],
         });
     }
 
@@ -247,29 +272,51 @@ impl Builder {
         side.push((name.to_string(), masked_leaf(mask, space, parts)));
     }
 
-    /// The family's one channel, `RANGE16`, if it has an obligation: its table
-    /// `V[range16]` and its multiplicity the last `W` column.
+    fn uses(&self, channel: u32) -> bool {
+        self.lookups.iter().any(|l| l.channel == channel)
+    }
+
+    /// The channels the family's obligations use, in channel order: `RANGE16`,
+    /// its table `V[range16]`, and `XOR8`, its table `lookup::xor8_table`, each
+    /// where used; each multiplicity one of the last `W` columns, in that
+    /// order.
     pub fn channels(&self) -> Vec<ChannelSpec> {
-        match self.lookups.is_empty() {
-            true => Vec::new(),
-            false => vec![ChannelSpec {
-                channel: lookup_channel::RANGE16,
-                table: vec![PolyAddress::Virtual(VirtualKind::Range16)],
-                multiplicity: PolyAddress::Witness(self.witness.len() as u32),
-            }],
-        }
+        let first = self.witness.len() as u32;
+        [lookup_channel::RANGE16, lookup_channel::XOR8]
+            .into_iter()
+            .filter(|c| self.uses(*c))
+            .enumerate()
+            .map(|(i, channel)| ChannelSpec {
+                channel,
+                table: match channel {
+                    lookup_channel::RANGE16 => vec![PolyAddress::Virtual(VirtualKind::Range16)],
+                    _ => crate::lookup::xor8_table(),
+                },
+                multiplicity: PolyAddress::Witness(first + i as u32),
+            })
+            .collect()
     }
 
     /// The circuit over `2^trace_vars` rows: the two product trees, each side
-    /// padded to one power of two with leaves that are literally 1, and the
-    /// `RANGE16` tree where there is an obligation. Panics on every refusal of
-    /// the assembly, and on a copower chunk with no direct bound.
+    /// padded to one power of two with leaves that are literally 1, and a
+    /// fraction tree for each channel used. Panics on every refusal of the
+    /// assembly, and on a copower chunk with no direct bound.
     pub fn artifact(mut self, trace_vars: u32) -> CircuitArtifact {
         let channels = self.channels();
+        for spec in &channels {
+            let name = lookup_channel::NAMES[spec.channel as usize];
+            self.witness.push(format!("mult_{name}"));
+        }
         let mut virtuals = Vec::new();
-        if !channels.is_empty() {
-            self.witness.push("mult_range16".to_string());
+        if self.uses(lookup_channel::RANGE16) {
             virtuals.push((VirtualKind::Range16, "range16".to_string()));
+        }
+        if self.uses(lookup_channel::XOR8) {
+            virtuals.extend([
+                (VirtualKind::Xor8A, "xor8_a".to_string()),
+                (VirtualKind::Xor8B, "xor8_b".to_string()),
+                (VirtualKind::Xor8Out, "xor8_out".to_string()),
+            ]);
         }
         let side = self.reads.len().max(self.writes.len()).next_power_of_two();
         for (leaves, name) in [(&mut self.reads, "read"), (&mut self.writes, "write")] {

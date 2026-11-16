@@ -128,6 +128,9 @@ impl Serialize for VirtualKind {
             VirtualKind::RamLive => 1u32.serialize(s),
             VirtualKind::Range19 => 2u32.serialize(s),
             VirtualKind::Range16 => 3u32.serialize(s),
+            VirtualKind::Xor8A => 4u32.serialize(s),
+            VirtualKind::Xor8B => 5u32.serialize(s),
+            VirtualKind::Xor8Out => 6u32.serialize(s),
         }
     }
 }
@@ -139,6 +142,9 @@ impl<'de> Deserialize<'de> for VirtualKind {
             1 => Ok(VirtualKind::RamLive),
             2 => Ok(VirtualKind::Range19),
             3 => Ok(VirtualKind::Range16),
+            4 => Ok(VirtualKind::Xor8A),
+            5 => Ok(VirtualKind::Xor8B),
+            6 => Ok(VirtualKind::Xor8Out),
             _ => Err(D::Error::custom("unknown virtual table kind")),
         }
     }
@@ -154,6 +160,9 @@ impl Serialize for PolyAddress {
             PolyAddress::Virtual(VirtualKind::RamLive) => (3, 1, 0),
             PolyAddress::Virtual(VirtualKind::Range19) => (3, 2, 0),
             PolyAddress::Virtual(VirtualKind::Range16) => (3, 3, 0),
+            PolyAddress::Virtual(VirtualKind::Xor8A) => (3, 4, 0),
+            PolyAddress::Virtual(VirtualKind::Xor8B) => (3, 5, 0),
+            PolyAddress::Virtual(VirtualKind::Xor8Out) => (3, 6, 0),
             PolyAddress::Inner { layer, offset } => (4, layer, offset),
             PolyAddress::Scratch(i) => (5, i, 0),
             PolyAddress::Cached { layer, offset } => (6, layer, offset),
@@ -172,6 +181,9 @@ impl<'de> Deserialize<'de> for PolyAddress {
             (3, 1, 0) => Ok(PolyAddress::Virtual(VirtualKind::RamLive)),
             (3, 2, 0) => Ok(PolyAddress::Virtual(VirtualKind::Range19)),
             (3, 3, 0) => Ok(PolyAddress::Virtual(VirtualKind::Range16)),
+            (3, 4, 0) => Ok(PolyAddress::Virtual(VirtualKind::Xor8A)),
+            (3, 5, 0) => Ok(PolyAddress::Virtual(VirtualKind::Xor8B)),
+            (3, 6, 0) => Ok(PolyAddress::Virtual(VirtualKind::Xor8Out)),
             (4, layer, offset) => Ok(PolyAddress::Inner { layer, offset }),
             (5, i, 0) => Ok(PolyAddress::Scratch(i)),
             (6, layer, offset) => Ok(PolyAddress::Cached { layer, offset }),
