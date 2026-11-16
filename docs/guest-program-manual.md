@@ -15,7 +15,7 @@ directory below the root.
 
 A guest is an Apogee-SDK program, not a Linux one: no file descriptors, streams, clock, entropy or
 diagnostic output. Its public input, its journal and the prover's advice are memory, read and
-written with ordinary loads and stores, and its only ecalls are `EXIT` and the two precompiles the
+written with ordinary loads and stores, and its only ecalls are `EXIT` and the three precompiles the
 SDK calls (§3.1). Any other number answers `-ENOSYS` and leaves the run unprovable
 ([ecall-abi.md](spec/ecall-abi.md) §4).
 
@@ -122,15 +122,15 @@ fn main() {
 
 ### 3.1 Precompiles and `U256`
 
-Two operations are not RV64IMAC code but a circuit each, which a guest reaches through the SDK
-([precompiles.md](spec/precompiles.md)): the Poseidon2-A64-C5 permutation, and the 256-bit
-`mul_div` that a token balance's arithmetic is built on.
+Three operations are not RV64IMAC code but a circuit each, which a guest reaches through the SDK
+([precompiles.md](spec/precompiles.md)): the Poseidon2-A64-C5 permutation, the 256-bit `mul_div`
+that a token balance's arithmetic is built on, and a Merkle path's root.
 
 ```rust
-use guest_sdk::{poseidon2_compress, Digest, U256};
+use guest_sdk::{merkle_root, poseidon2_compress, Digest, U256};
 
-let sibling = Digest::new(lanes).expect("a lane below p"); // 8 canonical lanes, from advice say
-let node = poseidon2_compress(&leaf, &sibling); // a Merkle node, a Digest
+let leaf = poseidon2_compress(&left, &right); // a node over two Digests, each lane below p
+let root = merkle_root(slot, &leaf, &advice[at..at + 64 * 20]); // a 20-level path, read in place
 let share = U256::from(amount).mul_div(U256::from(total), U256::from(reserve)); // Option<U256>
 ```
 
@@ -139,17 +139,23 @@ let share = U256::from(amount).mul_div(U256::from(total), U256::from(reserve)); 
 - Division and `mul_div` are one precompile call each; addition, comparison and multiplication are
   a few instructions a limb. `mul_div` is `None` for a zero divisor or a quotient past `2^256`.
 - A `Digest`'s lanes are each below `p`: `Digest::new` refuses any other, as a lane `x + p` would be
-  a second encoding of the node `x` opens. Decode every digest from advice or input through it; a
-  node `poseidon2_compress` returns is one already.
+  a second encoding of the node `x` opens. Decode every digest the guest compares or publishes from
+  advice or input through it; a node `poseidon2_compress` or `merkle_root` returns is one already.
+- `merkle_root(slot, &leaf, siblings)` is the fold of `poseidon2_compress` up a path of 16 to 32
+  siblings, 64 bytes each, in one call: the depth is `siblings.len() / 64`, the node goes on the left
+  where the slot's bit is 0, and each sibling lane is read mod `p`, so a path needs no decoding. It
+  costs a level row and sixteen round rows a level and no guest cycles; `Digest::bytes(&path)`
+  passes a path the guest holds itself.
 - A precompile's frame is the guest's own memory below the advice region, which the SDK's calls
-  always are: advice is copied in before it is hashed, and a frame reaching the advice is the fatal
-  `OutOfBounds`.
+  always are: advice is copied in before `poseidon2_permute` hashes it, and a frame reaching the
+  advice is the fatal `OutOfBounds`. A path's siblings are not a frame: `merkle_root` reads an
+  advised path where it lies.
 - A guest that links a precompile pays one shard of each family it declares, at `2^16` rows: worth
   it once the call replaces more instructions than that ([circuits.md](spec/circuits.md) §1).
 - `guests/marketplace` is the worked example of a table a proof follows by its root: a listings
   table of `2^20` slots as a Poseidon2 Merkle tree, the root before a batch in the public input, a
-  Merkle proof in the advice for each run of operations on one listing, checked before it is used,
-  and the root after the batch in the journal. Each listing's price is in its own currency, an
+  Merkle proof in the advice for each run of operations on one listing, checked by `merkle_root`
+  where it lies before it is used, and the root after the batch in the journal. Each listing's price is in its own currency, an
   ERC-20 contract's address or zero for the native one, and the journal tallies each currency's
   volume and fees apart.
 
@@ -166,6 +172,33 @@ Cutting a guest's cycles has more than one strategy, and two are in use:
   The order is the sequencer's policy and becomes part of the batch: the guest proves the order it
   is given and never sorts. Any order is valid input, at a proof a run, and another order can be
   another result.
+
+### 3.3 A database's state
+
+A business guest keeps a database the proof follows by digest, and every Apogee guest program
+keeps it the same way from here on. This is the common convention for an on-chain database.
+
+- **Two kinds of record.** A *state* record is a current value that persists from batch to batch:
+  an account's balance, a listing, an open position. An *action* record is an event that changes
+  state: a purchase, a transfer, a new listing.
+- **Each state table is a tree.** Each persistent table of state records is a fixed-depth Merkle
+  tree of its own, 16 to 32 levels: a record's slot is its key, its leaf a digest of the record's
+  encoding, an empty slot the empty record's, and every node `poseidon2_compress` of its children,
+  so `merkle_root` opens a record by its path from the advice and writes it back along the same
+  path (§3.1).
+- **The state is one digest.** The global state hash, the snapshot, is the hash of the tables' roots
+  concatenated in the schema's fixed order, absorbed one root at a time:
+  `compress(… compress(compress(root_1, root_2), root_3) …, root_k)`; a guest with one table
+  publishes its root. A statement carries the snapshot before its batch in the public input and the
+  snapshot after it in the journal.
+- **Actions stay off-chain.** Proving is what costs, so action records are not in the snapshot. They
+  are the batch itself, the input a sequencer orders (§3.2), and once proved they are kept in an
+  ordinary database for data availability: whoever holds them and the snapshot before a batch can
+  rebuild the state after it.
+
+`guests/marketplace` is the one-table case: its listings are state records under one root, which is
+its snapshot, and its operations are actions; its journal's tallies summarize the actions it
+proved, which no snapshot holds.
 
 ## 4. Build it
 
