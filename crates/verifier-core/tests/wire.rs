@@ -303,18 +303,6 @@ fn the_readers_refuse_rather_than_panic() {
 fn a_key_that_breaks_a_load_rule_is_refused() {
     let honest = vk();
     let mut cases: Vec<(&str, VerifyingKey)> = Vec::new();
-    // An edit the identity digests is re-digested, so the rule under test is
-    // the one that refuses it.
-    let rekey = |mut k: VerifyingKey| {
-        k.identity = identity_digest(
-            k.code_version,
-            &k.config,
-            k.entry_pc,
-            &k.setup_commitments,
-            &k.circuits,
-        );
-        k
-    };
 
     let mut k = honest.clone();
     k.code_version = 2;
@@ -326,36 +314,46 @@ fn a_key_that_breaks_a_load_rule_is_refused() {
     k.entry_pc += 4;
     cases.push(("the identity is not the digest", k));
     let mut k = honest.clone();
-    k.circuits[0].channels.swap(0, 1);
-    cases.push(("the identity is not the digest", k.clone()));
-    cases.push(("the circuit is not the protocol's", rekey(k)));
-    let mut k = honest.clone();
     k.circuits.swap(1, 2);
-    cases.push(("the key's circuits are not its config's families", rekey(k)));
+    cases.push(("the key's circuits are not its config's families", k));
     let mut k = honest.clone();
     k.circuits.pop();
-    cases.push(("not one circuit per config family", rekey(k)));
+    cases.push(("not one circuit per config family", k));
+    let mut k = honest.clone();
+    k.circuits[0].channels.swap(0, 1);
+    cases.push(("the circuit is not the protocol's", k));
     let mut k = honest.clone();
     k.circuits[0].artifact.layers[0].enforcing.pop();
-    cases.push(("the circuit is not the protocol's", rekey(k)));
+    cases.push(("the circuit is not the protocol's", k));
     let mut k = honest.clone();
     k.circuits[1] = constraints::family_circuit(family::INIT_TEARDOWN, 18).unwrap();
-    cases.push(("the circuit is not the protocol's", rekey(k)));
+    cases.push(("the circuit is not the protocol's", k));
 
     // A config the circuits still match, at another height: the add/sub
     // family has no circuit below 2^19.
     let mut k = honest.clone();
     k.config.families[0].1 = 1 << 18;
-    cases.push(("no circuit proves it at height", rekey(k)));
+    k.identity = identity_digest(
+        k.code_version,
+        &k.config,
+        k.entry_pc,
+        &k.setup_commitments,
+        &k.circuits,
+    );
+    cases.push(("no circuit proves it at height", k));
     let mut k = honest.clone();
     k.setup_commitments.pop();
     cases.push(("not one setup commitment per config family", k));
     let mut k = honest.clone();
     k.setup_commitments[0].0.pop();
-    cases.push((
-        "the setup commitment is not its setup columns' shape",
-        rekey(k),
-    ));
+    k.identity = identity_digest(
+        k.code_version,
+        &k.config,
+        k.entry_pc,
+        &k.setup_commitments,
+        &k.circuits,
+    );
+    cases.push(("the setup commitment is not its setup columns' shape", k));
     let mut k = honest.clone();
     k.config.families[1].1 = 1 << 18;
     cases.push(("not one a program derives", k));
@@ -392,4 +390,14 @@ fn a_key_that_breaks_a_load_rule_is_refused() {
         e.contains("the key's circuits are not its config's families"),
         "{e}"
     );
+    // An in-memory key the decoder could not produce: a channel spec naming
+    // an inner column, which no key serializes. The registry refuses it
+    // before the identity would hash it.
+    let mut k = honest.clone();
+    k.circuits[0].channels[0].multiplicity = constraints::PolyAddress::Inner {
+        layer: 1,
+        offset: 0,
+    };
+    let e = k.check().unwrap_err();
+    assert!(e.contains("the circuit is not the protocol's"), "{e}");
 }

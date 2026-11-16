@@ -245,25 +245,27 @@ and runs `VerifyingKey::check`, which refuses, in order:
 
 1. a `VmConfig` no derivation produces (`VmConfig::from_bytes` of its own bytes), or a
    `code_version` other than `CODE_VERSION`;
-2. a setup-commitment count other than the family count, or an `identity` that
-   `identity_digest(code_version, config, entry_pc, setup_commitments, circuits)` does not
-   reproduce;
+2. a setup-commitment count other than the family count;
 3. a circuit count other than the family count; then, family by family: a circuit for another
    family; a height the registry has no circuit for; a circuit, artifact or channel specs, other
    than `config.circuit(family, trace_vars)`, the registry's ([circuits.md](circuits.md) §1); an
    artifact failing `CircuitArtifact::validate`; a setup commitment not of its `S` columns' shape
    (§3); an artifact failing `constraints::memory::check_memory` or
    `constraints::lookup::check_discharge`; and `GENERIC` specs naming anything but the generic
-   table's 3 setup columns after the family's own, which no registry circuit fails.
+   table's 3 setup columns after the family's own, which no registry circuit fails;
+4. an `identity` that `identity_digest(code_version, config, entry_pc, setup_commitments,
+   circuits)` does not reproduce. It runs last because it hashes the circuits' bytes, and step 3 has
+   held them to the registry first.
 
 Then it expands `pcs`, which `check` does not read. `verifier::load_verifying_key` is
-`VerifyingKey::from_bytes`. The circuits are held to the registry because nothing else binds them:
-identity binds the program and the registry's revision, not the circuit that proves it.
+`VerifyingKey::from_bytes`. The identity binds the circuits' bytes, so a key made with other
+circuits names another program; the registry check decides which circuits this verifier supports.
 
 **A key from an untrusted source.** Every field is recomputed from or compared with the verifier's
-one trusted value (§1), or fixed by the code: `config`, `entry_pc` and the setup commitments
-through identity; `code_version` and the circuits by the verifier's own registry; `pcs` by the
-setup seed. So a key may come from the prover, provided the identity comparison is made.
+one trusted value (§1), or fixed by the code: `config`, `entry_pc`, the setup commitments and
+the circuits through identity; `code_version` by the code and the circuits by the verifier's own
+registry too; `pcs` by the setup seed. So a key may come from the prover, provided the identity
+comparison is made.
 
 Validation runs once, at load; `verify_shard` and `verify_block` assume a loaded key. On one edited
 in memory a changed config or circuit list is still refused as `Statement`, but an edit inside a
@@ -272,7 +274,8 @@ circuit may go unnoticed.
 `prover::ProverSetup::new(program)` builds the key: each family's circuit from `VmConfig::circuit`
 and fill from `prover::family_fill` (`ProverError::Unregistered` if either is missing), every
 family's setup columns committed (`program::setup_openers`, whose openers it keeps for the
-openings), the identity over those commitments, then `check` (`ProverError::Key`).
+openings), the identity over those commitments and the circuits, then `check`
+(`ProverError::Key`).
 
 ## 8. Time windows
 

@@ -644,20 +644,6 @@ impl VerifyingKey {
         if self.setup_commitments.len() != families.len() {
             return Err("the key has not one setup commitment per config family".into());
         }
-        let identity = identity_digest(
-            self.code_version,
-            &self.config,
-            self.entry_pc,
-            &self.setup_commitments,
-            &self.circuits,
-        );
-        if identity != self.identity {
-            return Err(
-                "the identity is not the digest of the key's config, entry pc, setup and \
-                 circuits"
-                    .into(),
-            );
-        }
         if self.circuits.len() != families.len() {
             return Err("the key has not one circuit per config family".into());
         }
@@ -711,6 +697,22 @@ impl VerifyingKey {
                     "{name}: the circuit does not name the generic table as its last setup columns"
                 ));
             }
+        }
+        // Last: the identity digests the circuits' bytes, and only the
+        // registry's circuits are sure to serialize.
+        let identity = identity_digest(
+            self.code_version,
+            &self.config,
+            self.entry_pc,
+            &self.setup_commitments,
+            &self.circuits,
+        );
+        if identity != self.identity {
+            return Err(
+                "the identity is not the digest of the key's config, entry pc, setup and \
+                 circuits"
+                    .into(),
+            );
         }
         Ok(())
     }
