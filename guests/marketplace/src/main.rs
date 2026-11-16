@@ -17,20 +17,25 @@
 //! same path. A verifier holding the roots follows the whole table without
 //! anyone publishing it.
 //!
-//! **A batch a sequencer shaped.** A run is a stretch of consecutive ops on one
-//! slot. No other slot moves while it lasts, so the slot's siblings hold; each
-//! listing it passes through after the one its proof opens is the guest's own
+//! **One proof a run.** A run is a stretch of consecutive ops on one slot. No
+//! other slot moves while it lasts, so the slot's siblings hold; each listing
+//! it passes through after the one its proof opens is the guest's own
 //! arithmetic; and no root but the batch's first and last is published. So a
 //! run opens its proof once and writes one root back, `2 · DEPTH + 2`
 //! permutations however many ops it holds, half that where it leaves its
-//! listing as it found it. Ordering is the sequencer's: the guest takes the
-//! batch in its order, opening a proof wherever an op's slot is not the one
-//! before's, and presumes each listing's ops gathered, in the order they
-//! arrived, which is one proof a listing. A batch in any other order is as
-//! correct, at a proof a run, at worst one an op. Gathering moves nothing in
-//! the table, as ops on two slots share only the tallies: their order in the
-//! journal, and which purchase a tally past `2^256` refuses, follow the batch's
-//! order.
+//! listing as it found it.
+//!
+//! **The order is the sequencer's.** Grouping a listing's ops together is a
+//! sequencing policy upstream of the guest, and the order it chooses becomes
+//! part of the batch: the guest proves the batch in that order, opening a proof
+//! wherever an op's slot is not the one before's, and never sorts. It presumes
+//! each listing's ops gathered, one proof a listing; a batch in any other order
+//! is as valid, at a proof a run, at worst one an op. Regrouping a batch can
+//! change its result, not only its cost. Purchases in one currency on two slots
+//! compete for its tally's room below `2^256`, and the one refused leaves its
+//! stock as it was, so which succeeds, and the root after, follow the order; so
+//! does the order of the journal's tallies, each currency's place its first
+//! purchase's.
 //!
 //! A price is a [`U256`], an ERC-20 amount's width, in its listing's currency:
 //! an ERC-20 contract's address, or the zero address for the chain's native

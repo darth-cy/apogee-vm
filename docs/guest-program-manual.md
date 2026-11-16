@@ -162,9 +162,10 @@ Cutting a guest's cycles has more than one strategy, and two are in use:
 - **The input's format.** Whoever builds the input, a sequencer say, can shape it so the guest does
   less, and the guest presumes that shape rather than making it. `guests/marketplace` opens one
   Merkle proof for each run of consecutive operations on one listing and writes one root back,
-  however long the run, so a sequencer that gathers each listing's operations, in the order they
-  arrived, makes it one proof a listing. The guest never sorts: a batch in any other order is as
-  correct, at a proof a run.
+  however long the run, so a batch with each listing's operations gathered is one proof a listing.
+  The order is the sequencer's policy and becomes part of the batch: the guest proves the order it
+  is given and never sorts. Any order is valid input, at a proof a run, and another order can be
+  another result.
 
 ## 4. Build it
 
