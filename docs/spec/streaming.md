@@ -139,7 +139,10 @@ The window families' shards follow the pipeline, built from the final state in r
 at most `max_in_flight`, which are all that a `ThreadPool::install` around the call bounds.
 
 **The knob.** `max_in_flight`, at least 1, is an argument because only the caller knows the
-machine; `host::prove` takes it from its caller. `StreamingReport::peak_in_flight` is the most
+machine; `host::prove` takes it from its caller. `prover::DEFAULT_MAX_IN_FLIGHT`, 8, is what every
+proving path in the repository passes: on an r8i.8xlarge at `2^20` execution shards, 4 → 8 cut
+the business guests' prove time by 16–25% for 10–13 GiB more peak, the CPU-seconds unchanged, and
+16 added nothing for an 11-shard statement. `StreamingReport::peak_in_flight` is the most
 shards claimed or batched at once in either pass.
 
 ## 6. The retained archived path

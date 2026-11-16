@@ -24,6 +24,7 @@
 //! - `max_in_flight` is an argument. It is the backpressure that bounds the
 //!   peak — the prover's worker count, each worker holding one shard at a
 //!   time — and the caller is the only one that knows the machine.
+//!   [`DEFAULT_MAX_IN_FLIGHT`], 8, is what every caller here passes.
 //! - **There is no archive to return**, so there are no per-phase section
 //!   clocks either. [`Proven::report`] carries the streaming run's own clocks
 //!   instead: one wall clock per pass, and the executor's time inside each.
@@ -44,6 +45,7 @@
 //! format's reader is the CLI, so its writer lives beside the reader and there
 //! is one definition of it.
 
+pub use prover::DEFAULT_MAX_IN_FLIGHT;
 pub use verifier::proof_archive;
 
 use std::time::Instant;

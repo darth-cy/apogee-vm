@@ -65,7 +65,7 @@ fn proof_bytes(a: &constraints::CircuitArtifact, p: &ShardProof) -> usize {
 /// emulator's reading of it is `crates/emulator/tests/guests.rs`', which checks
 /// the exit status and the journal and nothing below that.
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.7 GB"]
+#[ignore = "2^20 rows: one statement's proof peaks at 8.7 GB at 4 in flight"]
 fn a1_the_guest_proves_and_every_shard_verifies() {
     let (setup, archive, public, proofs) = proved();
     let config = &setup.program.config;
@@ -143,7 +143,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
 /// other key commits jump/branch/slt's setup columns with one packed-table
 /// cell poisoned — `37 AND 45` answering 0 — and its identity digests that.
 #[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.7 GB"]
+#[ignore = "2^20 rows: one statement's proof peaks at 8.7 GB at 4 in flight"]
 fn a_key_with_another_generic_table_is_another_statement() {
     use poly::{MultilinearPoly, PolyBacking};
     let (setup, _, public, proofs) = proved();

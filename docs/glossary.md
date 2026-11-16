@@ -35,7 +35,7 @@ the literature fixes (GKR, LogUp, RISC-V) are not listed.
 | `HALT_PC` | 1: the exit row's `next_pc`, the pc's final value | [memory.md §5](spec/memory.md) |
 | height | a family's rows a shard: `2^12`, `2^16`, `2^18`, `2^20` or `2^22` | [program.md §7](spec/program.md) |
 | identity, image column | a digest, 8 `Fp` lanes, of the code version, `VmConfig` and entry pc; meant to commit the decoded tables and the image column too | [program.md §8](spec/program.md) |
-| in flight | shards worked at once, at most `max_in_flight` | [streaming.md §5](spec/streaming.md) |
+| in flight | shards worked at once, at most `max_in_flight`, 8 by default | [streaming.md §5](spec/streaming.md) |
 | journal | the public output: what the guest leaves in the output window | [public-values.md §1](spec/public-values.md) |
 | laws | Laws 1–4: locality, derived width, top layer, single source of truth | [gkr.md §4](spec/gkr.md) |
 | layer | layer 0 the committed columns, the top the outputs; `L{k}[j]` between | [gkr.md §1](spec/gkr.md) |

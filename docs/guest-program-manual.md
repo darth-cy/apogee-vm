@@ -372,7 +372,7 @@ doubleword access through an unaligned pointer; `NotAnInstruction`, a jump to a 
 ```rust
 let params = program::ProgramParams::defaults();
 let setup = host::setup(&elf, &params).expect("registers");
-let proven = host::prove(&setup, &io, 4).expect("proves"); // at most 4 shards in flight
+let proven = host::prove(&setup, &io, host::DEFAULT_MAX_IN_FLIGHT).expect("proves"); // 8 shards in flight
 host::verify(&setup.vk, &proven.block).expect("verifies"); // UNSOUND: architecture.md §0
 assert_eq!(setup.vk.identity.to_bytes(), registered); // from your own channel, never the proof
 assert_eq!(proven.exit_code, 0);

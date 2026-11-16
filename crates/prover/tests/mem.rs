@@ -75,7 +75,7 @@ fn proof_bytes(a: &constraints::CircuitArtifact, p: &ShardProof) -> usize {
 /// `crates/emulator/tests/guests.rs`', which checks the exit status and the
 /// journal and nothing below that.
 #[test]
-#[ignore = "six 2^20-row execution shards: one statement's proof peaks near 22 GB (unmeasured since RV64)"]
+#[ignore = "six 2^20-row execution shards: one statement's proof peaks near 22 GB at 4 in flight (unmeasured since RV64)"]
 fn a1_the_guest_proves_and_every_shard_verifies() {
     let (setup, archive, public, proofs) = proved();
     let config = &setup.program.config;

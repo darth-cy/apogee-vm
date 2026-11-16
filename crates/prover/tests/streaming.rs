@@ -97,7 +97,7 @@ fn a1_the_streamed_block_does_not_depend_on_max_in_flight() {
 
 /// `guests/precompiles`' statement: the three precompiles, so the `Invocations`
 /// arm — each of their six families a shard — beside
-/// its execution and window shards; proved once at four in flight and verified,
+/// its execution and window shards; proved once at the default in flight and verified,
 /// its journal the run's. `crates/checker/tests/precompiles.rs` holds that
 /// journal to the host's and the statement's multiset to its circuits.
 #[test]
@@ -116,7 +116,8 @@ fn a2_a_statement_with_precompile_calls_streams_and_verifies() {
         .concat(),
         advice: Vec::new(),
     };
-    let (block, _) = prove_block_streaming(&setup, &io, 4).expect("it proves");
+    let (block, _) =
+        prove_block_streaming(&setup, &io, prover::DEFAULT_MAX_IN_FLIGHT).expect("it proves");
     verifier::verify_block(&setup.vk, &block, block.statement()).expect("it verifies");
     let run = emulator::run(&setup.program.image, &io).expect("it runs");
     assert_eq!(

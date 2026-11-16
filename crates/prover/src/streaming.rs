@@ -98,12 +98,23 @@ pub struct StreamingReport {
     pub pass2_execute_ns: u64,
 }
 
+/// The shards in flight every proving path in this repository uses: 8, the
+/// owner's default since 2026-11-16, until a caller knows its machine better.
+///
+/// Measured that day on an r8i.8xlarge (32 threads) over the three business
+/// guests at `2^20` execution shards:
+/// - 4 → 8 cut prove time by 16–25%, for 10–13 GiB more peak, with the
+///   CPU-seconds unchanged: the extra shards fill idle threads;
+/// - 16 added nothing for an 11-shard statement, whose pipeline held at most
+///   7 at once, and 4% for an 18-shard one.
+pub const DEFAULT_MAX_IN_FLIGHT: usize = 8;
+
 /// Prove one execution of `setup`'s program over `io` as a block, streaming.
 ///
 /// `max_in_flight` is the backpressure: the number of workers, each holding at
 /// most one shard at a time, and therefore what bounds the peak. It is an
 /// argument and not a constant because the caller is the only one that knows
-/// the machine — a `2^20` `BITWISE` shard's forward pass alone is
+/// the machine, [`DEFAULT_MAX_IN_FLIGHT`] the default — a `2^20` `BITWISE` shard's forward pass alone is
 /// 4.2 GiB (`docs/spec/streaming.md` §1). The work inside each shard runs on
 /// rayon's pool, so
 /// `RAYON_NUM_THREADS` is the cores the shards share and `max_in_flight` is

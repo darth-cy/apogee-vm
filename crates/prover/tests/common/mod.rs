@@ -283,13 +283,13 @@ pub fn trace(program: &Program, status: u32) -> TraceArchive {
 /// **The one proving path's backpressure, for the suites.**
 ///
 /// `prover::prove_block_streaming` proves at most this many shards at once,
-/// so it is what bounds a suite's peak (`docs/spec/streaming.md` §5). Four
-/// rather than eight: an `#[ignore]`d suite is run for its verdict and not for
-/// its wall clock, and the measured difference between the two is 14% of the
-/// time against 6.8 GiB of peak. The block does not depend on it —
-/// `tests/streaming.rs` proves the bytes equal at 1 and 8 — so no test's
-/// assertion rests on the number.
-pub const IN_FLIGHT: usize = 4;
+/// so it is what bounds a suite's peak (`docs/spec/streaming.md` §5): the
+/// default, `prover::DEFAULT_MAX_IN_FLIGHT`, as for all proving. A suite's
+/// ignore reason that quotes a peak at 4 in flight was measured before the
+/// default moved. The block does not depend on it — `tests/streaming.rs`
+/// proves the bytes equal at 1 and 8 — so no test's assertion rests on the
+/// number.
+pub const IN_FLIGHT: usize = prover::DEFAULT_MAX_IN_FLIGHT;
 
 /// A run with nothing on any stream: what every committed guest but
 /// `public-io` takes.
