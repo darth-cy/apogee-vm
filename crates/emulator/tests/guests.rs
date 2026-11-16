@@ -570,8 +570,8 @@ fn the_recorded_public_input_is_what_the_host_supplied() {
 
 /// The host's side of `guests/marketplace`: a sparse table of listings as the
 /// guest commits to it, each node `transcript`'s permutation of two digests,
-/// truncated, each leaf a listing's 56 bytes packed seven to a lane beside a
-/// tag lane of 1.
+/// truncated, each leaf a listing's 76 bytes packed seven to a lane beside four
+/// zeros and a tag lane of 1.
 mod market {
     use std::collections::BTreeMap;
 
@@ -669,7 +669,8 @@ mod market {
 /// units of `10^18`. Six apply and five are refused, and the journal is both
 /// roots and a tally per currency bought in, in first-purchase order, the first
 /// token's two purchases summed. The advice is each slot's proof under the
-/// table the ops before it left, and the same advice one sibling off panics.
+/// table the ops before it left. The batch with a record past its `n_ops`
+/// panics, and so does the same advice one sibling off.
 #[test]
 fn marketplace_follows_its_table_by_its_root() {
     use market::{listing, Table};
@@ -764,6 +765,11 @@ fn marketplace_follows_its_table_by_its_root() {
     let e = run(&image, &common::with_advice(&input, &advice)).unwrap();
     assert_eq!(e.exit_code, 0);
     assert_eq!(to_hex(&e.io.output), to_hex(&journal));
+
+    let mut surplus = input.clone();
+    surplus.extend([0u8; 84]);
+    let e = run(&image, &common::with_advice(&surplus, &advice)).unwrap();
+    assert_eq!(e.exit_code, 101, "a record past n_ops is a malformed batch");
 
     advice[market::LISTING] ^= 1;
     let e = run(&image, &common::with_advice(&input, &advice)).unwrap();

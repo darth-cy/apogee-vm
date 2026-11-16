@@ -29,8 +29,8 @@
 //! A listing is 76 bytes, packed seven to a lane into eleven lanes below
 //! `2^56 < p`, so the packing is injective. Its leaf is one permutation of those
 //! lanes, four zeros and the tag 1, `compress(lanes 0..8, [lanes 8..11, 0, 0,
-//! 0, 0, 1])`, the tag keeping a leaf's preimage from an internal node's. An
-//! empty slot holds the all-zero listing.
+//! 0, 0, 1])`, the tag naming this encoding of a listing. An empty slot holds
+//! the all-zero listing.
 //!
 //! ```text
 //! listing    0..8    seller    u64; 0 only in an empty slot
@@ -39,6 +39,13 @@
 //!           48..56   stock     u64
 //!           56..76   currency  20 bytes: an ERC-20 contract's address; 0, native
 //! ```
+//!
+//! The tag does not keep a leaf's preimage apart from a node's: a node
+//! compresses any two digests, and a leaf's sixteen lanes are two digests as
+//! well. The depth does. Every proof is `DEPTH` siblings, so a listing's leaf
+//! is always `DEPTH` compressions below the root, where the table's leaves are
+//! and none of its nodes. A tree whose proofs varied in length would need its
+//! leaves hashed apart from its nodes.
 //!
 //! # The public input
 //!
@@ -54,6 +61,9 @@
 //!           56..64   quantity  u64: a list's stock, a buy's count
 //!           64..84   currency  20 bytes: a list's or a reprice's, the price's
 //! ```
+//!
+//! The input is the header and its `n_ops` ops and nothing more, so no byte of
+//! the statement goes unread.
 //!
 //! # The advice
 //!
@@ -204,7 +214,8 @@ impl Tallies {
 }
 
 /// The root `path` opens with `leaf` at `slot`: slot bit `i` says which side
-/// of level `i` the node is.
+/// of level `i` the node is. A path is exactly `DEPTH` siblings, by its type,
+/// and that depth, not the leaf's tag, keeps a listing from opening as a node.
 fn root(slot: u32, leaf: Digest, path: &[Digest; DEPTH]) -> Digest {
     let mut node = leaf;
     for (level, sibling) in path.iter().enumerate() {
@@ -267,7 +278,7 @@ fn main() {
     let n_ops = u32::from_le_bytes(input[68..72].try_into().expect("four bytes")) as usize;
     assert!(fee_bps <= MAX_FEE_BPS, "marketplace: fee_bps is above 1000");
     assert!(
-        n_ops <= MAX_OPS && input.len() >= HEADER + OP * n_ops,
+        n_ops <= MAX_OPS && input.len() == HEADER + OP * n_ops,
         "marketplace: the batch is not n_ops records"
     );
     // Asked for only when there is an op: a run given no advice has no region.
