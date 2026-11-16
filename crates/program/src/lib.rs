@@ -63,6 +63,9 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::MERKLE_ROOT,
     family::MERKLE_LEVELS,
     family::MERKLE_ROUNDS,
+    family::KECCAK,
+    family::KECCAK_RHO,
+    family::KECCAK_CHI,
 ];
 
 /// The **frame family** of ecall `number`, the one whose row reads the frame
@@ -161,6 +164,9 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::MERKLE_ROOT => "MERKLE_ROOT",
         family::MERKLE_LEVELS => "MERKLE_LEVELS",
         family::MERKLE_ROUNDS => "MERKLE_ROUNDS",
+        family::KECCAK => "KECCAK",
+        family::KECCAK_RHO => "KECCAK_RHO",
+        family::KECCAK_CHI => "KECCAK_CHI",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -321,7 +327,10 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::MUL_DIV_U256
         | family::MERKLE_ROOT
         | family::MERKLE_LEVELS
-        | family::MERKLE_ROUNDS => &[],
+        | family::MERKLE_ROUNDS
+        | family::KECCAK
+        | family::KECCAK_RHO
+        | family::KECCAK_CHI => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }

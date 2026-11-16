@@ -304,6 +304,9 @@ pub fn family_name(f: FamilyId) -> String {
         family::MERKLE_ROOT => "MERKLE_ROOT".to_string(),
         family::MERKLE_LEVELS => "MERKLE_LEVELS".to_string(),
         family::MERKLE_ROUNDS => "MERKLE_ROUNDS".to_string(),
+        family::KECCAK => "KECCAK".to_string(),
+        family::KECCAK_RHO => "KECCAK_RHO".to_string(),
+        family::KECCAK_CHI => "KECCAK_CHI".to_string(),
         other => format!("family({other})"),
     }
 }

@@ -28,6 +28,7 @@ pub mod delegation;
 pub mod family;
 pub mod gadgets;
 pub mod jump_branch_slt;
+pub mod keccak;
 mod laws;
 pub mod lookup;
 pub mod mem_subword;
@@ -138,6 +139,9 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
             f::MERKLE_ROOT => (merkle::artifact, merkle::channels()),
             f::MERKLE_LEVELS => (merkle::levels_artifact, merkle::levels_channels()),
             f::MERKLE_ROUNDS => (merkle::rounds_artifact, merkle::rounds_channels()),
+            f::KECCAK => (keccak::artifact, keccak::channels()),
+            f::KECCAK_RHO => (keccak::rho_artifact, keccak::rho_channels()),
+            f::KECCAK_CHI => (keccak::chi_artifact, keccak::chi_channels()),
             _ => return None,
         };
     if trace_vars < minimum_trace_vars(&channels) {

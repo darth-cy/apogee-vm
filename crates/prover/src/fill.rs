@@ -174,6 +174,9 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
         family::MERKLE_ROOT => Some(merkle_root),
         family::MERKLE_LEVELS => Some(merkle_levels),
         family::MERKLE_ROUNDS => Some(merkle_rounds),
+        family::KECCAK => Some(keccak),
+        family::KECCAK_RHO => Some(keccak_rho),
+        family::KECCAK_CHI => Some(keccak_chi),
         _ => None,
     }
 }
@@ -236,20 +239,34 @@ fn frame_fill<'a>(
 /// gap's two chunks.
 fn access(
     w: &mut Witness,
-    [read_ts, read]: [usize; 2],
-    [c0, c1]: [usize; 2],
+    cols: [usize; 2],
+    chunks: [usize; 2],
     calls: &FrameSlice,
     j: usize,
     r: usize,
 ) {
+    access_at(w, cols, chunks, calls, j, r, r);
+}
+
+/// [`access`] of entry `e`'s word `j` on row `r`, for a family of several
+/// rows an entry.
+fn access_at(
+    w: &mut Witness,
+    [read_ts, read]: [usize; 2],
+    [c0, c1]: [usize; 2],
+    calls: &FrameSlice,
+    j: usize,
+    e: usize,
+    r: usize,
+) {
     let word = calls.word(j);
-    let ts = memory::TS_STEP * calls.cycles()[r] + delegation::FRAME_DELTA;
-    let gap = ts - word.read_ts[r] - 1;
+    let ts = memory::TS_STEP * calls.cycles()[e] + delegation::FRAME_DELTA;
+    let gap = ts - word.read_ts[e] - 1;
     w.row(
         r,
         &[
-            (read_ts, word.read_ts[r]),
-            (read, word.read_value[r]),
+            (read_ts, word.read_ts[e]),
+            (read, word.read_value[e]),
             (c0, (gap >> 16) & 0xffff),
             (c1, gap >> 32),
         ],
@@ -633,6 +650,313 @@ fn mul_div_u256(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>
                 );
             }
             w.put(bounds[k], r, g >> 16);
+        }
+    }
+    Ok(w.finish(src.height))
+}
+
+// ---------------------------------------------------------------------------
+// Keccak-f[1600]
+// ---------------------------------------------------------------------------
+
+/// One round of Keccak-f[1600] and each state between its steps that
+/// `constraints::keccak` commits, lane `x + 5y`.
+struct KeccakRound {
+    /// The round's input.
+    a: [u64; 25],
+    /// theta's `D`.
+    d: [u64; 5],
+    /// `A ⊕ D`.
+    theta: [u64; 25],
+    /// After rho and pi, at the lane's destination.
+    b: [u64; 25],
+    /// After chi.
+    chi: [u64; 25],
+    /// After iota: the next round's input.
+    out: [u64; 25],
+}
+
+/// The 24 rounds from `a`.
+fn keccak_rounds(mut a: [u64; 25]) -> Vec<KeccakRound> {
+    use constants::delegation::keccak::{ROTATIONS, ROUNDS, ROUND_CONSTANTS};
+    (0..ROUNDS)
+        .map(|t| {
+            let c: [u64; 5] = std::array::from_fn(|x| (0..5).fold(0, |p, y| p ^ a[x + 5 * y]));
+            let d: [u64; 5] =
+                std::array::from_fn(|x| c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1));
+            let theta: [u64; 25] = std::array::from_fn(|i| a[i] ^ d[i % 5]);
+            let mut b = [0u64; 25];
+            for x in 0..5 {
+                for y in 0..5 {
+                    b[y + 5 * ((2 * x + 3 * y) % 5)] =
+                        theta[x + 5 * y].rotate_left(ROTATIONS[y][x]);
+                }
+            }
+            let chi: [u64; 25] = std::array::from_fn(|i| {
+                let (x, y) = (i % 5, 5 * (i / 5));
+                b[i] ^ (!b[(x + 1) % 5 + y] & b[(x + 2) % 5 + y])
+            });
+            let mut out = chi;
+            out[0] ^= ROUND_CONSTANTS[t];
+            let round = KeccakRound {
+                a,
+                d,
+                theta,
+                b,
+                chi,
+                out,
+            };
+            a = out;
+            round
+        })
+        .collect()
+}
+
+/// Entry `c`'s rounds, from its frame's words as read; the words it wrote
+/// are the last round's output.
+fn keccak_call(calls: &FrameSlice, c: usize) -> Vec<KeccakRound> {
+    let state = |write: bool| -> [u64; 25] {
+        std::array::from_fn(|i| {
+            frame_word(calls, 2 * i, c, write) | frame_word(calls, 2 * i + 1, c, write) << 32
+        })
+    };
+    let rounds = keccak_rounds(state(false));
+    assert_eq!(
+        state(true),
+        rounds[rounds.len() - 1].out,
+        "cycle {}: the trace's Keccak-f[1600] output is not the permutation's",
+        calls.cycles()[c]
+    );
+    rounds
+}
+
+/// Plane `y` of `state`: its five lanes.
+fn keccak_plane(state: &[u64; 25], y: usize) -> [u64; 5] {
+    std::array::from_fn(|x| state[x + 5 * y])
+}
+
+/// A plane's byte columns `{prefix}{x}_{k}`, lane `x`, byte `k`.
+fn byte_columns(w: &mut Witness, prefix: &str) -> [[usize; 8]; 5] {
+    std::array::from_fn(|x| std::array::from_fn(|k| w.col(&format!("{prefix}{x}_{k}"))))
+}
+
+/// Row `r`'s bytes of `lanes`.
+fn put_lanes(w: &mut Witness, cols: &[[usize; 8]; 5], r: usize, lanes: [u64; 5]) {
+    for (lane, bytes) in lanes.iter().zip(cols) {
+        for (k, c) in bytes.iter().enumerate() {
+            w.put(*c, r, (lane >> (8 * k)) & 0xff);
+        }
+    }
+}
+
+/// The rot1 split of `C`'s bytes: each XOR `0x7F` (`constraints::keccak`'s
+/// `theta_d`).
+fn rot1_split(c: [u64; 5]) -> [u64; 5] {
+    c.map(|lane| lane ^ 0x7f7f_7f7f_7f7f_7f7f)
+}
+
+/// The round one-hot's and the plane one-hot's columns, `r{t}` and `y{v}`.
+fn round_plane(w: &mut Witness, rounds: usize) -> (Vec<usize>, Vec<usize>) {
+    let r = (0..rounds).map(|t| w.col(&format!("r{t}"))).collect();
+    let y = (0..5).map(|v| w.col(&format!("y{v}"))).collect();
+    (r, y)
+}
+
+/// `KECCAK`, `constraints::keccak`: eight rows a call, row `y < 5` plane `y` —
+/// its ten frame words, their bytes in and out, the parity of the planes up
+/// to it, and at `y = 4` round 0's `D` — and rows 5–7 zero.
+fn keccak(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constants::delegation::keccak::FRAME;
+    use constraints::keccak::{frame_stamps, PLANES, WORDS};
+    let fam = family::KECCAK;
+    let calls = *src.invocations(fam)?;
+    let per = program::delegation_rows(fam) as usize;
+    let mut w = Witness::new(fam, per * calls.len());
+    let [live, cycle, number, base, ra, pin, pout, room] = [
+        "live", "cycle", "number", "base", "ra", "pin", "pout", "room_h16",
+    ]
+    .map(|c| w.col(c));
+    let (_, y) = round_plane(&mut w, 0);
+    let st = ["st_send", "st_recv", "st_pin", "st_pout"].map(|c| w.col(c));
+    let words: Vec<([usize; 2], [usize; 2], usize)> = (0..WORDS)
+        .map(|j| {
+            let cols = [
+                w.col(&format!("w{j}_read_ts")),
+                w.col(&format!("w{j}_read_value")),
+            ];
+            let chunks = [0, 1].map(|c| w.col(&format!("w{j}_gap_c{c}")));
+            (cols, chunks, w.col(&format!("w{j}_write_value")))
+        })
+        .collect();
+    let [input, output, p, q, d, s] =
+        ["in", "out", "p", "q", "d", "s"].map(|n| byte_columns(&mut w, n));
+    for c in 0..calls.len() {
+        let rounds = keccak_call(&calls, c);
+        let (first, last) = (rounds[0].a, rounds[rounds.len() - 1].out);
+        let at = calls.bases()[c] as u64;
+        let left = (guest_memory::ADVICE_ORIGIN as u64)
+            .checked_sub(at + 4 * FRAME as u64)
+            .ok_or_else(|| {
+                format!(
+                    "the frame at cycle {} reaches the advice",
+                    calls.cycles()[c]
+                )
+            })?;
+        let mut parity = [0u64; 5];
+        for v in 0..PLANES {
+            let r = per * c + v;
+            w.row(
+                r,
+                &[
+                    (live, 1),
+                    (cycle, calls.cycles()[c]),
+                    (number, ecall::KECCAK_F1600 as u64),
+                    (base, at),
+                    (ra, at + 4 * (WORDS * v) as u64),
+                    (y[v], 1),
+                    (pin, (v > 0) as u64),
+                    (pout, (v < PLANES - 1) as u64),
+                    (room, left >> 16),
+                ],
+            );
+            for (col, value) in st.iter().zip(frame_stamps(v)) {
+                w.put(*col, r, value);
+            }
+            for (j, (cols, chunks, write)) in words.iter().enumerate() {
+                let word = WORDS * v + j;
+                access_at(&mut w, *cols, *chunks, &calls, word, c, r);
+                w.put(*write, r, calls.word(word).write_value[c]);
+            }
+            put_lanes(&mut w, &input, r, keccak_plane(&first, v));
+            put_lanes(&mut w, &output, r, keccak_plane(&last, v));
+            put_lanes(&mut w, &p, r, parity);
+            for (x, lane) in parity.iter_mut().enumerate() {
+                *lane ^= first[x + 5 * v];
+            }
+            put_lanes(&mut w, &q, r, parity);
+            if v == PLANES - 1 {
+                put_lanes(&mut w, &s, r, rot1_split(parity));
+                put_lanes(&mut w, &d, r, rounds[0].d);
+            }
+        }
+    }
+    Ok(w.finish(src.height))
+}
+
+/// `KECCAK_RHO`, `constraints::keccak`: 128 rows a call, row `5t + y` the
+/// source plane `y` of round `t` — `A`, `D`, `A ⊕ D`, its split against each
+/// lane's mask, and the rotated lanes — and rows 120–127 zero.
+fn keccak_rho(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constants::delegation::keccak::ROUNDS;
+    use constraints::keccak::{rho_stamps, rotation, PLANES};
+    let fam = family::KECCAK_RHO;
+    let calls = *src.invocations(fam)?;
+    let per = program::delegation_rows(fam) as usize;
+    let mut w = Witness::new(fam, per * calls.len());
+    let [live, cycle, dfwd] = ["live", "cycle", "dfwd"].map(|c| w.col(c));
+    let (rt, y) = round_plane(&mut w, ROUNDS);
+    let st = [
+        "st_a", "st_din", "st_dout", "st_b0", "st_b1", "st_b2", "st_b3", "st_b4",
+    ]
+    .map(|c| w.col(c));
+    let [a, d, b, theta, split] = ["a", "d", "b", "t", "s"].map(|n| byte_columns(&mut w, n));
+    for c in 0..calls.len() {
+        let rounds = keccak_call(&calls, c);
+        for (t, round) in rounds.iter().enumerate() {
+            for (v, bit) in y.iter().enumerate() {
+                let r = per * c + PLANES * t + v;
+                w.row(
+                    r,
+                    &[
+                        (live, 1),
+                        (cycle, calls.cycles()[c]),
+                        (rt[t], 1),
+                        (*bit, 1),
+                        (dfwd, (v < PLANES - 1) as u64),
+                    ],
+                );
+                for (col, value) in st.iter().zip(rho_stamps(t, v)) {
+                    w.put(*col, r, value);
+                }
+                let lanes = keccak_plane(&round.theta, v);
+                put_lanes(&mut w, &a, r, keccak_plane(&round.a, v));
+                put_lanes(&mut w, &d, r, round.d);
+                put_lanes(&mut w, &theta, r, lanes);
+                let masks: [u64; 5] =
+                    std::array::from_fn(|x| rotation(x, v).2 * 0x0101_0101_0101_0101);
+                put_lanes(
+                    &mut w,
+                    &split,
+                    r,
+                    std::array::from_fn(|x| lanes[x] ^ masks[x]),
+                );
+                let rotated = std::array::from_fn(|x| round.b[v + 5 * ((2 * x + 3 * v) % 5)]);
+                put_lanes(&mut w, &b, r, rotated);
+            }
+        }
+    }
+    Ok(w.finish(src.height))
+}
+
+/// `KECCAK_CHI`, `constraints::keccak`: 128 rows a call, row `5t + y` B-plane
+/// `y` of round `t` — its lanes, chi's XORs, lane 0's bytes before iota, the
+/// plane written, the parity of the planes up to it, and at `y = 4` before the
+/// last round the next round's `D` — and rows 120–127 zero.
+fn keccak_chi(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constants::delegation::keccak::{IOTA_BYTES, ROUNDS};
+    use constraints::keccak::{chi_stamps, PLANES};
+    let fam = family::KECCAK_CHI;
+    let calls = *src.invocations(fam)?;
+    let per = program::delegation_rows(fam) as usize;
+    let mut w = Witness::new(fam, per * calls.len());
+    let [live, cycle, pin, pout, dnext] =
+        ["live", "cycle", "pin", "pout", "dnext"].map(|c| w.col(c));
+    let (rt, y) = round_plane(&mut w, ROUNDS);
+    let st = ["st_b", "st_pin", "st_pout", "st_a"].map(|c| w.col(c));
+    let [b, e, a, p, q, d, s] =
+        ["b", "e", "a", "p", "q", "d", "s"].map(|n| byte_columns(&mut w, n));
+    let c0 = IOTA_BYTES.map(|k| w.col(&format!("c0_{k}")));
+    for c in 0..calls.len() {
+        let rounds = keccak_call(&calls, c);
+        for (t, round) in rounds.iter().enumerate() {
+            let mut parity = [0u64; 5];
+            for (v, bit) in y.iter().enumerate() {
+                let r = per * c + PLANES * t + v;
+                let next = v == PLANES - 1 && t + 1 < ROUNDS;
+                w.row(
+                    r,
+                    &[
+                        (live, 1),
+                        (cycle, calls.cycles()[c]),
+                        (rt[t], 1),
+                        (*bit, 1),
+                        (pin, (v > 0) as u64),
+                        (pout, (v < PLANES - 1) as u64),
+                        (dnext, next as u64),
+                    ],
+                );
+                for (col, value) in st.iter().zip(chi_stamps(t, v)) {
+                    w.put(*col, r, value);
+                }
+                let lanes = keccak_plane(&round.b, v);
+                put_lanes(&mut w, &b, r, lanes);
+                let xors = std::array::from_fn(|x| lanes[(x + 1) % 5] ^ lanes[(x + 2) % 5]);
+                put_lanes(&mut w, &e, r, xors);
+                let written = keccak_plane(&round.out, v);
+                put_lanes(&mut w, &a, r, written);
+                for (col, k) in c0.iter().zip(IOTA_BYTES) {
+                    w.put(*col, r, (round.chi[5 * v] >> (8 * k)) & 0xff);
+                }
+                put_lanes(&mut w, &p, r, parity);
+                for (lane, out) in parity.iter_mut().zip(written) {
+                    *lane ^= out;
+                }
+                put_lanes(&mut w, &q, r, parity);
+                if next {
+                    put_lanes(&mut w, &s, r, rot1_split(parity));
+                    put_lanes(&mut w, &d, r, rounds[t + 1].d);
+                }
+            }
         }
     }
     Ok(w.finish(src.height))

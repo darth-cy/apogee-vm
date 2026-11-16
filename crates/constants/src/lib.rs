@@ -421,7 +421,7 @@ pub mod generic_table {
 /// The number is what everything else cites: canonical ordering is ascending
 /// `FamilyId`, the program-identity digest absorbs families in that order, and
 /// shard transcripts are seeded with it. Ids 0–6 are the execution families,
-/// 7–11 the window families and 12–17 the delegation families
+/// 7–11 the window families and 12–20 the delegation families
 /// ([`crate::delegation`], `docs/spec/circuits.md` §1).
 ///
 /// Which mnemonic each instruction family claims is `crates/program`'s
@@ -504,9 +504,21 @@ pub mod family {
     /// A level's permutation, 16 rows: [`POSEIDON2_ROUNDS`]' rows keyed by the
     /// level, the last round writing the node alone. Touches no RAM.
     pub const MERKLE_ROUNDS: u32 = 17;
+    /// The Keccak-f[1600] permutation's **frame** rows, eight a call, rows
+    /// 0–4 live: plane `y` of the 50-word frame read and written in place,
+    /// its column parity, `D` for round 0, and the planes sent to
+    /// [`KECCAK_RHO`] and received from [`KECCAK_CHI`] in
+    /// `address_space::KECCAK` (`constraints::keccak`).
+    pub const KECCAK: u32 = 18;
+    /// theta's `D` applied, rho and pi: 128 rows a call, row `5t + y` the
+    /// source plane `y` of round `t`, rows 120–127 dead. Touches no RAM.
+    pub const KECCAK_RHO: u32 = 19;
+    /// chi, iota and the next round's `D`: 128 rows a call, row `5t + y` the
+    /// plane `y` round `t` writes, rows 120–127 dead. Touches no RAM.
+    pub const KECCAK_CHI: u32 = 20;
 
     /// How many families this table defines.
-    pub const COUNT: u32 = 18;
+    pub const COUNT: u32 = 21;
 
     /// The pinned height of [`PUBLIC_INPUT`] and [`PUBLIC_OUTPUT`].
     ///
@@ -567,6 +579,9 @@ pub mod family {
         false, // MERKLE_ROOT
         false, // MERKLE_LEVELS
         false, // MERKLE_ROUNDS
+        false, // KECCAK
+        false, // KECCAK_RHO
+        false, // KECCAK_CHI
     ];
 
     /// The trace-height menu, ascending: the heights the registries build
@@ -614,6 +629,9 @@ pub mod family {
         1 << 16, // MERKLE_ROOT, likewise
         1 << 16, // MERKLE_LEVELS, likewise
         1 << 16, // MERKLE_ROUNDS, likewise: its level's bound
+        1 << 16, // KECCAK, the floor of its RANGE16 and XOR8 channels
+        1 << 16, // KECCAK_RHO, its XOR8 channel's
+        1 << 16, // KECCAK_CHI, likewise
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -903,6 +921,12 @@ pub mod ecall {
     /// refuses any other. `a0` is preserved.
     pub const MERKLE_ROOT: u32 = 0x0512;
 
+    /// A delegation call: Keccak-f[1600] (FIPS 202, 24 rounds) on the state at
+    /// `a0`, in place: 50 words, lane `i = x + 5y` words `2i` (low) and
+    /// `2i + 1` (high), little-endian (`delegation::keccak`). The frame lies
+    /// below `guest_memory::ADVICE_ORIGIN`. `a0` is preserved.
+    pub const KECCAK_F1600: u32 = 0x0513;
+
     /// Linux `ENOSYS`. Every number but [`EXIT`] and the delegation calls
     /// returns `-ENOSYS` in `a0`: a number nobody has assigned, or a retired
     /// one (`docs/spec/ecall-abi.md` §4). Such a call executes and cannot be
@@ -942,6 +966,11 @@ pub mod address_space {
     /// 2s + 1)`, and a level's control `(MERKLE, cycle, 16b + 8, rest, ptr)`
     /// (`docs/spec/precompiles.md` §6).
     pub const MERKLE: u8 = 6;
+    /// A Keccak-f[1600] call's state between rows, in bytes: two bytes of the
+    /// call at `cycle` are the tuple `(KECCAK, cycle, stamp, byte, byte)`, the
+    /// stamp naming what they are of which round and plane
+    /// (`constraints::keccak`).
+    pub const KECCAK: u8 = 7;
 }
 
 /// The memory argument's clock and its own numbers.
@@ -1062,6 +1091,80 @@ pub mod delegation {
         pub const MAX_DEPTH: u32 = 32;
     }
 
+    /// [`ecall::KECCAK_F1600`]'s frame and the permutation's constants (FIPS
+    /// 202 §3.2).
+    pub mod keccak {
+        /// Lanes in the state: 5 by 5, lane `A[x][y]` at `x + 5y`.
+        pub const LANES: usize = 25;
+        /// Rounds of the permutation.
+        pub const ROUNDS: usize = 24;
+        /// The frame: lane `i` is words `2i` (low) and `2i + 1` (high).
+        pub const FRAME: usize = 2 * LANES;
+
+        /// The byte positions of a lane that iota can change. Every round
+        /// constant sets bits `2^j − 1` alone, so iota is four byte XORs
+        /// rather than eight; [`IOTA_BYTES_ARE_THE_ONLY_ONES`] holds the table
+        /// to it.
+        pub const IOTA_BYTES: [usize; 4] = [0, 1, 3, 7];
+
+        /// Every byte [`IOTA_BYTES`] omits is zero in every round constant,
+        /// checked at compile time because the circuit's shape rests on it.
+        pub const IOTA_BYTES_ARE_THE_ONLY_ONES: () = {
+            let mut mask = 0u64;
+            let mut i = 0;
+            while i < IOTA_BYTES.len() {
+                mask |= 0xffu64 << (8 * IOTA_BYTES[i]);
+                i += 1;
+            }
+            let mut r = 0;
+            while r < ROUNDS {
+                assert!(
+                    ROUND_CONSTANTS[r] & !mask == 0,
+                    "a round constant sets a bit outside IOTA_BYTES"
+                );
+                r += 1;
+            }
+        };
+
+        /// The rho rotation offsets, `ROTATIONS[y][x]` for lane `A[x][y]`, a
+        /// rotate-left on the 64-bit lane.
+        pub const ROTATIONS: [[u32; 5]; 5] = [
+            [0, 1, 62, 28, 27],
+            [36, 44, 6, 55, 20],
+            [3, 10, 43, 25, 39],
+            [41, 45, 15, 21, 8],
+            [18, 2, 61, 56, 14],
+        ];
+
+        /// The iota round constants, one per round.
+        pub const ROUND_CONSTANTS: [u64; ROUNDS] = [
+            0x0000_0000_0000_0001,
+            0x0000_0000_0000_8082,
+            0x8000_0000_0000_808a,
+            0x8000_0000_8000_8000,
+            0x0000_0000_0000_808b,
+            0x0000_0000_8000_0001,
+            0x8000_0000_8000_8081,
+            0x8000_0000_0000_8009,
+            0x0000_0000_0000_008a,
+            0x0000_0000_0000_0088,
+            0x0000_0000_8000_8009,
+            0x0000_0000_8000_000a,
+            0x0000_0000_8000_808b,
+            0x8000_0000_0000_008b,
+            0x8000_0000_0000_8089,
+            0x8000_0000_0000_8003,
+            0x8000_0000_0000_8002,
+            0x8000_0000_0000_0080,
+            0x0000_0000_0000_800a,
+            0x8000_0000_8000_000a,
+            0x8000_0000_8000_8081,
+            0x8000_0000_0000_8080,
+            0x0000_0000_8000_0001,
+            0x8000_0000_8000_8008,
+        ];
+    }
+
     /// Every delegation family as `(family, ecall number, words an entry, rows
     /// an entry, what an entry is)`, ascending by family. A row is never
     /// reassigned.
@@ -1073,7 +1176,7 @@ pub mod delegation {
     /// `MERKLE_LEVELS`. A later one only expands the entry into rows of its
     /// own, reading its words from its buffer and no memory but its own address
     /// space.
-    pub const TYPES: [(u32, u32, usize, u32, Per); 6] = [
+    pub const TYPES: [(u32, u32, usize, u32, Per); 9] = [
         (family::POSEIDON2, ecall::POSEIDON2, 32, 1, Per::Call),
         (
             family::POSEIDON2_ROUNDS,
@@ -1103,6 +1206,27 @@ pub mod delegation {
             merkle::SIBLING,
             16,
             Per::Level,
+        ),
+        (
+            family::KECCAK,
+            ecall::KECCAK_F1600,
+            keccak::FRAME,
+            8,
+            Per::Call,
+        ),
+        (
+            family::KECCAK_RHO,
+            ecall::KECCAK_F1600,
+            keccak::FRAME,
+            128,
+            Per::Call,
+        ),
+        (
+            family::KECCAK_CHI,
+            ecall::KECCAK_F1600,
+            keccak::FRAME,
+            128,
+            Per::Call,
         ),
     ];
 }
