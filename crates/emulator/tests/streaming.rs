@@ -45,8 +45,8 @@ const GUESTS: [(&str, u32); 11] = [
     // Without it every chunk here would come from the tail and the flush path
     // would never run.
     ("shards", 16),
-    // Both precompiles, its delegation families at `2^12`: 302 Poseidon2 calls
-    // fill the rounds' 256-call buffer mid-execution.
+    // The precompiles, their delegation families at `2^12`: 302 Poseidon2
+    // calls fill the rounds' 256-call buffer mid-execution.
     ("precompiles", 16),
 ];
 
@@ -168,8 +168,8 @@ fn the_chunks_are_the_planned_shards_row_for_row() {
                 family_name(chunk.family)
             );
             *want += 1;
-            // A delegation chunk carries calls, each the buffer's own, at the
-            // height over the family's rows a call.
+            // A delegation chunk carries entries, each the buffer's own, at the
+            // height over the family's rows an entry, and what each carries.
             if let Some(calls) = &chunk.calls {
                 let buffer = traces
                     .delegation(chunk.family)
@@ -197,6 +197,9 @@ fn the_chunks_are_the_planned_shards_row_for_row() {
                         want.write_value[start..start + calls.len()]
                     );
                     assert_eq!(got.read_ts, want.read_ts[start..start + calls.len()]);
+                }
+                for (got, want) in calls.carry.iter().zip(&buffer.carry) {
+                    assert_eq!(got[..], want[start..start + calls.len()], "{name}: a carry");
                 }
                 if program::delegation_rows(chunk.family) > 1 && calls.len() == per {
                     split_families += 1;

@@ -406,7 +406,7 @@ pub mod generic_table {
 /// The number is what everything else cites: canonical ordering is ascending
 /// `FamilyId`, the program-identity digest absorbs families in that order, and
 /// shard transcripts are seeded with it. Ids 0–6 are the execution families,
-/// 7–11 the window families and 12–14 the delegation families
+/// 7–11 the window families and 12–17 the delegation families
 /// ([`crate::delegation`], `docs/spec/circuits.md` §1).
 ///
 /// Which mnemonic each instruction family claims is `crates/program`'s
@@ -477,9 +477,21 @@ pub mod family {
     /// `floor(a·b/d)` and `a·b mod d` over 256-bit words, one row a call
     /// (`docs/spec/precompiles.md` §4).
     pub const MUL_DIV_U256: u32 = 14;
+    /// A Merkle path's **frame** row, one a call: the anchor, the 19-word
+    /// frame, the leaf sent to and the root received from [`MERKLE_LEVELS`]'
+    /// chain in `address_space::MERKLE`, the root written canonical
+    /// (`docs/spec/precompiles.md` §6).
+    pub const MERKLE_ROOT: u32 = 15;
+    /// One row a level of a path: its sibling read from RAM, its slot bit, and
+    /// the node and the sibling in order, through the external layer, sent to
+    /// [`MERKLE_ROUNDS`].
+    pub const MERKLE_LEVELS: u32 = 16;
+    /// A level's permutation, 16 rows: [`POSEIDON2_ROUNDS`]' rows keyed by the
+    /// level, the last round writing the node alone. Touches no RAM.
+    pub const MERKLE_ROUNDS: u32 = 17;
 
     /// How many families this table defines.
-    pub const COUNT: u32 = 15;
+    pub const COUNT: u32 = 18;
 
     /// The pinned height of [`PUBLIC_INPUT`] and [`PUBLIC_OUTPUT`].
     ///
@@ -537,6 +549,9 @@ pub mod family {
         false, // POSEIDON2
         false, // POSEIDON2_ROUNDS
         false, // MUL_DIV_U256
+        false, // MERKLE_ROOT
+        false, // MERKLE_LEVELS
+        false, // MERKLE_ROUNDS
     ];
 
     /// The trace-height menu, ascending: the heights the registries build
@@ -581,6 +596,9 @@ pub mod family {
         1 << 16, // POSEIDON2, the floor of its RANGE16 channel
         1 << 16, // POSEIDON2_ROUNDS
         1 << 16, // MUL_DIV_U256, likewise
+        1 << 16, // MERKLE_ROOT, likewise
+        1 << 16, // MERKLE_LEVELS, likewise
+        1 << 16, // MERKLE_ROUNDS, likewise: its level's bound
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -869,6 +887,14 @@ pub mod ecall {
     /// below `2^256`; an executor refuses either. `a0` is preserved.
     pub const MUL_DIV_U256: u32 = 0x0511;
 
+    /// A delegation call: the root of the Merkle path the 19-word frame at
+    /// `a0` names — its 8 lanes the leaf, then the slot, the depth and the
+    /// siblings' address — written over the lanes (`docs/spec/precompiles.md`
+    /// §6). The caller owes a depth in `16..=32`, a slot below `2^depth`, and
+    /// `64·depth` word-aligned sibling bytes clear of the frame; an executor
+    /// refuses any other. `a0` is preserved.
+    pub const MERKLE_ROOT: u32 = 0x0512;
+
     /// Linux `ENOSYS`. Every number but [`EXIT`] and the delegation calls
     /// returns `-ENOSYS` in `a0`: a number nobody has assigned, or a retired
     /// one (`docs/spec/ecall-abi.md` §4). Such a call executes and cannot be
@@ -903,6 +929,11 @@ pub mod address_space {
     /// at boundary `b`, is the tuple `(POSEIDON2, cycle, 8b + j, lane 2j,
     /// lane 2j + 1)` (`docs/spec/precompiles.md` §3).
     pub const POSEIDON2: u8 = 5;
+    /// A Merkle path's state between rows: lane pair `s` of the call at
+    /// `cycle`, at boundary `b`, is `(MERKLE, cycle, 16b + s, lane 2s, lane
+    /// 2s + 1)`, and a level's control `(MERKLE, cycle, 16b + 8, rest, ptr)`
+    /// (`docs/spec/precompiles.md` §6).
+    pub const MERKLE: u8 = 6;
 }
 
 /// The memory argument's clock and its own numbers.
@@ -969,7 +1000,8 @@ pub mod memory {
 /// in `constraints::family_circuit` (its circuit, over
 /// `constraints::delegation`'s frame), `emulator`'s `frame_function` (the
 /// function), `prover`'s `family_fill` (its witness) and a `guest_sdk` shim
-/// (the record and the call).
+/// (the record and the call). `MERKLE_ROOT`, whose call reads a path beyond
+/// its frame, is the emulator's `merkle_root` instead of a frame function.
 pub mod delegation {
     use super::{ecall, family};
 
@@ -983,17 +1015,86 @@ pub mod delegation {
     /// and `loader::load_elf` reads by this name, never by content.
     pub const SECTION: &str = ".apogee.delegations";
 
-    /// Every delegation family as `(family, ecall number, frame words, rows a
-    /// call)`, ascending by family. A row is never reassigned.
+    /// What one entry of a delegation family's buffer is.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Per {
+        /// One call: its frame's words.
+        Call,
+        /// One level of an [`ecall::MERKLE_ROOT`] path: its sibling's 16 words,
+        /// accessed at the call's timestamp like a frame's, and the [`CARRY`]
+        /// values it starts from.
+        Level,
+    }
+
+    /// The values a level entry carries: what its rows start from that none of
+    /// its words gives, so that a shard may begin mid-path. The node's 8 lanes,
+    /// the slot's bits not yet taken, and the level.
+    pub const CARRY: usize = 10;
+
+    /// [`ecall::MERKLE_ROOT`]'s frame, by word, and its path's depths
+    /// (`docs/spec/precompiles.md` §6).
+    pub mod merkle {
+        /// Words `0..16`: 8 lanes, two little-endian words each, the leaf in
+        /// and the root out.
+        pub const LANES: usize = 16;
+        /// The slot, below `2^depth`: its bit `L` is 1 where level `L`'s node
+        /// is the right child.
+        pub const SLOT: usize = 16;
+        /// The depth.
+        pub const DEPTH: usize = 17;
+        /// The siblings' address: word-aligned, `64·depth` bytes, level 0's
+        /// first, clear of the frame.
+        pub const SIBLINGS: usize = 18;
+        /// The frame's words.
+        pub const FRAME: usize = 19;
+        /// A sibling's words: 8 lanes, two little-endian words each.
+        pub const SIBLING: usize = 16;
+        /// The depths a path may have.
+        pub const MIN_DEPTH: u32 = 16;
+        pub const MAX_DEPTH: u32 = 32;
+    }
+
+    /// Every delegation family as `(family, ecall number, words an entry, rows
+    /// an entry, what an entry is)`, ascending by family. A row is never
+    /// reassigned.
     ///
-    /// Each family of a number records every call of it. The first is the
-    /// number's **frame family**, whose row a call reads the frame and the
-    /// anchor through; a later one only expands the call into rows of its own,
-    /// reading the frame's words from its buffer and no memory but its own
-    /// address space.
-    pub const TYPES: [(u32, u32, usize, u32); 3] = [
-        (family::POSEIDON2, ecall::POSEIDON2, 32, 1),
-        (family::POSEIDON2_ROUNDS, ecall::POSEIDON2, 32, 16),
-        (family::MUL_DIV_U256, ecall::MUL_DIV_U256, 24, 1),
+    /// Each family of a number records every entry of its kind: a call's, or
+    /// one per level of a call's path. The first family of a number and a kind
+    /// reads the entry's words from RAM: for a call, the number's **frame
+    /// family**, whose row a call also reads the anchor through; for a level,
+    /// `MERKLE_LEVELS`. A later one only expands the entry into rows of its
+    /// own, reading its words from its buffer and no memory but its own address
+    /// space.
+    pub const TYPES: [(u32, u32, usize, u32, Per); 6] = [
+        (family::POSEIDON2, ecall::POSEIDON2, 32, 1, Per::Call),
+        (
+            family::POSEIDON2_ROUNDS,
+            ecall::POSEIDON2,
+            32,
+            16,
+            Per::Call,
+        ),
+        (family::MUL_DIV_U256, ecall::MUL_DIV_U256, 24, 1, Per::Call),
+        (
+            family::MERKLE_ROOT,
+            ecall::MERKLE_ROOT,
+            merkle::FRAME,
+            1,
+            Per::Call,
+        ),
+        (
+            family::MERKLE_LEVELS,
+            ecall::MERKLE_ROOT,
+            merkle::SIBLING,
+            1,
+            Per::Level,
+        ),
+        (
+            family::MERKLE_ROUNDS,
+            ecall::MERKLE_ROOT,
+            merkle::SIBLING,
+            16,
+            Per::Level,
+        ),
     ];
 }

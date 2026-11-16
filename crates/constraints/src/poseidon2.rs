@@ -105,23 +105,51 @@ pub fn internal_forms() -> ([Form; PARTIAL], [Form; WIDTH]) {
     (inputs, state)
 }
 
-/// `POSEIDON2_ROUNDS`: row `k` of the call at `cycle` reads lane pair `j` at
-/// `stamp + j`, boundary `k`'s, applies its rounds, and writes it at
-/// `stamp + 8 + j`, boundary `k + 1`'s.
+/// Whose permutation a [`rounds`] builder lays out: a `POSEIDON2` call's, in
+/// `address_space::POSEIDON2`, or one level's of a Merkle path, in
+/// `address_space::MERKLE` (`crate::merkle`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Keyed {
+    Call,
+    Level,
+}
+
+/// The rounds of one permutation, sixteen rows: row `k` reads lane pair `j`
+/// at `stamp + j`, boundary `k`'s, applies its rounds, and writes it at
+/// `stamp + stride + j`, boundary `k + 1`'s.
 ///
 /// ```text
 /// one_kind      Σ_k row_k − live                 the kind bits, one-hot on a live row
-/// stamp_rule    stamp − Σ_k 8k·row_k
+/// stamp_rule    stamp − Σ_k 8k·row_k              a call's (POSEIDON2_ROUNDS)
+/// level_range   (stamp − Σ_k 16(k + 1)·row_k)/256 < 2^16
+///                                                 a level's (MERKLE_ROUNDS): 256L + 16(k + 1)
 /// ext_rule      ext − Σ_{k external} row_k        int_rule   int − live + ext
 /// y{j}_rule     y_j − ext·s_j − int·L_j(s, z) − Σ_k row_k·c_k[j]
 /// y{j}_sq_rule  y2_j − y_j²                       y{j}_cube_rule   z_j − y2_j·y_j
 /// o{l}_rule     o_l − ext·Σ_k M_E[l][k]·z_k − int·K_l(s, z)
+/// keep_rule     keep − live + row14               a level's: the last round writes
+///                                                 pairs 0..3 alone, the node
 /// ```
 ///
 /// `L_j` and `K_l` are [`internal_forms`], `c_k` [`round_constant`]. Every
-/// gate is degree 2, the kind riding a linear factor.
-fn rounds() -> Builder {
-    let mut b = Builder::new(family::POSEIDON2_ROUNDS);
+/// gate is degree 2, the kind riding a linear factor. A call's stride is 8 and
+/// a level's [`crate::merkle::STRIDE`], so its control fits beside its pairs.
+pub(crate) fn rounds(keyed: Keyed) -> Builder {
+    let (fam, space, stride, first) = match keyed {
+        Keyed::Call => (
+            family::POSEIDON2_ROUNDS,
+            address_space::POSEIDON2,
+            PAIRS as u64,
+            0,
+        ),
+        Keyed::Level => (
+            family::MERKLE_ROUNDS,
+            address_space::MERKLE,
+            crate::merkle::STRIDE,
+            1,
+        ),
+    };
+    let mut b = Builder::new(fam);
     let live = b.live;
     let cycle = b.mcol("cycle");
     let stamp_col = b.mcol("stamp");
@@ -129,11 +157,15 @@ fn rounds() -> Builder {
     let o: Vec<PolyAddress> = (0..WIDTH).map(|i| b.mcol(&format!("o{i}"))).collect();
     let kinds: Vec<PolyAddress> = (0..ROWS - 1).map(|k| b.bit(&format!("row{k}"))).collect();
     b.gate("one_kind", sum(&kinds) - live);
+    // Row `k` reads boundary `first + k`, a level's offset by its `256L`.
     let mut at = Expr::from(stamp_col);
     for (k, x) in kinds.iter().enumerate() {
-        at = at - *x * stamp(k as u64);
+        at = at - *x * (stride * (first + k as u64));
     }
-    b.gate("stamp_rule", at);
+    match keyed {
+        Keyed::Call => b.gate("stamp_rule", at),
+        Keyed::Level => b.range16("level_range", at * crate::merkle::per_level()),
+    }
     let ext = b.col("ext");
     let int = b.col("int");
     let external: Vec<PolyAddress> = (0..ROWS - 1)
@@ -174,8 +206,18 @@ fn rounds() -> Builder {
         let e = o[l] - ext * full - int * linear(&outputs[l]);
         b.gate(&format!("o{l}_rule"), e);
     }
+    let keep = match keyed {
+        Keyed::Call => live,
+        Keyed::Level => {
+            // A leaf's mask, so an `M` column with a booleanity gate of its
+            // own, which the rule already implies.
+            let keep = b.mcol("keep");
+            b.gate("keep_boolean", keep - keep * keep);
+            b.gate("keep_rule", keep - live + kinds[ROWS - 2]);
+            keep
+        }
+    };
     for j in 0..PAIRS {
-        let space = address_space::POSEIDON2;
         b.leaf(
             false,
             &format!("read_s{j}"),
@@ -187,19 +229,60 @@ fn rounds() -> Builder {
                 Part::of(s[2 * j + 1]),
             ],
         );
-        b.leaf(
+        b.leaf_under(
+            if j < PAIRS / 2 { live } else { keep },
             true,
             &format!("write_o{j}"),
             space,
             [
                 Part::of(cycle),
-                Part::plus(stamp_col, stamp(1) + j as u64),
+                Part::plus(stamp_col, stride + j as u64),
                 Part::of(o[2 * j]),
                 Part::of(o[2 * j + 1]),
             ],
         );
     }
     b
+}
+
+/// `name`, a lane, is the words `lo` and `hi` and canonical, below `p`:
+///
+/// ```text
+/// {name}_rule        lane − lo − 2^32·hi
+/// {name}_top         is_zero(3·0xFFFF − h1 − h0 − l1, inv, top): both words'
+///                    halfwords but the lowest all ones
+/// {name}_canonical   0xFFFF − 59·top − l0 < 2^16
+/// ```
+///
+/// `l0 l1` and `h0 h1` are the words' halfwords, each bounded, so the lane is
+/// canonical exactly when `top = 0` or `l0 ≤ 0xFFC4`.
+pub(crate) fn canonical(
+    b: &mut Builder,
+    name: &str,
+    lane: PolyAddress,
+    lo: PolyAddress,
+    hi: PolyAddress,
+) {
+    let live = b.live;
+    let lit = |v: Fp| Coeff::Literal(v);
+    b.gate(&format!("{name}_rule"), lane - lo - hi * T32);
+    let l1 = b.word(&format!("{name}_lo"), lo.into());
+    let h1 = b.word(&format!("{name}_hi"), hi.into());
+    let inv = b.col(&format!("{name}_inv"));
+    let top = b.col(&format!("{name}_top"));
+    let all_ones = [
+        (lit(Fp::from_u64(3 * 0xffff)), live),
+        (lit(Fp::MINUS_ONE), hi),
+        (lit(Fp::from_u64(0xffff)), h1),
+        (lit(Fp::MINUS_ONE), l1),
+    ];
+    let [inverse, at_nonzero] = gadgets::is_zero(&all_ones, inv, top, live);
+    b.push_gate(&format!("{name}_top_inverse"), inverse);
+    b.push_gate(&format!("{name}_top_at_nonzero"), at_nonzero);
+    b.range16(
+        &format!("{name}_canonical"),
+        live * 0xffff - top * 59 - (lo - l1 * T16),
+    );
 }
 
 /// `POSEIDON2`: the frame, the input lanes after `M_E` sent as boundary 0, the
@@ -233,27 +316,9 @@ fn frame_row() -> Builder {
         }
         b.gate(&format!("u{j}_rule"), e);
     }
-    let lit = |v: Fp| Coeff::Literal(v);
     for (l, ol) in o.iter().enumerate() {
         let (lo, hi) = (f.words[2 * l].write, f.words[2 * l + 1].write);
-        b.gate(&format!("o{l}_rule"), *ol - lo - hi * T32);
-        let l1 = b.word(&format!("o{l}_lo"), lo.into());
-        let h1 = b.word(&format!("o{l}_hi"), hi.into());
-        let inv = b.col(&format!("o{l}_inv"));
-        let top = b.col(&format!("o{l}_top"));
-        let all_ones = [
-            (lit(Fp::from_u64(3 * 0xffff)), live),
-            (lit(Fp::MINUS_ONE), hi),
-            (lit(Fp::from_u64(0xffff)), h1),
-            (lit(Fp::MINUS_ONE), l1),
-        ];
-        let [inverse, at_nonzero] = gadgets::is_zero(&all_ones, inv, top, live);
-        b.push_gate(&format!("o{l}_top_inverse"), inverse);
-        b.push_gate(&format!("o{l}_top_at_nonzero"), at_nonzero);
-        b.range16(
-            &format!("o{l}_canonical"),
-            live * 0xffff - top * 59 - (lo - l1 * T16),
-        );
+        canonical(&mut b, &format!("o{l}"), *ol, lo, hi);
     }
     for j in 0..PAIRS {
         let space = address_space::POSEIDON2;
@@ -296,7 +361,7 @@ pub fn channels() -> Vec<ChannelSpec> {
 
 /// `POSEIDON2_ROUNDS`' circuit over `2^trace_vars` rows; it reads no lookup.
 pub fn rounds_artifact(trace_vars: u32) -> CircuitArtifact {
-    rounds().artifact(trace_vars)
+    rounds(Keyed::Call).artifact(trace_vars)
 }
 
 /// `POSEIDON2_ROUNDS` has no channel.

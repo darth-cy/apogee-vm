@@ -1,10 +1,10 @@
-//! The two precompiles over a real execution, `guests/precompiles` built from
-//! source, in ordinary CI and without a proof (`docs/spec/precompiles.md`):
+//! The three precompiles over a real execution, `guests/precompiles` built
+//! from source, in ordinary CI and without a proof (`docs/spec/precompiles.md`):
 //!
 //! - **the journal is the host's**: the Poseidon2 permutation of the
-//!   generator's own input and of lanes at `2^64 − 1`, read mod `p`, and a
-//!   Merkle root, each by `transcript`; and `mul_div` at edges whose answers
-//!   are hand-derived or a `u128`'s;
+//!   generator's own input and of lanes at `2^64 − 1`, read mod `p`, a Merkle
+//!   root, and two `merkle_root` paths, each by `transcript`; and `mul_div` at
+//!   edges whose answers are hand-derived or a `u128`'s;
 //! - **every precompile circuit keeps every rule**, by `constraints` and, with
 //!   no shared code, by this crate;
 //! - **the fill holds**: every live row and the padding after it satisfy every
@@ -13,9 +13,10 @@
 //!   every row-local gate and lookup refuse, and each written word one off is
 //!   refused by its row alone;
 //! - **the statement reconciles**: every shard forwarded, and the roots of all
-//!   of them and the boundary multiply out, the anchors and the Poseidon2 state
-//!   included. A round row moved to another call's cycle keeps every row-local
-//!   relation and does not.
+//!   of them and the boundary multiply out, the anchors and the Poseidon2 and
+//!   Merkle state included. A round row moved to another call's cycle keeps
+//!   every row-local relation and does not, nor does a level taking the other
+//!   order.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -36,10 +37,13 @@ use poly::{MultilinearPoly, PolyBacking};
 use prover::{Program, ShardSource};
 use trace::{IoStreams, PhaseTiming, TraceArchive};
 
-const DELEGATIONS: [u32; 3] = [
+const DELEGATIONS: [u32; 6] = [
     family::POSEIDON2,
     family::POSEIDON2_ROUNDS,
     family::MUL_DIV_U256,
+    family::MERKLE_ROOT,
+    family::MERKLE_LEVELS,
+    family::MERKLE_ROUNDS,
 ];
 
 fn f(v: u64) -> Fp {
@@ -57,11 +61,31 @@ fn leaf(i: usize, j: usize) -> u64 {
 
 const LEAVES: usize = 8;
 
+/// The input's path: its slot, every bit of it taken, and its depth, the
+/// least a path may have.
+const SLOT: u32 = 0xb5a3;
+const DEPTH: usize = 16;
+
+/// Lane `j` of the input path's sibling `l`, the top lane at `p − 1`.
+fn sibling(l: usize, j: usize) -> u64 {
+    match j {
+        7 => field::A64_C5 - 1,
+        _ => (l as u64 + 1).wrapping_mul(0xd1b5_4a32_d192_ed03) ^ (j as u64) << 7,
+    }
+}
+
 fn input() -> Vec<u8> {
     let mut out = (LEAVES as u32).to_le_bytes().to_vec();
     for i in 0..LEAVES {
         for j in 0..8 {
             out.extend(leaf(i, j).to_le_bytes());
+        }
+    }
+    out.extend(SLOT.to_le_bytes());
+    out.extend((DEPTH as u32).to_le_bytes());
+    for l in 0..DEPTH {
+        for j in 0..8 {
+            out.extend(sibling(l, j).to_le_bytes());
         }
     }
     out
@@ -133,6 +157,22 @@ fn permute(lanes: [u64; 16]) -> [u64; 16] {
     s.map(Fp::to_u64)
 }
 
+/// The root of `leaf` at `slot` up `path`: level `L`'s node the first eight
+/// lanes of the permutation of the node below and its sibling, the node below
+/// first where bit `L` of `slot` is 0.
+fn fold(slot: u32, leaf: [u64; 8], path: &[[u64; 8]]) -> [u64; 8] {
+    path.iter().enumerate().fold(leaf, |node, (level, sib)| {
+        let (l, r) = match slot >> level & 1 {
+            0 => (node, *sib),
+            _ => (*sib, node),
+        };
+        let mut s = [0u64; 16];
+        s[..8].copy_from_slice(&l);
+        s[8..].copy_from_slice(&r);
+        std::array::from_fn(|j| permute(s)[j])
+    })
+}
+
 /// `2^k` as 32 bytes, little-endian.
 fn pow2(k: usize) -> [u8; 32] {
     let mut out = [0u8; 32];
@@ -201,6 +241,15 @@ fn the_journal_is_the_hosts() {
             None => want.extend([0u8; 65]),
         }
     }
+    let leaves: Vec<[u64; 8]> = (0..LEAVES)
+        .map(|i| std::array::from_fn(|j| leaf(i, j)))
+        .collect();
+    let path: Vec<[u64; 8]> = (0..DEPTH)
+        .map(|l| std::array::from_fn(|j| sibling(l, j)))
+        .collect();
+    want.extend(lanes(&fold(SLOT, leaves[0], &path)));
+    let ram: Vec<[u64; 8]> = (0..32).map(|l| leaves[l % LEAVES]).collect();
+    want.extend(lanes(&fold(u32::MAX, leaves[0], &ram)));
     assert_eq!(archive.io_streams().output, want);
 }
 
@@ -222,7 +271,7 @@ fn every_precompile_circuit_keeps_every_rule() {
         assert_eq!(check_padding_identity(a), Ok(()));
         assert_eq!(check_lookup_discharge(a, &c.channels), Ok(()));
         assert!(a.padding.zero_row_valid);
-        // RANGE16's table needs 2^16 rows; the rounds read no lookup.
+        // RANGE16's table needs 2^16 rows; POSEIDON2's rounds read no lookup.
         let below = family_circuit(fam, 12);
         assert_eq!(
             below.is_some(),
@@ -444,7 +493,7 @@ fn every_row_holds_and_every_constraint_bites() {
         // Each kind of row once — a frame row, or a round row of each kind
         // and the idle one — and the first padding row.
         let samples: Vec<usize> = match fam {
-            family::POSEIDON2_ROUNDS => (0..16).chain([s.live]).collect(),
+            family::POSEIDON2_ROUNDS | family::MERKLE_ROUNDS => (0..16).chain([s.live]).collect(),
             _ => vec![0, s.live],
         };
         let names: Vec<&String> = s.a.memory.iter().chain(&s.a.witness).collect();
@@ -564,6 +613,60 @@ fn the_statement_reconciles_and_a_round_moved_to_another_call_does_not() {
         let mut values: Vec<Fp> = (0..c.len()).map(|i| c.get_base(i)).collect();
         values[row] = values[0];
         *c = MultilinearPoly::new(PolyBacking::Fp(values));
+    };
+    assert!(!balances(
+        &program,
+        &archive,
+        &roots(&program, &archive, &edit)
+    ));
+
+    // The input path's level 1 taking the other order, its row recomputed:
+    // the bit flipped, the slot's rest halved from it, the node and the
+    // sibling swapped through M_E. Every row-local relation holds, and the
+    // state and the control it sends are not what the rows after it read.
+    let s = Shard::new(&program, &archive, family::MERKLE_LEVELS);
+    let row = 1;
+    let honest = s.row(row);
+    let mut swapped = honest.clone();
+    let (bit, rest, next) = (s.at("bit"), s.at("rest"), s.at("rest_next"));
+    swapped[bit] = Fp::ONE - honest[bit];
+    swapped[next] = (honest[rest] - swapped[bit]) * f(2).inverse().expect("a unit");
+    let node: Vec<Fp> = (0..8).map(|i| honest[s.at(&format!("n{i}"))]).collect();
+    let word = |j: usize| honest[s.at(&format!("w{j}_read_value"))];
+    let sibling: Vec<Fp> = (0..8)
+        .map(|k| word(2 * k) + word(2 * k + 1) * f(1 << 32))
+        .collect();
+    let (left, right) = match swapped[bit] == Fp::ONE {
+        true => (&sibling, &node),
+        false => (&node, &sibling),
+    };
+    let mut x: [Fp; 16] = std::array::from_fn(|i| if i < 8 { left[i] } else { right[i - 8] });
+    transcript::external(&mut x);
+    for (j, v) in x.iter().enumerate() {
+        swapped[s.at(&format!("u{j}"))] = *v;
+    }
+    assert!(
+        s.refused(&swapped, row).is_empty(),
+        "the swapped level is a valid level"
+    );
+    let committed = s.a.committed();
+    let edit = |fam: u32, index: u32, columns: &mut [(PolyAddress, MultilinearPoly)]| {
+        if (fam, index) != (family::MERKLE_LEVELS, 0) {
+            return;
+        }
+        for (i, v) in swapped
+            .iter()
+            .enumerate()
+            .filter(|(i, v)| **v != honest[*i])
+        {
+            let (_, c) = columns
+                .iter_mut()
+                .find(|(x, _)| *x == committed[i])
+                .expect("a committed column");
+            let mut values: Vec<Fp> = (0..c.len()).map(|r| c.get_base(r)).collect();
+            values[row] = *v;
+            *c = MultilinearPoly::new(PolyBacking::Fp(values));
+        }
     };
     assert!(!balances(
         &program,

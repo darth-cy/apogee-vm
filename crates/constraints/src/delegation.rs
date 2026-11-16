@@ -228,11 +228,23 @@ impl Builder {
 
     /// A memory leaf under `live`, on the read side or the write side.
     pub fn leaf(&mut self, write: bool, name: &str, space: u8, parts: [Part; 4]) {
+        self.leaf_under(self.live, write, name, space, parts);
+    }
+
+    /// A memory leaf under `mask`, a boolean column zero wherever `live` is.
+    pub fn leaf_under(
+        &mut self,
+        mask: PolyAddress,
+        write: bool,
+        name: &str,
+        space: u8,
+        parts: [Part; 4],
+    ) {
         let side = match write {
             false => &mut self.reads,
             true => &mut self.writes,
         };
-        side.push((name.to_string(), masked_leaf(self.live, space, parts)));
+        side.push((name.to_string(), masked_leaf(mask, space, parts)));
     }
 
     /// The family's one channel, `RANGE16`, if it has an obligation: its table
@@ -363,30 +375,8 @@ pub fn frame(b: &mut Builder, number: u32, words: usize, written: impl Fn(usize)
                 w.addr - out[0].addr - live * (4 * j as u64),
             );
         }
-        let gap = cycle * mem::TS_STEP - w.read_ts + Expr::from(live) * delegation::FRAME_DELTA
-            - Expr::from(live);
-        b.bounded(&format!("w{j}_gap"), gap, mem::TS_BITS);
-        b.leaf(
-            false,
-            &format!("read_w{j}"),
-            address_space::RAM,
-            [
-                Part::of(w.addr),
-                Part::of(w.read_ts),
-                Part::of(w.read),
-                Part::default(),
-            ],
-        );
-        let stamp = Part {
-            columns: vec![cycle; mem::TS_STEP as usize],
-            plus: delegation::FRAME_DELTA,
-        };
-        b.leaf(
-            true,
-            &format!("write_w{j}"),
-            address_space::RAM,
-            [Part::of(w.addr), stamp, Part::of(w.write), Part::default()],
-        );
+        let addr = Part::of(w.addr);
+        access(b, &format!("w{j}"), cycle, addr, w.read_ts, w.read, w.write);
     }
     b.leaf(
         false,
@@ -400,6 +390,49 @@ pub fn frame(b: &mut Builder, number: u32, words: usize, written: impl Fn(usize)
         ],
     );
     Frame { cycle, words: out }
+}
+
+/// One RAM word an entry's row accesses at the requesting cycle's
+/// `4·cycle + FRAME_DELTA`, `docs/spec/precompiles.md` §1: `<name>_gap`, the
+/// gap below it in `[0, 2^38)`, the read leaf `(RAM, addr, read_ts, read)` and
+/// the write leaf `(RAM, addr, 4·cycle + FRAME_DELTA, write)`.
+///
+/// **UNFINISHED: A64-C5 CHARACTERISTIC**, as [`frame`]'s: nothing bounds
+/// `cycle`, so the gap makes no timestamp an integer.
+pub fn access(
+    b: &mut Builder,
+    name: &str,
+    cycle: PolyAddress,
+    addr: Part,
+    read_ts: PolyAddress,
+    read: PolyAddress,
+    write: PolyAddress,
+) {
+    let live = b.live;
+    let gap = cycle * mem::TS_STEP - read_ts + Expr::from(live) * delegation::FRAME_DELTA
+        - Expr::from(live);
+    b.bounded(&format!("{name}_gap"), gap, mem::TS_BITS);
+    b.leaf(
+        false,
+        &format!("read_{name}"),
+        address_space::RAM,
+        [
+            addr.clone(),
+            Part::of(read_ts),
+            Part::of(read),
+            Part::default(),
+        ],
+    );
+    let stamp = Part {
+        columns: vec![cycle; mem::TS_STEP as usize],
+        plus: delegation::FRAME_DELTA,
+    };
+    b.leaf(
+        true,
+        &format!("write_{name}"),
+        address_space::RAM,
+        [addr, stamp, Part::of(write), Part::default()],
+    );
 }
 
 // A frame's write is at `(RAM, FRAME_DELTA)`, which no query of

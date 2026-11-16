@@ -23,6 +23,7 @@ use std::fmt;
 
 pub mod lookup_tables;
 
+use constants::delegation::Per;
 use constants::extra_mask::{
     add_sub_lui_auipc as alu, atomics, bitwise as bw, jump_branch_slt as jbs, mem_subword,
     mem_word, mul_div as md, system_code, IMM_NEGATIVE,
@@ -59,6 +60,9 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::POSEIDON2,
     family::POSEIDON2_ROUNDS,
     family::MUL_DIV_U256,
+    family::MERKLE_ROOT,
+    family::MERKLE_LEVELS,
+    family::MERKLE_ROUNDS,
 ];
 
 /// The **frame family** of ecall `number`, the one whose row reads the frame
@@ -67,7 +71,8 @@ pub fn delegation_family(number: u32) -> Option<FamilyId> {
     delegation_families(number).next()
 }
 
-/// Every family recording a call of ecall `number`, its frame family first.
+/// Every family recording an entry of ecall `number`, a call's or a level's,
+/// its frame family first.
 pub fn delegation_families(number: u32) -> impl Iterator<Item = FamilyId> {
     delegation::TYPES
         .iter()
@@ -75,32 +80,54 @@ pub fn delegation_families(number: u32) -> impl Iterator<Item = FamilyId> {
         .map(|(f, ..)| *f)
 }
 
-/// `family`'s frame in 32-bit words, or `None` if it is not a delegation
-/// family. A family expanding a call holds the call's frame too.
-pub fn delegation_frame_words(family: FamilyId) -> Option<usize> {
-    delegation::TYPES
-        .iter()
-        .find(|(f, ..)| *f == family)
-        .map(|(_, _, words, _)| *words)
+/// `family`'s registry row, if it is a delegation family.
+fn delegation_type(family: FamilyId) -> Option<&'static (u32, u32, usize, u32, Per)> {
+    delegation::TYPES.iter().find(|(f, ..)| *f == family)
 }
 
-/// How many rows a delegation family takes a call: 1 for a frame family.
+/// The words of an entry of `family` in 32-bit words, or `None` if it is not
+/// a delegation family: a call's frame, or a level's sibling. A family
+/// expanding an entry holds its words too.
+pub fn delegation_frame_words(family: FamilyId) -> Option<usize> {
+    delegation_type(family).map(|(_, _, words, ..)| *words)
+}
+
+/// How many rows a delegation family takes an entry: 1 for a frame family.
 /// Panics on a family that is not a delegation family.
 pub fn delegation_rows(family: FamilyId) -> u32 {
-    delegation::TYPES
-        .iter()
-        .find(|(f, ..)| *f == family)
-        .map(|(.., rows)| *rows)
+    delegation_type(family)
+        .map(|(_, _, _, rows, _)| *rows)
         .unwrap_or_else(|| panic!("family {family} is not a delegation family"))
 }
 
-/// Whether delegation `family` is its number's frame family: the one whose
-/// rows read and write RAM.
-pub fn is_frame_family(family: FamilyId) -> bool {
-    delegation::TYPES
-        .iter()
-        .find(|(f, ..)| *f == family)
-        .is_some_and(|(_, n, ..)| delegation_family(*n) == Some(family))
+/// What an entry of delegation `family` is, a call or a level of one. Panics
+/// on a family that is not a delegation family.
+pub fn delegation_per(family: FamilyId) -> Per {
+    delegation_type(family)
+        .map(|(.., per)| *per)
+        .unwrap_or_else(|| panic!("family {family} is not a delegation family"))
+}
+
+/// How many values an entry of delegation `family` carries:
+/// `delegation::CARRY` for a level's, none for a call's.
+pub fn delegation_carry(family: FamilyId) -> usize {
+    match delegation_per(family) {
+        Per::Call => 0,
+        Per::Level => delegation::CARRY,
+    }
+}
+
+/// Whether delegation `family`'s rows read their entries' words from RAM: it
+/// is the first family of its number recording its kind of entry, a call's
+/// frame family or `MERKLE_LEVELS`. A later family holds the same entries and
+/// touches no RAM.
+pub fn reads_ram(family: FamilyId) -> bool {
+    delegation_type(family).is_some_and(|(_, n, _, _, per)| {
+        delegation::TYPES
+            .iter()
+            .find(|t| t.1 == *n && t.4 == *per)
+            .is_some_and(|t| t.0 == family)
+    })
 }
 
 /// Whether `family`'s rows are cycles, and so whether the decoder routes
@@ -131,6 +158,9 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::POSEIDON2 => "POSEIDON2",
         family::POSEIDON2_ROUNDS => "POSEIDON2_ROUNDS",
         family::MUL_DIV_U256 => "MUL_DIV_U256",
+        family::MERKLE_ROOT => "MERKLE_ROOT",
+        family::MERKLE_LEVELS => "MERKLE_LEVELS",
+        family::MERKLE_ROUNDS => "MERKLE_ROUNDS",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -288,7 +318,10 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::ADVICE_WINDOWS
         | family::POSEIDON2
         | family::POSEIDON2_ROUNDS
-        | family::MUL_DIV_U256 => &[],
+        | family::MUL_DIV_U256
+        | family::MERKLE_ROOT
+        | family::MERKLE_LEVELS
+        | family::MERKLE_ROUNDS => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }

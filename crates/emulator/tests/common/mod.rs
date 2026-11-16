@@ -112,8 +112,16 @@ pub fn input_of(name: &str) -> Vec<u8> {
         // Reads nothing: its exit status is its result. `shards` is the same
         // shape — it counts its own checks — and `tests/streaming.rs` streams it.
         "addsub" | "control" | "alu" | "mem" | "shards" => Vec::new(),
-        // One leaf of zeros: a Merkle root over one leaf is the leaf.
-        "precompiles" => [1u32.to_le_bytes().as_slice(), &[0u8; 64]].concat(),
+        // One leaf of zeros, a Merkle root over one leaf being the leaf, and a
+        // path of the fewest siblings, zeros, from slot 0.
+        "precompiles" => [
+            1u32.to_le_bytes().as_slice(),
+            &[0u8; 64],
+            &0u32.to_le_bytes(),
+            &16u32.to_le_bytes(),
+            &[0u8; 64 * 16],
+        ]
+        .concat(),
         other => panic!("no input chosen for {other}"),
     }
 }

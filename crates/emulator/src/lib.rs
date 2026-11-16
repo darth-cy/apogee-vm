@@ -32,6 +32,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use constants::delegation::Per;
 use constants::{delegation, ecall, guest_memory, memory};
 use field::Fp;
 use isa::{decode, AmoOp, Instr};
@@ -255,9 +256,10 @@ pub fn trace_run(
 ///
 /// A cycle-owning family's shards and a delegation family's are chunks: a
 /// window family's rows are addresses, and what fills them is the final
-/// [`MemoryState`]. A delegation family's chunk carries its calls in `calls`
-/// and no `rows`, its shard being `docs/spec/streaming.md` §4's cut of its rows
-/// at `program::delegation_rows` a call.
+/// [`MemoryState`]. A delegation family's chunk carries its entries, calls or
+/// path levels, in `calls` and no `rows`, its shard being
+/// `docs/spec/streaming.md` §4's cut of its rows at `program::delegation_rows`
+/// an entry.
 pub struct ShardChunk {
     pub family: FamilyId,
     pub index: u32,
@@ -413,9 +415,23 @@ struct Cycle {
     delegation: Option<Invocation>,
 }
 
-/// One delegation invocation: the ecall number, the frame base, and one
-/// `(address, old, new)` per frame word, in frame order.
-type Invocation = (u32, u32, Vec<(u32, u32, u32)>);
+/// One delegation invocation: the ecall number, the frame base, one
+/// `(address, old, new)` per frame word in frame order, and a path's levels.
+struct Invocation {
+    number: u32,
+    base: u32,
+    frame: Vec<(u32, u32, u32)>,
+    levels: Vec<Level>,
+}
+
+/// One level of a `MERKLE_ROOT` path: its sibling's address and words, which
+/// the call reads and leaves, and what the level's entry carries
+/// (`delegation::CARRY`).
+struct Level {
+    base: u32,
+    words: [u32; delegation::merkle::SIBLING],
+    carry: [u64; delegation::CARRY],
+}
 
 impl Cycle {
     fn new() -> Cycle {
@@ -1027,8 +1043,7 @@ impl<'a> Machine<'a> {
                         return Err(EmuError::DelegationFamilyAbsent { pc, number: n });
                     }
                 }
-                let frame = self.delegate(family, pc, base)?;
-                row.delegation = Some((n, base as u32, frame));
+                row.delegation = Some(self.delegate(n, family, pc, base)?);
                 return self.commit(&row, instr, pc, fall);
             }
             // Every other number is unassigned or retired: answered, and the
@@ -1044,18 +1059,21 @@ impl<'a> Machine<'a> {
         self.commit(&row, instr, pc, next_pc)
     }
 
-    /// Execute delegation `family` over the frame at `base`, in place,
-    /// returning each frame word as `(address, old, new)`.
+    /// Execute delegation `family`, ecall `number`, over the frame at `base`,
+    /// in place, returning each frame word as `(address, old, new)` and a
+    /// path's levels.
     ///
     /// Every frame word must be one a store could write, below the advice
     /// region; anything else is a fatal guest error, as a misaligned store is.
-    /// What the call computes is [`frame_function`]'s.
+    /// What the call computes is [`frame_function`]'s, or for `MERKLE_ROOT`
+    /// [`Machine::merkle_root`]'s.
     fn delegate(
         &mut self,
+        number: u32,
         family: FamilyId,
         pc: u32,
         base: u64,
-    ) -> Result<Vec<(u32, u32, u32)>, EmuError> {
+    ) -> Result<Invocation, EmuError> {
         let words = program::delegation_frame_words(family).expect("a delegation family");
         // The frame ends at or below the advice, the circuit's `room`, and
         // every word is checked as a store's is: aligned, and in a region a
@@ -1069,14 +1087,95 @@ impl<'a> Machine<'a> {
         }
         let base = base as u32;
         let old: Vec<u32> = (0..words).map(|j| self.word(base + 4 * j as u32)).collect();
-        let new = frame_function(family)(pc, &old)?;
-        Ok((0..words)
+        let (new, levels) = match family {
+            constants::family::MERKLE_ROOT => self.merkle_root(pc, base, &old)?,
+            _ => (frame_function(family)(pc, &old)?, Vec::new()),
+        };
+        let frame = (0..words)
             .map(|j| {
                 let addr = base + 4 * j as u32;
                 self.set_word(addr, new[j]);
                 (addr, old[j], new[j])
             })
-            .collect())
+            .collect();
+        Ok(Invocation {
+            number,
+            base,
+            frame,
+            levels,
+        })
+    }
+
+    /// The `MERKLE_ROOT` call over the frame at `base`, whose words are
+    /// `frame`: the root of the path it names written over its lanes, and each
+    /// level's sibling and carry (`docs/spec/precompiles.md` §6).
+    ///
+    /// Level `L` hashes the node with its sibling, the node on the left where
+    /// slot bit `L` is 0, as `transcript::poseidon2_permute`'s first eight
+    /// lanes: `guest_sdk::poseidon2_compress`. A sibling's lanes are read mod
+    /// `p`, so a sibling may be anywhere a load reaches, advice included; each
+    /// of its words is checked as a load's. The caller owes a depth in
+    /// `16..=32`, a slot below `2^depth` and siblings clear of the frame, whose
+    /// words the call reads at the same timestamp; any other frame is refused.
+    fn merkle_root(
+        &self,
+        pc: u32,
+        base: u32,
+        frame: &[u32],
+    ) -> Result<(Vec<u32>, Vec<Level>), EmuError> {
+        use delegation::merkle::{DEPTH, LANES, MAX_DEPTH, MIN_DEPTH, SIBLING, SIBLINGS, SLOT};
+        let refuse = |detail| Err(EmuError::DelegationFrame { pc, detail });
+        let (slot, depth, siblings) = (frame[SLOT] as u64, frame[DEPTH], frame[SIBLINGS] as u64);
+        if !(MIN_DEPTH..=MAX_DEPTH).contains(&depth) {
+            return refuse("merkle_root's depth is outside 16..=32");
+        }
+        if slot >> depth != 0 {
+            return refuse("merkle_root's slot is not below 2^depth");
+        }
+        let end = siblings + (4 * SIBLING) as u64 * depth as u64;
+        if siblings < base as u64 + 4 * frame.len() as u64 && (base as u64) < end {
+            return refuse("merkle_root's siblings overlap its frame");
+        }
+        let lanes = |w: &[u32]| -> [Fp; 8] {
+            std::array::from_fn(|i| Fp::from_u64(w[2 * i] as u64 | (w[2 * i + 1] as u64) << 32))
+        };
+        let mut node = lanes(&frame[..LANES]);
+        let mut levels = Vec::with_capacity(depth as usize);
+        for level in 0..depth as u64 {
+            let at = siblings + (4 * SIBLING) as u64 * level;
+            let mut words = [0u32; SIBLING];
+            for (j, w) in words.iter_mut().enumerate() {
+                *w = self.word(self.data_word(pc, at + 4 * j as u64, 4)?);
+            }
+            let mut carry = [0u64; delegation::CARRY];
+            for (c, x) in carry.iter_mut().zip(node) {
+                *c = x.to_u64();
+            }
+            carry[8] = slot >> level;
+            carry[9] = level;
+            let sibling = lanes(&words);
+            let (left, right) = match slot >> level & 1 {
+                0 => (node, sibling),
+                _ => (sibling, node),
+            };
+            let mut state: [Fp; 16] = std::array::from_fn(|i| match i < 8 {
+                true => left[i],
+                false => right[i - 8],
+            });
+            transcript::poseidon2_permute(&mut state);
+            node.copy_from_slice(&state[..8]);
+            levels.push(Level {
+                base: at as u32,
+                words,
+                carry,
+            });
+        }
+        let mut new = frame.to_vec();
+        for (i, x) in node.iter().enumerate() {
+            new[2 * i] = x.to_u64() as u32;
+            new[2 * i + 1] = (x.to_u64() >> 32) as u32;
+        }
+        Ok((new, levels))
     }
 }
 
@@ -1189,7 +1288,7 @@ struct Recorder<'a> {
     /// Rows pushed per `traces.families[i]`, flushed shards included, so the
     /// cycle profile survives a buffer being handed away.
     family_rows: Vec<u64>,
-    /// Calls pushed per `traces.delegations[i]`, likewise.
+    /// Entries pushed per `traces.delegations[i]`, likewise.
     calls: Vec<u64>,
     /// Shards a streaming run has filled and the caller has not taken.
     /// [`Keep::Whole`] never fills it: it holds every row to the end.
@@ -1263,38 +1362,57 @@ impl<'a> Recorder<'a> {
         self.memory
             .record(AddressSpace::Pc, 0, base, pc as u64, next_pc as u64);
         // An invocation's frame accesses ride this cycle at
-        // `delegation::FRAME_DELTA`, 0: after the pc query, before the roles.
-        // Every family of the number records the call.
-        if let Some((number, frame_base, frame)) = &queries.delegation {
-            let words: Vec<Query> = frame
+        // `delegation::FRAME_DELTA`, 0: after the pc query, before the roles,
+        // its levels' after its frame's. Every family of the number records
+        // the call, or each of its levels.
+        if let Some(call) = &queries.delegation {
+            let memory = &mut self.memory;
+            let mut query = |addr: u32, read: u32, write: u32| {
+                let (read, write) = (read as u64, write as u64);
+                let ts = base + delegation::FRAME_DELTA;
+                let event = memory.record(AddressSpace::Ram, addr, ts, read, write);
+                Query {
+                    addr,
+                    read_ts: event.read_ts,
+                    read_value: read,
+                    write_value: write,
+                }
+            };
+            let words: Vec<Query> = call.frame.iter().map(|&(a, r, w)| query(a, r, w)).collect();
+            let levels: Vec<Vec<Query>> = call
+                .levels
                 .iter()
-                .map(|&(addr, read, write)| {
-                    let (read, write) = (read as u64, write as u64);
-                    let event = self.memory.record(
-                        AddressSpace::Ram,
-                        addr,
-                        base + delegation::FRAME_DELTA,
-                        read,
-                        write,
-                    );
-                    Query {
-                        addr,
-                        read_ts: event.read_ts,
-                        read_value: read,
-                        write_value: write,
-                    }
+                .map(|l| {
+                    let at = |j: usize| l.base + 4 * j as u32;
+                    l.words
+                        .iter()
+                        .enumerate()
+                        .map(|(j, &w)| query(at(j), w, w))
+                        .collect()
                 })
                 .collect();
-            for family in program::delegation_families(*number) {
+            for family in program::delegation_families(call.number) {
                 let at = self
                     .traces
                     .delegations
                     .iter()
                     .position(|t| t.family == family)
                     .expect("a declared number declares all its families");
-                self.traces.delegations[at].push(cycle, *frame_base, &words);
-                self.calls[at] += 1;
-                self.flush_calls(at);
+                match program::delegation_per(family) {
+                    Per::Call => {
+                        self.traces.delegations[at].push(cycle, call.base, &words, &[]);
+                        self.calls[at] += 1;
+                        self.flush_calls(at);
+                    }
+                    Per::Level => {
+                        for (level, words) in call.levels.iter().zip(&levels) {
+                            let buffer = &mut self.traces.delegations[at];
+                            buffer.push(cycle, level.base, words, &level.carry);
+                            self.calls[at] += 1;
+                            self.flush_calls(at);
+                        }
+                    }
+                }
             }
         }
         let mut row = Row {
@@ -1356,8 +1474,8 @@ impl<'a> Recorder<'a> {
         });
     }
 
-    /// Hand `traces.delegations[at]` away if it holds a shard's calls: its
-    /// height over the family's rows a call. As [`Recorder::flush_family`].
+    /// Hand `traces.delegations[at]` away if it holds a shard's entries: its
+    /// height over the family's rows an entry. As [`Recorder::flush_family`].
     fn flush_calls(&mut self, at: usize) {
         if !matches!(self.memory, Keep::Streaming(_)) {
             return;
@@ -1562,6 +1680,91 @@ mod tests {
             Err(EmuError::OutOfBounds {
                 pc: 0,
                 addr: 1 << 32
+            })
+        );
+    }
+
+    /// `merkle_root` answers the fold of the permutation up the path its frame
+    /// names, siblings just below the frame included, and refuses by name each
+    /// frame its caller owes it not to send.
+    #[test]
+    fn merkle_root_answers_its_path_and_refuses_what_its_caller_owes() {
+        let io = GuestIo {
+            input: Vec::new(),
+            advice: Vec::new(),
+        };
+        let image = spin();
+        let mut machine = Machine::new(&image, &io);
+        let base = guest_memory::RAM_ORIGIN + 0x2000;
+        let below = base - 64 * 16;
+        for j in 0..16 * 16 {
+            machine.set_word(below + 4 * j, j.wrapping_mul(0x9e37_79b9) | 1);
+        }
+        let frame = |slot: u32, depth: u32, siblings: u32| {
+            let mut f: Vec<u32> = (0..16).map(|i| 7 * i + 1).collect();
+            f.extend([slot, depth, siblings]);
+            f
+        };
+        let lanes = |w: &[u32]| -> Vec<Fp> {
+            (0..8)
+                .map(|i| Fp::from_u64(w[2 * i] as u64 | (w[2 * i + 1] as u64) << 32))
+                .collect()
+        };
+        let slot = 0b1011_0000_0000_0110;
+        let mut node = lanes(&frame(0, 0, 0)[..16]);
+        for level in 0..16 {
+            let words: Vec<u32> = (0..16)
+                .map(|j| machine.word(below + 64 * level + 4 * j))
+                .collect();
+            let sibling = lanes(&words);
+            let (l, r) = match slot >> level & 1 {
+                0 => (&node, &sibling),
+                _ => (&sibling, &node),
+            };
+            let mut state: [Fp; 16] = std::array::from_fn(|i| if i < 8 { l[i] } else { r[i - 8] });
+            transcript::poseidon2_permute(&mut state);
+            node = state[..8].to_vec();
+        }
+        let (new, levels) = machine
+            .merkle_root(0, base, &frame(slot, 16, below))
+            .expect("a path clear of its frame");
+        assert_eq!(lanes(&new[..16]), node, "the root is the fold");
+        assert_eq!(
+            new[16..],
+            frame(slot, 16, below)[16..],
+            "the rest written back"
+        );
+        assert_eq!(levels.len(), 16);
+        let refused = |slot, depth, siblings| {
+            machine
+                .merkle_root(0, base, &frame(slot, depth, siblings))
+                .err()
+        };
+        let frame_error = |detail| Some(EmuError::DelegationFrame { pc: 0, detail });
+        let depth = "merkle_root's depth is outside 16..=32";
+        let overlap = "merkle_root's siblings overlap its frame";
+        assert_eq!(refused(0, 15, below), frame_error(depth));
+        assert_eq!(refused(0, 33, below), frame_error(depth));
+        assert_eq!(
+            refused(1 << 16, 16, below),
+            frame_error("merkle_root's slot is not below 2^depth")
+        );
+        assert_eq!(refused(0, 16, base + 72), frame_error(overlap));
+        assert_eq!(refused(0, 16, below + 4), frame_error(overlap));
+        let addr = below as u64 - 1022;
+        assert_eq!(
+            refused(0, 16, below - 1022),
+            Some(EmuError::Misaligned {
+                pc: 0,
+                addr,
+                width: 4
+            })
+        );
+        assert_eq!(
+            refused(0, 16, 0x7000),
+            Some(EmuError::OutOfBounds {
+                pc: 0,
+                addr: 0x7000
             })
         );
     }

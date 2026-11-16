@@ -7,23 +7,24 @@
 //!
 //! **A database a proof follows by its root.** The table is `2^DEPTH` listing
 //! slots, the leaves of a fixed-depth binary tree whose every node is
-//! [`poseidon2_compress`], the Poseidon2 precompile, over [`Digest`]s, whose
-//! lanes are each below `p`. The public input carries the root before the batch
-//! and the batch; the advice carries, for each run of ops on one slot, the
-//! slot's listing and its `DEPTH` siblings, a Merkle proof. Nothing advised is
+//! [`poseidon2_compress`] of its children, over [`Digest`]s, whose lanes are
+//! each below `p`. The public input carries the root before the batch and the
+//! batch; the advice carries, for each run of ops on one slot, the slot's
+//! listing and its `DEPTH` siblings, a Merkle proof. Nothing advised is
 //! trusted: the guest rebuilds the root from the proof before it reads the
 //! listing, panics where the two differ, applies the run's ops to the listing
 //! it holds, and builds the next root from the listing they leave, along the
-//! same path. A verifier holding the roots follows the whole table without
-//! anyone publishing it.
+//! same path. Each root is one [`merkle_root`] call, the Merkle path
+//! precompile, over the advised siblings in place. A verifier holding the
+//! roots follows the whole table without anyone publishing it.
 //!
 //! **One proof a run.** A run is a stretch of consecutive ops on one slot. No
 //! other slot moves while it lasts, so the slot's siblings hold; each listing
 //! it passes through after the one its proof opens is the guest's own
 //! arithmetic; and no root but the batch's first and last is published. So a
-//! run opens its proof once and writes one root back, `2 · DEPTH + 2`
-//! permutations however many ops it holds, half that where it leaves its
-//! listing as it found it.
+//! run opens its proof once and writes one root back, two `merkle_root` calls
+//! and two leaf permutations however many ops it holds, half that where it
+//! leaves its listing as it found it.
 //!
 //! **The order is the sequencer's.** Grouping a listing's ops together is a
 //! sequencing policy upstream of the guest, and the order it chooses becomes
@@ -89,7 +90,8 @@
 //!
 //! For each run, in order: its slot's listing, then the slot's `DEPTH` siblings
 //! from the leaf up, 64 bytes each, a digest, under the root the runs before it
-//! left.
+//! left. The precompile reads each sibling's lanes in place, mod `p`: a
+//! sibling's encoding is the prover's, and no root depends on it.
 //!
 //! # The journal
 //!
@@ -107,11 +109,11 @@
 //! An op that breaks a rule — a slot already listed, an account not the
 //! listing's seller, a purchase past the stock or by the seller, a tally past
 //! `2^256` — is rejected and counted, and leaves the table as it was. A
-//! malformed batch, a digest with a lane at or above `p`, and a proof that does
-//! not open the root, panic.
+//! malformed batch, an input root with a lane at or above `p`, and a proof that
+//! does not open the table, panic.
 
 use constants::guest_memory;
-use guest_sdk::{poseidon2_compress, Digest, U256};
+use guest_sdk::{merkle_root, poseidon2_compress, Digest, U256};
 
 guest_sdk::entry!(main);
 
@@ -234,43 +236,29 @@ impl Tallies {
     }
 }
 
-/// The root `path` opens with `leaf` at `slot`: slot bit `i` says which side
-/// of level `i` the node is. A path is exactly `DEPTH` siblings, by its type,
-/// and that depth, not the leaf's tag, keeps a listing from opening as a node.
-fn root(slot: u32, leaf: Digest, path: &[Digest; DEPTH]) -> Digest {
-    let mut node = leaf;
-    for (level, sibling) in path.iter().enumerate() {
-        node = match slot >> level & 1 {
-            0 => poseidon2_compress(&node, sibling),
-            _ => poseidon2_compress(sibling, &node),
-        };
-    }
-    node
-}
-
 /// A run: consecutive ops on one slot, which one proof opens. No other slot
 /// moves while it lasts, so its path holds, and its listing after the opened
 /// one is the guest's own arithmetic.
-struct Run {
+struct Run<'a> {
     slot: u32,
     /// The listing as the proof opened it.
     opened: Listing,
     /// The listing the run's ops have left so far.
     listing: Listing,
-    path: [Digest; DEPTH],
+    /// The slot's `DEPTH` siblings as advised, read in place. Every proof is
+    /// exactly `DEPTH` of them, and that depth, not the leaf's tag, keeps a
+    /// listing from opening as a node.
+    path: &'a [u8],
 }
 
-impl Run {
+impl<'a> Run<'a> {
     /// `slot`'s run, opened by the advice's next proof under `table`, or a
     /// panic.
-    fn open(slot: u32, advice: &[u8], at: &mut usize, table: Digest) -> Run {
+    fn open(slot: u32, advice: &'a [u8], at: &mut usize, table: Digest) -> Run<'a> {
         let listing = Listing::decode(take(advice, at, LISTING));
-        let mut path = [Digest::default(); DEPTH];
-        for sibling in path.iter_mut() {
-            *sibling = digest_at(take(advice, at, 64), 0);
-        }
+        let path = take(advice, at, 64 * DEPTH);
         assert!(
-            root(slot, listing.leaf(), &path) == table,
+            merkle_root(slot, &listing.leaf(), path) == table,
             "marketplace: the advice does not open the table"
         );
         Run {
@@ -287,7 +275,7 @@ impl Run {
         if self.listing == self.opened {
             table
         } else {
-            root(self.slot, self.listing.leaf(), &self.path)
+            merkle_root(self.slot, &self.listing.leaf(), self.path)
         }
     }
 }
@@ -434,7 +422,7 @@ fn u256_at(b: &[u8], at: usize) -> U256 {
 }
 
 /// The digest at `at`, or a panic: a lane at or above `p` is a second encoding
-/// of a node, which no proof may open.
+/// of a node, which no table may be.
 fn digest_at(b: &[u8], at: usize) -> Digest {
     Digest::new(core::array::from_fn(|i| u64_at(b, at + 8 * i)))
         .expect("marketplace: a digest's lane is not below p")
