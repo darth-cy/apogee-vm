@@ -149,7 +149,8 @@ let share = U256::from(amount).mul_div(U256::from(total), U256::from(reserve)); 
 - `guests/marketplace` is the worked example of a table a proof follows by its root: a listings
   table of `2^20` slots as a Poseidon2 Merkle tree, the root before a batch in the public input,
   each operation's Merkle proof in the advice, checked before it is used, and the root after the
-  batch in the journal.
+  batch in the journal. Each listing's price is in its own currency, an ERC-20 contract's address
+  or zero for the native one, and the journal tallies each currency's volume and fees apart.
 
 ## 4. Build it
 
