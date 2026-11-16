@@ -14,21 +14,12 @@
 //!
 //! # What this is a fixture for
 //!
-//! **Wide integer arithmetic past the register width.** RV64 multiplies 64 bits
-//! by 64 bits into two registers and has nothing wider, so a `u128` here is two
-//! registers, a `u256` four, and every operation on one is a sequence the
-//! backend writes out itself or a `compiler_builtins` routine. `crates/field` reaches for
-//! `u128` as well, but only ever as the widening result of a 64-bit multiply;
-//! this is the only guest whose *values* are 128 bits wide, and the only one
-//! that needs the 256-bit intermediate an exact `mul_div` and a constant-product
-//! check are built on.
-//!
-//! None of it is cheap. At opt-level 0 nothing knows that the `u64` halves
-//! [`mul_u256`] multiplies have empty top halves, so each of its four partial
-//! products compiles as a full 128-by-128 multiply. A single `mul_div` is that
-//! product and then 256 shift-and-subtract iterations of [`div_u256`], which is
-//! thousands of executed instructions with nothing in them but integer
-//! arithmetic; a swap is two of those.
+//! **Wide integer arithmetic past the register width, through the SDK's
+//! [`U256`].** RV64 multiplies 64 bits by 64 bits into two registers and has
+//! nothing wider, so every price below is a `u128` ratio formed over a 256-bit
+//! intermediate: Uniswap's `FullMath.mulDiv`, which is `U256::mul_div`, one call
+//! of the `MUL_DIV_U256` precompile (`docs/spec/precompiles.md` §4). The square
+//! root and the constant-product check are `U256` too.
 //!
 //! It allocates nothing. Every buffer is a fixed array on the stack, because the
 //! format bounds every one of them — the batch is read one 36-byte record at a
@@ -70,9 +61,7 @@
 //! 56 bytes of header leave room for [`MAX_OPS`] records and no more. The batch
 //! could have gone in advice, where there is no such bound — and it is not
 //! there, because nothing binds advice: a journal computed from an advised
-//! batch is a statement about a batch the prover chose. Per-op cost is what
-//! makes this guest a wide-arithmetic fixture, and a swap is tens of thousands
-//! of instructions, so 453 of them is a long run either way.
+//! batch is a statement about a batch the prover chose.
 //!
 //! ```text
 //! header    0..16    reserve_x       u128
@@ -139,6 +128,7 @@
 //! no pc reaches it.
 
 use constants::guest_memory;
+use guest_sdk::U256;
 
 guest_sdk::entry!(main);
 
@@ -177,156 +167,55 @@ const SQRT_STEPS: u32 = 200;
 // 256-bit arithmetic
 // ---------------------------------------------------------------------------
 
-/// A 256-bit value, as a `(high, low)` pair of `u128` halves.
-///
-/// A tuple rather than a struct for one reason: Rust orders tuples
-/// lexicographically, so `(hi_a, lo_a) < (hi_b, lo_b)` is already the numeric
-/// comparison of the two 256-bit values, and the constant-product assertion in
-/// [`accept_swap`] needs nothing further.
-type U256 = (u128, u128);
-
-/// The exact 256-bit product of two `u128`s.
-///
-/// Schoolbook over `u64` halves, which is the only shape that stays inside
-/// `u128` at every step: each of the four partial products is at most
-/// `(2^64 - 1)^2`, comfortably below `2^128`, whereas any attempt to multiply
-/// the halves in a wider type would need the wider type this function exists to
-/// build. What the compiler makes of it is in the module doc: four partial
-/// products, sixty-eight hardware multiplies, and the carry chain below.
-fn mul_u256(a: u128, b: u128) -> U256 {
-    /// The low 64 bits of a `u128`.
-    const LOW: u128 = u64::MAX as u128;
-
-    let (a0, a1) = (a & LOW, a >> 64);
-    let (b0, b1) = (b & LOW, b >> 64);
-
-    let p00 = a0 * b0;
-    let p01 = a0 * b1;
-    let p10 = a1 * b0;
-    let p11 = a1 * b1;
-
-    // The two middle terms together can reach 2^129, so the carry out of their
-    // sum is a real bit of the answer and is kept rather than checked away.
-    let (mid, mid_carry) = p01.overflowing_add(p10);
-    let (lo, lo_carry) = p00.overflowing_add((mid & LOW) << 64);
-
-    // Every term below is a part of the true high word, which is under 2^128
-    // because the product of two u128s is under 2^256; so each partial sum is
-    // bounded by that word and none of these additions can overflow.
-    let hi = p11 + (mid >> 64) + (u128::from(mid_carry) << 64) + u128::from(lo_carry);
-
-    (hi, lo)
-}
-
-/// `floor((hi * 2^128 + lo) / d)`, or `None` when the divisor is zero or the
-/// quotient will not fit in a `u128`.
-///
-/// Restoring long division, one bit of the dividend at a time. There is no
-/// wider type to fall back on and no hardware divider wider than 64 bits that
-/// would help, so a shift-and-subtract loop is both the
-/// obvious implementation and the only one whose exactness is visible by
-/// inspection. It is 256 iterations regardless of the operands, which is also
-/// what makes its cost independent of the values a prover chose.
-fn div_u256(hi: u128, lo: u128, d: u128) -> Option<u128> {
-    if d == 0 {
-        return None;
-    }
-    // The quotient is below 2^128 exactly when the high half is below the
-    // divisor, so this single comparison is the whole overflow test and the
-    // loop is spared having to notice.
-    if hi >= d {
-        return None;
-    }
-
-    let mut rem: u128 = 0;
-    let mut quo: u128 = 0;
-    for i in (0..256u32).rev() {
-        // The dividend's bits, most significant first. The subtraction is
-        // guarded by the branch it sits in, so the unsigned counter cannot
-        // wrap under it.
-        let bit = if i >= 128 {
-            (hi >> (i - 128)) & 1
-        } else {
-            (lo >> i) & 1
-        };
-
-        // The running remainder is always below `d`, so doubling it can carry
-        // out of the `u128`; that carry is the difference between "subtract"
-        // and "do not" and is taken before the shift discards it.
-        let carry = (rem >> 127) != 0;
-        rem = (rem << 1) | bit;
-
-        // The quotient bits arrive from position 255 downward, and the test
-        // above proved the top 128 of them are zero, so this shift never pushes
-        // a set bit off the end.
-        quo <<= 1;
-
-        // With the carry set the true remainder is `2^128 + rem`, which is
-        // above `d` unconditionally. The subtraction is exact in either case:
-        // the true value is under `2 * d`, so the difference is under `d` and
-        // therefore under `2^128`, and the wrapping form computes it as the
-        // borrow it is.
-        if carry || rem >= d {
-            rem = rem.wrapping_sub(d);
-            quo |= 1;
-        }
-    }
-    Some(quo)
-}
-
 /// `floor(a * b / d)`, exact even where `a * b` overflows a `u128`.
 ///
 /// Uniswap's `FullMath.mulDiv`, and the heart of this guest: every price, every
 /// mint and every burn below is one call to it. Both halves of the answer are
 /// needed — the product must not be truncated before the division, or a swap
 /// against a large pool prices at nothing — so the product is formed in 256 bits
-/// and consumed there.
+/// and consumed there, by the precompile.
 ///
 /// `None` is the honest answer for a zero divisor and for a quotient above
 /// `u128::MAX`; both are rejections at the call site rather than saturations,
 /// because a saturated price is a lie that the invariant assertion would then
 /// have to catch.
 fn mul_div(a: u128, b: u128, d: u128) -> Option<u128> {
-    let (hi, lo) = mul_u256(a, b);
-    div_u256(hi, lo, d)
+    U256::from(a)
+        .mul_div(U256::from(b), U256::from(d))?
+        .to_u128()
 }
 
-/// `floor(sqrt(hi * 2^128 + lo))`, which always fits in a `u128`.
+/// `floor(sqrt(n))`, which always fits in a `u128`.
 ///
 /// Newton's iteration on integers: from an over-estimate, `x` moves to
-/// `floor((x + floor(N/x)) / 2)` and the first step that does not move down is
-/// at `floor(sqrt(N))`. Two details make it safe in fixed width.
+/// `floor((x + floor(n/x)) / 2)` and the first step that does not move down is
+/// at `floor(sqrt(n))`. Two details make it safe in fixed width.
 ///
 /// The average is computed as `q + (x - q) / 2` rather than `(x + q) / 2`,
 /// because the latter overflows for `x` near `2^128` while the former is the
-/// same integer and never leaves the range. And `floor(N/x)` is asked for as a
-/// `u128`: it fits whenever `x` is at least `floor(sqrt(N))`, which the
+/// same integer and never leaves the range. And `floor(n/x)` is asked for as a
+/// `u128`: it fits whenever `x` is at least `floor(sqrt(n))`, which the
 /// iteration maintains, except at the very top of the range where the true
 /// quotient can exceed `u128::MAX` by two. There it is capped, which stops the
 /// iteration at once and returns `u128::MAX` — the correct answer, because a
-/// quotient that large only arises for `N` above `(2^128 - 2)^2`.
+/// quotient that large only arises for `n` above `(2^128 - 2)^2`.
 ///
 /// The loop is bounded rather than open. Each step strictly decreases `x` while
-/// it is running, and the worst start is `u128::MAX` against a small `N`, which
+/// it is running, and the worst start is `u128::MAX` against a small `n`, which
 /// roughly halves each time: 128 halvings and then a handful of quadratic steps.
 /// The ceiling is far past both, so reaching it means the reasoning above is
 /// wrong, and a panic says so rather than the guest spinning.
-fn sqrt_u256(hi: u128, lo: u128) -> u128 {
-    if hi == 0 && lo == 0 {
+fn sqrt_u256(n: U256) -> u128 {
+    if n.is_zero() {
         return 0;
     }
 
     // The first power of two at or above the square root: `2^ceil(bits/2)` is
-    // above `sqrt(N)` for any `N` under `2^bits`. At the top of the range that
+    // above `sqrt(n)` for any `n` under `2^bits`. At the top of the range that
     // power is `2^128`, which is not representable and is replaced by
-    // `u128::MAX` — still at or above the answer, because `floor(sqrt(N))` for
-    // a 256-bit `N` never exceeds `u128::MAX`.
-    let bits = if hi != 0 {
-        256 - hi.leading_zeros()
-    } else {
-        128 - lo.leading_zeros()
-    };
-    let half = bits.div_ceil(2);
+    // `u128::MAX` — still at or above the answer, because `floor(sqrt(n))` for
+    // a 256-bit `n` never exceeds `u128::MAX`.
+    let half = (256 - n.leading_zeros()).div_ceil(2);
     let mut x = if half >= 128 {
         u128::MAX
     } else {
@@ -334,7 +223,7 @@ fn sqrt_u256(hi: u128, lo: u128) -> u128 {
     };
 
     for _ in 0..SQRT_STEPS {
-        let q = div_u256(hi, lo, x).unwrap_or(u128::MAX);
+        let q = (n / U256::from(x)).to_u128().unwrap_or(u128::MAX);
         if q >= x {
             return x;
         }
@@ -500,7 +389,7 @@ fn accept_swap(before: Pool, next: Pool, fee_x: u128, fee_y: u128) -> Option<Eff
         return None;
     }
     assert!(
-        mul_u256(next.x, next.y) >= mul_u256(before.x, before.y),
+        U256::from(next.x) * U256::from(next.y) >= U256::from(before.x) * U256::from(before.y),
         "amm: the constant product fell across a swap"
     );
     Some(Effect::Move { next, fee_x, fee_y })
@@ -644,8 +533,7 @@ fn main() {
     // The unclaimed seed is claimed here, before any op runs, because every op
     // below divides by the share count.
     if pool.shares == 0 {
-        let (hi, lo) = mul_u256(pool.x, pool.y);
-        pool.shares = sqrt_u256(hi, lo);
+        pool.shares = sqrt_u256(U256::from(pool.x) * U256::from(pool.y));
     }
 
     let mut fees_x: u128 = 0;

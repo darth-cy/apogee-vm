@@ -615,7 +615,9 @@ fn check_parts(
         }
     }
     // The delegation buffers: one row per invocation, whose frame events ride
-    // the requesting cycle and are checked against the log at that cycle.
+    // the requesting cycle and are checked against the log at that cycle —
+    // a frame family's, once: a family expanding the call holds the same
+    // invocations and touches no RAM.
     let mut invocations: Vec<(u64, &DelegationTrace, usize)> = Vec::new();
     for t in &traces.delegations {
         let n = t.cycle.len();
@@ -635,7 +637,9 @@ fn check_parts(
         if !columns_agree {
             return Err(format!("family {}'s columns differ in length", t.family));
         }
-        invocations.extend((0..n).map(|r| (t.cycle[r], t, r)));
+        if program::is_frame_family(t.family) {
+            invocations.extend((0..n).map(|r| (t.cycle[r], t, r)));
+        }
     }
     invocations.sort_by_key(|(cycle, ..)| *cycle);
     consistent(traces, profile)?;

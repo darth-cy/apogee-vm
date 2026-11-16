@@ -144,7 +144,7 @@ tag on no proof path.
 | 6 | `SUMCHECK_FINAL_EVALS` | S †† | the zerocheck's final evaluations † |
 | 7 | `PUBLIC_INPUT_STREAM` | B | `io_digest`: the input |
 | 8 | `PUBLIC_OUTPUT_STREAM` | B | `io_digest`: the output |
-| 9 | `PROGRAM_IDENTITY` | S | identity: `[code_version]`; G5: the identity's 8 lanes |
+| 9 | `PROGRAM_IDENTITY` | S | identity: `[code_version, circuit_revision]`; G5: the identity's 8 lanes |
 | 10 | `VM_CONFIG` | S | identity; G2 |
 | 11 | `SHARD_COUNTS` | S | G3 |
 | 12 | `GKR_OUTPUTS` | S †† | GKR: the outputs |

@@ -1,482 +1,418 @@
-//! The delegation frame, shared by every delegation circuit.
-//!
-//! Every delegation family proves the same thing about its frame: the `2^n`
-//! rows are invocations, one row is one call, the frame is `words`
-//! fixed-offset RAM words at `base + 4j`, and the anchor is two leaves in the
-//! family's own address space that pair the invocation with exactly one
-//! request (`constants::delegation`). This module is that paragraph as data —
-//! the memory columns, the leaves and the bounds — so a family's own file
-//! holds only the function it delegates.
-//!
-//! **UNFINISHED: no delegation is registered** (`constants::delegation::TYPES`),
-//! so no circuit builds on this frame yet and its helpers are allowed to be
-//! unused until the first delegation family does.
-//!
-//! # The layout every delegation family shares
+//! What every delegation circuit is built on (`docs/spec/precompiles.md` §1):
+//! [`Builder`], which names a family's committed columns once and holds its
+//! gates, obligations and memory leaves, and [`frame`], the anchor and the RAM
+//! words every frame family carries.
 //!
 //! ```text
-//! M[0]              cycle          the requesting cycle
-//! M[1]              live           the row's one mask
-//! M[2]              base           the frame base pointer
-//! M[3]              anchor_value   the teardown's value, free on both sides
-//! M[4 + 4j + f]     frame word j:  addr, read_ts, read_value, write_value
-//!
-//! W, over RANGE16 (each family at 2^16 and above):
-//! W[2j + c]         frame word j's two timestamp-gap chunks
-//! W[2·words + ..]   base_low, base_low_hi, base_room, base_room_hi
+//! every family   M[0] live: the row's one mask, every leaf's and every obligation's
+//! a frame        M[1] cycle, M[2] number, then per frame word j
+//!                M[..] w{j}_addr w{j}_read_ts w{j}_read_value [w{j}_write_value]
+//!                W[..] w{j}_gap_c0 w{j}_gap_c1, RANGE16 chunks of 4·cycle − 1 − read_ts
+//!                W[..] room_h16: ADVICE_ORIGIN − 4·words − addr_0 is a word
+//!   read leaves  word j (RAM, addr_j, read_ts_j, read_value_j); the anchor
+//!                (DELEGATION, addr_0, cycle, number)
+//!   write leaves word j (RAM, addr_j, 4·cycle + FRAME_DELTA, write_value_j), the
+//!                read value for a word written back
 //! ```
-#![allow(dead_code)]
+//!
+//! A row is live or padding: every leaf is masked by `live`, so a padding row,
+//! all zero, is the identity of both products, and every obligation's selector
+//! is `live`. Every enforcing gate is zero on the all-zero row.
 
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use constants::{challenge_slot, guest_memory, lookup_channel, memory as mem};
+use constants::{
+    address_space, challenge_slot, delegation, guest_memory, lookup_channel, memory as mem,
+};
 use field::Fp;
 
-use crate::{Coeff, GateDef, LookupExpr, PolyAddress};
+use crate::family::{Expr, T16};
+use crate::lookup::ChannelSpec;
+use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 
-// An invocation's frame writes must land on a `(space, Δ)` pair no frame query
-// of the table holds, or the frame builder would file them into the requesting
-// row. A `const` assertion rather than a test, because a violation is a broken
-// ABI, not a failing case.
-const _: () = {
-    let mut q = 0;
-    while q < crate::memory::FRAME_QUERIES {
-        assert!(
-            !(crate::memory::FRAME_SPACE[q] == constants::address_space::RAM
-                && crate::memory::FRAME_DELTA[q] == constants::delegation::FRAME_DELTA),
-            "a frame query already holds (RAM, FRAME_DELTA): an invocation's frame events \
-             would be filed into the requesting row"
-        );
-        q += 1;
-    }
-};
-
-// ---------------------------------------------------------------------------
-// The committed columns
-// ---------------------------------------------------------------------------
-
-/// `M[0]`: the cycle whose ecall requested this invocation.
-pub const CYCLE: PolyAddress = PolyAddress::Memory(0);
-/// `M[1]`: the row's one mask. The frame and the anchor are one invocation:
-/// live together or not at all.
-pub const LIVE: PolyAddress = PolyAddress::Memory(1);
-/// `M[2]`: the frame base pointer the request handed over in `a0`.
-pub const BASE: PolyAddress = PolyAddress::Memory(2);
-/// `M[3]`: the teardown read's value, free on both sides of the anchor.
-pub const ANCHOR_VALUE: PolyAddress = PolyAddress::Memory(3);
-
-/// The four `M` columns every delegation frame carries before its words.
-pub const HEAD_COLUMNS: usize = 4;
-
-/// A frame word's field: its address, `base + 4j`.
-pub const WORD_ADDR: u32 = 0;
-/// A frame word's field: the timestamp of the write its read consumed.
-pub const WORD_READ_TS: u32 = 1;
-/// A frame word's field: the value it read.
-pub const WORD_READ_VALUE: u32 = 2;
-/// A frame word's field: the value it wrote, at `4·cycle + FRAME_DELTA`.
-pub const WORD_WRITE_VALUE: u32 = 3;
-
-/// `M[4 + 4j + field]`: one field of frame word `j`.
-pub fn word(j: usize, field: u32) -> PolyAddress {
-    PolyAddress::Memory(HEAD_COLUMNS as u32 + 4 * j as u32 + field)
+/// One part of a memory tuple, `docs/spec/memory.md` §1: the sum of `columns`,
+/// each weighted 1, plus the integer `plus`. A coefficient is one literal or
+/// one challenge, so the part's challenge times `plus` is the mask term
+/// `plus` times over.
+#[derive(Clone, Debug, Default)]
+pub struct Part {
+    pub columns: Vec<PolyAddress>,
+    pub plus: u64,
 }
 
-/// The `M` column names, in layout order.
-pub fn memory_names(words: usize) -> Vec<String> {
-    let mut out = vec![
-        "cycle".to_string(),
-        "live".to_string(),
-        "base".to_string(),
-        "anchor_value".to_string(),
-    ];
-    for j in 0..words {
-        for field in ["addr", "read_ts", "read_value", "write_value"] {
-            out.push(format!("w{j}_{field}"));
+impl Part {
+    /// The part that is one column.
+    pub fn of(x: PolyAddress) -> Part {
+        Part {
+            columns: vec![x],
+            plus: 0,
         }
     }
-    out
-}
-
-/// Bits in `(base − RAM_ORIGIN) / 4`, which is below `2^31 / 4`.
-pub const BASE_LOW_BITS: usize = 29;
-/// Bits in `2^31 − frame bytes − base`.
-pub const BASE_ROOM_BITS: usize = 31;
-
-// ---------------------------------------------------------------------------
-// Gate constructors
-// ---------------------------------------------------------------------------
-
-pub(crate) fn lit(v: u64) -> Coeff {
-    Coeff::Literal(Fp::from_u64(v))
-}
-
-pub(crate) fn neg(v: u64) -> Coeff {
-    Coeff::Literal(-Fp::from_u64(v))
-}
-
-fn slot(s: u32) -> Coeff {
-    Coeff::Challenge(s)
-}
-
-/// `x − x·x`, which holds exactly at `x ∈ {0, 1}`.
-///
-/// Byte-identical to `crate::memory`'s, which `check_memory` compares
-/// structurally when it looks for a leaf mask's booleanity gate.
-pub(crate) fn booleanity(x: PolyAddress) -> GateDef {
-    GateDef::Quadratic {
-        constant: lit(0),
-        linear: vec![(lit(1), x)],
-        products: vec![(neg(1), x, x)],
+    /// The part that is one column plus `plus`.
+    pub fn plus(x: PolyAddress, plus: u64) -> Part {
+        Part {
+            columns: vec![x],
+            plus,
+        }
+    }
+    /// The constant part `plus`.
+    pub fn constant(plus: u64) -> Part {
+        Part {
+            columns: Vec::new(),
+            plus,
+        }
     }
 }
 
-pub(crate) fn quadratic(
-    linear: Vec<(Coeff, PolyAddress)>,
-    products: Vec<(Coeff, PolyAddress, PolyAddress)>,
-) -> GateDef {
+/// `mask·T(space, addr, ts, val, hi) + 1 − mask`, one flat `Quadratic`, as
+/// `docs/spec/memory.md` §2.2 writes a leaf: every column term multiplied by
+/// the mask, every constant on it.
+pub fn masked_leaf(mask: PolyAddress, space: u8, parts: [Part; 4]) -> GateDef {
+    let slots = [
+        challenge_slot::MEM_ALPHA_ADDR,
+        challenge_slot::MEM_ALPHA_TS,
+        challenge_slot::MEM_ALPHA_VAL,
+        challenge_slot::MEM_ALPHA_HI,
+    ];
+    let lit = |v: u64| Coeff::Literal(Fp::from_u64(v));
+    let mut linear = vec![
+        (Coeff::Challenge(challenge_slot::MEM_GAMMA), mask),
+        (Coeff::Literal(Fp::MINUS_ONE), mask),
+        (lit(space as u64), mask),
+    ];
+    let mut products = Vec::new();
+    for (slot, part) in slots.into_iter().zip(parts) {
+        for x in part.columns {
+            products.push((Coeff::Challenge(slot), x, mask));
+        }
+        for _ in 0..part.plus {
+            linear.push((Coeff::Challenge(slot), mask));
+        }
+    }
     GateDef::Quadratic {
-        constant: lit(0),
+        constant: lit(1),
         linear,
         products,
     }
 }
 
-pub(crate) fn linear(terms: Vec<(Coeff, PolyAddress)>) -> GateDef {
-    GateDef::Linear {
-        terms,
-        constant: lit(0),
+/// A delegation family's circuit, column by column. Columns are named once,
+/// here, and a fill finds them by name (`CircuitArtifact::column`).
+pub struct Builder {
+    family: u32,
+    memory: Vec<String>,
+    witness: Vec<String>,
+    gates: Vec<(String, GateDef)>,
+    lookups: Vec<LookupExpr>,
+    /// Copower-scaled chunks, each with its direct bound beside it.
+    scaled: Vec<PolyAddress>,
+    reads: Vec<(String, GateDef)>,
+    writes: Vec<(String, GateDef)>,
+    /// `M[0]`, boolean: a live row.
+    pub live: PolyAddress,
+}
+
+impl Builder {
+    /// A family's builder, with `M[0] live` and its booleanity.
+    pub fn new(family: u32) -> Builder {
+        let mut b = Builder {
+            family,
+            memory: Vec::new(),
+            witness: Vec::new(),
+            gates: Vec::new(),
+            lookups: Vec::new(),
+            scaled: Vec::new(),
+            reads: Vec::new(),
+            writes: Vec::new(),
+            live: PolyAddress::Memory(0),
+        };
+        let live = b.mcol("live");
+        b.gate("live_boolean", live - live * live);
+        b
     }
-}
 
-/// `2^n` as a field element, for an `n` a `u64` literal cannot hold.
-pub(crate) fn pow2(n: u32) -> Fp {
-    let mut out = Fp::ONE;
-    let two = Fp::from_u64(2);
-    for _ in 0..n {
-        out *= two;
+    fn named(&self, name: &str) {
+        assert!(
+            !self.memory.iter().chain(&self.witness).any(|n| n == name),
+            "family {}: a second column named `{name}`",
+            self.family
+        );
     }
-    out
-}
 
-/// A leaf's timestamp: the literal 0, a column, or this row's
-/// `4·cycle + delta`.
-pub(crate) enum Timestamp {
-    Zero,
-    Column(PolyAddress),
-    Write(u64),
-}
+    /// A new `M` column: one a memory leaf may read.
+    pub fn mcol(&mut self, name: &str) -> PolyAddress {
+        self.named(name);
+        self.memory.push(name.to_string());
+        PolyAddress::Memory(self.memory.len() as u32 - 1)
+    }
 
-/// One memory leaf: `live·T(space, addr, ts, value) + 1 − live`, written flat
-/// as `docs/spec/memory.md` §2.2 writes one.
-pub(crate) fn leaf(
-    space: u8,
-    addr: PolyAddress,
-    ts: Timestamp,
-    value: Option<PolyAddress>,
-) -> GateDef {
-    let mut lin = vec![
-        (slot(challenge_slot::MEM_GAMMA), LIVE),
-        (neg(1), LIVE),
-        (lit(space as u64), LIVE),
-    ];
-    let mut products = vec![(slot(challenge_slot::MEM_ALPHA_ADDR), addr, LIVE)];
-    match ts {
-        Timestamp::Zero => {}
-        Timestamp::Column(column) => {
-            products.push((slot(challenge_slot::MEM_ALPHA_TS), column, LIVE));
+    /// A new `W` column.
+    pub fn col(&mut self, name: &str) -> PolyAddress {
+        self.named(name);
+        self.witness.push(name.to_string());
+        PolyAddress::Witness(self.witness.len() as u32 - 1)
+    }
+
+    /// A new `W` column held boolean by `<name>_boolean`.
+    pub fn bit(&mut self, name: &str) -> PolyAddress {
+        let x = self.col(name);
+        self.gate(&format!("{name}_boolean"), x - x * x);
+        x
+    }
+
+    /// An enforcing gate, `e = 0` on every row. Panics unless `e` is zero on
+    /// the all-zero row, which every padding row is.
+    pub fn gate(&mut self, name: &str, e: Expr) {
+        assert!(
+            e.constant == Fp::ZERO,
+            "family {}: gate `{name}` is not zero on the all-zero row",
+            self.family
+        );
+        self.gates.push((name.to_string(), e.gate()));
+    }
+
+    /// An enforcing gate already built, such as `gadgets::is_zero`'s.
+    pub fn push_gate(&mut self, name: &str, g: GateDef) {
+        self.gates.push((name.to_string(), g));
+    }
+
+    /// A `RANGE16` obligation under `live`: `e < 2^16`.
+    pub fn range16(&mut self, name: &str, e: Expr) {
+        self.lookups.push(LookupExpr {
+            name: name.to_string(),
+            channel: lookup_channel::RANGE16,
+            selector: self.live,
+            tuple: vec![e.gate()],
+        });
+    }
+
+    /// `value` is a word: a new column `<name>_h16`, its high halfword, and
+    /// both halfwords in `RANGE16` (`docs/spec/memory.md` §7). Returns the
+    /// halfword.
+    pub fn word(&mut self, name: &str, value: Expr) -> PolyAddress {
+        let h = self.col(&format!("{name}_h16"));
+        self.range16(&format!("{name}_hi_range"), h.into());
+        self.range16(&format!("{name}_lo_range"), value - h * T16);
+        h
+    }
+
+    /// `value ∈ [0, 2^bits)` for a `bits` that is not a multiple of 16: `q`
+    /// committed chunks of weight `2^16 … 2^16q`, the remainder derived.
+    ///
+    /// ```text
+    /// chunk_c < 2^16                    direct, one a chunk
+    /// 2^(16 − r)·chunk_top < 2^16       scaled: chunk_top < 2^r, given the direct one
+    /// value − Σ 2^16(c+1)·chunk_c < 2^16
+    /// ```
+    ///
+    /// The maximum is `2^bits − 1` exactly. The scaled obligation alone bounds
+    /// nothing, `2^(16−r)` being a unit of `Fp` (`lookup::check_copowers`, run
+    /// at assembly over every top chunk).
+    pub fn bounded(&mut self, name: &str, value: Expr, bits: u32) {
+        let (q, r) = (bits / 16, bits % 16);
+        assert!(q >= 1 && r > 0, "{name}: {bits} bits is not 16q + r");
+        let chunks: Vec<PolyAddress> = (0..q).map(|c| self.col(&format!("{name}_c{c}"))).collect();
+        let mut low = value;
+        for (c, chunk) in chunks.iter().enumerate() {
+            self.range16(&format!("{name}_c{c}_range"), (*chunk).into());
+            low = low - *chunk * (1u64 << (16 * (c + 1)));
         }
-        Timestamp::Write(delta) => {
-            // `4·cycle + delta`: a coefficient is one literal or one challenge,
-            // so `α_ts·4·cycle` is the term repeated four times and
-            // `α_ts·delta·live` `delta` times (`docs/spec/memory.md` §1).
-            for _ in 0..mem::TS_STEP {
-                products.push((slot(challenge_slot::MEM_ALPHA_TS), CYCLE, LIVE));
-            }
-            for _ in 0..delta {
-                lin.push((slot(challenge_slot::MEM_ALPHA_TS), LIVE));
-            }
+        let top = chunks[chunks.len() - 1];
+        self.range16(&format!("{name}_top_scaled"), top * (1u64 << (16 - r)));
+        self.range16(&format!("{name}_lo_range"), low);
+        self.scaled.push(top);
+    }
+
+    /// A memory leaf under `live`, on the read side or the write side.
+    pub fn leaf(&mut self, write: bool, name: &str, space: u8, parts: [Part; 4]) {
+        let side = match write {
+            false => &mut self.reads,
+            true => &mut self.writes,
+        };
+        side.push((name.to_string(), masked_leaf(self.live, space, parts)));
+    }
+
+    /// The family's one channel, `RANGE16`, if it has an obligation: its table
+    /// `V[range16]` and its multiplicity the last `W` column.
+    pub fn channels(&self) -> Vec<ChannelSpec> {
+        match self.lookups.is_empty() {
+            true => Vec::new(),
+            false => vec![ChannelSpec {
+                channel: lookup_channel::RANGE16,
+                table: vec![PolyAddress::Virtual(VirtualKind::Range16)],
+                multiplicity: PolyAddress::Witness(self.witness.len() as u32),
+            }],
         }
     }
-    if let Some(value) = value {
-        products.push((slot(challenge_slot::MEM_ALPHA_VAL), value, LIVE));
-    }
-    GateDef::Quadratic {
-        constant: lit(1),
-        linear: lin,
-        products,
-    }
-}
 
-/// A leaf that is the product's identity.
-pub(crate) fn pad_leaf() -> GateDef {
-    GateDef::Linear {
-        terms: Vec::new(),
-        constant: lit(1),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// The memory subtree
-// ---------------------------------------------------------------------------
-
-/// Leaves a side: the frame's `words` plus the anchor's one, padded to a power
-/// of two with leaves that are literally 1.
-pub fn leaves_a_side(words: usize) -> usize {
-    (words + 1).next_power_of_two()
-}
-
-/// The read side and the write side of the memory subtree, each padded.
-///
-/// Read: one leaf per frame word, consuming the write it names, then the
-/// anchor's **teardown** — `T(space, base, 4·cycle + ANCHOR_DELTA,
-/// anchor_value)`, the tuple the requesting row's mirror query wrote back.
-/// Write: one leaf per frame word at `4·cycle + FRAME_DELTA`, then the
-/// anchor's **answer** — `T(space, base, 0, 0)`, stamped 0, which is the stamp
-/// no ordinary cycle can produce and which exactly one request may read.
-///
-/// **UNFINISHED: the request side** (`constants::delegation::ANCHOR_DELTA`).
-/// No requesting row reads the answer or writes the teardown tuple yet, so
-/// both anchor leaves are unmatched in the memory argument.
-pub(crate) fn leaves(space: u8, words: usize) -> [Vec<(String, GateDef)>; 2] {
-    let side = leaves_a_side(words);
-    let mut reads: Vec<(String, GateDef)> = Vec::with_capacity(side);
-    let mut writes: Vec<(String, GateDef)> = Vec::with_capacity(side);
-    for j in 0..words {
-        reads.push((
-            format!("read_w{j}"),
-            leaf(
-                constants::address_space::RAM,
-                word(j, WORD_ADDR),
-                Timestamp::Column(word(j, WORD_READ_TS)),
-                Some(word(j, WORD_READ_VALUE)),
-            ),
-        ));
-        writes.push((
-            format!("write_w{j}"),
-            leaf(
-                constants::address_space::RAM,
-                word(j, WORD_ADDR),
-                Timestamp::Write(constants::delegation::FRAME_DELTA),
-                Some(word(j, WORD_WRITE_VALUE)),
-            ),
-        ));
-    }
-    reads.push((
-        "read_anchor".to_string(),
-        leaf(
-            space,
-            BASE,
-            Timestamp::Write(constants::delegation::ANCHOR_DELTA),
-            Some(ANCHOR_VALUE),
-        ),
-    ));
-    writes.push((
-        "write_anchor".to_string(),
-        leaf(space, BASE, Timestamp::Zero, None),
-    ));
-    for i in 0..side - words - 1 {
-        reads.push((format!("read_pad{i}"), pad_leaf()));
-        writes.push((format!("write_pad{i}"), pad_leaf()));
-    }
-    [reads, writes]
-}
-
-// ---------------------------------------------------------------------------
-// Range checks through the RANGE16 channel
-// ---------------------------------------------------------------------------
-//
-// A delegation family sits at `2^16` or above and bounds through `RANGE16`,
-// and the helpers below are what such families share.
-
-/// Bits a `RANGE16` chunk holds.
-pub(crate) const CHUNK_BITS: u32 = 16;
-
-/// One `RANGE16` obligation.
-pub(crate) fn range16(name: String, selector: PolyAddress, tuple: GateDef) -> LookupExpr {
-    LookupExpr {
-        name,
-        channel: lookup_channel::RANGE16,
-        selector,
-        tuple: vec![tuple],
+    /// The circuit over `2^trace_vars` rows: the two product trees, each side
+    /// padded to one power of two with leaves that are literally 1, and the
+    /// `RANGE16` tree where there is an obligation. Panics on every refusal of
+    /// the assembly, and on a copower chunk with no direct bound.
+    pub fn artifact(mut self, trace_vars: u32) -> CircuitArtifact {
+        let channels = self.channels();
+        let mut virtuals = Vec::new();
+        if !channels.is_empty() {
+            self.witness.push("mult_range16".to_string());
+            virtuals.push((VirtualKind::Range16, "range16".to_string()));
+        }
+        let side = self.reads.len().max(self.writes.len()).next_power_of_two();
+        for (leaves, name) in [(&mut self.reads, "read"), (&mut self.writes, "write")] {
+            for i in leaves.len()..side {
+                leaves.push((
+                    format!("{name}_pad_{i}"),
+                    GateDef::Linear {
+                        terms: Vec::new(),
+                        constant: Coeff::Literal(Fp::ONE),
+                    },
+                ));
+            }
+        }
+        let a = crate::memory::assemble(
+            trace_vars,
+            [self.memory, self.witness, Vec::new()],
+            virtuals,
+            [self.reads, self.writes],
+            self.gates,
+            self.lookups,
+            &channels,
+        );
+        assert!(
+            a.padding.zero_row_valid,
+            "family {}: a gate is nonzero on the all-zero row",
+            self.family
+        );
+        let scaled: Vec<(PolyAddress, PolyAddress)> =
+            self.scaled.iter().map(|x| (*x, self.live)).collect();
+        if let Err(e) = crate::lookup::check_copowers(&a, &scaled) {
+            panic!("family {}: {e}", self.family);
+        }
+        a
     }
 }
 
-/// A 32-bit bound, `docs/spec/memory.md` §7's shape: the high halfword direct
-/// and the derived low half, **one committed column and two obligations**.
-///
-/// `hi <= 2^16 - 1` and `x - 2^16*hi <= 2^16 - 1` give
-/// `x = lo + 2^16*hi <= 2^32 - 1`, and the low expression is *defined* as the
-/// remainder, so no wrap is possible.
-pub(crate) fn bound32(
-    name: &str,
-    x: PolyAddress,
-    hi: PolyAddress,
-    selector: PolyAddress,
-) -> Vec<LookupExpr> {
-    vec![
-        range16(
-            format!("{name}_hi_range"),
-            selector,
-            linear(vec![(lit(1), hi)]),
-        ),
-        range16(
-            format!("{name}_lo_range"),
-            selector,
-            linear(vec![(lit(1), x), (Coeff::Literal(-pow2(CHUNK_BITS)), hi)]),
-        ),
-    ]
+/// One frame word's columns.
+#[derive(Clone, Copy, Debug)]
+pub struct Word {
+    pub addr: PolyAddress,
+    pub read_ts: PolyAddress,
+    pub read: PolyAddress,
+    /// What the call writes; the read value for a word written back.
+    pub write: PolyAddress,
 }
 
-/// A bound of `[0, 2^bits)` for a `bits` that is **not** a multiple of sixteen,
-/// over `RANGE16`.
-///
-/// Write `bits = 16q + r` with `0 < r < 16`. Commit `q` chunks with weights
-/// `2^16 .. 2^{16q}`; the low remainder is derived. Obligations:
+/// A frame's columns: the requesting cycle and its words.
+pub struct Frame {
+    pub cycle: PolyAddress,
+    pub words: Vec<Word>,
+}
+
+/// The frame of the delegation `number`, of `words` RAM words at `base + 4j`,
+/// `written(j)` saying which the call writes: `docs/spec/precompiles.md` §1.
 ///
 /// ```text
-/// chunk_c < 2^16                    direct, one per committed chunk
-/// 2^(16 - r) * chunk_top < 2^16     scaled, so chunk_top < 2^r
-/// x - sum 2^{16(c+1)} chunk_c < 2^16
+/// number_rule   number − NUMBER·live
+/// addr_w{j}     addr_j − addr_0 − 4j·live                      j ≥ 1
+/// room          ADVICE_ORIGIN·live − 4·words·live − addr_0, a word
+/// gap_w{j}      4·cycle + FRAME_DELTA − 1 − read_ts_j ∈ [0, 2^38)
 /// ```
 ///
-/// The maximum is `(2^16 - 1)(1 + 2^16 + … + 2^{16(q-1)}) + 2^{16q}(2^r - 1)`,
-/// which is `2^bits - 1` exactly.
-///
-/// **The scaled obligation alone bounds nothing.** `2^{16-r}` is a unit in
-/// `Fp`, so an unbounded `x` sweeps a coset of which almost no member is a
-/// small integer, and the range check sees nothing wrong. It is the top
-/// chunk's own direct obligation that establishes the premise, which is why
-/// `lookup::check_copowers` requires the pair under the **same** selector, and
-/// why every caller here passes one selector to both.
-pub(crate) fn bound_chunked(
-    name: &str,
-    x: Vec<(Coeff, PolyAddress)>,
-    chunks: &[PolyAddress],
-    bits: u32,
-    selector: PolyAddress,
-    constant: Coeff,
-) -> Vec<LookupExpr> {
-    let q = chunks.len() as u32;
-    assert!(
-        bits > CHUNK_BITS * q && bits < CHUNK_BITS * (q + 1),
-        "delegation: {name} needs {q} chunks for {bits} bits"
-    );
-    let r = bits - CHUNK_BITS * q;
-    let mut out: Vec<LookupExpr> = Vec::new();
-    for (c, chunk) in chunks.iter().enumerate() {
-        out.push(range16(
-            format!("{name}_c{c}_range"),
-            selector,
-            linear(vec![(lit(1), *chunk)]),
-        ));
-    }
-    out.push(range16(
-        format!("{name}_top_scaled"),
-        selector,
-        linear(vec![(
-            lit(1u64 << (CHUNK_BITS - r)),
-            chunks[chunks.len() - 1],
-        )]),
-    ));
-    let mut low = x;
-    for (c, chunk) in chunks.iter().enumerate() {
-        low.push((Coeff::Literal(-pow2(CHUNK_BITS * (c as u32 + 1))), *chunk));
-    }
-    out.push(range16(
-        format!("{name}_lo_range"),
-        selector,
-        GateDef::Linear {
-            terms: low,
-            constant,
-        },
-    ));
-    out
-}
-
-/// Chunks a 38-bit timestamp gap takes over `RANGE16`: two committed, the low
-/// one derived.
-///
-/// `TIMESTAMP` would be the natural channel and it does not fit a delegation
-/// family — its table needs 19 variables, and those families sit at
-/// `2^16` or `2^18`, where 19 variables need `2^20`, an execution family's
-/// floor.
-pub const GAP_CHUNKS: usize = 2;
-
-/// The frame's own gates: `live`'s booleanity, the `words` address rules and
-/// the two frame-pointer bounds. The timestamp gaps are obligations, not gates
-/// ([`gap_lookups_range16`]), and each base decomposition is one committed
-/// value plus one chunk.
-///
-/// The caller supplies the witness addresses, because their position in the
-/// witness subtree is the family's business: `base_low` is the aligned
-/// quotient `(base - RAM_ORIGIN) / 4` and `base_room` is
-/// `2^31 - frame bytes - base`.
-///
-/// A gate that must be vacuous on the all-zero padding row carries `live` on
-/// every term: on a padding row `addr` and `base` are 0 and `4j` is not.
-pub(crate) fn frame_gates_range16(
-    words: usize,
-    frame_bytes: u64,
-    base_low: PolyAddress,
-    base_room: PolyAddress,
-) -> Vec<(String, GateDef)> {
-    let mut out: Vec<(String, GateDef)> = vec![("live_boolean".to_string(), booleanity(LIVE))];
-    for j in 0..words {
-        out.push((
-            format!("addr_w{j}"),
-            quadratic(
-                vec![(neg(4 * j as u64), LIVE)],
-                vec![(lit(1), LIVE, word(j, WORD_ADDR)), (neg(1), LIVE, BASE)],
-            ),
-        ));
-    }
-    out.push((
-        "base_aligned".to_string(),
-        quadratic(
-            vec![(neg(guest_memory::RAM_ORIGIN as u64), LIVE)],
-            vec![(lit(1), LIVE, BASE), (neg(4), LIVE, base_low)],
-        ),
-    ));
-    let top = (1u64 << 31) - frame_bytes;
-    out.push((
-        "base_in_window".to_string(),
-        quadratic(
-            vec![(lit(top), LIVE)],
-            vec![(neg(1), LIVE, BASE), (neg(1), LIVE, base_room)],
-        ),
-    ));
-    out
-}
-
-/// The frame's timestamp-gap obligations, `[0, 2^38)` apiece over `RANGE16`.
-///
-/// The expression is `4*cycle + FRAME_DELTA - 1 - read_ts`, and the selector is
-/// `live`: on a padding row it is `-1`, which is in no table, and the selector
-/// is what exempts it. There is **no** `gap_w{j}` gate — the obligations are
-/// the bound and the decomposition at once, exactly as `memory::gap_lookups`
-/// has it for an execution family.
+/// `room` keeps the frame below the advice region, where every value is a
+/// word: its init is the image's, the public input's or 0, and every family
+/// writes words. So a frame's reads need no bound of their own; a word advice
+/// initialized could be any field element. `addr_0` is the anchor's `a0`, a
+/// word, so `room` is one exactly when the frame ends at or below
+/// `ADVICE_ORIGIN`. A
+/// word off initialized memory there, unaligned or in the hole, reads a tuple
+/// nothing wrote, and the memory argument refuses it (`docs/spec/memory.md`
+/// §9). The anchor read pairs the row with the ecall that requested it, its
+/// `(base, cycle, number)`.
 ///
 /// **UNFINISHED: A64-C5 CHARACTERISTIC**, as `memory::gap_lookups`: nothing
 /// bounds `cycle`, so the gap makes no timestamp an integer.
-pub(crate) fn gap_lookups_range16(
-    words: usize,
-    chunk: &dyn Fn(usize, usize) -> PolyAddress,
-) -> Vec<LookupExpr> {
-    let mut out: Vec<LookupExpr> = Vec::new();
+pub fn frame(b: &mut Builder, number: u32, words: usize, written: impl Fn(usize) -> bool) -> Frame {
+    let live = b.live;
+    let cycle = b.mcol("cycle");
+    let n = b.mcol("number");
+    b.gate("number_rule", n - live * number as u64);
+    let mut out = Vec::with_capacity(words);
     for j in 0..words {
-        let chunks: Vec<PolyAddress> = (0..GAP_CHUNKS).map(|c| chunk(j, c)).collect();
-        out.extend(bound_chunked(
-            &format!("gap{j}"),
-            vec![(lit(mem::TS_STEP), CYCLE), (neg(1), word(j, WORD_READ_TS))],
-            &chunks,
-            mem::TS_BITS,
-            LIVE,
-            Coeff::Literal(Fp::from_u64(constants::delegation::FRAME_DELTA) - Fp::from_u64(1)),
-        ));
+        let addr = b.mcol(&format!("w{j}_addr"));
+        let read_ts = b.mcol(&format!("w{j}_read_ts"));
+        let read = b.mcol(&format!("w{j}_read_value"));
+        let write = match written(j) {
+            true => b.mcol(&format!("w{j}_write_value")),
+            false => read,
+        };
+        out.push(Word {
+            addr,
+            read_ts,
+            read,
+            write,
+        });
     }
-    out
+    let end = guest_memory::ADVICE_ORIGIN as u64 - 4 * words as u64;
+    b.word("room", live * end - out[0].addr);
+    for (j, w) in out.iter().enumerate() {
+        if j > 0 {
+            b.gate(
+                &format!("addr_w{j}"),
+                w.addr - out[0].addr - live * (4 * j as u64),
+            );
+        }
+        let gap = cycle * mem::TS_STEP - w.read_ts + Expr::from(live) * delegation::FRAME_DELTA
+            - Expr::from(live);
+        b.bounded(&format!("w{j}_gap"), gap, mem::TS_BITS);
+        b.leaf(
+            false,
+            &format!("read_w{j}"),
+            address_space::RAM,
+            [
+                Part::of(w.addr),
+                Part::of(w.read_ts),
+                Part::of(w.read),
+                Part::default(),
+            ],
+        );
+        let stamp = Part {
+            columns: vec![cycle; mem::TS_STEP as usize],
+            plus: delegation::FRAME_DELTA,
+        };
+        b.leaf(
+            true,
+            &format!("write_w{j}"),
+            address_space::RAM,
+            [Part::of(w.addr), stamp, Part::of(w.write), Part::default()],
+        );
+    }
+    b.leaf(
+        false,
+        "read_anchor",
+        address_space::DELEGATION,
+        [
+            Part::of(out[0].addr),
+            Part::of(cycle),
+            Part::of(n),
+            Part::default(),
+        ],
+    );
+    Frame { cycle, words: out }
 }
+
+// A frame's write is at `(RAM, FRAME_DELTA)`, which no query of
+// `constraints::memory`'s frame holds, so a frame word's event is never filed
+// into the requesting row. A `const` assertion: a violation is a broken ABI.
+const _: () = {
+    let mut q = 0;
+    while q < crate::memory::FRAME_QUERIES {
+        assert!(
+            !(crate::memory::FRAME_SPACE[q] == address_space::RAM
+                && crate::memory::FRAME_DELTA[q] == delegation::FRAME_DELTA),
+            "a frame query already holds (RAM, FRAME_DELTA)"
+        );
+        q += 1;
+    }
+};

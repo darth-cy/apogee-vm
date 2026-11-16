@@ -17,8 +17,9 @@
 //! `docs/spec/public-values.md` specifies all three.
 //!
 //! The ecall ABI is [`exit`] and the delegation calls, each a shim over one
-//! frame. An ecall carries its number in `a7` and its argument in `a0`;
-//! `docs/spec/ecall-abi.md` is the table, every number [`constants::ecall`]'s.
+//! frame: [`poseidon2_permute`], and [`U256`]'s divisions. An ecall carries its
+//! number in `a7` and its argument in `a0`; `docs/spec/ecall-abi.md` is the
+//! table, every number [`constants::ecall`]'s.
 //!
 //! # `unsafe`, and global state
 //!
@@ -29,7 +30,7 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::arch::global_asm;
 
-use constants::{delegation, ecall, guest_memory};
+use constants::{ecall, guest_memory};
 
 // ---------------------------------------------------------------------------
 // crt0
@@ -125,10 +126,10 @@ macro_rules! entry {
 // Raw ecall
 // ---------------------------------------------------------------------------
 
-// One shim, one argument: `EXIT` takes a status, and a delegation call its
-// frame's base. A six-argument shim with zeroes passed in would be strictly worse --
-// an unused `in(...)` register is still a constraint on the register
-// allocator.
+// One shim, one argument: `EXIT` takes a status. A delegation call, which
+// takes its frame's base and preserves `a0`, has its own (`delegate`). A
+// six-argument shim with zeroes passed in would be strictly worse -- an unused
+// `in(...)` register is still a constraint on the register allocator.
 //
 // No `options(...)`: the default is the conservative one.
 //
@@ -432,59 +433,93 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 //
 // Last in the file, so a guest that calls no delegation links none of it and
 // the line numbers -- the panic locations -- of everything above stay put.
-//
-// UNFINISHED: no delegation is registered (`constants::delegation::TYPES`), so
-// there is no shim, and the record and the call below are allowed to be unused
-// until the first one.
 
-/// Status used when a delegation call answers anything but 0.
-#[allow(dead_code)]
-const EXIT_DELEGATION_ERROR: i32 = 72;
+// A shim's record is a `static`, its ecall number, in a section of its own,
+// `.apogee.delegations.<name>`, which `apogee.ld` gathers into
+// `constants::delegation::SECTION`: the linker keeps or drops sections whole,
+// so two records in one would declare both families for a guest that reaches
+// either. And no `#[used]`: a record must be in the image exactly when its
+// shim is, so what keeps it is the shim reading its ecall number out of it.
 
-/// A declaration record (`constants::delegation`): the magic, then `number`
-/// little-endian. `const`-evaluated, so it is `.rodata` and not code.
-#[allow(dead_code)]
-const fn record(number: u32) -> [u8; delegation::MARKER_BYTES] {
-    let magic = delegation::MARKER_MAGIC;
-    let number = number.to_le_bytes();
-    let mut out = [0u8; delegation::MARKER_BYTES];
-    let mut i = 0;
-    while i < delegation::MARKER_BYTES {
-        out[i] = if i < magic.len() {
-            magic[i]
-        } else {
-            number[i - magic.len()]
-        };
-        i += 1;
-    }
-    out
+#[link_section = ".apogee.delegations.poseidon2"]
+static POSEIDON2: u32 = ecall::POSEIDON2;
+
+#[link_section = ".apogee.delegations.mul_div_u256"]
+static MUL_DIV_U256: u32 = ecall::MUL_DIV_U256;
+
+/// One delegation call over the frame at `frame`, its ecall number read back
+/// out of `declared`. Through `black_box`: folded to an immediate, the read
+/// would leave the record unreferenced and the declaration out of the image.
+///
+/// # Safety
+/// `frame` is word-aligned, below the advice region, and valid for reads and
+/// writes of the whole frame `declared`'s family reads and writes in place.
+unsafe fn delegate(declared: &'static u32, frame: *mut u32) {
+    let number = *core::hint::black_box(declared);
+    // `a0` is preserved, and the default options let the call read and write
+    // the memory `frame` reaches.
+    core::arch::asm!("ecall", in("a7") number as usize, in("a0") frame as usize);
 }
 
-// A shim's record is a `static` in a section of its own,
-// `.rodata.apogee.delegations.<name>`: the linker keeps or drops sections
-// whole, so two records in one would declare both families for a guest that
-// reaches either. And no `#[used]`: a record must be in the image exactly when
-// its shim is, so what keeps it is the shim reading its ecall number out of it.
+/// The Poseidon2-A64-C5 permutation of `state`, in place: the precompile,
+/// `transcript::poseidon2_permute` (`docs/spec/precompiles.md` §3). A lane is
+/// read mod `p` and written below it.
+pub fn poseidon2_permute(state: &mut [u64; 16]) {
+    // SAFETY: a `[u64; 16]` is 32 words, 8-aligned, and is the whole frame.
+    unsafe { delegate(&POSEIDON2, state.as_mut_ptr().cast()) }
+}
 
-/// One delegation call over `frame`, its ecall number read back out of
-/// `declared`. Through `black_box`: folded to an immediate, the read would
-/// leave the record unreferenced and the declaration out of the image.
-#[allow(dead_code)]
-fn delegate(declared: &'static [u8; delegation::MARKER_BYTES], frame: &mut [u32]) {
-    let declared = core::hint::black_box(declared);
-    let n = delegation::MARKER_MAGIC.len();
-    let number = u32::from_le_bytes([
-        declared[n],
-        declared[n + 1],
-        declared[n + 2],
-        declared[n + 3],
-    ]);
-    // SAFETY: `frame` is live, writable and word-aligned, and the caller sizes
-    // it to the frame `number`'s family reads and writes in place.
-    if unsafe { ecall1(number as usize, frame.as_mut_ptr() as usize) } != 0 {
-        exit(EXIT_DELEGATION_ERROR);
+/// Eight lanes, each canonical, below `p = 2^64 − 59` (`field::A64_C5`): a
+/// digest, the transcript's width, and what [`poseidon2_compress`] takes. The
+/// call reads a lane mod `p`, so `x` and `x + p` would be two encodings of one
+/// node, and a `Digest` has one: a digest decoded from input or advice is
+/// [`Digest::new`]'s to check, once, and a node the call wrote is canonical
+/// already.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Digest([u64; 8]);
+
+impl Digest {
+    /// `lanes`, if every one is below `p`.
+    pub const fn new(lanes: [u64; 8]) -> Option<Digest> {
+        let mut i = 0;
+        while i < lanes.len() {
+            if lanes[i] >= field::A64_C5 {
+                return None;
+            }
+            i += 1;
+        }
+        Some(Digest(lanes))
+    }
+
+    pub const fn lanes(&self) -> &[u64; 8] {
+        &self.0
     }
 }
+
+/// A Merkle node: the first 8 lanes of the permutation of `left ‖ right`,
+/// truncated with no feed-forward.
+pub fn poseidon2_compress(left: &Digest, right: &Digest) -> Digest {
+    let mut state = [0u64; 16];
+    state[..8].copy_from_slice(&left.0);
+    state[8..].copy_from_slice(&right.0);
+    poseidon2_permute(&mut state);
+    let mut out = [0u64; 8];
+    out.copy_from_slice(&state[..8]);
+    Digest(out)
+}
+
+/// `(floor(a·b/d), a·b mod d)` by the precompile (`docs/spec/precompiles.md`
+/// §4). The caller owes `d ≠ 0` and a quotient below `2^256`, which an
+/// executor refuses; [`U256::mul_div`] checks both first.
+fn mul_div_u256(a: U256, b: U256, d: U256) -> (U256, U256) {
+    let mut frame = [a.0, b.0, d.0];
+    // SAFETY: three `[u64; 4]` are 24 words, 8-aligned, and the whole frame.
+    unsafe { delegate(&MUL_DIV_U256, frame.as_mut_ptr().cast()) };
+    (U256(frame[0]), U256(frame[1]))
+}
+
+mod u256;
+pub use u256::U256;
 
 // ---------------------------------------------------------------------------
 // The C ABI
@@ -544,6 +579,40 @@ pub unsafe extern "C" fn apogee_commit(bytes: *const u8, len: usize) {
 #[no_mangle]
 pub extern "C" fn apogee_exit(code: i32) -> ! {
     exit(code)
+}
+
+/// `poseidon2_permute()` over the 16 lanes at `state`.
+///
+/// # Safety
+/// `state` is 8-aligned and valid for reads and writes of 16 `uint64_t`.
+#[no_mangle]
+pub unsafe extern "C" fn apogee_poseidon2_permute(state: *mut u64) {
+    poseidon2_permute(&mut *state.cast::<[u64; 16]>())
+}
+
+/// `U256::mul_div_rem()`: `q = floor(a·b/d)` and `r = a·b mod d`, four
+/// little-endian limbs each. Returns 0, or 1 and writes nothing when `d = 0`
+/// or the quotient is not below `2^256`.
+///
+/// # Safety
+/// `a`, `b`, `d` are valid for reads and `q`, `r` for writes of 4 `uint64_t`.
+#[no_mangle]
+pub unsafe extern "C" fn apogee_mul_div_u256(
+    a: *const u64,
+    b: *const u64,
+    d: *const u64,
+    q: *mut u64,
+    r: *mut u64,
+) -> i32 {
+    let get = |x: *const u64| U256(*x.cast::<[u64; 4]>());
+    match get(a).mul_div_rem(get(b), get(d)) {
+        Some((quo, rem)) => {
+            *q.cast::<[u64; 4]>() = quo.0;
+            *r.cast::<[u64; 4]>() = rem.0;
+            0
+        }
+        None => 1,
+    }
 }
 
 /// A destructor `__cxa_atexit` registered: the function, its argument and the

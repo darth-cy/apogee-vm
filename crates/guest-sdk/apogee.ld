@@ -52,6 +52,15 @@ SECTIONS {
     *(.eh_frame)
     *(.gcc_except_table*)
   } > RAM
+  /* The delegation declarations (docs/spec/precompiles.md §1): one u32 per
+     precompile shim the guest links, its ecall number, each an input section
+     of its own that --gc-sections keeps exactly where the shim is. An output
+     section of their own, which the loader reads by name and nothing else
+     declares; empty, it is dropped. Never on .text's last page: when
+     --gc-sections leaves .rodata empty, the address skips to the next page. */
+  .apogee.delegations MAX(ALIGN(4), ALIGN(ADDR(.text) + SIZEOF(.text), 4096)) : {
+    *(.apogee.delegations.*)
+  } > RAM
   .data   : ALIGN(4096) {
     *(.data*)
     *(.sdata*)

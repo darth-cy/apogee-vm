@@ -56,24 +56,51 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::PUBLIC_INPUT,
     family::PUBLIC_OUTPUT,
     family::ADVICE_WINDOWS,
+    family::POSEIDON2,
+    family::POSEIDON2_ROUNDS,
+    family::MUL_DIV_U256,
 ];
 
-/// The delegation family that answers ecall `number`, or `None`. The registry
-/// is `constants::delegation::TYPES`.
+/// The **frame family** of ecall `number`, the one whose row reads the frame
+/// and the anchor, or `None`. The registry is `constants::delegation::TYPES`.
 pub fn delegation_family(number: u32) -> Option<FamilyId> {
+    delegation_families(number).next()
+}
+
+/// Every family recording a call of ecall `number`, its frame family first.
+pub fn delegation_families(number: u32) -> impl Iterator<Item = FamilyId> {
     delegation::TYPES
         .iter()
-        .find(|(_, n, ..)| *n == number)
+        .filter(move |(_, n, ..)| *n == number)
         .map(|(f, ..)| *f)
 }
 
 /// `family`'s frame in 32-bit words, or `None` if it is not a delegation
-/// family.
+/// family. A family expanding a call holds the call's frame too.
 pub fn delegation_frame_words(family: FamilyId) -> Option<usize> {
     delegation::TYPES
         .iter()
         .find(|(f, ..)| *f == family)
-        .map(|(.., words)| *words)
+        .map(|(_, _, words, _)| *words)
+}
+
+/// How many rows a delegation family takes a call: 1 for a frame family.
+/// Panics on a family that is not a delegation family.
+pub fn delegation_rows(family: FamilyId) -> u32 {
+    delegation::TYPES
+        .iter()
+        .find(|(f, ..)| *f == family)
+        .map(|(.., rows)| *rows)
+        .unwrap_or_else(|| panic!("family {family} is not a delegation family"))
+}
+
+/// Whether delegation `family` is its number's frame family: the one whose
+/// rows read and write RAM.
+pub fn is_frame_family(family: FamilyId) -> bool {
+    delegation::TYPES
+        .iter()
+        .find(|(f, ..)| *f == family)
+        .is_some_and(|(_, n, ..)| delegation_family(*n) == Some(family))
 }
 
 /// Whether `family`'s rows are cycles, and so whether the decoder routes
@@ -101,6 +128,9 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::PUBLIC_INPUT => "PUBLIC_INPUT",
         family::PUBLIC_OUTPUT => "PUBLIC_OUTPUT",
         family::ADVICE_WINDOWS => "ADVICE_WINDOWS",
+        family::POSEIDON2 => "POSEIDON2",
+        family::POSEIDON2_ROUNDS => "POSEIDON2_ROUNDS",
+        family::MUL_DIV_U256 => "MUL_DIV_U256",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -255,7 +285,10 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::ZERO_WINDOWS
         | family::PUBLIC_INPUT
         | family::PUBLIC_OUTPUT
-        | family::ADVICE_WINDOWS => &[],
+        | family::ADVICE_WINDOWS
+        | family::POSEIDON2
+        | family::POSEIDON2_ROUNDS
+        | family::MUL_DIV_U256 => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -409,9 +442,9 @@ pub enum ProgramError {
     /// A RAM window rule of `docs/spec/memory.md` §3.2 or §3.5 is broken;
     /// `rule` says which.
     WindowRule { rule: &'static str },
-    /// A declaration record at `addr` names an ecall number no delegation
-    /// family answers: the guest and this preprocessor disagree on the ABI.
-    UnknownDelegation { addr: u32, number: u32 },
+    /// A declaration record names an ecall number no delegation family
+    /// answers: the guest and this preprocessor disagree on the ABI.
+    UnknownDelegation { number: u32 },
     /// No circuit proves `family` at `height`, so no key commits its setup
     /// columns.
     NoCircuit { family: FamilyId, height: u32 },
@@ -456,10 +489,9 @@ impl fmt::Display for ProgramError {
                 4 * height as u64
             ),
             ProgramError::WindowRule { rule } => write!(f, "RAM window rule broken: {rule}"),
-            ProgramError::UnknownDelegation { addr, number } => write!(
+            ProgramError::UnknownDelegation { number } => write!(
                 f,
-                "the declaration record at {addr:#x} names ecall {number:#x}, which no \
-                 delegation family answers"
+                "the image declares ecall {number:#x}, which no delegation family answers"
             ),
             ProgramError::NoCircuit { family, height } => write!(
                 f,
@@ -577,35 +609,20 @@ fn narrowest(values: Vec<u32>) -> PolyBacking {
 ///
 /// A delegation family claims no pc — its ecall number is in `a7` at run time,
 /// not in any instruction word — so what puts one in the config is the record
-/// its SDK shim emits: `delegation::MARKER_MAGIC`, then the ecall number, in
-/// an allocated `.rodata` section the linker keeps exactly when the shim is
-/// linked. The scan is over the file-backed bytes at every byte offset, since
-/// a `static`'s alignment is the linker's choice.
+/// its SDK shim emits: the ecall number, in the ELF section
+/// `delegation::SECTION`, which the linker keeps exactly when the shim is
+/// linked and `loader::load_elf` reads into `image.delegations`. Every family
+/// of a declared number is present.
 pub fn declared_delegations(image: &ProgramImage) -> Result<Vec<FamilyId>, ProgramError> {
-    let n = delegation::MARKER_MAGIC.len();
-    let mut found: Vec<FamilyId> = Vec::new();
-    for segment in &image.segments {
-        let bytes = &segment.bytes;
-        for at in 0..bytes.len().saturating_sub(delegation::MARKER_BYTES - 1) {
-            if bytes[at..at + n] != delegation::MARKER_MAGIC {
-                continue;
-            }
-            let number = u32::from_le_bytes([
-                bytes[at + n],
-                bytes[at + n + 1],
-                bytes[at + n + 2],
-                bytes[at + n + 3],
-            ]);
-            let family = delegation_family(number).ok_or(ProgramError::UnknownDelegation {
-                addr: segment.vaddr.wrapping_add(at as u32),
-                number,
-            })?;
-            if !found.contains(&family) {
-                found.push(family);
-            }
+    let mut found = Vec::new();
+    for &number in &image.delegations {
+        if delegation_family(number).is_none() {
+            return Err(ProgramError::UnknownDelegation { number });
         }
+        found.extend(delegation_families(number));
     }
     found.sort_unstable();
+    found.dedup();
     Ok(found)
 }
 

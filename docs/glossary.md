@@ -7,6 +7,7 @@ the literature fixes (GKR, LogUp, RISC-V) are not listed.
 | --- | --- | --- |
 | A64-C5 | the prime `2^64 − 59`; `Fp`, the base field, is the integers modulo it | [primitives.md §1](spec/primitives.md) |
 | advice | memory whose initial values the prover chose, bound by nothing | [public-values.md §6](spec/public-values.md) |
+| anchor | the tuple a precompile call's ecall row writes and its frame row reads, pairing the two | [precompiles.md §2](spec/precompiles.md) |
 | archived path | proving from a held `TraceArchive`; only the tamper harness does | [streaming.md §6](spec/streaming.md) |
 | artifact | a circuit as data, `CircuitArtifact`; also an exported `ProgramImage` | [gkr.md §4](spec/gkr.md), [program.md §3](spec/program.md) |
 | base claims | each committed column's claimed value where the backward pass ends | [gkr.md §5](spec/gkr.md) |
@@ -25,8 +26,8 @@ the literature fixes (GKR, LogUp, RISC-V) are not listed.
 | discharge | the rule that each lookup is one leaf of its tree | [lookup.md §11](spec/lookup.md) |
 | enforcing, producing | a gate vanishing on every row; one writing the next layer | [gkr.md §1](spec/gkr.md) |
 | extra mask, kind, kind bit | `family_extra_mask` = `1 << kind`, a kind being a mnemonic's index; `b_k` its bit | [program.md §6](spec/program.md) |
-| family | a circuit and the rows it proves: instructions (0–6) or memory locations | [circuits.md §1](spec/circuits.md) |
-| frame | an execution family's queries | [memory.md §2](spec/memory.md) |
+| family | a circuit and the rows it proves: instructions (0–6), memory locations (7–11) or precompile calls (12–14) | [circuits.md §1](spec/circuits.md) |
+| frame | an execution family's queries; a precompile call's RAM words, which its frame family's row reads and writes | [memory.md §2](spec/memory.md), [precompiles.md §1](spec/precompiles.md) |
 | gate list, row-wise, halving | the gates from layer `k` to `k + 1`, keeping the height or halving it | [gkr.md §1](spec/gkr.md) |
 | gated key, neutral tuple | a lookup tuple under its selector; off, it reads a neutral table row | [lookup.md §4](spec/lookup.md) |
 | generic table | the tagged table of `ZeroEntry`, `AND`, `SIGN`, `POW`, `POW_W` | [lookup.md §9](spec/lookup.md) |
@@ -43,6 +44,7 @@ the literature fixes (GKR, LogUp, RISC-V) are not listed.
 | multiplicity | a channel's `W` column counting each table row's lookups | [lookup.md §7](spec/lookup.md) |
 | padding contract | `padding.row` makes row-local relations vanish and tree inputs 1 | [gkr.md §4](spec/gkr.md) |
 | pass 1, pass 2 | executing to fix the statement; again to prove each shard | [streaming.md §2](spec/streaming.md) |
+| precompile, delegation | an ecall a circuit of its own answers over a frame: the Poseidon2 permutation, `mul_div_u256` | [precompiles.md](spec/precompiles.md) |
 | public window | windows 2 and 3 at `2^12`: input at `0x8000`, journal at `0xC000` | [public-values.md §2](spec/public-values.md) |
 | query | one read and one write at one address in one cycle | [execution-trace.md §3](spec/execution-trace.md) |
 | reconciliation | `∏ read roots · R_b = ∏ write roots · W_b`, once a statement | [memory.md §4](spec/memory.md) |

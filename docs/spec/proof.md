@@ -246,7 +246,8 @@ and runs `VerifyingKey::check`, which refuses, in order:
 1. a `VmConfig` no derivation produces (`VmConfig::from_bytes` of its own bytes), or a
    `code_version` other than `CODE_VERSION`;
 2. a setup-commitment count other than the family count, or an `identity` that
-   `identity_digest(code_version, config, entry_pc, setup_commitments)` does not reproduce;
+   `identity_digest(code_version, config, entry_pc, setup_commitments)` does not reproduce under
+   this build's `CIRCUIT_REVISION`, which a key from another registry's revision fails;
 3. a circuit count other than the family count; then, family by family: a circuit for another
    family; a height the registry has no circuit for; a circuit, artifact or channel specs, other
    than `config.circuit(family, trace_vars)`, the registry's ([circuits.md](circuits.md) §1); an
@@ -257,7 +258,7 @@ and runs `VerifyingKey::check`, which refuses, in order:
 
 Then it expands `pcs`, which `check` does not read. `verifier::load_verifying_key` is
 `VerifyingKey::from_bytes`. The circuits are held to the registry because nothing else binds them:
-identity binds the program, not the circuit that proves it.
+identity binds the program and the registry's revision, not the circuit that proves it.
 
 **A key from an untrusted source.** Every field is recomputed from or compared with the verifier's
 one trusted value (§1), or fixed by the code: `config`, `entry_pc` and the setup commitments
@@ -285,11 +286,13 @@ another; step 4 holds it to `ts_start ≤ ts_end ≤ 2^38` and nothing more.
 window is non-empty and no shard's `ts_end` exceeds the next shard's `ts_start`; a family's records
 are consecutive and ascending, so neighbours suffice. It is per family because families interleave
 — `ADD_SUB_LUI_AUIPC` may own cycles 1 and 3 and `JUMP_BRANCH_SLT` cycle 2 — and every other family
-is exempt: a window family's rows are words.
+is exempt: a window family's rows are words, a delegation family's calls riding cycles already
+owned.
 
 The prover reads a window off the shard's `M[0]` cycle column (`ts_window`,
 `crates/prover/src/lib.rs`): `[4·c_0, 4·c_max + 4)`, `c_0` row 0's cycle and `c_max` the largest,
-padding rows carrying 0. Window families claim `verifier_core::TRIVIAL_TS_WINDOW = [0, 2^38)`.
+padding rows carrying 0. Window and delegation families claim
+`verifier_core::TRIVIAL_TS_WINDOW = [0, 2^38)`.
 
 **A window binds nothing.** No gate ties it to the rows proved under it, so a prover may claim any
 windows the rule admits; cross-shard order, cycle uniqueness and pc continuity are the memory

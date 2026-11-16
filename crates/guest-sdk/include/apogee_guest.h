@@ -10,7 +10,8 @@
  * An Apogee guest has no files and no streams. Its public input, advice and
  * journal are memory the proof binds — or, for advice, does not — and these
  * four calls are the whole of reaching them (docs/guest-program-manual.md §11,
- * docs/spec/public-values.md).
+ * docs/spec/public-values.md). The last two calls are precompiles, each a
+ * circuit of its own (docs/spec/precompiles.md).
  *
  * The library also provides `memcpy`, `memmove`, `memset` and `memcmp`, the
  * 128-bit integer helpers a compiler calls, and `__cxa_atexit`, which C++
@@ -43,6 +44,18 @@ void apogee_commit(const void *bytes, size_t len);
  * provable. Unlike returning `code` from `main`, it runs no destructor: it is
  * C's `_Exit`. */
 __attribute__((noreturn)) void apogee_exit(int32_t code);
+
+/* The Poseidon2-A64-C5 permutation of the 16 lanes at `state`, in place, by
+ * the precompile: each lane read mod p = 2^64 - 59 and written below it.
+ * `state` is 8-aligned and below the advice region: copy advice in before
+ * hashing it. */
+void apogee_poseidon2_permute(uint64_t state[16]);
+
+/* q = floor(a*b/d) and r = a*b mod d over the full 512-bit product, by the
+ * precompile; each value four little-endian 64-bit limbs. Returns 0, or 1 and
+ * writes nothing when d = 0 or the quotient is not below 2^256. */
+int32_t apogee_mul_div_u256(const uint64_t a[4], const uint64_t b[4], const uint64_t d[4],
+                            uint64_t q[4], uint64_t r[4]);
 
 /* The guest's entry, which the library's startup calls. Declared here with C
  * linkage because a freestanding C++ compiler does not give `main` any: a

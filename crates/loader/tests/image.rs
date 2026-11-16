@@ -36,7 +36,7 @@ fn the_image_round_trips_through_postcard() {
 /// The wire forms are built here from primitives rather than by patching a
 /// serialized image, so each one is exactly the malformation it is named
 /// after. The first case is a **positive** control on that construction: if the
-/// hand-built layout were wrong, the three refusals below would all be
+/// hand-built layout were wrong, the refusals below would all be
 /// evidence about this test rather than about the deserializer.
 #[test]
 fn malformed_wire_forms_are_rejected() {
@@ -45,17 +45,25 @@ fn malformed_wire_forms_are_rejected() {
     const TEXT: &[u8] = &[0x01, 0x00, 0x82, 0x80];
     const NOP: u32 = 0x0000_0013;
     const RET: u32 = 0x0000_8067;
-    // The wire form, spelled in primitives: entry, segments, slot_base, slots.
+    // The wire form, spelled in primitives: entry, segments, slot_base, slots,
+    // delegations.
     type WireSegment<'a> = (u32, u32, &'a [u8]);
     type WireSlot = (u8, u32);
-    type WireImage<'a> = (u32, &'a [WireSegment<'a>], u32, &'a [WireSlot]);
-    let wire = |slot_base: u32, slots: &[WireSlot]| -> Vec<u8> {
-        let image: WireImage = (0x0001_0000, &[(0x0001_0000, 4, TEXT)], slot_base, slots);
+    type WireImage<'a> = (u32, &'a [WireSegment<'a>], u32, &'a [WireSlot], &'a [u32]);
+    let declaring = |slot_base: u32, slots: &[WireSlot], delegations: &[u32]| -> Vec<u8> {
+        let image: WireImage = (
+            0x0001_0000,
+            &[(0x0001_0000, 4, TEXT)],
+            slot_base,
+            slots,
+            delegations,
+        );
         let mut buf = [0u8; 256];
         postcard::to_slice(&image, &mut buf)
             .expect("the buffer is far larger than this image")
             .to_vec()
     };
+    let wire = |slot_base: u32, slots: &[WireSlot]| declaring(slot_base, slots, &[]);
 
     let good = wire(0x0001_0000, &[(1, NOP), (1, RET)]);
     assert_eq!(
@@ -75,6 +83,10 @@ fn malformed_wire_forms_are_rejected() {
             wire(0x0001_0000, &[(0, NOP), (2, 7)]),
         ),
         ("an odd slot_base", wire(0x0001_0001, &[(1, NOP), (1, RET)])),
+        (
+            "delegations out of order",
+            declaring(0x0001_0000, &[(1, NOP), (1, RET)], &[0x511, 0x510]),
+        ),
     ] {
         assert!(
             postcard::from_bytes::<ProgramImage>(&bytes).is_err(),
@@ -85,7 +97,13 @@ fn malformed_wire_forms_are_rejected() {
     // The segment list has invariants of its own, and a hand-built wire form is
     // the only way to state one it could not have.
     let multi = |segments: &[(u32, u32, &[u8])]| -> Vec<u8> {
-        let image: WireImage = (0x0001_0000, segments, 0x0001_0000, &[(1, NOP), (1, RET)]);
+        let image: WireImage = (
+            0x0001_0000,
+            segments,
+            0x0001_0000,
+            &[(1, NOP), (1, RET)],
+            &[],
+        );
         let mut buf = [0u8; 256];
         postcard::to_slice(&image, &mut buf)
             .expect("the buffer is far larger than this image")
@@ -290,6 +308,7 @@ fn initial_word_assembles_words_across_segment_edges() {
         ],
         slot_base: 0x0001_3002,
         slots: Vec::new(),
+        delegations: Vec::new(),
     };
     assert_eq!(image.initial_word(0x0001_3000), 0xbbaa_0000);
     assert_eq!(image.initial_word(0x0001_3004), 0x0000_00cc);

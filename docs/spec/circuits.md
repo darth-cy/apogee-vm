@@ -16,7 +16,8 @@ Families 0–6 (`constants::family`) are the **execution** families, one execute
 row ([add-sub.md](add-sub.md), [jump-branch-slt.md](jump-branch-slt.md),
 [bitwise.md](bitwise.md), [mul-div.md](mul-div.md), [memory-ops.md](memory-ops.md) §3,
 §4, §6); 7–11 the **window** families, one memory word a row ([memory.md](memory.md) §3,
-[public-values.md](public-values.md) §4).
+[public-values.md](public-values.md) §4); 12–14 the **delegation** families, a precompile call a
+row or sixteen ([precompiles.md](precompiles.md)).
 
 Shapes at the default height `2^n` (`constants::family::DEFAULT_HEIGHTS`): committed columns,
 enforcing gates, obligations per channel (`TIMESTAMP/RANGE16/GENERIC/DECODER`), row-wise gate
@@ -25,7 +26,7 @@ lists (the halving ones are `n`), inner columns, artifact bytes, and a shard pro
 
 | id | family | `n` | `M` | `W` | `S` | gates | lookups | row-wise | inner | bytes | proof |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | `ADD_SUB_LUI_AUIPC` | 22 | 27 | 37 | 11 | 54 | 8/5/1/1 | 5 | 356 | 42,652 | 32,504 |
+| 0 | `ADD_SUB_LUI_AUIPC` | 22 | 28 | 37 | 11 | 58 | 8/5/1/1 | 5 | 356 | 43,405 | 32,520 |
 | 1 | `JUMP_BRANCH_SLT` | 22 | 27 | 51 | 11 | 54 | 8/11/2/1 | 5 | 392 | 47,243 | 33,304 |
 | 2 | `BITWISE` | 22 | 27 | 48 | 11 | 38 | 8/0/8/1 | 5 | 330 | 41,255 | 31,560 |
 | 3 | `MUL_DIV` | 20 | 27 | 98 | 11 | 86 | 13/26/6/1 | 6 | 458 | 68,632 | 32,800 |
@@ -37,6 +38,9 @@ lists (the halving ones are `n`), inner columns, artifact bytes, and a shard pro
 | 9 | `PUBLIC_INPUT` | 12 | 3 | 0 | 0 | 0 | — | 1 | 26 | 1,759 | 5,992 |
 | 10 | `PUBLIC_OUTPUT` | 12 | 2 | 0 | 0 | 0 | — | 1 | 26 | 1,714 | 5,976 |
 | 11 | `ADVICE_WINDOWS` | 22 | 3 | 0 | 0 | 0 | — | 1 | 46 | 2,839 | 17,912 |
+| 12 | `POSEIDON2` | 16 | 164 | 130 | 0 | 98 | 0/210/0/0 | 9 | 1,344 | 208,518 | 44,376 |
+| 13 | `POSEIDON2_ROUNDS` | 16 | 35 | 65 | 0 | 84 | — | 4 | 62 | 58,609 | 15,088 |
+| 14 | `MUL_DIV_U256` | 16 | 91 | 135 | 0 | 48 | 0/239/0/0 | 9 | 1,218 | 180,932 | 41,272 |
 
 The bytes are the GKR pass and outputs; the witness commitment and the opening come on top
 ([proof.md](proof.md) §9, [pcs.md](pcs.md) §7).
@@ -49,7 +53,9 @@ halving lists, one per variable and as wide as the outputs, and no gate below th
 
 **Shared circuits.** `PUBLIC_OUTPUT`'s circuit is `ZERO_WINDOWS`' and `ADVICE_WINDOWS`' is
 `PUBLIC_INPUT`'s, byte for byte at one height, all `constraints::memory` constructors
-([memory.md](memory.md) §3). Every other family's is its own module's `artifact`.
+([memory.md](memory.md) §3). Every other family's is its own module's `artifact`, the delegation
+families' on `constraints::delegation`'s builder: `poseidon2::{artifact, rounds_artifact}` and
+`mul_div_u256::artifact`.
 
 ## 2. How a family circuit is assembled
 
@@ -78,8 +84,14 @@ constructor panics on a refusal, so every circuit that exists has passed them. I
 - `memory::frame_with_channels_artifact(queries, trace_vars, FamilySpec)`, the execution families:
   [memory.md](memory.md) §2's frame over `memory::frame_queries(family)`, then the family's witness
   columns after the frame's `w + 3`, setup columns from `S[0]`, virtual tables, enforcing gates
-  after the frame's, lookups after its `2w` gap obligations, and a non-empty channel list;
-- the window constructors ([memory.md](memory.md) §3).
+  after the frame's, lookups after its `2w` gap obligations, and a non-empty channel list; its
+  own `M` columns after the frame's, and a leaf folded into `rd`'s write leaf (`ADD_SUB_LUI_AUIPC`'s
+  request, [precompiles.md](precompiles.md) §2);
+- the window constructors ([memory.md](memory.md) §3);
+- `delegation::Builder`, the delegation families: `M[0] live` masking every leaf and obligation,
+  columns named once, leaves padded to one power of two a side, the one channel `RANGE16` where
+  there is an obligation, and `lookup::check_copowers` over its scaled chunks
+  ([precompiles.md](precompiles.md) §1).
 
 Beyond the frame, each execution family has `m_pc` as the row's liveness and every other mask
 held to `m_pc` times the kinds making that query (`<q>_mask_rule`, [memory.md](memory.md) §2); its

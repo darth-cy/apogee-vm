@@ -642,9 +642,11 @@ impl VerifyingKey {
             &self.setup_commitments,
         );
         if identity != self.identity {
-            return Err(
-                "the identity is not the digest of the key's config, entry pc and setup".into(),
-            );
+            return Err(format!(
+                "the identity is not the digest of the key's config, entry pc and setup at \
+                 circuit revision {}",
+                constants::family::CIRCUIT_REVISION
+            ));
         }
         if self.circuits.len() != families.len() {
             return Err("the key has not one circuit per config family".into());

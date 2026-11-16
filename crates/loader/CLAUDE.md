@@ -1,5 +1,5 @@
 # loader
 
-ELF loading, RVC expansion and the `ProgramImage`; the symbol table read beside it.
+ELF loading, RVC expansion, the delegation declarations' section and the `ProgramImage`; the symbol table read beside it.
 
 Specified in [program.md](../../docs/spec/program.md) §1–§3.

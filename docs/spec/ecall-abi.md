@@ -26,12 +26,16 @@ Every number this VM implements.
 | Number | Constant | Class | What |
 | --- | --- | --- | --- |
 | 93 | `EXIT` | deterministic | end the execution with status `a0`'s low word, read as an `i32`: the statement's exit status; nonzero is a failed execution, still provable |
+| `0x0510` | `POSEIDON2` | deterministic | the Poseidon2-A64-C5 permutation of the 16 lanes at `a0`, two little-endian words each, in place; a lane read mod `p`, written canonical |
+| `0x0511` | `MUL_DIV_U256` | deterministic | `a`, `b`, `d` at `a0`, eight little-endian words each, become `⌊a·b/d⌋`, `a·b mod d`, `d`; the caller owes `d ≠ 0` and a quotient below `2^256`, which the emulator refuses as `DelegationFrame` |
 
 A class says who chooses the result. **deterministic**: a function of the guest's own state, which
-a circuit proves. **advice**: chosen by the prover; no number has it. A proof admits `EXIT` alone:
-`ADD_SUB_LUI_AUIPC` holds every ecall row's `a7` to 93 ([add-sub.md](add-sub.md)). A delegation
-call is a number `constants::delegation::TYPES` registers, its frame at `a0`; **UNFINISHED**: none
-is registered, and no ecall row requests one yet.
+a circuit proves. **advice**: chosen by the prover; no number has it. A proof admits these three:
+`ADD_SUB_LUI_AUIPC` holds an exit row's `a7` to 93, and a delegation call's row writes an anchor only
+the family of its number reads ([precompiles.md](precompiles.md) §2). A delegation call preserves
+`a0`, as every register; its frame is a word-aligned span a store could write, each word checked as
+one, below `ADVICE_ORIGIN` (§5): a frame reaching the advice is the fatal `OutOfBounds`
+([precompiles.md](precompiles.md) §1).
 
 ## 3. Retired numbers
 
@@ -125,8 +129,8 @@ makes them true:
 
 ## 6. The guest-sdk surface
 
-`crates/guest-sdk` is the guest's runtime. Only `exit` issues an ecall (a delegation's shim would
-too, and none is registered); the rest is loads and stores.
+`crates/guest-sdk` is the guest's runtime. Only `exit` and the two precompiles' shims issue an
+ecall; the rest is loads and stores.
 
 | Item | What |
 | --- | --- |
@@ -139,6 +143,8 @@ too, and none is registered); the rest is loads and stores.
 | `exit(code)` | `EXIT`; publishes nothing beyond what was committed |
 | allocator | bumps up from `__heap_start`, never frees; exits 71 when a block would end above `__stack_top − STACK_RESERVE` or the live `sp` |
 | panic handler | exits 101 and writes nothing: a panicking guest is provable, having published what it committed |
+| `poseidon2_permute(state)`, `Digest`, `poseidon2_compress(l, r)` | `POSEIDON2` over a `[u64; 16]`; 8 lanes, each below `p`; and a Merkle node over two `Digest`s ([precompiles.md](precompiles.md) §5) |
+| `U256` | a 256-bit integer; its division and `mul_div` are `MUL_DIV_U256` |
 
 ## 7. The C ABI
 
@@ -152,6 +158,8 @@ calling it.
 | `const uint8_t *apogee_advice(size_t *len)` | `advice()` |
 | `void apogee_commit(const void *bytes, size_t len)` | `commit` |
 | `void apogee_exit(int32_t code)` | `exit`, never returning |
+| `void apogee_poseidon2_permute(uint64_t state[16])` | `poseidon2_permute` |
+| `int32_t apogee_mul_div_u256(a, b, d, q, r)` | `U256::mul_div_rem` over four-limb arrays: 0, or 1 and nothing written where it is `None` |
 
 The library's `_start` is crt0's (§5): it runs the guest's static initializers and calls its own
 `int main(void)`, exiting with what it returns; the header declares `main` with C linkage, which a

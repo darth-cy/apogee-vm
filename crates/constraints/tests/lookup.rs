@@ -498,6 +498,7 @@ fn family_spec(edit: fn(&mut FamilySpec)) -> FamilySpec {
                 multiplicity: w(MULT_GENERIC),
             },
         ],
+        ..FamilySpec::default()
     };
     edit(&mut e);
     e

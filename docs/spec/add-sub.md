@@ -3,8 +3,9 @@
 `add`, `sub`, `addi`, `lui`, `auipc`, their 32-bit forms `addw`, `subw`, `addiw`, and `ecall`,
 `ebreak` and `fence`, compressed forms included, are family 0, one executed instruction a row;
 `constraints::add_sub::artifact` is its circuit, on `crates/constraints/src/family.rs`'s builder.
-Every `ecall` is a row of it, so the circuit also proves the exit. This page specifies what it adds
-beside the memory frame ([memory.md](memory.md) §2); its shape is [circuits.md](circuits.md) §1's.
+Every `ecall` is a row of it, so the circuit also proves the exit and a delegation's request. This
+page specifies what it adds beside the memory frame ([memory.md](memory.md) §2); its shape is
+[circuits.md](circuits.md) §1's.
 
 ## 1. Columns
 
@@ -22,7 +23,8 @@ writes to a nonzero `rd`. The family adds the builder's decoded row, kind bits `
 `imm_negative`, and:
 
 ```text
-is_ecall is_fence        the system kind, split by its code
+is_exit is_fence         the system kind, split by its code, with delegates
+delegates (M)            a delegation request: the mask of its anchor tuple
 c0 c1                    the low word's carry or borrow, and the high word's
 rd_lo_h16 rd_lo_sign     sel's high halfword and its bit 15, sel's bit 31
 rd_hi_h16                sel_hi's high halfword
@@ -39,15 +41,17 @@ address and value-mask rules), and, each held to 0, with `adds = b_add + b_addi 
 b_addiw`, `adds64 = b_add + b_addi + b_auipc`, `W = b_addw + b_addiw + b_subw` and 93 `EXIT`:
 
 ```text
-system_split       is_ecall + is_fence − b_system
+delegates_live     delegates − delegates·m_pc
+system_split       is_ecall + is_fence − b_system          is_ecall = is_exit + delegates
 ecall_code         is_ecall·imm
 fence_code         is_fence·(imm − 2)
-ecall_is_exit      is_ecall·(v1 − 93)
-ecall_is_exit_hi   is_ecall·vh1
+ecall_is_exit      is_exit·(v1 − 93)
+ecall_is_exit_hi   is_exit·vh1
+delegation_number_hi   delegates·vh1                      delegation_base_hi   delegates·vh2
 rs1_mask_rule      m_rs1 − m_pc·(adds − b_auipc + b_sub + b_subw + is_ecall)
 rs2_mask_rule      m_rs2 − m_pc·(b_add + b_sub + b_addw + b_subw + is_ecall)
-rd_mask_rule       m_rd − m_pc·(adds + b_sub + b_lui + b_subw + is_ecall)
-<q>_addr_rule      m_q·(a_q − decoded_q − is_ecall·{17 for rs1, 10 for rs2 and rd})
+rd_mask_rule       m_rd − m_pc·(adds + b_sub + b_lui + b_subw + is_exit)
+<q>_addr_rule      m_q·(a_q − decoded_q − c_q)    c_rs1 = 17·is_ecall, c_rs2 = 10·is_ecall, c_rd = 10·is_exit
 add_lo             adds·(v1 + v2 + imm − sel − 2^32·c0) + b_auipc·pc
 sub_lo             (b_sub + b_subw)·(v1 − v2 − sel + 2^32·c0)
 lui_lo             b_lui·(imm − sel)
@@ -55,9 +59,18 @@ add_hi             adds64·(vh1 + vh2 + c0 + (2^32 − 1)·neg − sel_hi − 2^
 sub_hi             b_sub·(vh1 − vh2 − c0 − sel_hi + 2^32·c1)
 lui_hi             b_lui·((2^32 − 1)·neg − sel_hi)
 w_extend           W·(sel_hi − (2^32 − 1)·rd_lo_sign)
-exit_status        is_ecall·(v_rd − sel)
-exit_status_hi     is_ecall·(vh_rd − sel_hi)
-next_pc_rule       next_pc + 2^32·pc_wrap − (1 − is_ecall)·seq − is_ecall·HALT_PC
+exit_status        is_exit·(v_rd − sel)
+exit_status_hi     is_exit·(vh_rd − sel_hi)
+next_pc_rule       next_pc + 2^32·pc_wrap − (1 − is_exit)·seq − is_exit·HALT_PC
+```
+
+and `delegates` held boolean. A request's anchor `T(DELEGATION, v2, cycle, v1)` under `delegates`
+is folded into `rd`'s write leaf, `rd` being absent on that row
+([precompiles.md](precompiles.md) §2):
+
+```text
+write_rd           1 + m_rd·(T(REG, a_rd, 4·cycle + 3, w_rd, w_rd_hi) − 1)
+                     + delegates·(T(DELEGATION, v2, cycle, v1) − 1)
 ```
 
 ## 3. Lookups
@@ -89,12 +102,18 @@ satisfy a gate with a carry of 0 and reach a register.
 instruction advances by 2 ([program.md](program.md) §5) — or `HALT_PC` on the exit row, less
 `2^32·pc_wrap`. Both are below `2^32`, so `pc_wrap = 0` on every live row.
 
-On a system row `system_split` sets exactly one of `is_ecall` and `is_fence`, and the code gates
-make it the one `imm` names; `ebreak`'s code 1 satisfies neither, so an `ebreak` row is unprovable.
-A `fence` row makes no query but the pc's and falls through. An `ecall` row is the exit: its `a7` is
-93 in both words, so no other number passes. The exit row writes back the `a0` it read, both words,
-so `x10`'s final low word is the status the statement carries ([proof.md](proof.md) §6, step 10b),
-and writes `HALT_PC`, after which no row runs ([memory.md](memory.md) §5).
+On a system row `system_split` sets exactly one of `is_exit`, `delegates` and `is_fence`, and the
+code gates make an ecall or a fence the one `imm` names; `ebreak`'s code 1 satisfies neither, so an
+`ebreak` row is unprovable. A `fence` row makes no query but the pc's and falls through. An exit's
+`a7` is 93 in both words. The exit row writes back the `a0` it read, both words, so `x10`'s final
+low word is the status the statement carries ([proof.md](proof.md) §6, step 10b), and writes
+`HALT_PC`, after which no row runs ([memory.md](memory.md) §5).
+
+A request reads `a7` and `a0`, each a word, writes no register and falls through. Its anchor names
+its number, base and cycle, and balances only against the frame row of the family that number
+registers ([precompiles.md](precompiles.md) §2), so a request of an unregistered number, or of 93,
+has no proof; `delegates_live` keeps a padding row from writing one. The fold costs no leaf:
+`m_rd` and `delegates` are exclusive, `rd_mask_rule` writing no `rd` where `is_exit` is 0.
 
 A row with `m_pc = 0` is bound to no table row and its kind bits are free; the arithmetic gates are
 gated by those bits alone. That is harmless: the mask rules zero the row's other masks and every
@@ -104,8 +123,10 @@ is refused by the row alone, and every gate and lookup refuses some single-cell 
 
 ## 5. Limits
 
-- An `ecall` whose `a7` is not 93 has no proof. The emulator answers any other number `-ENOSYS`
-  and continues ([ecall-abi.md](ecall-abi.md) §4); the fill refuses that trace, naming the cycle.
+- An `ecall` whose `a7` is neither 93 nor a registered delegation has no proof. The emulator answers
+  any other number `-ENOSYS` and continues ([ecall-abi.md](ecall-abi.md) §4); the fill refuses that
+  trace, naming the cycle.
 - An `ebreak` has no proof; it is fatal in the emulator
   ([execution-trace.md](execution-trace.md) §10).
-- No row touches RAM: an `ecall` row reads `a7` and `a0` and writes `a0`.
+- No row touches RAM: an `ecall` row reads `a7` and `a0`, and an exit writes `a0`; a delegation's
+  frame is its family's row's.

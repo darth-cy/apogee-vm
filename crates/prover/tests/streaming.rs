@@ -30,10 +30,10 @@
 //!   block's: where an archived construction and a streamed one are held to
 //!   the same bytes.
 //!
-//! The two `ShardRows` arms are each proved and verified by the suites that
+//! The three `ShardRows` arms are each proved and verified by the suites that
 //! are about them: `tests/block.rs` and `tests/acceptance.rs` the `Cycles` arm,
-//! `tests/public_io.rs` the `Window` arm. Re-proving them here would be the
-//! same mutation set at twice the cost.
+//! `tests/public_io.rs` the `Window` arm, and `a2` here the `Invocations` arm.
+//! Re-proving them here would be the same mutation set at twice the cost.
 //!
 //! Every test here is `#[ignore]`d and proves real statements: run with
 //! `cargo test --release -p prover --test streaming -- --include-ignored
@@ -93,4 +93,41 @@ fn a1_the_streamed_block_does_not_depend_on_max_in_flight() {
         r8.peak_in_flight, 3,
         "addsub: the window families' batch is the largest"
     );
+}
+
+/// `guests/precompiles`' statement: both precompiles, so the `Invocations` arm
+/// — `POSEIDON2`, `POSEIDON2_ROUNDS` and `MUL_DIV_U256`, each a shard — beside
+/// its execution and window shards; proved once at four in flight and verified,
+/// its journal the run's. `crates/checker/tests/precompiles.rs` holds that
+/// journal to the host's and the statement's multiset to its circuits.
+#[test]
+#[ignore = "proves the precompiles statement"]
+fn a2_a_statement_with_precompile_calls_streams_and_verifies() {
+    let setup = ProverSetup::new(common::precompiles_program()).expect("precompiles registers");
+    let io = GuestIo {
+        input: [1u32.to_le_bytes().as_slice(), &[0u8; 64]].concat(),
+        advice: Vec::new(),
+    };
+    let (block, _) = prove_block_streaming(&setup, &io, 4).expect("it proves");
+    verifier::verify_block(&setup.vk, &block, block.statement()).expect("it verifies");
+    let run = emulator::run(&setup.program.image, &io).expect("it runs");
+    assert_eq!(
+        block.statement().output,
+        run.io.output,
+        "the journal is the run's"
+    );
+    for family in [
+        constants::family::POSEIDON2,
+        constants::family::POSEIDON2_ROUNDS,
+        constants::family::MUL_DIV_U256,
+    ] {
+        let at = setup
+            .program
+            .config
+            .families
+            .iter()
+            .position(|(f, _)| *f == family);
+        let count = at.map(|i| block.statement().shard_counts[i]);
+        assert_eq!(count, Some(1), "one shard of family {family}");
+    }
 }

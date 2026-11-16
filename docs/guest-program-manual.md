@@ -15,8 +15,9 @@ directory below the root.
 
 A guest is an Apogee-SDK program, not a Linux one: no file descriptors, streams, clock, entropy or
 diagnostic output. Its public input, its journal and the prover's advice are memory, read and
-written with ordinary loads and stores, and its only ecall is `EXIT`. Any other number answers
-`-ENOSYS` and leaves the run unprovable ([ecall-abi.md](spec/ecall-abi.md) §4).
+written with ordinary loads and stores, and its only ecalls are `EXIT` and the two precompiles the
+SDK calls (§3.1). Any other number answers `-ENOSYS` and leaves the run unprovable
+([ecall-abi.md](spec/ecall-abi.md) §4).
 
 ## 2. Write the guest
 
@@ -50,7 +51,7 @@ fn main() {
 and append it to the list in `guests/Cargo.toml`:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "public-io", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "public-io", "precompiles", "marketplace", "hello"]
 ```
 
 - `#![no_std]`: the target is bare metal. `extern crate alloc;` adds `Vec`, `Box` and `String`
@@ -116,10 +117,55 @@ fn main() {
 - Checking the advice is the guest's job: committing a function of unchecked advice publishes what
   the prover chose ([public-values.md](spec/public-values.md) §6).
 
-`digest` is a collision-resistant hash the guest links — a Poseidon2 sponge over
-`crates/transcript`, say. The SDK carries none, and the VM has
-no precompile: every operation is RV64IMAC code in the guest, proved row by row.
-[ecall-abi.md](spec/ecall-abi.md) §6 lists the SDK.
+`digest` is a collision-resistant hash: a Merkle root of `guest_sdk::poseidon2_compress`, say
+(§3.1). [ecall-abi.md](spec/ecall-abi.md) §6 lists the SDK.
+
+### 3.1 Precompiles and `U256`
+
+Two operations are not RV64IMAC code but a circuit each, which a guest reaches through the SDK
+([precompiles.md](spec/precompiles.md)): the Poseidon2-A64-C5 permutation, and the 256-bit
+`mul_div` that a token balance's arithmetic is built on.
+
+```rust
+use guest_sdk::{poseidon2_compress, Digest, U256};
+
+let sibling = Digest::new(lanes).expect("a lane below p"); // 8 canonical lanes, from advice say
+let node = poseidon2_compress(&leaf, &sibling); // a Merkle node, a Digest
+let share = U256::from(amount).mul_div(U256::from(total), U256::from(reserve)); // Option<U256>
+```
+
+- `U256` is four `u64` limbs, least significant first, with `from_be_bytes` for an EVM word. Its
+  operators panic on overflow and on a zero divisor; `checked_*` and `overflowing_*` do not.
+- Division and `mul_div` are one precompile call each; addition, comparison and multiplication are
+  a few instructions a limb. `mul_div` is `None` for a zero divisor or a quotient past `2^256`.
+- A `Digest`'s lanes are each below `p`: `Digest::new` refuses any other, as a lane `x + p` would be
+  a second encoding of the node `x` opens. Decode every digest from advice or input through it; a
+  node `poseidon2_compress` returns is one already.
+- A precompile's frame is the guest's own memory below the advice region, which the SDK's calls
+  always are: advice is copied in before it is hashed, and a frame reaching the advice is the fatal
+  `OutOfBounds`.
+- A guest that links a precompile pays one shard of each family it declares, at `2^16` rows: worth
+  it once the call replaces more instructions than that ([circuits.md](spec/circuits.md) §1).
+- `guests/marketplace` is the worked example of a table a proof follows by its root: a listings
+  table of `2^20` slots as a Poseidon2 Merkle tree, the root before a batch in the public input, a
+  Merkle proof in the advice for each run of operations on one listing, checked before it is used,
+  and the root after the batch in the journal. Each listing's price is in its own currency, an
+  ERC-20 contract's address or zero for the native one, and the journal tallies each currency's
+  volume and fees apart.
+
+### 3.2 Fewer cycles
+
+Cutting a guest's cycles has more than one strategy, and two are in use:
+
+- **A precompile module.** The VM proves a hot operation in a circuit of its own, which the guest
+  calls instead of running it (§3.1).
+- **The input's format.** Whoever builds the input, a sequencer say, can shape it so the guest does
+  less, and the guest presumes that shape rather than making it. `guests/marketplace` opens one
+  Merkle proof for each run of consecutive operations on one listing and writes one root back,
+  however long the run, so a batch with each listing's operations gathered is one proof a listing.
+  The order is the sequencer's policy and becomes part of the batch: the guest proves the order it
+  is given and never sorts. Any order is valid input, at a proof a run, and another order can be
+  another result.
 
 ## 4. Build it
 
@@ -157,7 +203,7 @@ fit its decoded table (§8). The identity you publish is the release image's.
 cargo run -p artifact-dump -- guests/target/riscv64imac-unknown-none-elf/debug/hello --out artifacts
 ```
 
-This writes `artifacts/hello.img`, `postcard` over `ProgramImage`'s four fields with no header
+This writes `artifacts/hello.img`, `postcard` over `ProgramImage`'s five fields with no header
 ([program.md](spec/program.md) §3), and `artifacts/hello.img.txt`, its report, and prints the entry,
 the segment and instruction counts and the artifact's size and SHA-256. The tool first serializes
 the image, reads it back through the validating reader and compares; on a difference, or an ELF the

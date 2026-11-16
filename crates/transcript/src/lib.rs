@@ -30,17 +30,17 @@ pub const RATE: usize = 8;
 
 /// HorizenLabs' `M4`, MDS over `p`: every minor is a nonzero integer of
 /// magnitude at most 64.
-const M4: [[u128; 4]; 4] = [[5, 7, 1, 3], [4, 6, 1, 1], [1, 3, 5, 7], [1, 1, 4, 6]];
+pub const M4: [[u128; 4]; 4] = [[5, 7, 1, 3], [4, 6, 1, 1], [1, 3, 5, 7], [1, 1, 4, 6]];
 
 /// `x^3`, a permutation of the field because `3 ∤ p − 1`.
-fn sbox(x: Fp) -> Fp {
+pub fn sbox(x: Fp) -> Fp {
     x * x * x
 }
 
 /// The external layer `circ(2·M4, M4, M4, M4)`: block `b` becomes
 /// `M4·s_b + Σ_j M4·s_j`. An entry of `y` is below `16p` and one of `sum` below
 /// `64p`, so each lane is reduced once.
-fn external(s: &mut [Fp; WIDTH]) {
+pub fn external(s: &mut [Fp; WIDTH]) {
     let v = s.map(Fp::to_u64);
     let y: [[u128; 4]; 4] = core::array::from_fn(|b| {
         core::array::from_fn(|r| (0..4).map(|c| M4[r][c] * v[4 * b + c] as u128).sum())
@@ -53,7 +53,7 @@ fn external(s: &mut [Fp; WIDTH]) {
 
 /// The internal layer `M_I = J + diag(μ − 1)`: lane `i` becomes
 /// `(μ_i − 1)·s_i + Σ_j s_j`, below `p² + 16p < 2^128`.
-fn internal(s: &mut [Fp; WIDTH]) {
+pub fn internal(s: &mut [Fp; WIDTH]) {
     let sum: u128 = s.iter().map(|x| x.to_u64() as u128).sum();
     for (x, &d) in s.iter_mut().zip(&params::INTERNAL_DIAG_M_1) {
         *x = Fp::from_u128(d as u128 * x.to_u64() as u128 + sum);
@@ -61,10 +61,17 @@ fn internal(s: &mut [Fp; WIDTH]) {
 }
 
 // The round constants of `params` as field elements, converted at compile time
-// so that no round pays for the conversion.
-const RC_INITIAL: [[Fp; WIDTH]; 6] = rows(params::RC_INITIAL);
-const RC_PARTIAL: [Fp; 42] = lanes(params::RC_PARTIAL);
-const RC_TERMINAL: [[Fp; WIDTH]; 6] = rows(params::RC_TERMINAL);
+// so that no round pays for the conversion; public, with `M4`, `INTERNAL_DIAG`
+// and the two layers, for the circuit that proves the permutation
+// (`docs/spec/precompiles.md` §3).
+/// The six initial full rounds' constants.
+pub const RC_INITIAL: [[Fp; WIDTH]; 6] = rows(params::RC_INITIAL);
+/// The 42 partial rounds' constants, one a round, for lane 0.
+pub const RC_PARTIAL: [Fp; 42] = lanes(params::RC_PARTIAL);
+/// The six terminal full rounds' constants.
+pub const RC_TERMINAL: [[Fp; WIDTH]; 6] = rows(params::RC_TERMINAL);
+/// `μ_i − 1`, the internal matrix's diagonal less one.
+pub const INTERNAL_DIAG: [Fp; WIDTH] = lanes(params::INTERNAL_DIAG_M_1);
 
 const fn lanes<const N: usize>(xs: [u64; N]) -> [Fp; N] {
     let mut out = [Fp::ZERO; N];

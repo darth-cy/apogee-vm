@@ -30,7 +30,7 @@ use trace::{plan_shards, FamilyTraces, MemoryEventLog};
 
 /// The guests this file streams, and the height each family takes: `2^16`,
 /// which cuts no shard at all for most of them.
-const GUESTS: [(&str, u32); 10] = [
+const GUESTS: [(&str, u32); 11] = [
     ("fib", 16),
     ("heap", 16),
     ("atomics", 16),
@@ -45,11 +45,21 @@ const GUESTS: [(&str, u32); 10] = [
     // Without it every chunk here would come from the tail and the flush path
     // would never run.
     ("shards", 16),
+    // Both precompiles, its delegation families at `2^12`: 302 Poseidon2 calls
+    // fill the rounds' 256-call buffer mid-execution.
+    ("precompiles", 16),
 ];
 
-/// Every family at `2^height`.
-fn params(height: u32) -> ProgramParams {
-    uniform(1 << height)
+/// Every family at `2^height`; for `precompiles`, the delegation families at
+/// `2^12`.
+fn params(name: &str, height: u32) -> ProgramParams {
+    let mut p = uniform(1 << height);
+    if name == "precompiles" {
+        for (family, ..) in constants::delegation::TYPES {
+            p.heights[family as usize] = 1 << 12;
+        }
+    }
+    p
 }
 
 /// One guest streamed: every chunk in the order it filled, and what the
@@ -67,7 +77,7 @@ struct Streamed {
 
 fn stream(name: &str, height: u32) -> Streamed {
     let image = image(name);
-    let (tables, config) = decode_program(&image, &params(height))
+    let (tables, config) = decode_program(&image, &params(name, height))
         .unwrap_or_else(|e| panic!("{name} decodes at 2^{height}: {e}"));
     let guest_io = io(&input_of(name));
     let mut run = StreamingRun::new(&image, &guest_io, &tables, &config)
@@ -108,8 +118,8 @@ fn whole(
     emulator::Execution,
 ) {
     let image = image(name);
-    let (tables, config) =
-        decode_program(&image, &params(height)).unwrap_or_else(|e| panic!("{name} decodes: {e}"));
+    let (tables, config) = decode_program(&image, &params(name, height))
+        .unwrap_or_else(|e| panic!("{name} decodes: {e}"));
     trace_run(&image, &io(&input_of(name)), &tables, &config)
         .unwrap_or_else(|e| panic!("{name} traces: {e}"))
 }
@@ -127,7 +137,7 @@ fn the_chunks_are_the_planned_shards_row_for_row() {
 
         // Claim 1: the chunk set is the plan's, family by family.
         let plan = plan_shards(&profile, &{
-            let (_, config) = decode_program(&image(name), &params(height)).expect("decodes");
+            let (_, config) = decode_program(&image(name), &params(name, height)).expect("decodes");
             config
         });
         let mut counted: BTreeMap<FamilyId, u32> = BTreeMap::new();
@@ -158,6 +168,41 @@ fn the_chunks_are_the_planned_shards_row_for_row() {
                 family_name(chunk.family)
             );
             *want += 1;
+            // A delegation chunk carries calls, each the buffer's own, at the
+            // height over the family's rows a call.
+            if let Some(calls) = &chunk.calls {
+                let buffer = traces
+                    .delegation(chunk.family)
+                    .expect("a delegation buffer");
+                let per = (buffer.height / program::delegation_rows(chunk.family)) as usize;
+                assert!(
+                    calls.len() <= per && chunk.rows.is_empty(),
+                    "{name}: a call chunk"
+                );
+                let start = chunk.index as usize * per;
+                assert_eq!(
+                    calls.cycle,
+                    buffer.cycle[start..start + calls.len()],
+                    "{name}"
+                );
+                assert_eq!(
+                    calls.base,
+                    buffer.base[start..start + calls.len()],
+                    "{name}"
+                );
+                for (got, want) in calls.words.iter().zip(&buffer.words) {
+                    assert_eq!(got.read_value, want.read_value[start..start + calls.len()]);
+                    assert_eq!(
+                        got.write_value,
+                        want.write_value[start..start + calls.len()]
+                    );
+                    assert_eq!(got.read_ts, want.read_ts[start..start + calls.len()]);
+                }
+                if program::delegation_rows(chunk.family) > 1 && calls.len() == per {
+                    split_families += 1;
+                }
+                continue;
+            }
             let rows = &chunk.rows;
             let buffer = traces
                 .family(chunk.family)

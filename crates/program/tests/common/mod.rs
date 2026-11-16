@@ -123,6 +123,7 @@ pub fn image_of(at: u32, words: &[u32]) -> ProgramImage {
         }],
         slot_base: at,
         slots,
+        delegations: Vec::new(),
     }
 }
 

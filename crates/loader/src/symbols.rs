@@ -1,8 +1,8 @@
 //! The ELF **symbol table**, read beside the image and never into it.
 //!
-//! A [`crate::ProgramImage`] is the post-load memory, the entry pc and the
-//! instruction stream, and program identity is meant to bind exactly that
-//! (`docs/spec/program.md` §8). A symbol table is what a linker wrote for a
+//! A [`crate::ProgramImage`] is the post-load memory, the entry pc, the
+//! instruction stream and the delegations its one section declares, and
+//! program identity is meant to bind exactly that (`docs/spec/program.md` §8). A symbol table is what a linker wrote for a
 //! debugger: it is not part of the image, nothing binds it, and nothing here
 //! can change what a proof is about. What it is for is reading — a listing of
 //! four thousand hex words with no names in it is a listing nobody can
@@ -133,11 +133,24 @@ fn for_each_symbol(elf: &[u8], mut each: impl FnMut(&str, u32, u32, u8, u16)) {
     }
 }
 
-struct SectionHeader {
-    kind: u32,
-    offset: usize,
-    size: usize,
+pub(crate) struct SectionHeader {
+    name: u32,
+    pub(crate) kind: u32,
+    pub(crate) offset: usize,
+    pub(crate) size: usize,
     link: u32,
+}
+
+/// The section named `name`, by the section-name string table `e_shstrndx`
+/// names: `load_elf` reads its delegation declarations through it.
+pub(crate) fn section_named(elf: &[u8], name: &str) -> Option<SectionHeader> {
+    let mut sections = section_headers(elf)?;
+    let names = sections.get(u16le(elf, 0x3e) as usize)?;
+    let names = slice(elf, names.offset, names.size)?;
+    let at = sections
+        .iter()
+        .position(|s| string_at(names, s.name as usize) == Some(name))?;
+    Some(sections.swap_remove(at))
 }
 
 fn section_headers(elf: &[u8]) -> Option<Vec<SectionHeader>> {
@@ -158,6 +171,7 @@ fn section_headers(elf: &[u8]) -> Option<Vec<SectionHeader>> {
         let at = shoff.checked_add(i.checked_mul(shentsize)?)?;
         let header = slice(elf, at, SHDR_LEN)?;
         out.push(SectionHeader {
+            name: u32le(header, 0),
             kind: u32le(header, 4),
             offset: usize::try_from(u64le(header, 24)).ok()?,
             size: usize::try_from(u64le(header, 32)).ok()?,
@@ -167,7 +181,7 @@ fn section_headers(elf: &[u8]) -> Option<Vec<SectionHeader>> {
     Some(out)
 }
 
-fn slice(bytes: &[u8], at: usize, len: usize) -> Option<&[u8]> {
+pub(crate) fn slice(bytes: &[u8], at: usize, len: usize) -> Option<&[u8]> {
     bytes.get(at..at.checked_add(len)?)
 }
 
