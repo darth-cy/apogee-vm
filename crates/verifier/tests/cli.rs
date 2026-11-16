@@ -23,8 +23,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// The per-shard verdict lines, `<file>: family F shard I verifies`. The
-/// statement's line and the UNFINISHED warning say "verifies" too, and end
-/// otherwise.
+/// statement's line says "verifies" too, and ends otherwise.
 fn verdicts(text: &str) -> usize {
     text.lines().filter(|l| l.ends_with(" verifies")).count()
 }

@@ -92,8 +92,7 @@ fn tamper(cells: Vec<Cell>) -> Tamper {
 const IMAGE_ROW: usize = 1 << 14;
 
 /// Three distinct classes on screen: a semantics cell, `Constraint`; a memory
-/// event's value and its timestamp, `MemoryArgument`; a lookup multiplicity,
-/// `Lookup`.
+/// event's value, `MemoryArgument`; a lookup multiplicity, `Lookup`.
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
 fn a2_a3_a4_a_semantics_a_memory_and_a_multiplicity_cell_fail_in_three_classes() {
@@ -116,9 +115,8 @@ fn a2_a3_a4_a_semantics_a_memory_and_a_multiplicity_cell_fail_in_three_classes()
         CONSTRAINT,
     );
 
-    // A memory event: a teardown value no gate reads, and a pc read's
-    // timestamp one lower — its gap chunk still in range and its multiplicity
-    // recounted — both pinned by the multiset alone.
+    // A memory event: a teardown value no gate reads, pinned by the multiset
+    // alone.
     let word = h.cell(INIT, 0, PolyAddress::Memory(1), IMAGE_ROW);
     h.assert_rejects(
         &tamper(vec![at(
@@ -128,12 +126,6 @@ fn a2_a3_a4_a_semantics_a_memory_and_a_multiplicity_cell_fail_in_three_classes()
             word + Fp::ONE,
         )]),
         (INIT, 0),
-        MEMORY,
-    );
-    assert_eq!(h.cell(ADD, 0, col(ADD, "pc_read_ts"), 3), f(12));
-    h.assert_rejects(
-        &tamper(vec![cell(ADD, "pc_read_ts", 3, f(11))]),
-        (ADD, 0),
         MEMORY,
     );
 
@@ -305,11 +297,10 @@ fn a13_the_teardown_binds_the_final_values() {
     h.assert_rejects(&result, (INIT, 0), MEMORY);
 }
 
-/// A row's pc write is a cycle or more after the one it reads
-/// (`docs/spec/memory.md` §2.4, §9). Row 3, at cycle 4, reads the pc row 2
-/// wrote at 12, its gap 0; that read moved one later, to 13, is refused by the
-/// timestamp channel, `gap_lo_pc` being −1 there. One earlier, to 11, the gap
-/// is in range and the multiset alone refuses it (the `a3` tamper above).
+/// A row's pc read is the pc write one cycle back (`docs/spec/memory.md` §2.4).
+/// Row 3, at cycle 4, reads the pc row 2 wrote at 12; that read moved one later,
+/// to 13, or one earlier, to 11, breaks `pc_step` and is refused at the circuit,
+/// before the timestamp channel (13's gap is −1) or the multiset could see it.
 ///
 /// The cycle is not the cell moved: the harness derives a shard's time window
 /// from its cycle column, as an honest prover does, so a fractional cycle puts
@@ -318,17 +309,19 @@ fn a13_the_teardown_binds_the_final_values() {
 /// holds a fractional cycle to `gap_lo_pc` in the circuit.
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 3.9 GB"]
-fn a_pc_read_less_than_a_cycle_before_its_write_is_refused() {
+fn a_pc_read_off_the_previous_cycle_is_refused() {
     let setup = common::setup();
     let archive = common::archive(&setup.program);
     let h = TamperHarness::new(&setup, &archive);
     assert_eq!(h.cell(ADD, 0, CYCLE, 3), f(4));
     assert_eq!(h.cell(ADD, 0, col(ADD, "pc_read_ts"), 3), f(12));
-    h.assert_rejects(
-        &tamper(vec![cell(ADD, "pc_read_ts", 3, f(13))]),
-        (ADD, 0),
-        lookup(lookup_channel::TIMESTAMP),
-    );
+    for moved in [13, 11] {
+        h.assert_rejects(
+            &tamper(vec![cell(ADD, "pc_read_ts", 3, f(moved))]),
+            (ADD, 0),
+            CONSTRAINT,
+        );
+    }
 }
 
 /// The frame's and the halting rule's tamper targets, `docs/spec/memory.md`

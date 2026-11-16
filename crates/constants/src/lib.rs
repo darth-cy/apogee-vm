@@ -614,7 +614,7 @@ pub mod family {
     /// holds to the registry. Absorbed beside [`CODE_VERSION`], so a key from
     /// a registry of another revision is another program's; bumped with every
     /// change to a registry circuit. Changing it re-registers every program.
-    pub const CIRCUIT_REVISION: u32 = 1;
+    pub const CIRCUIT_REVISION: u32 = 2;
 }
 
 /// The bit positions of `family_extra_mask`, per family. A bit position is
