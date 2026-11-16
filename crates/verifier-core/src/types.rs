@@ -485,6 +485,25 @@ pub struct VerifyingKey {
     pub pcs: Setup,
 }
 
+/// One circuit as a key carries it: its family, its artifact's bytes, then its
+/// channel specs. The program identity digests these same bytes for every
+/// config family (`identity_digest`), so an identity names its circuits.
+pub fn circuit_bytes(c: &FamilyCircuit) -> Vec<u8> {
+    let mut w = Writer::new();
+    w.u32(c.family);
+    w.bytes(&c.artifact.to_bytes());
+    w.count(c.channels.len());
+    for spec in &c.channels {
+        w.u32(spec.channel);
+        w.count(spec.table.len());
+        for t in &spec.table {
+            write_address(&mut w, *t);
+        }
+        write_address(&mut w, spec.multiplicity);
+    }
+    w.bytes
+}
+
 /// An address a channel spec names: tag 0 `M`, 1 `W`, 2 `S`, 3 `V`, then the
 /// index — a virtual table's being its kind's artifact wire tag.
 fn write_address(w: &mut Writer, a: PolyAddress) {
@@ -542,17 +561,7 @@ impl VerifyingKey {
         }
         w.count(self.circuits.len());
         for c in &self.circuits {
-            w.u32(c.family);
-            w.bytes(&c.artifact.to_bytes());
-            w.count(c.channels.len());
-            for spec in &c.channels {
-                w.u32(spec.channel);
-                w.count(spec.table.len());
-                for t in &spec.table {
-                    write_address(&mut w, *t);
-                }
-                write_address(&mut w, spec.multiplicity);
-            }
+            w.raw(&circuit_bytes(c));
         }
         w.bytes
     }
@@ -640,13 +649,14 @@ impl VerifyingKey {
             &self.config,
             self.entry_pc,
             &self.setup_commitments,
+            &self.circuits,
         );
         if identity != self.identity {
-            return Err(format!(
-                "the identity is not the digest of the key's config, entry pc and setup at \
-                 circuit revision {}",
-                constants::family::CIRCUIT_REVISION
-            ));
+            return Err(
+                "the identity is not the digest of the key's config, entry pc, setup and \
+                 circuits"
+                    .into(),
+            );
         }
         if self.circuits.len() != families.len() {
             return Err("the key has not one circuit per config family".into());

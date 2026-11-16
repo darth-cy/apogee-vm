@@ -28,9 +28,9 @@ pub use statement::{
     GlobalTranscript, ProgramIdentity, VmConfig, MEMORY_CHALLENGES, TRIVIAL_TS_WINDOW,
 };
 pub use types::{
-    committed_groups, opening_schedule, pcs_setup_len, read_commitment, read_gkr, read_opening,
-    write_commitment, write_gkr, write_opening, PublicInputs, ShardProof, VerifyError,
-    VerifyingKey,
+    circuit_bytes, committed_groups, opening_schedule, pcs_setup_len, read_commitment, read_gkr,
+    read_opening, write_commitment, write_gkr, write_opening, PublicInputs, ShardProof,
+    VerifyError, VerifyingKey,
 };
 
 // The types a key and a proof are built from, so a caller needs no second

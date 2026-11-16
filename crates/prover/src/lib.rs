@@ -254,6 +254,7 @@ impl ProverSetup {
                 &program.config,
                 program.image.entry,
                 &setup_commitments,
+                &circuits,
             ),
             setup_commitments,
             circuits,

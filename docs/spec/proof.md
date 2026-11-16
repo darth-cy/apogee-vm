@@ -246,8 +246,8 @@ and runs `VerifyingKey::check`, which refuses, in order:
 1. a `VmConfig` no derivation produces (`VmConfig::from_bytes` of its own bytes), or a
    `code_version` other than `CODE_VERSION`;
 2. a setup-commitment count other than the family count, or an `identity` that
-   `identity_digest(code_version, config, entry_pc, setup_commitments)` does not reproduce under
-   this build's `CIRCUIT_REVISION`, which a key from another registry's revision fails;
+   `identity_digest(code_version, config, entry_pc, setup_commitments, circuits)` does not
+   reproduce;
 3. a circuit count other than the family count; then, family by family: a circuit for another
    family; a height the registry has no circuit for; a circuit, artifact or channel specs, other
    than `config.circuit(family, trace_vars)`, the registry's ([circuits.md](circuits.md) §1); an

@@ -156,17 +156,24 @@ mod tests {
             .iter()
             .map(|(f, h)| zeros(*f, h.trailing_zeros(), 2))
             .collect();
+        let circuits: Vec<_> = config
+            .families
+            .iter()
+            .map(|(f, h)| constraints::family_circuit(*f, h.trailing_zeros()).unwrap())
+            .collect();
         VerifyingKey {
             code_version: family::CODE_VERSION,
             entry_pc: 0x1_0000,
-            identity: identity_digest(family::CODE_VERSION, &config, 0x1_0000, &setup_commitments),
+            identity: identity_digest(
+                family::CODE_VERSION,
+                &config,
+                0x1_0000,
+                &setup_commitments,
+                &circuits,
+            ),
             config: config.clone(),
             setup_commitments,
-            circuits: config
-                .families
-                .iter()
-                .map(|(f, h)| constraints::family_circuit(*f, h.trailing_zeros()).unwrap())
-                .collect(),
+            circuits,
             pcs: Setup(vec![]),
         }
     }

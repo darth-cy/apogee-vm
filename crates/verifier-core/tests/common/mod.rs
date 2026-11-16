@@ -79,7 +79,13 @@ fn key_over(config: VmConfig) -> VerifyingKey {
     VerifyingKey {
         code_version: family::CODE_VERSION,
         entry_pc: 0x1_0000,
-        identity: identity_digest(family::CODE_VERSION, &config, 0x1_0000, &setup_commitments),
+        identity: identity_digest(
+            family::CODE_VERSION,
+            &config,
+            0x1_0000,
+            &setup_commitments,
+            &circuits,
+        ),
         config,
         setup_commitments,
         circuits,

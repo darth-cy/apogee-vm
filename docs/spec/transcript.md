@@ -126,7 +126,7 @@ chunks) or
 
 ## 4. Tags
 
-`Tag = u64`: `constants::transcript_tags`, 29 tags numbered from 1 to 30 and named by
+`Tag = u64`: `constants::transcript_tags`, 30 tags numbered from 1 to 31 and named by
 `transcript_tags::NAMES[tag − 1]`; 0 is not a tag, and 13 is retired, never to be reassigned.
 Kinds: **S** scalars, `Fp` or `Fp2` (†† marks `Fp2`, two lanes a value), **B** bytes, **C**
 challenge. Where: G1–G9 and the shard transcript are
@@ -144,7 +144,7 @@ tag on no proof path.
 | 6 | `SUMCHECK_FINAL_EVALS` | S †† | the zerocheck's final evaluations † |
 | 7 | `PUBLIC_INPUT_STREAM` | B | `io_digest`: the input |
 | 8 | `PUBLIC_OUTPUT_STREAM` | B | `io_digest`: the output |
-| 9 | `PROGRAM_IDENTITY` | S | identity: `[code_version, circuit_revision]`; G5: the identity's 8 lanes |
+| 9 | `PROGRAM_IDENTITY` | S | identity: `[code_version]`; G5: the identity's 8 lanes |
 | 10 | `VM_CONFIG` | S | identity; G2 |
 | 11 | `SHARD_COUNTS` | S | G3 |
 | 12 | `GKR_OUTPUTS` | S †† | GKR: the outputs |
@@ -166,6 +166,7 @@ tag on no proof path.
 | 28 | `PCS_MESSAGE` | S, S †† | the opening: every prover message |
 | 29 | `PCS_CHALLENGE` | C | the opening: every challenge |
 | 30 | `PCS_DIGEST` | S | a terminal digest's own sponge |
+| 31 | `FAMILY_CIRCUIT` | B | identity: one family's circuit, as a key carries it |
 
 ## 5. Security
 

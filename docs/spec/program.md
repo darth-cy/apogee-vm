@@ -213,10 +213,11 @@ A digest, `ProgramIdentity`, on the wire its 8 lanes' canonical bytes in order, 
 
 | # | tag | message |
 | --- | --- | --- |
-| 1 | `PROGRAM_IDENTITY` | `[code_version, circuit_revision]`: `constants::family::CODE_VERSION`, 1, the only one derivation builds (`UnsupportedCodeVersion`), and `CIRCUIT_REVISION`, the registry's |
+| 1 | `PROGRAM_IDENTITY` | `[code_version]`: `constants::family::CODE_VERSION`, 1, the only one derivation builds (`UnsupportedCodeVersion`) |
 | 2 | `VM_CONFIG` | §7's |
 | 3 | `PROGRAM_ENTRY` | `[entry_pc]` |
 | 4 | `SETUP_COMMITMENT` | once per family of the config, in its order: its setup commitment's payloads, empty for a family with none |
+| 5 | `FAMILY_CIRCUIT` | once per family of the config, in its order: its circuit as a key carries it (`verifier_core::circuit_bytes`: the family, the artifact's bytes, the channel specs) |
 
 A family's **setup columns** (`program::setup_columns`) are an instruction family's decoded-table
 columns in tuple order, or `INIT_TEARDOWN`'s **image column** (`program::image_init_column`), row
@@ -228,19 +229,16 @@ carries the commitments, and every shard opens its setup columns against its fam
 identity commits every setup column, so it needs every family's circuit: `program_identity` refuses
 a config with a family no circuit proves at its height (`NoCircuit`).
 
-**It binds** the entry pc; the family set, every height, `bytecode_size_words`, the code version and
-the circuit revision; every instruction the sweep found, with its pc, length, operands and kind, and
-that no other pc holds one; every file byte of the image (`.text`, `.rodata`, `.data`); and the
-generic table. One ELF at two settings of the heights has two identities.
+**It binds** the entry pc; the family set, every height, `bytecode_size_words` and the code version;
+every circuit that proves the config, so a key made by another registry has another identity and a
+key cached by identity is never another registry's; every instruction the sweep found, with its pc,
+length, operands and kind, and that no other pc holds one; every file byte of the image (`.text`,
+`.rodata`, `.data`); and the generic table. One ELF at two settings of the heights has two identities.
 `crates/program/tests/identity.rs`' `every_code_and_image_byte_moves_the_identity` holds an
 instruction word, a `.rodata` byte and a `.data` byte to it.
 
 **It does not bind**:
 
-- the circuits themselves, which a key's load holds to the registry ([proof.md](proof.md) §7). Their
-  revision names them: `CIRCUIT_REVISION` moves with every change to a registry circuit, so a key
-  made by another registry has another identity, and a key cached by identity is never another
-  registry's;
 - anything an execution chooses: its input, advice, shard counts, window list;
 - memory past a segment's file bytes (`.bss`, the heap and the stack): `mem_len` enters nothing,
   and such memory starts at zero whatever is declared;

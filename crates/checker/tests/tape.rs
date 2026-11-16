@@ -63,7 +63,13 @@ fn key_and_statement() -> (VerifyingKey, PublicInputs) {
     let vk = VerifyingKey {
         code_version: family::CODE_VERSION,
         entry_pc,
-        identity: identity_digest(family::CODE_VERSION, &config, entry_pc, &setup_commitments),
+        identity: identity_digest(
+            family::CODE_VERSION,
+            &config,
+            entry_pc,
+            &setup_commitments,
+            &circuits,
+        ),
         config,
         setup_commitments,
         circuits,

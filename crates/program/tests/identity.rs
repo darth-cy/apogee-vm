@@ -62,8 +62,8 @@ fn fib_at_the_defaults_is_deterministic() {
 
 /// The digest is exactly the documented recipe, rebuilt here message by
 /// message: `PROGRAM_IDENTITY`, `VM_CONFIG`, `PROGRAM_ENTRY`, one
-/// `SETUP_COMMITMENT` per family, then `digest()`. Fails if a message moved or
-/// one were added.
+/// `SETUP_COMMITMENT` per family, one `FAMILY_CIRCUIT` per family, then
+/// `digest()`. Fails if a message moved or one were added.
 #[test]
 fn the_identity_is_the_documented_recipe() {
     let image = common::guest("fib");
@@ -71,10 +71,7 @@ fn the_identity_is_the_documented_recipe() {
 
     let fp = |x: u32| Fp::from_u64(x as u64);
     let mut tr = Transcript::new();
-    tr.append_scalars(
-        tags::PROGRAM_IDENTITY,
-        &[fp(family::CODE_VERSION), fp(family::CIRCUIT_REVISION)],
-    );
+    tr.append_scalars(tags::PROGRAM_IDENTITY, &[fp(family::CODE_VERSION)]);
     let mut vm: Vec<Fp> = config.families.iter().map(|(f, _)| fp(*f)).collect();
     vm.extend(config.families.iter().map(|(_, h)| fp(*h)));
     vm.push(fp(config.bytecode_size_words));
@@ -89,6 +86,9 @@ fn the_identity_is_the_documented_recipe() {
     for opener in program::setup_openers(&image, &tables, &circuits, &pcs) {
         let c = program::setup_commitment(opener.as_ref());
         tr.append_scalars(tags::SETUP_COMMITMENT, &c.0.concat());
+    }
+    for c in &circuits {
+        tr.append_bytes(tags::FAMILY_CIRCUIT, &verifier_core::circuit_bytes(c));
     }
     assert_eq!(
         ProgramIdentity(tr.digest()),
