@@ -60,7 +60,7 @@ pub mod transcript_tags {
     pub const PUBLIC_OUTPUT_STREAM: u64 = 8;
 
     /// Scalars. The first message of the program-identity sponge: `[code
-    /// version, circuit revision]`. It is what opens that sponge, so the
+    /// version]`. It is what opens that sponge, so the
     /// identity is domain-separated from every other digest in the protocol.
     /// `docs/spec/program.md` §8. Also the global transcript's G5 message, the
     /// identity's 8 lanes (`docs/spec/proof.md` §2).
@@ -169,6 +169,13 @@ pub mod transcript_tags {
     /// inside that digest's own sponge. `docs/spec/pcs.md` §7.
     pub const PCS_DIGEST: u64 = 30;
 
+    /// Bytes. One config family's circuit as a key carries it
+    /// (`verifier_core::circuit_bytes`): the program-identity sponge's messages
+    /// after the [`SETUP_COMMITMENT`]s, one per config family in its order, so
+    /// an identity changes with every circuit it is proved by.
+    /// `docs/spec/program.md` §8.
+    pub const FAMILY_CIRCUIT: u64 = 31;
+
     /// Every tag's name, indexed by `tag - 1`. **Documentation, never
     /// semantics**, as `challenge_slot::NAMES` is: the number is the tag, and
     /// nothing reads a name to decide anything. `checker::tape` renders a
@@ -177,7 +184,7 @@ pub mod transcript_tags {
     ///
     /// One entry per tag above, and `"RETIRED"` at the retired 13. The lookup
     /// itself lives in `checker::tape`.
-    pub const NAMES: [&str; 30] = [
+    pub const NAMES: [&str; 31] = [
         "PROTOCOL_SUITE",
         "PUBLIC_INPUTS",
         "SUMCHECK_ROUND",
@@ -208,6 +215,7 @@ pub mod transcript_tags {
         "PCS_MESSAGE",
         "PCS_CHALLENGE",
         "PCS_DIGEST",
+        "FAMILY_CIRCUIT",
     ];
 }
 
@@ -608,13 +616,6 @@ pub mod family {
     /// The version of the decoded-table construction. Absorbed first into the
     /// program-identity sponge. Changing it re-registers every program.
     pub const CODE_VERSION: u32 = 1;
-
-    /// The registry's revision: the circuit `constraints::family_circuit`
-    /// builds for each family at each height, which a key carries and its load
-    /// holds to the registry. Absorbed beside [`CODE_VERSION`], so a key from
-    /// a registry of another revision is another program's; bumped with every
-    /// change to a registry circuit. Changing it re-registers every program.
-    pub const CIRCUIT_REVISION: u32 = 1;
 }
 
 /// The bit positions of `family_extra_mask`, per family. A bit position is

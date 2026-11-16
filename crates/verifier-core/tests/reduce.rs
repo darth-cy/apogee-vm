@@ -104,7 +104,13 @@ fn the_setup_commitments_are_bound_into_every_challenge() {
     for i in [0, 1] {
         let mut k = vk();
         k.setup_commitments[i].0[0][0] += Fp::ONE;
-        k.identity = identity_digest(k.code_version, &k.config, k.entry_pc, &k.setup_commitments);
+        k.identity = identity_digest(
+            k.code_version,
+            &k.config,
+            k.entry_pc,
+            &k.setup_commitments,
+            &k.circuits,
+        );
         assert_ne!(
             k.identity, key.identity,
             "family {i}'s setup moves the identity"

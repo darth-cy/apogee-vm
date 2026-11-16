@@ -4,9 +4,6 @@ From an empty crate to a proof: write a guest, build it, export and check its `P
 what the VM will prove of it, and prove a run. Commands run from the repository root unless a step
 changes directory.
 
-> **ALARM — UNFINISHED — WARNING — TODO: A64-C5 CHARACTERISTIC.** A proof made today is **UNSOUND**
-> ([architecture.md](architecture.md) §0).
-
 ## 1. Before you start
 
 `rust-toolchain.toml` pins stable Rust 1.96.1 with `llvm-tools` and the target
@@ -373,15 +370,14 @@ doubleword access through an unaligned pointer; `NotAnInstruction`, a jump to a 
 let params = program::ProgramParams::defaults();
 let setup = host::setup(&elf, &params).expect("registers");
 let proven = host::prove(&setup, &io, host::DEFAULT_MAX_IN_FLIGHT).expect("proves"); // 8 shards in flight
-host::verify(&setup.vk, &proven.block).expect("verifies"); // UNSOUND: architecture.md §0
+host::verify(&setup.vk, &proven.block).expect("verifies");
 assert_eq!(setup.vk.identity.to_bytes(), registered); // from your own channel, never the proof
 assert_eq!(proven.exit_code, 0);
 ```
 
-The block's statement carries the public input, the journal and the exit status. **ALARM —
-UNFINISHED**: a block that verifies is not yet evidence of its execution
-([architecture.md](architecture.md) §0). A family with rows costs at least a whole shard of its
-height, so a short run wastes less at smaller heights: `2^20` is an instruction family's floor
+The block's statement carries the public input, the journal and the exit status. A family with
+rows costs at least a whole shard of its height, so a short run wastes less at smaller heights:
+`2^20` is an instruction family's floor
 ([lookup.md](spec/lookup.md) §3), and each choice of heights is its own identity. A shard's cost is
 [architecture.md](architecture.md) §7.
 

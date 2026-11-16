@@ -46,8 +46,9 @@ const EXECUTION_FAMILIES: [u32; 7] = [
 /// `docs/spec/memory.md` §2.1's table, written here again rather than read from
 /// `frame_queries`: per family, its query list and, derived from it by hand,
 /// `w`, the `M` and `W` column counts, the leaves a side, the obligations and
-/// the enforcing gates — `w` booleanity gates, one write-back per read-only
-/// query the family holds, and the four x0 gates. The `M` count is `1 + 5w`.
+/// the enforcing gates — `w` booleanity gates, the pc step, one write-back per
+/// read-only query the family holds, and the four x0 gates. The `M` count is
+/// `1 + 5w`.
 #[allow(clippy::type_complexity)]
 const FRAME_SHAPES: [(u32, &[usize], usize, usize, usize, usize, usize); 7] = [
     //  family                      queries                       M   W  side  lk  enf
@@ -58,7 +59,7 @@ const FRAME_SHAPES: [(u32, &[usize], usize, usize, usize, usize, usize); 7] = [
         8,
         4,
         8,
-        13,
+        14,
     ),
     (
         family::JUMP_BRANCH_SLT,
@@ -67,10 +68,10 @@ const FRAME_SHAPES: [(u32, &[usize], usize, usize, usize, usize, usize); 7] = [
         8,
         4,
         8,
-        13,
+        14,
     ),
-    (family::BITWISE, &[PC, RS1, RS2, RD], 27, 8, 4, 8, 13),
-    (family::MUL_DIV, &[PC, RS1, RS2, RD], 27, 8, 4, 8, 13),
+    (family::BITWISE, &[PC, RS1, RS2, RD], 27, 8, 4, 8, 14),
+    (family::MUL_DIV, &[PC, RS1, RS2, RD], 27, 8, 4, 8, 14),
     (
         family::MEM_WORD,
         &[PC, RS1, RS2, LOAD, RAM, RD],
@@ -78,7 +79,7 @@ const FRAME_SHAPES: [(u32, &[usize], usize, usize, usize, usize, usize); 7] = [
         10,
         8,
         12,
-        15,
+        16,
     ),
     (
         family::MEM_SUBWORD,
@@ -87,7 +88,7 @@ const FRAME_SHAPES: [(u32, &[usize], usize, usize, usize, usize, usize); 7] = [
         10,
         8,
         12,
-        15,
+        16,
     ),
     (
         family::ATOMICS,
@@ -96,7 +97,7 @@ const FRAME_SHAPES: [(u32, &[usize], usize, usize, usize, usize, usize); 7] = [
         10,
         8,
         12,
-        15,
+        16,
     ),
 ];
 
@@ -294,10 +295,10 @@ fn the_query_table_is_the_documents() {
 /// query, and `w + 4` witness columns; `2w` leaves in the order `read_<q>` by
 /// slot, the read side's constant-1 pads, then the same for the write side;
 /// row-wise widths halving from `2·side` to 2; and the enforcing gates by name
-/// — one booleanity per slot, a write-back of each word per read-only query the
-/// family holds, then the five x0 gates. The column addresses are the slot's,
-/// `M[1 + 5s + f]` and `W[s]`, with the x0 gadget's four witness columns after
-/// the family's `w` gap chunks.
+/// — one booleanity per slot, the pc step, a write-back of each word per
+/// read-only query the family holds, then the five x0 gates. The column
+/// addresses are the slot's, `M[1 + 5s + f]` and `W[s]`, with the x0 gadget's
+/// four witness columns after the family's `w` gap chunks.
 ///
 /// Fails if a family's frame kept the table's seven queries, if a query's
 /// columns were placed by its id rather than its slot, if a write-back gate
@@ -385,6 +386,7 @@ fn the_frame_layout_is_the_documents() {
             .iter()
             .map(|&q| format!("{}_mask_boolean", FRAME_NAMES[q]))
             .collect();
+        expected.push(String::from("pc_step"));
         for &q in queries.iter().filter(|q| FRAME_READ_ONLY.contains(q)) {
             for suffix in ["", "_hi"] {
                 expected.push(format!("{}_writes_back{suffix}", FRAME_NAMES[q]));
@@ -1162,7 +1164,7 @@ fn cached_entries_are_held_to_the_memory_rules() {
 /// removed — its enforcing entry and its relation, every later relation index
 /// shifted down — is still a lawful circuit, and `check_memory` refuses that
 /// query's leaves' mask as unconstrained. Tried on `pc_mask_boolean`, at slot
-/// 0, whose mask `M[1]` no other gate reads, and on `rd_mask_boolean`, at slot
+/// 0, whose mask `M[1]` `pc_step` still reads, and on `rd_mask_boolean`, at slot
 /// 3 — so `M[16]`, the address the family's *width* gives it, not the `M[26]`
 /// of the query table — whose mask `rd_is_zero_inverse` still reads. Kills a
 /// mask rule that is not checked, or that accepts any enforcing gate on the

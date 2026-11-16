@@ -16,7 +16,8 @@
 //!            W[s] <q>_gap_hi; W[w] rd_inv, W[w+1] rd_is_zero,
 //!            W[w+2] rd_selected, W[w+3] rd_selected_hi
 //! list 0     L{1}[0..w] read_<q>, then 1s to a power of two; likewise write_<q>;
-//!            enforcing: w booleanity, two write-backs per read-only query, 5 x0
+//!            enforcing: w booleanity, the pc step, two write-backs per
+//!            read-only query, 5 x0
 //! lists 1-k  L{k+1}[j] = L{k}[2j]·L{k}[2j+1], halving the width to 2
 //!
 //! windows    M[0] teardown_ts, M[1] teardown_value, V[row];
@@ -411,15 +412,10 @@ fn x0_gates(queries: &[usize], at: usize) -> [(&'static str, GateDef); 5] {
 ///
 /// `a` is the query's [`FRAME_MIN_ADVANCE`]. Both below `2^19` make
 /// `gap = 4·cycle + Δ − read_ts − a = lo + 2^19·hi` a field element in
-/// `[0, 2^38)`: `read_ts + a ≤ 4·cycle + Δ` as integers, under the counting
-/// premise of `docs/spec/memory.md` §4.2. §2.4; `Δ − a` is the field element,
-/// `Δ − 1` for every query but the pc, whose is `−4`.
-///
-/// **UNFINISHED: A64-C5 CHARACTERISTIC.** The counting premise needs
-/// `p/(2^38 + 3)` above a statement's tuple count, and at `p = 2^64 − 59` it
-/// is about `2^26`: `cycle` is never bounded, so nothing makes a timestamp an
-/// integer, and a loop of that many edges balances with no init. A later stage
-/// bounds every write timestamp structurally (`docs/spec/memory.md` §4.2).
+/// `[0, 2^38)`: `read_ts + a ≤ 4·cycle + Δ` as integers, every timestamp being
+/// an integer below `2^38` by the pc step (`docs/spec/memory.md` §4.2). §2.4;
+/// `Δ − a` is the field element, `Δ − 1` for every query but the pc, whose is
+/// `−4`.
 fn gap_lookups(query: usize, at: usize) -> [LookupExpr; 2] {
     let (name, hi) = (FRAME_NAMES[query], gap_hi(at));
     let selector = frame(at, FIELD_MASK);
@@ -461,8 +457,8 @@ fn gap_lookups(query: usize, at: usize) -> [LookupExpr; 2] {
 /// over `2^trace_vars` rows and the `queries` of [`frame_queries`]: with
 /// `w = queries.len()`, `1 + 5w` `M` columns and two per register query,
 /// `w + 4` `W` columns, `2w` leaves padded to the next power of two a side,
-/// `w` booleanity gates, two write-back gates per read-only query, the five x0
-/// gates and `2w` gap obligations. Validated and held to [`check_memory`]; panics if either
+/// `w` booleanity gates, the pc step, two write-back gates per read-only query,
+/// the five x0 gates and `2w` gap obligations. Validated and held to [`check_memory`]; panics if either
 /// refuses it, or if `queries` is not the pc query followed by a strictly
 /// ascending subset of the table.
 pub fn frame_artifact(queries: &[usize], trace_vars: u32) -> CircuitArtifact {
@@ -615,6 +611,21 @@ fn frame_body(
         writes.push((format!("write_{name}"), write));
         enforcing.push((format!("{name}_mask_boolean"), booleanity(mask)));
     }
+    // `m·(4·cycle − 4 − read_ts) = 0` on the pc, slot 0: a live row reads the
+    // pc write one cycle back, so the pc's path puts row j at cycle j and every
+    // timestamp is an integer (`docs/spec/memory.md` §2.4, §4.2).
+    let (m, read_ts) = (frame(0, FIELD_MASK), frame(0, FIELD_READ_TS));
+    enforcing.push((
+        String::from("pc_step"),
+        GateDef::Quadratic {
+            constant: lit(0),
+            linear: vec![(Coeff::Literal(-Fp::from_u64(memory::TS_STEP)), m)],
+            products: vec![
+                (lit(memory::TS_STEP), m, CYCLE),
+                (Coeff::Literal(Fp::MINUS_ONE), m, read_ts),
+            ],
+        },
+    ));
     for (at, &query) in queries.iter().enumerate() {
         if FRAME_READ_ONLY.contains(&query) {
             let name = FRAME_NAMES[query];

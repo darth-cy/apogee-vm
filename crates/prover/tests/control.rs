@@ -174,6 +174,7 @@ fn a_key_with_another_generic_table_is_another_statement() {
         &vk.config,
         vk.entry_pc,
         &vk.setup_commitments,
+        &vk.circuits,
     );
     assert_ne!(vk.identity, setup.vk.identity);
     for proof in &proofs {

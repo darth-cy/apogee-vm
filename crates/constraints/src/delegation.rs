@@ -341,10 +341,8 @@ pub struct Frame {
 /// word off initialized memory there, unaligned or in the hole, reads a tuple
 /// nothing wrote, and the memory argument refuses it (`docs/spec/memory.md`
 /// §9). The anchor read pairs the row with the ecall that requested it, its
-/// `(base, cycle, number)`.
-///
-/// **UNFINISHED: A64-C5 CHARACTERISTIC**, as `memory::gap_lookups`: nothing
-/// bounds `cycle`, so the gap makes no timestamp an integer.
+/// `(base, cycle, number)`, so `cycle` is that live row's, an integer below
+/// `2^36` (`docs/spec/memory.md` §4.2).
 pub fn frame(b: &mut Builder, number: u32, words: usize, written: impl Fn(usize) -> bool) -> Frame {
     let live = b.live;
     let cycle = b.mcol("cycle");
@@ -395,10 +393,9 @@ pub fn frame(b: &mut Builder, number: u32, words: usize, written: impl Fn(usize)
 /// One RAM word an entry's row accesses at the requesting cycle's
 /// `4·cycle + FRAME_DELTA`, `docs/spec/precompiles.md` §1: `<name>_gap`, the
 /// gap below it in `[0, 2^38)`, the read leaf `(RAM, addr, read_ts, read)` and
-/// the write leaf `(RAM, addr, 4·cycle + FRAME_DELTA, write)`.
-///
-/// **UNFINISHED: A64-C5 CHARACTERISTIC**, as [`frame`]'s: nothing bounds
-/// `cycle`, so the gap makes no timestamp an integer.
+/// the write leaf `(RAM, addr, 4·cycle + FRAME_DELTA, write)`. `cycle` is a
+/// requesting ecall's: a frame's through its anchor, a Merkle level's through
+/// its call's state (`docs/spec/memory.md` §4.2).
 pub fn access(
     b: &mut Builder,
     name: &str,

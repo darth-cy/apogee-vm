@@ -5,19 +5,6 @@ Apogee proves executions of RV64IMAC programs, written in Rust or in C and C++
 states, how one is made and checked, what it assumes and where it stops. Each paragraph names the
 page that specifies its subject; [glossary.md](glossary.md) indexes the vocabulary.
 
-## 0. ALARM — UNFINISHED — WARNING — TODO: A64-C5 CHARACTERISTIC
-
-**Every proof this repository makes is UNSOUND.** The base field is A64-C5, `p = 2^64 − 59`, and
-every challenge is an element of its quadratic extension ([primitives.md](spec/primitives.md) §1).
-One integer argument does not hold at `p ≈ 2^64`: the memory argument's count of timestamps,
-which nothing bounds ([memory.md](spec/memory.md) §4.2). Every execution family's identities are
-exact over the integers, `MUL_DIV`'s product among them ([mul-div.md](spec/mul-div.md) §5.1). Each
-seam is marked:
-
-```console
-$ grep -rn "A64-C5 CHARACTERISTIC" crates
-```
-
 Every committed column is committed, and every claim on one opened, by Akita
 ([pcs.md](spec/pcs.md)): the setup columns in the key, digested into the identity; each shard's
 memory columns in the statement, before the memory challenges; its witness columns in its proof,
@@ -29,10 +16,10 @@ before its lookup challenges ([proof.md](spec/proof.md) §3). The suites that pr
 A verifier holds two things it does not take from the prover's word, one of them from a channel the
 prover does not control ([proof.md](spec/proof.md) §1, §3):
 
-- the **program identity**, a digest of eight field elements: of the code version and the circuit
-  revision, the program's `VmConfig` — the circuit families it uses and their heights — its entry
-  pc, and the commitments to its instruction tables, its initial memory image and the generic lookup
-  table ([program.md](spec/program.md) §8);
+- the **program identity**, a digest of eight field elements: of the code version, the program's
+  `VmConfig` — the circuit families it uses and their heights — its entry pc, the commitments to its
+  instruction tables, its initial memory image and the generic lookup table, and those families'
+  circuits ([program.md](spec/program.md) §8);
 - a **verifying key**: that config, those commitments and each family's circuit. Loading it
   recomputes the identity from its own contents and holds its circuits to the registry's bytes
   ([proof.md](spec/proof.md) §7).
@@ -45,7 +32,7 @@ windows, the final registers and pc, and every shard's memory commitment and roo
 A proof that verifies is meant to establish that the program of that identity, started at its entry
 pc over its image, with the public input in its input window and some advice of the prover's
 choosing, executes instruction by instruction to `EXIT` with that status, having written that
-journal — **UNFINISHED** (§0). Nothing is claimed of the advice, and nothing is hidden: no proof is
+journal. Nothing is claimed of the advice, and nothing is hidden: no proof is
 blinded.
 
 ## 2. From a binary to a proof
@@ -81,15 +68,14 @@ prove each shard as it fills. Its memory is bounded by the shards in flight, not
 ## 3. How soundness composes
 
 Each shard's GKR pass ties its circuit's outputs to its base columns' claimed values, and its
-opening ties those to the committed columns. On top of that, these arguments span the execution —
-**UNFINISHED** where §0 says:
+opening ties those to the committed columns. On top of that, these arguments span the execution:
 
 | claim | carried by | |
 | --- | --- | --- |
 | every row obeys its instruction | the family circuit's enforcing gates, zero on every row | the family pages, [circuits.md](spec/circuits.md) |
 | a row's instruction is the program's at its pc | a lookup of the row's pc and fields in the family's decoded table, which the identity commits | [lookup.md](spec/lookup.md) §10 |
 | every read returns the last write | one multiset over all shards: an access reads a tuple `(space, address, timestamp, value)` and writes one with a later timestamp; the verifier multiplies every shard's read and write roots against boundary factors for the registers and the pc | [memory.md](spec/memory.md) |
-| the rows are one path from the entry pc to the exit, in program order | the pc is a cell of that multiset: a row reads its pc and writes the next one at least four timestamps later, so shard order, cycle uniqueness and continuity need no other argument | [memory.md](spec/memory.md) §5, §9 |
+| the rows are one path from the entry pc to the exit, in program order | the pc is a cell of that multiset: a row reads its pc and writes the next one exactly four timestamps later, so shard order, cycle uniqueness and continuity need no other argument | [memory.md](spec/memory.md) §5, §9 |
 | a value is in range, a sign, a byte-wise AND | LogUp channels over range tables and the generic table | [lookup.md](spec/lookup.md) |
 | the public input and the journal are the claimed bytes | the two public windows' initial and final columns, held to the bytes' multilinear extensions | [public-values.md](spec/public-values.md) §5 |
 
@@ -118,7 +104,6 @@ shard's witness commitment before its lookup challenges ([proof.md](spec/proof.m
 
 | | |
 | --- | --- |
-| **unsound** | the memory argument's timestamp count fails at A64-C5's characteristic (§0) |
 | not zero-knowledge | no blinding in GKR |
 | advice is unbound | a guest checks it against something a proof binds ([public-values.md](spec/public-values.md) §6) |
 | public values | at most 16,380 bytes each of input and journal ([public-values.md](spec/public-values.md) §9) |

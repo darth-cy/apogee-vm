@@ -333,14 +333,26 @@ fn a_key_that_breaks_a_load_rule_is_refused() {
     // family has no circuit below 2^19.
     let mut k = honest.clone();
     k.config.families[0].1 = 1 << 18;
-    k.identity = identity_digest(k.code_version, &k.config, k.entry_pc, &k.setup_commitments);
+    k.identity = identity_digest(
+        k.code_version,
+        &k.config,
+        k.entry_pc,
+        &k.setup_commitments,
+        &k.circuits,
+    );
     cases.push(("no circuit proves it at height", k));
     let mut k = honest.clone();
     k.setup_commitments.pop();
     cases.push(("not one setup commitment per config family", k));
     let mut k = honest.clone();
     k.setup_commitments[0].0.pop();
-    k.identity = identity_digest(k.code_version, &k.config, k.entry_pc, &k.setup_commitments);
+    k.identity = identity_digest(
+        k.code_version,
+        &k.config,
+        k.entry_pc,
+        &k.setup_commitments,
+        &k.circuits,
+    );
     cases.push(("the setup commitment is not its setup columns' shape", k));
     let mut k = honest.clone();
     k.config.families[1].1 = 1 << 18;
@@ -366,10 +378,26 @@ fn a_key_that_breaks_a_load_rule_is_refused() {
         },
         bytecode_size_words: 1 << 20,
     };
-    k.identity = identity_digest(k.code_version, &k.config, k.entry_pc, &k.setup_commitments);
+    k.identity = identity_digest(
+        k.code_version,
+        &k.config,
+        k.entry_pc,
+        &k.setup_commitments,
+        &k.circuits,
+    );
     let e = k.check().unwrap_err();
     assert!(
         e.contains("the key's circuits are not its config's families"),
         "{e}"
     );
+    // An in-memory key the decoder could not produce: a channel spec naming
+    // an inner column, which no key serializes. The registry refuses it
+    // before the identity would hash it.
+    let mut k = honest.clone();
+    k.circuits[0].channels[0].multiplicity = constraints::PolyAddress::Inner {
+        layer: 1,
+        offset: 0,
+    };
+    let e = k.check().unwrap_err();
+    assert!(e.contains("the circuit is not the protocol's"), "{e}");
 }

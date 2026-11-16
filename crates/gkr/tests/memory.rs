@@ -466,8 +466,9 @@ fn window_artifacts_prove_and_verify() {
 
 /// A satisfying base for the frame holding `queries`, over 16 rows, in layout
 /// order: random masks, rows 0 and 1 live in every query; a masked query is 0 in
-/// every column; a read-only query writes back both words; `rd` is at address
-/// 0 on row 0 and wherever a coin says, with its x0 witnesses consistent.
+/// every column; a live pc reads at `4·cycle − 4`; a read-only query writes
+/// back both words; `rd` is at address 0 on row 0 and wherever a coin says,
+/// with its x0 witnesses consistent.
 /// Every column is addressed by the query's **slot** in this family, its
 /// behaviour chosen by the query's id: `load` and `ram` fall through to the
 /// last arm and write what they like, the frame not constraining them.
@@ -486,6 +487,9 @@ fn frame_columns(queries: &[usize], rng: &mut Rng) -> Vec<Vec<Fp>> {
             row[column(s, 0)] = Fp::ONE;
             let read_value = Fp::from_u64(rng.next_u64() >> 32);
             row[column(s, 2)] = Fp::from_u64(rng.next_u64() >> 26);
+            if q == PC {
+                row[column(s, 2)] = Fp::from_u64(4) * (row[0] - Fp::ONE);
+            }
             row[column(s, 3)] = read_value;
             row[gap_hi(queries, s)] = Fp::from_u64(rng.next_u64() >> 45);
             let read_hi = Fp::from_u64(rng.next_u64() >> 32);

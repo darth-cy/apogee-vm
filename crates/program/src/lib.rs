@@ -988,9 +988,9 @@ pub fn setup_commitment(opener: Option<&Opener>) -> Commitment {
 
 /// The program's identity, `docs/spec/program.md` §8:
 /// `verifier_core::identity_digest` over the code version, the static
-/// `VmConfig`, the entry pc and every family's setup commitment — so it binds
-/// every instruction and every file byte of the image. Commits every setup
-/// column to compute them.
+/// `VmConfig`, the entry pc and every family's setup commitment and circuit —
+/// so it binds every instruction, every file byte of the image and every
+/// circuit. Commits every setup column to compute them.
 pub fn program_identity(
     image: &ProgramImage,
     tables: &DecodedTables,
@@ -1015,5 +1015,6 @@ pub fn program_identity(
         config,
         image.entry,
         &commitments,
+        &circuits,
     ))
 }

@@ -345,19 +345,19 @@ fn one_changed_value_does_not_reconcile() {
 /// frame, cycle 23:
 ///
 /// - its pc query's read timestamp moved one earlier, 88 to 87, with `gap_hi`
-///   rewritten for the new gap (it stays 0): no gate and no obligation breaks,
-///   and the roots do not reconcile — the value tamper's surface;
+///   rewritten for the new gap (it stays 0): no obligation breaks, `pc_step`
+///   does, and the roots do not reconcile;
 /// - its cycle moved one earlier, 23 to 22, which moves every write timestamp
-///   of the row four earlier: the roots do not reconcile, and the lookup
-///   evaluator also names, on that row, the low chunk of every live query whose
-///   gap was below 4 and went negative — measured: the pc query's, whose gap is
-///   always 0, and `rs1`'s.
+///   of the row four earlier: `pc_step` breaks, the roots do not reconcile, and
+///   the lookup evaluator also names, on that row, the low chunk of every live
+///   query whose gap was below 4 and went negative — measured: the pc query's,
+///   whose gap is always 0, and `rs1`'s.
 ///
-/// So the surfaces differ: a value enters no obligation, and a timestamp that
-/// moves a gap below 0 is caught by the lookup evaluator as well as by
-/// reconciliation. The row is pinned because the second half's short set is a
-/// measurement, not a rule. Fails if the read leaf did not bind `read_ts`, the
-/// write leaf `cycle`, or the gap obligations `cycle`.
+/// So the surfaces differ: a value enters no gate and no obligation, and a
+/// timestamp that moves a gap below 0 is caught by the lookup evaluator as well
+/// as by reconciliation. The row is pinned because the second half's short set
+/// is a measurement, not a rule. Fails if the read leaf did not bind `read_ts`,
+/// the write leaf `cycle`, or the gap obligations `cycle`.
 #[test]
 fn one_changed_timestamp_does_not_reconcile_and_a_moved_cycle_breaks_a_gap() {
     let f = fib();
@@ -372,9 +372,17 @@ fn one_changed_timestamp_does_not_reconcile_and_a_moved_cycle_breaks_a_gap() {
         (ALU, read_ts, ROW, int(87)),
         (ALU, gap_hi(pc), ROW, int(gap >> 19)),
     ];
+    let step = || {
+        Err(SelfCheckError {
+            layer: 0,
+            row: ROW,
+            relation: "pc_step".to_string(),
+        })
+    };
     let expected = Surface {
+        gate: step(),
+        lookups: Vec::new(),
         reconciles: false,
-        ..honest()
     };
     assert_eq!(
         surface(&f, &tampered(&f.shards, &cells), &f.finals),
@@ -394,7 +402,7 @@ fn one_changed_timestamp_does_not_reconcile_and_a_moved_cycle_breaks_a_gap() {
     assert_eq!(short, ["gap_lo_pc", "gap_lo_rs1"]);
     let forged = tampered(&f.shards, &[(ALU, CYCLE, ROW, int(CYCLE_AT_ROW - 1))]);
     let expected = Surface {
-        gate: Ok(()),
+        gate: step(),
         lookups: short.into_iter().map(|name| (ROW, name)).collect(),
         reconciles: false,
     };
@@ -585,13 +593,13 @@ fn consecutive_rows_are_a_cycle_apart() {
 
 /// Mask booleanity (`docs/spec/memory.md` §2.4). On the first padding row of
 /// `ADD_SUB_LUI_AUIPC`'s frame, row 1,009, the pc query — slot 0 of every
-/// frame — forged with mask −1: address 10, reading `x10`'s last write and
-/// writing 42 at `4·2,119`, the row's cycle set to 2,119, two past fib's last so
-/// that the write is the pc's least advance, 4, or more after the exit row's
-/// write to `x10`, with the boundary claiming `x10` ends at 42 there — the exit
-/// status. At `m = −1` each of the query's two leaves is `−T(AS − 2, …)`: the pc
-/// query reads and writes as a REG query, one sign flip on each side of the
-/// equation, so the roots reconcile and every obligation holds. A single
+/// frame — forged with mask −1: address 10, reading `x10`'s last write, at `t`,
+/// and writing 42 at `t + 4`, the row's cycle set to `(t + 4)/4` in the field
+/// so that `pc_step` holds, with the boundary claiming `x10` ends at 42 there —
+/// the exit status. At `m = −1` each of the query's two leaves is
+/// `−T(AS − 2, …)`: the pc query reads and writes as a REG query, one sign flip
+/// on each side of the equation, so the roots reconcile and every obligation
+/// holds. A single
 /// query's read and write pair suffices; a second −1 query is not needed.
 /// `gkr::self_check` names `pc_mask_boolean` on that row, the one gate that
 /// stops it; the same forgery at mask 1, a PC query, does not reconcile.
@@ -606,15 +614,13 @@ fn a_pc_query_masked_by_minus_1_reads_as_a_register_and_only_booleanity_refuses_
         row < 1usize << f.shards[ALU].artifact.trace_vars,
         "a padding row"
     );
-    let cycle = f.t.cycles.len() as u64 + 2;
-    let ts = TS_STEP * cycle;
     let pc = slot(&f, ALU, PC).expect("every frame has the pc query");
     let (t10, v10) = (f.finals.reg_ts[10], f.finals.reg_values[9]);
-    let advance = FRAME_MIN_ADVANCE[PC];
-    assert!(t10 + advance <= ts && ts - t10 - advance < 1 << 19);
+    let ts = t10 + TS_STEP;
+    let cycle = int(ts) * int(TS_STEP).inverse().expect("4 is invertible");
     let cells = |mask: Fp| {
         [
-            (ALU, CYCLE, row, int(cycle)),
+            (ALU, CYCLE, row, cycle),
             (ALU, frame(pc, FIELD_MASK), row, mask),
             (ALU, frame(pc, FIELD_ADDR), row, int(10)),
             (ALU, frame(pc, FIELD_READ_TS), row, int(t10)),
