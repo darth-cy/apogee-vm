@@ -104,7 +104,7 @@ use verifier_core::{
 
 pub use fill::{family_fill, Fill, ShardRows, ShardSource};
 pub use phases::{advance, finish, prove_block};
-pub use streaming::{prove_block_streaming, StreamingReport};
+pub use streaming::{prove_block_streaming, StreamingReport, DEFAULT_MAX_IN_FLIGHT};
 
 /// Every way the prover refuses. One flat enum.
 #[derive(Clone, Debug, PartialEq, Eq)]

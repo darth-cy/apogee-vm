@@ -28,14 +28,17 @@ Every number this VM implements.
 | 93 | `EXIT` | deterministic | end the execution with status `a0`'s low word, read as an `i32`: the statement's exit status; nonzero is a failed execution, still provable |
 | `0x0510` | `POSEIDON2` | deterministic | the Poseidon2-A64-C5 permutation of the 16 lanes at `a0`, two little-endian words each, in place; a lane read mod `p`, written canonical |
 | `0x0511` | `MUL_DIV_U256` | deterministic | `a`, `b`, `d` at `a0`, eight little-endian words each, become `⌊a·b/d⌋`, `a·b mod d`, `d`; the caller owes `d ≠ 0` and a quotient below `2^256`, which the emulator refuses as `DelegationFrame` |
+| `0x0512` | `MERKLE_ROOT` | deterministic | the 19 words at `a0`, a leaf's 8 lanes, its slot, the depth and the siblings' address, get the path's root over the lanes; the caller owes a depth in `16..=32`, a slot below `2^depth` and word-aligned siblings clear of the frame, which the emulator refuses as `DelegationFrame` ([precompiles.md](precompiles.md) §6) |
 
 A class says who chooses the result. **deterministic**: a function of the guest's own state, which
-a circuit proves. **advice**: chosen by the prover; no number has it. A proof admits these three:
+a circuit proves. **advice**: chosen by the prover; no number has it. A proof admits these four:
 `ADD_SUB_LUI_AUIPC` holds an exit row's `a7` to 93, and a delegation call's row writes an anchor only
 the family of its number reads ([precompiles.md](precompiles.md) §2). A delegation call preserves
 `a0`, as every register; its frame is a word-aligned span a store could write, each word checked as
 one, below `ADVICE_ORIGIN` (§5): a frame reaching the advice is the fatal `OutOfBounds`
-([precompiles.md](precompiles.md) §1).
+([precompiles.md](precompiles.md) §1). `MERKLE_ROOT`'s siblings are not its frame: it reads them,
+each word checked and bounded as a load's, and they may lie anywhere a load reaches, the advice
+included.
 
 ## 3. Retired numbers
 
@@ -129,7 +132,7 @@ makes them true:
 
 ## 6. The guest-sdk surface
 
-`crates/guest-sdk` is the guest's runtime. Only `exit` and the two precompiles' shims issue an
+`crates/guest-sdk` is the guest's runtime. Only `exit` and the three precompiles' shims issue an
 ecall; the rest is loads and stores.
 
 | Item | What |
@@ -145,6 +148,7 @@ ecall; the rest is loads and stores.
 | panic handler | exits 101 and writes nothing: a panicking guest is provable, having published what it committed |
 | `poseidon2_permute(state)`, `Digest`, `poseidon2_compress(l, r)` | `POSEIDON2` over a `[u64; 16]`; 8 lanes, each below `p`; and a Merkle node over two `Digest`s ([precompiles.md](precompiles.md) §5) |
 | `U256` | a 256-bit integer; its division and `mul_div` are `MUL_DIV_U256` |
+| `merkle_root(slot, leaf, siblings)`, `Digest::bytes(path)` | `MERKLE_ROOT` over a path of `siblings.len() / 64` siblings, which may be advice read in place; a `Digest` path as those bytes ([precompiles.md](precompiles.md) §5) |
 
 ## 7. The C ABI
 
@@ -160,6 +164,7 @@ calling it.
 | `void apogee_exit(int32_t code)` | `exit`, never returning |
 | `void apogee_poseidon2_permute(uint64_t state[16])` | `poseidon2_permute` |
 | `int32_t apogee_mul_div_u256(a, b, d, q, r)` | `U256::mul_div_rem` over four-limb arrays: 0, or 1 and nothing written where it is `None` |
+| `int32_t apogee_merkle_root(slot, depth, leaf, siblings, root)` | `merkle_root` over `depth` siblings: 0, or 1 and nothing written where its precondition or the leaf's `Digest::new` fails |
 
 The library's `_start` is crt0's (§5): it runs the guest's static initializers and calls its own
 `int main(void)`, exiting with what it returns; the header declares `main` with C linkage, which a

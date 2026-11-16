@@ -26,7 +26,7 @@
 //!             )],
 //!   delegations: [(family u32, height u32, cycle [u64], base [u32],
 //!                  [(addr [u32], read_ts [u64], read_value [u32],
-//!                    write_value [u32])])],
+//!                    write_value [u32])], carry [[u64]])],
 //!   events:   [(space tag u8, addr u32, ts u64, read_ts u64, read_value u32,
 //!               write_value u32)],
 //!   profile:  [(family u32, count u64)],
@@ -361,8 +361,15 @@ type FamilyWire = (
     [QueryWire; 8],
 );
 type EventWire = (u8, u32, u64, u64, u64, u64);
-type DelegationRef<'a> = (u32, u32, &'a [u64], &'a [u32], &'a [QueryRef<'a>]);
-type DelegationWire = (u32, u32, Seq<u64>, Seq<u32>, Seq<QueryWire>);
+type DelegationRef<'a> = (
+    u32,
+    u32,
+    &'a [u64],
+    &'a [u32],
+    &'a [QueryRef<'a>],
+    &'a [&'a [u64]],
+);
+type DelegationWire = (u32, u32, Seq<u64>, Seq<u32>, Seq<QueryWire>, Seq<Seq<u64>>);
 type PostExecutionWire = (
     Seq<FamilyWire>,
     Seq<DelegationWire>,
@@ -431,11 +438,25 @@ fn post_execution_wire(
                 .collect()
         })
         .collect();
+    let carries: Vec<Vec<&[u64]>> = traces
+        .delegations
+        .iter()
+        .map(|t| t.carry.iter().map(|c| &c[..]).collect())
+        .collect();
     let delegations: Vec<DelegationRef> = traces
         .delegations
         .iter()
-        .zip(&words)
-        .map(|(t, w)| (t.family, t.height, &t.cycle[..], &t.base[..], &w[..]))
+        .zip(words.iter().zip(&carries))
+        .map(|(t, (w, c))| {
+            (
+                t.family,
+                t.height,
+                &t.cycle[..],
+                &t.base[..],
+                &w[..],
+                &c[..],
+            )
+        })
         .collect();
     encode(&(
         &families[..],
@@ -498,13 +519,16 @@ fn decode_post_execution(
         delegations: delegations
             .0
             .into_iter()
-            .map(|(family, height, cycle, base, words)| DelegationTrace {
-                family,
-                height,
-                cycle: cycle.0,
-                base: base.0,
-                words: words.0.into_iter().map(columns).collect(),
-            })
+            .map(
+                |(family, height, cycle, base, words, carry)| DelegationTrace {
+                    family,
+                    height,
+                    cycle: cycle.0,
+                    base: base.0,
+                    words: words.0.into_iter().map(columns).collect(),
+                    carry: carry.0.into_iter().map(|c| c.0).collect(),
+                },
+            )
             .collect(),
     };
     let mut log_events = Vec::with_capacity(events.0.len().min(4096));
@@ -614,14 +638,18 @@ fn check_parts(
             }
         }
     }
-    // The delegation buffers: one row per invocation, whose frame events ride
-    // the requesting cycle and are checked against the log at that cycle —
-    // a frame family's, once: a family expanding the call holds the same
-    // invocations and touches no RAM.
+    // The delegation buffers: one entry per call or per level of one, whose
+    // word events ride the requesting cycle and are checked against the log
+    // at that cycle — the first family recording the kind of entry, once: a
+    // family expanding the entry holds the same entries and touches no RAM.
+    // Within a cycle the call's frame comes first, then its levels in order,
+    // ascending family id and a stable sort keeping both.
     let mut invocations: Vec<(u64, &DelegationTrace, usize)> = Vec::new();
     for t in &traces.delegations {
         let n = t.cycle.len();
-        if program::delegation_frame_words(t.family) != Some(t.words.len()) {
+        let shaped = program::delegation_frame_words(t.family) == Some(t.words.len())
+            && program::delegation_carry(t.family) == t.carry.len();
+        if !shaped {
             return Err(format!(
                 "family {}'s buffer is not a delegation frame",
                 t.family
@@ -633,11 +661,12 @@ fn check_parts(
                     && q.read_ts.len() == n
                     && q.read_value.len() == n
                     && q.write_value.len() == n
-            });
+            })
+            && t.carry.iter().all(|c| c.len() == n);
         if !columns_agree {
             return Err(format!("family {}'s columns differ in length", t.family));
         }
-        if program::is_frame_family(t.family) {
+        if program::reads_ram(t.family) {
             invocations.extend((0..n).map(|r| (t.cycle[r], t, r)));
         }
     }

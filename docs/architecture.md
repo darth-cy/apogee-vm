@@ -57,8 +57,9 @@ blinded.
 2. **Execution.** `emulator` runs the guest. A cycle is one row of the family that owns its
    instruction, recording its memory queries: timestamped reads and writes of the pc, registers and
    RAM ([execution-trace.md](spec/execution-trace.md)). A guest issues no system call but `EXIT`
-   and the precompile calls, the Poseidon2 permutation and a 256-bit `mul_div`, each a frame of RAM
-   a circuit of its own answers ([precompiles.md](spec/precompiles.md)): its input, journal and
+   and the precompile calls, the Poseidon2 permutation, a 256-bit `mul_div` and a Merkle path's
+   root, each a frame of RAM a circuit of its own answers ([precompiles.md](spec/precompiles.md)):
+   its input, journal and
    advice are regions of memory ([public-values.md](spec/public-values.md),
    [ecall-abi.md](spec/ecall-abi.md)).
 3. **Shards.** A family's rows are cut into **shards** of the family's height, a power of two

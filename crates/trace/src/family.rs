@@ -149,7 +149,7 @@ impl<'a> RowSlice<'a> {
     }
 }
 
-/// One shard's invocations of one delegation family: a borrowed window into a
+/// One shard's entries of one delegation family: a borrowed window into a
 /// [`DelegationTrace`], the cut [`RowSlice`] takes over a [`FamilyTrace`].
 #[derive(Clone, Copy, Debug)]
 pub struct FrameSlice<'a> {
@@ -159,9 +159,9 @@ pub struct FrameSlice<'a> {
 }
 
 impl<'a> FrameSlice<'a> {
-    /// Shard `index`'s invocations of `trace` at `height` rows: `height`
-    /// divided by the family's rows a call (`program::delegation_rows`), a
-    /// power of two that a height always holds whole.
+    /// Shard `index`'s entries of `trace` at `height` rows: `height` divided
+    /// by the family's rows an entry (`program::delegation_rows`), a power of
+    /// two that a height always holds whole.
     pub fn shard(trace: &'a DelegationTrace, index: u32, height: usize) -> FrameSlice<'a> {
         let per = height / program::delegation_rows(trace.family) as usize;
         let start = (index as usize * per).min(trace.len());
@@ -169,7 +169,7 @@ impl<'a> FrameSlice<'a> {
         FrameSlice { trace, start, len }
     }
 
-    /// How many invocations this shard holds; at most the height.
+    /// How many entries this shard holds; at most the height.
     pub fn len(&self) -> usize {
         self.len
     }
@@ -178,19 +178,25 @@ impl<'a> FrameSlice<'a> {
         self.len == 0
     }
 
-    /// The family whose invocations these are.
+    /// The family whose entries these are.
     pub fn family(&self) -> FamilyId {
         self.trace.family
     }
 
-    /// The requesting cycle of each invocation.
+    /// The requesting cycle of each entry.
     pub fn cycles(&self) -> &'a [u64] {
         &self.trace.cycle[self.start..self.start + self.len]
     }
 
-    /// The frame base pointer of each invocation.
+    /// Where each entry's words begin: a call's frame, a level's sibling.
     pub fn bases(&self) -> &'a [u32] {
         &self.trace.base[self.start..self.start + self.len]
+    }
+
+    /// Carried value `k` of each of this shard's entries: a level's
+    /// (`constants::delegation::CARRY`).
+    pub fn carry(&self, k: usize) -> &'a [u64] {
+        &self.trace.carry[k][self.start..self.start + self.len]
     }
 
     /// Frame word `j`'s four columns over this shard's invocations.
@@ -300,27 +306,35 @@ impl FamilyTrace {
     }
 }
 
-/// One **delegation** family's rows: one per invocation, column-major.
+/// One **delegation** family's entries, column-major: one per call, or for a
+/// level family one per level of a call's path (`program::delegation_per`).
 ///
-/// An invocation is not a cycle: it rides the cycle whose ecall requested it,
-/// and its memory queries are the frame's fixed-offset words, `words[j]` at
-/// `base + 4j`, each written at `4·cycle + constants::delegation::FRAME_DELTA`.
-/// A frame does not fit [`Row`]'s query slots, so it lives here.
+/// An entry is not a cycle: it rides the cycle whose ecall requested it, and
+/// its memory queries are its fixed-offset words, `words[j]` at `base + 4j` —
+/// a call's frame, a level's sibling — each written at
+/// `4·cycle + constants::delegation::FRAME_DELTA`. A frame does not fit
+/// [`Row`]'s query slots, so it lives here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DelegationTrace {
     pub family: FamilyId,
     /// The family's `VmConfig` height.
     pub height: u32,
-    /// The requesting cycle, one per invocation.
+    /// The requesting cycle, one per entry.
     pub cycle: Vec<u64>,
-    /// The frame base pointer, one per invocation.
+    /// Where an entry's words begin, one per entry: a call's frame, a level's
+    /// sibling.
     pub base: Vec<u32>,
-    /// The frame's word queries, in frame order.
+    /// The entry's word queries, in order.
     pub words: Vec<QueryColumns>,
+    /// What each entry carries, `program::delegation_carry` columns: a
+    /// level's node, its slot's bits not yet taken and its level; none for a
+    /// call.
+    pub carry: Vec<Vec<u64>>,
 }
 
 impl DelegationTrace {
-    /// An empty buffer for `family` at `height`, with `width` frame words.
+    /// An empty buffer for `family` at `height`, with `width` frame words and
+    /// the family's carry.
     pub fn new(family: FamilyId, height: u32, width: usize) -> DelegationTrace {
         DelegationTrace {
             family,
@@ -328,10 +342,11 @@ impl DelegationTrace {
             cycle: Vec::new(),
             base: Vec::new(),
             words: vec![QueryColumns::default(); width],
+            carry: vec![Vec::new(); program::delegation_carry(family)],
         }
     }
 
-    /// How many invocations the family made.
+    /// How many entries the family recorded.
     pub fn len(&self) -> usize {
         self.cycle.len()
     }
@@ -345,15 +360,21 @@ impl DelegationTrace {
         self.cycle.is_empty()
     }
 
-    /// Append one invocation: one query per frame word, in frame order.
-    pub fn push(&mut self, cycle: u64, base: u32, words: &[Query]) {
+    /// Append one entry: one query per frame word, in frame order, and what
+    /// it carries.
+    pub fn push(&mut self, cycle: u64, base: u32, words: &[Query], carry: &[u64]) {
         assert_eq!(
+            (words.len(), carry.len()),
+            (self.words.len(), self.carry.len()),
+            "delegation buffer: an entry of {} words carrying {} in a {}-word frame carrying {}",
             words.len(),
+            carry.len(),
             self.words.len(),
-            "delegation buffer: an invocation of {} words in a {}-word frame",
-            words.len(),
-            self.words.len()
+            self.carry.len()
         );
+        for (column, v) in self.carry.iter_mut().zip(carry) {
+            column.push(*v);
+        }
         self.cycle.push(cycle);
         self.base.push(base);
         for (columns, q) in self.words.iter_mut().zip(words) {
@@ -390,8 +411,8 @@ impl FamilyTraces {
     }
 
     /// Every buffer's row count, ascending by family id: the shape a
-    /// `CycleProfile` has. A delegation buffer's is its calls times the
-    /// family's rows a call.
+    /// `CycleProfile` has. A delegation buffer's is its entries times the
+    /// family's rows an entry.
     pub fn row_counts(&self) -> Vec<(FamilyId, u64)> {
         let mut out: Vec<(FamilyId, u64)> = self
             .families

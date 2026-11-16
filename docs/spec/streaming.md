@@ -82,8 +82,10 @@ A family's rows, in the order they are appended, are cut into shards of its `VmC
 `h`: shard `i` is rows `[i·h, min((i + 1)·h, len))`, the last padded to `h` with zero rows
 ([memory.md](memory.md) §2). `trace::plan_shards` is `⌈rows/h⌉` per family over the
 `CycleProfile`, a cycle-owning family's rows being its cycles and a delegation family's its calls
-times its rows a call, so a family the execution never reached has no shard. A delegation shard is
-whole calls: `h` over the rows a call of them, a power of two dividing `h`. A window family plans 0; its shards are windows ([memory.md](memory.md) §3),
+times its rows an entry, so a family the execution never reached has no shard. A delegation shard
+is whole entries, a call's or a path level's: `h` over the rows an entry of them, a power of two
+dividing `h`. A path's levels may straddle two shards, each level carrying what its rows start
+from ([precompiles.md](precompiles.md) §6). A window family plans 0; its shards are windows ([memory.md](memory.md) §3),
 counted by `shard_counts` in `crates/prover/src/lib.rs`: one `INIT_TEARDOWN` shard and one of each
 public window whatever the execution did, a `ZERO_WINDOWS` shard per entry of `init_windows`, and
 one per advice window supplied (`trace::advice_window_count`). The counts are the statement's
@@ -91,10 +93,11 @@ one per advice window supplied (`trace::advice_window_count`). The counts are th
 
 **The flush.** `StreamingRun` makes the cut as it runs. After a cycle is recorded, a buffer that
 has reached `h` rows is handed over as `ShardChunk { family, index, rows }`, `index = rows/h − 1`,
-and replaced by an empty one; a delegation buffer holding a shard's calls likewise, its chunk
+and replaced by an empty one; a delegation buffer holding a shard's entries likewise, its chunk
 carrying them in `calls`. A cycle appends one row, to its owning family's buffer, and a delegation
-call one call to each of its families', so a buffer reaches `h` without passing it, a step fills at
-most one a family, and no chunk is split. At exit `finish`
+call one entry to each of its families, or one per level of its path, each pushed and flushed in
+turn, so a buffer reaches `h` without passing it, a step fills at most one a family (a path's 32
+levels are fewer than any delegation shard holds), and no entry is split. At exit `finish`
 hands over the partial buffers. Chunks arrive in fill order, not statement order, and pass 1
 asserts that each family's count is the plan's.
 
@@ -136,7 +139,10 @@ The window families' shards follow the pipeline, built from the final state in r
 at most `max_in_flight`, which are all that a `ThreadPool::install` around the call bounds.
 
 **The knob.** `max_in_flight`, at least 1, is an argument because only the caller knows the
-machine; `host::prove` takes it from its caller. `StreamingReport::peak_in_flight` is the most
+machine; `host::prove` takes it from its caller. `prover::DEFAULT_MAX_IN_FLIGHT`, 8, is what every
+proving path in the repository passes: on an r8i.8xlarge at `2^20` execution shards, 4 → 8 cut
+the business guests' prove time by 16–25% for 10–13 GiB more peak, the CPU-seconds unchanged, and
+16 added nothing for an 11-shard statement. `StreamingReport::peak_in_flight` is the most
 shards claimed or batched at once in either pass.
 
 ## 6. The retained archived path

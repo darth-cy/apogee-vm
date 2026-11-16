@@ -25,10 +25,11 @@ count is the instruction count.
 | 3 | `PC` | 0 | the entry point |
 | 4 | `DELEGATION` | a delegation call's frame base | nothing: a request's anchor, read by its invocation |
 | 5 | `POSEIDON2` | a call's cycle, its lane pair `j` at boundary `b` the timestamp `8b + j` | nothing: the state between its rows |
+| 6 | `MERKLE` | a call's cycle, its lane pair `s` at boundary `B` the timestamp `16B + s`, a level's control `16B + 8` | nothing: a path's state between its rows |
 
-The tags are nonzero so that no real tuple is all zeros, as `x0`'s initial write would be; 6 is the
-tag the next space takes. Spaces 4 and 5 are the precompile circuits' alone and no event is logged
-in them ([precompiles.md](precompiles.md) §2, §3). RAM is 32-bit words: a byte or halfword access
+The tags are nonzero so that no real tuple is all zeros, as `x0`'s initial write would be; 7 is the
+tag the next space takes. Spaces 4 to 6 are the precompile circuits' alone and no event is logged
+in them ([precompiles.md](precompiles.md) §2, §3, §6). RAM is 32-bit words: a byte or halfword access
 queries its word, a doubleword access its two words, and `trace::InitialMemory` is what RAM starts
 from. A query's value is a `u64`: a register's 64 bits, a RAM word's 32.
 
@@ -87,7 +88,7 @@ the number ([ecall-abi.md](ecall-abi.md)):
 | `a7` | Δ = 2 | `a0` written at Δ = 3 | `next_pc` | Besides |
 | --- | --- | --- | --- | --- |
 | `EXIT` | `a0`, the status | the status | `HALT_PC` | the execution stops |
-| a delegation | `a0`, the frame base | none | fall-through | each frame word read and written at slot 0, the frame family's; the call recorded in each of its families' buffers ([precompiles.md](precompiles.md) §1) |
+| a delegation | `a0`, the frame base | none | fall-through | each frame word read and written at slot 0, the frame family's, and a Merkle path's siblings read there after it; the call, or each level of the path, recorded in each of its families' buffers ([precompiles.md](precompiles.md) §1) |
 | any other | none | `-ENOSYS` | fall-through | no proof admits the row ([ecall-abi.md](ecall-abi.md) §4) |
 
 ## 7. The order of the log
@@ -170,7 +171,7 @@ the rest.
   `DelegationTrace`: per call, its cycle, its base and each frame word's query.
 - **`RowSlice`.** One shard's rows, `[i·h, min((i + 1)·h, len))`, borrowed: what the memory column
   builders read, never the log ([memory.md](memory.md) §2). A delegation shard's is a `FrameSlice`
-  of its calls, `h` over the family's rows a call of them.
+  of its entries, `h` over the family's rows an entry of them.
 - **`MemoryState`**, the last-access tables: each register's, the pc's and each RAM word's last
   `(ts, value)`. `O(touched addresses)`, and all the register and pc boundary,
   the RAM window list (`trace::init_windows`) and the window families' teardown need.

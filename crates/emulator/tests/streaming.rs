@@ -24,6 +24,7 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::{exit_code_of, image, input_of, io, uniform};
+use constants::delegation::{self, Per};
 use emulator::{trace_run, ShardChunk, StreamingRun};
 use program::{decode_program, family_name, FamilyId, ProgramParams};
 use trace::{plan_shards, FamilyTraces, MemoryEventLog};
@@ -45,8 +46,8 @@ const GUESTS: [(&str, u32); 11] = [
     // Without it every chunk here would come from the tail and the flush path
     // would never run.
     ("shards", 16),
-    // Both precompiles, its delegation families at `2^12`: 302 Poseidon2 calls
-    // fill the rounds' 256-call buffer mid-execution.
+    // The precompiles, their delegation families at `2^12`: 302 Poseidon2
+    // calls fill the rounds' 256-call buffer mid-execution.
     ("precompiles", 16),
 ];
 
@@ -127,6 +128,9 @@ fn whole(
 #[test]
 fn the_chunks_are_the_planned_shards_row_for_row() {
     let mut split_families = 0;
+    // The level families' chunks that begin inside a path, by family: a
+    // continuation the carry alone describes.
+    let mut mid_path: BTreeMap<FamilyId, u32> = BTreeMap::new();
     let mut total_stops = 0;
     for (name, height) in GUESTS {
         let s = stream(name, height);
@@ -168,8 +172,8 @@ fn the_chunks_are_the_planned_shards_row_for_row() {
                 family_name(chunk.family)
             );
             *want += 1;
-            // A delegation chunk carries calls, each the buffer's own, at the
-            // height over the family's rows a call.
+            // A delegation chunk carries entries, each the buffer's own, at the
+            // height over the family's rows an entry, and what each carries.
             if let Some(calls) = &chunk.calls {
                 let buffer = traces
                     .delegation(chunk.family)
@@ -197,6 +201,14 @@ fn the_chunks_are_the_planned_shards_row_for_row() {
                         want.write_value[start..start + calls.len()]
                     );
                     assert_eq!(got.read_ts, want.read_ts[start..start + calls.len()]);
+                }
+                for (got, want) in calls.carry.iter().zip(&buffer.carry) {
+                    assert_eq!(got[..], want[start..start + calls.len()], "{name}: a carry");
+                }
+                if program::delegation_per(chunk.family) == Per::Level
+                    && calls.carry[delegation::CARRY - 1].first() > Some(&0)
+                {
+                    *mid_path.entry(chunk.family).or_default() += 1;
                 }
                 if program::delegation_rows(chunk.family) > 1 && calls.len() == per {
                     split_families += 1;
@@ -229,6 +241,19 @@ fn the_chunks_are_the_planned_shards_row_for_row() {
     // At least one family is cut into more than one shard: a comparison over
     // single-shard families alone would never test the index arithmetic.
     assert!(split_families >= 1, "{split_families} families cut in two");
+    // And a path crosses a shard of each level family: `precompiles`'
+    // depth-20 path is levels 4,080 to 4,099, a level shard holding 4,096 and
+    // a round shard 256 at `2^12`.
+    for family in [
+        constants::family::MERKLE_LEVELS,
+        constants::family::MERKLE_ROUNDS,
+    ] {
+        assert!(
+            mid_path.get(&family) >= Some(&1),
+            "a {} shard begins inside a path",
+            family_name(family)
+        );
+    }
     // And the executor really stopped mid-execution rather than handing
     // everything back from the tail: `shards`' add/sub family fills sixteen
     // times before its last short shard.

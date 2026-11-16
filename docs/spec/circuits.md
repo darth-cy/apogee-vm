@@ -16,8 +16,8 @@ Families 0–6 (`constants::family`) are the **execution** families, one execute
 row ([add-sub.md](add-sub.md), [jump-branch-slt.md](jump-branch-slt.md),
 [bitwise.md](bitwise.md), [mul-div.md](mul-div.md), [memory-ops.md](memory-ops.md) §3,
 §4, §6); 7–11 the **window** families, one memory word a row ([memory.md](memory.md) §3,
-[public-values.md](public-values.md) §4); 12–14 the **delegation** families, a precompile call a
-row or sixteen ([precompiles.md](precompiles.md)).
+[public-values.md](public-values.md) §4); 12–17 the **delegation** families, a precompile call or a
+path's level a row, or sixteen ([precompiles.md](precompiles.md)).
 
 Shapes at the default height `2^n` (`constants::family::DEFAULT_HEIGHTS`): committed columns,
 enforcing gates, obligations per channel (`TIMESTAMP/RANGE16/GENERIC/DECODER`), row-wise gate
@@ -41,6 +41,9 @@ lists (the halving ones are `n`), inner columns, artifact bytes, and a shard pro
 | 12 | `POSEIDON2` | 16 | 164 | 130 | 0 | 98 | 0/210/0/0 | 9 | 1,344 | 208,518 | 44,376 |
 | 13 | `POSEIDON2_ROUNDS` | 16 | 35 | 65 | 0 | 84 | — | 4 | 62 | 58,609 | 15,088 |
 | 14 | `MUL_DIV_U256` | 16 | 91 | 135 | 0 | 48 | 0/239/0/0 | 9 | 1,218 | 180,932 | 41,272 |
+| 15 | `MERKLE_ROOT` | 16 | 94 | 72 | 0 | 54 | 0/120/0/0 | 8 | 704 | 103,449 | 31,056 |
+| 16 | `MERKLE_LEVELS` | 16 | 63 | 50 | 0 | 20 | 0/97/0/0 | 8 | 704 | 138,302 | 30,208 |
+| 17 | `MERKLE_ROUNDS` | 16 | 36 | 66 | 0 | 85 | 0/1/0/0 | 4 | 104 | 64,028 | 16,304 |
 
 The bytes are the GKR pass and outputs; the witness commitment and the opening come on top
 ([proof.md](proof.md) §9, [pcs.md](pcs.md) §7).
@@ -54,8 +57,9 @@ halving lists, one per variable and as wide as the outputs, and no gate below th
 **Shared circuits.** `PUBLIC_OUTPUT`'s circuit is `ZERO_WINDOWS`' and `ADVICE_WINDOWS`' is
 `PUBLIC_INPUT`'s, byte for byte at one height, all `constraints::memory` constructors
 ([memory.md](memory.md) §3). Every other family's is its own module's `artifact`, the delegation
-families' on `constraints::delegation`'s builder: `poseidon2::{artifact, rounds_artifact}` and
-`mul_div_u256::artifact`.
+families' on `constraints::delegation`'s builder: `poseidon2::{artifact, rounds_artifact}`,
+`mul_div_u256::artifact` and `merkle::{artifact, levels_artifact, rounds_artifact}`, the two rounds
+families on one builder, `poseidon2::rounds`, keyed for a call or a level.
 
 ## 2. How a family circuit is assembled
 

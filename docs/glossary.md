@@ -35,7 +35,7 @@ the literature fixes (GKR, LogUp, RISC-V) are not listed.
 | `HALT_PC` | 1: the exit row's `next_pc`, the pc's final value | [memory.md §5](spec/memory.md) |
 | height | a family's rows a shard: `2^12`, `2^16`, `2^18`, `2^20` or `2^22` | [program.md §7](spec/program.md) |
 | identity, image column | a digest, 8 `Fp` lanes, of the code version, `VmConfig` and entry pc; meant to commit the decoded tables and the image column too | [program.md §8](spec/program.md) |
-| in flight | shards worked at once, at most `max_in_flight` | [streaming.md §5](spec/streaming.md) |
+| in flight | shards worked at once, at most `max_in_flight`, 8 by default | [streaming.md §5](spec/streaming.md) |
 | journal | the public output: what the guest leaves in the output window | [public-values.md §1](spec/public-values.md) |
 | laws | Laws 1–4: locality, derived width, top layer, single source of truth | [gkr.md §4](spec/gkr.md) |
 | layer | layer 0 the committed columns, the top the outputs; `L{k}[j]` between | [gkr.md §1](spec/gkr.md) |
@@ -44,7 +44,7 @@ the literature fixes (GKR, LogUp, RISC-V) are not listed.
 | multiplicity | a channel's `W` column counting each table row's lookups | [lookup.md §7](spec/lookup.md) |
 | padding contract | `padding.row` makes row-local relations vanish and tree inputs 1 | [gkr.md §4](spec/gkr.md) |
 | pass 1, pass 2 | executing to fix the statement; again to prove each shard | [streaming.md §2](spec/streaming.md) |
-| precompile, delegation | an ecall a circuit of its own answers over a frame: the Poseidon2 permutation, `mul_div_u256` | [precompiles.md](spec/precompiles.md) |
+| precompile, delegation | an ecall a circuit of its own answers over a frame: the Poseidon2 permutation, `mul_div_u256`, a Merkle path's root | [precompiles.md](spec/precompiles.md) |
 | public window | windows 2 and 3 at `2^12`: input at `0x8000`, journal at `0xC000` | [public-values.md §2](spec/public-values.md) |
 | query | one read and one write at one address in one cycle | [execution-trace.md §3](spec/execution-trace.md) |
 | reconciliation | `∏ read roots · R_b = ∏ write roots · W_b`, once a statement | [memory.md §4](spec/memory.md) |
