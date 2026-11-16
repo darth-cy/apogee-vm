@@ -166,8 +166,7 @@ first form verifies each `ShardProof` file with `verify_shard` and requires the 
 statement's shards, each once, in any order; the second verifies a `BlockProof` with
 `verify_block`, as an archive's `.vk`, `.public` and `.block` ([proof.md](spec/proof.md) §9). Exit
 0 when all verifies, 1 naming the first file refused or a wrong shard set, 2 on usage or a
-malformed identity. **Every run prints a warning to stderr that a proof which verifies is
-UNSOUND**: the memory argument's timestamp count fails at A64-C5's characteristic ([architecture.md](architecture.md) §0).
+malformed identity.
 
 ## 7. kat-gen and the committed vectors
 

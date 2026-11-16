@@ -213,7 +213,7 @@ A digest, `ProgramIdentity`, on the wire its 8 lanes' canonical bytes in order, 
 
 | # | tag | message |
 | --- | --- | --- |
-| 1 | `PROGRAM_IDENTITY` | `[code_version, circuit_revision]`: `constants::family::CODE_VERSION`, 1, the only one derivation builds (`UnsupportedCodeVersion`), and `CIRCUIT_REVISION`, 1, the registry's |
+| 1 | `PROGRAM_IDENTITY` | `[code_version, circuit_revision]`: `constants::family::CODE_VERSION`, 1, the only one derivation builds (`UnsupportedCodeVersion`), and `CIRCUIT_REVISION`, the registry's |
 | 2 | `VM_CONFIG` | §7's |
 | 3 | `PROGRAM_ENTRY` | `[entry_pc]` |
 | 4 | `SETUP_COMMITMENT` | once per family of the config, in its order: its setup commitment's payloads, empty for a family with none |

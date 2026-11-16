@@ -115,6 +115,7 @@ Gate list 0's first enforcing gates, in this order, and the circuit's first `2w`
 
 ```text
 <q>_mask_boolean       m − m·m = 0                       every query
+pc_step                m·(4·cycle − 4 − read_ts) = 0     the pc
 <q>_writes_back        write_value − read_value = 0      rs1 and rs2, where held
 <q>_writes_back_hi     write_hi − read_hi = 0            the same, on the high words
 rd_is_zero_inverse     addr·rd_inv + z − m = 0           on rd; z = rd_is_zero
@@ -129,6 +130,8 @@ gap_lo_<q>   TIMESTAMP, selector m:   4·cycle + δ_q − read_ts − 2^19·hi  
 
 - **Booleanity.** At `m = −1` a `pc` query's leaves are each `−T(REG, …)`: one sign flip a
   side, so the products balance and the pc access reads as a register access.
+- **Step.** A live row reads the pc write exactly one cycle back, so the pc's timestamps are
+  `4, 8, 12, …` and every `cycle` an integer (§4.2).
 - **Write-back.** Without it a read of `x0` could write 5 there. A `load` query is not
   read-only in every family: a store writes through it, so a load's write-back is the memory
   families' own gate ([memory-ops.md](memory-ops.md)).
@@ -138,8 +141,7 @@ gap_lo_<q>   TIMESTAMP, selector m:   4·cycle + δ_q − read_ts − 2^19·hi  
   boundary's final `x0 = 0` (§4.1) pins only its last write: a write of 5, a read of 5 and a
   write of 0 would otherwise balance.
 - **Gap.** Both chunks below `2^19` put `gap = 4·cycle + δ_q − read_ts` in `[0, 2^38)`, so
-  `read_ts < 4·cycle + Δ` as integers, every timestamp being a canonical integer by §4.2's
-  count. The pc query's `δ = −4` puts a row's pc write at least 4 after the one it reads, so
+  `read_ts < 4·cycle + Δ` as integers, every timestamp being an integer below `2^38` (§4.2). The pc query's `δ = −4` puts a row's pc write at least 4 after the one it reads, so
   consecutive rows' timestamps never interleave (§9). The frame's construction asserts two
   obligations per query.
 
@@ -256,7 +258,7 @@ message in this order (`verifier_core::boundary_scalars`):
 0, and of the pc, `HALT_PC`, are constants, not carried. `PublicInputs::from_bytes` refuses
 `t ≥ 2^38` or a word `≥ 2^32`, and `verify_global_memory` re-checks the timestamps and holds
 `v_10`, `a0`'s low word, to the exit status ([ecall-abi.md](ecall-abi.md)); no other register
-carries a public value. `t_pc` is not a cycle count: the pc's timestamps increase but need not be consecutive.
+carries a public value. `t_pc` is four times the cycle count (§2.4).
 `trace::build_boundary_finals(state)` is the fill.
 
 ### 4.2 The factors and the reconciliation
@@ -276,20 +278,23 @@ equation, which `verifier_core::verify_global_memory` runs once per statement
 its own verification.
 
 **The count.** Read each query as an edge from its read tuple to its write tuple. Inits are only
-written and finals only read, so a balanced multiset is paths from inits to finals plus loops. An
-edge advances the timestamp by an integer in `[1, 2^38 + 3]` (the gap plus the query's least
-advance, 4 at the pc and 1 elsewhere), so a loop needs at least `p/(2^38 + 3)` edges, and a
-statement has fewer than `2^65` tuples: under `2^32` shards a family (a `u32` count), 15 families,
-at most `2^22` rows (the menu's top), at most 81 tuples a row (`POSEIDON2`'s frame row, both sides),
-and 66 boundary tuples.
+written and finals only read, so a balanced multiset is paths from inits to finals plus loops. A
+statement has fewer than `2^59` rows, under `2^32` shards a family (a `u32` count), 18 families,
+at most `2^22` rows (the menu's top), and fewer than `2^65` tuples, at most 81 a row
+(`POSEIDON2`'s frame row, both sides) and 66 boundary tuples.
 
-**UNFINISHED: A64-C5 CHARACTERISTIC.** At `p = 2^64 − 59` that bound is about `2^26` edges, far
-below `2^65`, so the count excludes no loop. Nothing bounds `cycle`, so a timestamp is an integer
-only modulo `p`, and a loop of that many queries at one address balances with no init: a register
-or RAM read returning a value no write gave. A later stage bounds every write timestamp
-structurally, after which every timestamp on a path is an integer below `2^41` and no loop exists.
-Until then, what follows rests on the premise that nothing loops: every path starts at an init at
-timestamp 0 and ends at a final.
+- **The pc.** A live row is one pc edge, and `pc_step` advances it by exactly 4 (§2.4). A loop of
+  `k` edges needs `4k ≡ 0 mod p`, so `k ≥ p` rows, more than a statement has. The live rows are
+  therefore one path from `T(PC, 0, 0, entry_pc)`, the `j`-th at cycle `j`, to the final at `t_pc`,
+  four times the path's length and below `2^38` (§4.1): every live row's `cycle` is an integer
+  below `2^36`.
+- **Every other write** is a live row's query at `4·cycle + Δ` (§2.1's mask rule), or a precompile's
+  word at `4·cycle + FRAME_DELTA` of the ecall row that requested it, whose cycle the frame row
+  reads through the anchor and a Merkle level through its call's state
+  ([precompiles.md](precompiles.md) §2, §6). Every write timestamp, init or not, is therefore an
+  integer below `2^38`, and so is every read one, which equals a write's. Each gap holds over the
+  integers (§2.4), every edge strictly advances, and nothing loops: every path starts at an init at
+  timestamp 0 and ends at a final.
 
 ## 5. Halting
 
@@ -381,8 +386,7 @@ identity (§6.1).
 Both sides of §4.2 are products of linear forms in `(γ_M, α_addr, α_ts, α_val, α_hi)`, one per distinct
 tuple, every tuple fixed before those are drawn (§6.1, §8). By Schwartz–Zippel they agree on
 unequal multisets with probability at most `N/|Fp2| = N/p^2`, below `2^−63` at `N < 2^65` (§4.2),
-and on equal ones §4.2's count gives — **UNFINISHED** at A64-C5's characteristic, which leaves it a
-premise (§4.2):
+and on equal ones §4.2's paths give:
 
 - **One init per address** of `REG`, `PC` and `RAM`: the 33 boundary inits once per statement,
   and §3.5's windows, disjoint and of one height. A second init would let a stale read balance.
@@ -402,7 +406,6 @@ premise (§4.2):
   therefore distinct, so no cycle is proved twice. Nothing else carries it: there is no per-shard
   pc chaining, and a shard's time window ties to no row ([proof.md](proof.md) §8).
 
-Per address, the order is timestamp order, and it is program order: the pc query's gap puts
-consecutive pc writes at least 4 apart (§2.4), so each cycle's four timestamps precede the next
-cycle's whatever value `cycle` takes, and a row never reads an address before its predecessor's
-write there.
+Per address, the order is timestamp order, and it is program order: `pc_step` puts consecutive pc
+writes exactly 4 apart (§2.4), so each cycle's four timestamps precede the next cycle's, and a row
+never reads an address before its predecessor's write there.

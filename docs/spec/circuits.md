@@ -26,13 +26,13 @@ lists (the halving ones are `n`), inner columns, artifact bytes, and a shard pro
 
 | id | family | `n` | `M` | `W` | `S` | gates | lookups | row-wise | inner | bytes | proof |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | `ADD_SUB_LUI_AUIPC` | 22 | 28 | 37 | 11 | 58 | 8/5/1/1 | 5 | 356 | 43,405 | 32,520 |
-| 1 | `JUMP_BRANCH_SLT` | 22 | 27 | 51 | 11 | 54 | 8/11/2/1 | 5 | 392 | 47,243 | 33,304 |
-| 2 | `BITWISE` | 22 | 27 | 48 | 11 | 38 | 8/0/8/1 | 5 | 330 | 41,255 | 31,560 |
-| 3 | `MUL_DIV` | 20 | 27 | 98 | 11 | 86 | 13/26/6/1 | 6 | 458 | 68,632 | 32,800 |
-| 4 | `MEM_WORD` | 22 | 37 | 34 | 11 | 47 | 12/6/1/1 | 5 | 370 | 43,046 | 32,840 |
-| 5 | `MEM_SUBWORD` | 22 | 37 | 59 | 11 | 63 | 12/21/1/1 | 6 | 472 | 57,992 | 36,288 |
-| 6 | `ATOMICS` | 20 | 37 | 93 | 10 | 80 | 12/15/12/1 | 5 | 430 | 65,993 | 31,128 |
+| 0 | `ADD_SUB_LUI_AUIPC` | 22 | 28 | 37 | 11 | 59 | 8/5/1/1 | 5 | 356 | 43,534 | 32,520 |
+| 1 | `JUMP_BRANCH_SLT` | 22 | 27 | 51 | 11 | 55 | 8/11/2/1 | 5 | 392 | 47,372 | 33,304 |
+| 2 | `BITWISE` | 22 | 27 | 48 | 11 | 39 | 8/0/8/1 | 5 | 330 | 41,384 | 31,560 |
+| 3 | `MUL_DIV` | 20 | 27 | 98 | 11 | 87 | 13/26/6/1 | 6 | 458 | 68,761 | 32,800 |
+| 4 | `MEM_WORD` | 22 | 37 | 34 | 11 | 48 | 12/6/1/1 | 5 | 370 | 43,175 | 32,840 |
+| 5 | `MEM_SUBWORD` | 22 | 37 | 59 | 11 | 64 | 12/21/1/1 | 6 | 472 | 58,121 | 36,288 |
+| 6 | `ATOMICS` | 20 | 37 | 93 | 10 | 81 | 12/15/12/1 | 5 | 430 | 66,122 | 31,128 |
 | 7 | `INIT_TEARDOWN` | 22 | 2 | 0 | 1 | 0 | — | 1 | 46 | 3,019 | 17,912 |
 | 8 | `ZERO_WINDOWS` | 22 | 2 | 0 | 0 | 0 | — | 1 | 46 | 2,794 | 17,896 |
 | 9 | `PUBLIC_INPUT` | 12 | 3 | 0 | 0 | 0 | — | 1 | 26 | 1,759 | 5,992 |
@@ -52,7 +52,7 @@ The bytes are the GKR pass and outputs; the witness commitment and the opening c
 [lookup.md](lookup.md) §3 derives from the family's channels: 19 with `TIMESTAMP`, else 16 with
 `RANGE16`, else 0. A height changes `trace_vars`, each list's variable count and the number of
 halving lists, one per variable and as wide as the outputs, and no gate below them: at `2^20`
-`ADD_SUB_LUI_AUIPC` has 336 inner columns, 41,280 bytes and a 28,584-byte proof.
+`ADD_SUB_LUI_AUIPC` has 336 inner columns, 42,162 bytes and a 28,584-byte proof.
 
 **Shared circuits.** `PUBLIC_OUTPUT`'s circuit is `ZERO_WINDOWS`' and `ADVICE_WINDOWS`' is
 `PUBLIC_INPUT`'s, byte for byte at one height, all `constraints::memory` constructors

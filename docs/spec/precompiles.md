@@ -51,7 +51,8 @@ write  word j (RAM, addr_j, 4·cycle + FRAME_DELTA, write_j), read_j for a word 
 
 A gap in `[0, 2^38)` is two chunks and four obligations: each chunk direct, the top one scaled by
 `2^10`, and the remainder ([lookup.md](lookup.md) §11's copower rule holds the scaled one to its
-direct bound); **UNFINISHED: A64-C5 CHARACTERISTIC**, as every gap ([memory.md](memory.md) §4.2).
+direct bound); `cycle` is the request's, through the anchor, so every gap holds over the integers
+([memory.md](memory.md) §4.2).
 **The room keeps the frame below the advice.** `addr_0` is the request's `a0`, a word (§2), so
 `room` is a word exactly when the frame ends at or below `ADVICE_ORIGIN`. Below it every value is a
 word: initialized from the image, the public input or 0 ([memory.md](memory.md) §3), and written
