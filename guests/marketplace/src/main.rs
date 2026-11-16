@@ -8,14 +8,29 @@
 //! **A database a proof follows by its root.** The table is `2^DEPTH` listing
 //! slots, the leaves of a fixed-depth binary tree whose every node is
 //! [`poseidon2_compress`], the Poseidon2 precompile, over [`Digest`]s, whose
-//! lanes are each below `p`. The public input carries the
-//! root before the batch and the batch; the advice carries, for each operation,
-//! the slot's listing and its `DEPTH` siblings, a Merkle proof. Nothing advised
-//! is trusted: the guest rebuilds the root from the proof before it reads the
-//! listing, panics where the two differ, and builds the next root from the
-//! listing it writes, along the same path. A verifier holding the roots follows
-//! the whole table, `2 · DEPTH + 2` permutations an operation, without anyone
-//! publishing it.
+//! lanes are each below `p`. The public input carries the root before the batch
+//! and the batch; the advice carries, for each run of ops on one slot, the
+//! slot's listing and its `DEPTH` siblings, a Merkle proof. Nothing advised is
+//! trusted: the guest rebuilds the root from the proof before it reads the
+//! listing, panics where the two differ, applies the run's ops to the listing
+//! it holds, and builds the next root from the listing they leave, along the
+//! same path. A verifier holding the roots follows the whole table without
+//! anyone publishing it.
+//!
+//! **A batch a sequencer shaped.** A run is a stretch of consecutive ops on one
+//! slot. No other slot moves while it lasts, so the slot's siblings hold; each
+//! listing it passes through after the one its proof opens is the guest's own
+//! arithmetic; and no root but the batch's first and last is published. So a
+//! run opens its proof once and writes one root back, `2 · DEPTH + 2`
+//! permutations however many ops it holds, half that where it leaves its
+//! listing as it found it. Ordering is the sequencer's: the guest takes the
+//! batch in its order, opening a proof wherever an op's slot is not the one
+//! before's, and presumes each listing's ops gathered, in the order they
+//! arrived, which is one proof a listing. A batch in any other order is as
+//! correct, at a proof a run, at worst one an op. Gathering moves nothing in
+//! the table, as ops on two slots share only the tallies: their order in the
+//! journal, and which purchase a tally past `2^256` refuses, follow the batch's
+//! order.
 //!
 //! A price is a [`U256`], an ERC-20 amount's width, in its listing's currency:
 //! an ERC-20 contract's address, or the zero address for the chain's native
@@ -67,8 +82,9 @@
 //!
 //! # The advice
 //!
-//! For each op, in order: the slot's listing, then its `DEPTH` siblings from the
-//! leaf up, 64 bytes each, a digest, under the root the ops before it left.
+//! For each run, in order: its slot's listing, then the slot's `DEPTH` siblings
+//! from the leaf up, 64 bytes each, a digest, under the root the runs before it
+//! left.
 //!
 //! # The journal
 //!
@@ -227,6 +243,50 @@ fn root(slot: u32, leaf: Digest, path: &[Digest; DEPTH]) -> Digest {
     node
 }
 
+/// A run: consecutive ops on one slot, which one proof opens. No other slot
+/// moves while it lasts, so its path holds, and its listing after the opened
+/// one is the guest's own arithmetic.
+struct Run {
+    slot: u32,
+    /// The listing as the proof opened it.
+    opened: Listing,
+    /// The listing the run's ops have left so far.
+    listing: Listing,
+    path: [Digest; DEPTH],
+}
+
+impl Run {
+    /// `slot`'s run, opened by the advice's next proof under `table`, or a
+    /// panic.
+    fn open(slot: u32, advice: &[u8], at: &mut usize, table: Digest) -> Run {
+        let listing = Listing::decode(take(advice, at, LISTING));
+        let mut path = [Digest::default(); DEPTH];
+        for sibling in path.iter_mut() {
+            *sibling = digest_at(take(advice, at, 64), 0);
+        }
+        assert!(
+            root(slot, listing.leaf(), &path) == table,
+            "marketplace: the advice does not open the table"
+        );
+        Run {
+            slot,
+            opened: listing,
+            listing,
+            path,
+        }
+    }
+
+    /// The table the run leaves: `table` itself where its listing is as the
+    /// proof opened it.
+    fn close(&self, table: Digest) -> Digest {
+        if self.listing == self.opened {
+            table
+        } else {
+            root(self.slot, self.listing.leaf(), &self.path)
+        }
+    }
+}
+
 /// What an accepted op leaves in its slot, and a purchase's cost and fee in
 /// the listing's currency; a rejection is `None`.
 fn settle(listing: Listing, op: &Op, fee_bps: u32) -> Option<(Listing, Option<(U256, U256)>)> {
@@ -281,7 +341,8 @@ fn main() {
         n_ops <= MAX_OPS && input.len() == HEADER + OP * n_ops,
         "marketplace: the batch is not n_ops records"
     );
-    // Asked for only when there is an op: a run given no advice has no region.
+    // Asked for only when there is an op: an execution given no advice has no
+    // region.
     let advice = if n_ops > 0 { guest_sdk::advice() } else { &[] };
 
     let mut table = before;
@@ -291,6 +352,7 @@ fn main() {
         len: 0,
     };
     let mut at = 0;
+    let mut current: Option<Run> = None;
     for k in 0..n_ops {
         let o = &input[HEADER + OP * k..HEADER + OP * (k + 1)];
         let op = Op {
@@ -306,22 +368,21 @@ fn main() {
             (op.slot as usize) < 1 << DEPTH,
             "marketplace: a slot outside the table"
         );
-        let listing = Listing::decode(take(advice, &mut at, LISTING));
-        let mut path = [Digest::default(); DEPTH];
-        for sibling in path.iter_mut() {
-            *sibling = digest_at(take(advice, &mut at, 64), 0);
+        if current.as_ref().map(|run| run.slot) != Some(op.slot) {
+            if let Some(run) = current.take() {
+                table = run.close(table);
+            }
+            current = Some(Run::open(op.slot, advice, &mut at, table));
         }
-        assert!(
-            root(op.slot, listing.leaf(), &path) == table,
-            "marketplace: the advice does not open the table"
-        );
+        let run = current.as_mut().expect("the op's run is open");
+        let listing = run.listing;
         let settled = settle(listing, &op, fee_bps).and_then(|(next, purchase)| match purchase {
             Some((cost, fee)) => Some((next, Some(tallies.added(listing.currency, cost, fee)?))),
             None => Some((next, None)),
         });
         match settled {
             Some((next, tally)) => {
-                table = root(op.slot, next.leaf(), &path);
+                run.listing = next;
                 if let Some((at, t)) = tally {
                     tallies.set(at, t);
                 }
@@ -329,6 +390,9 @@ fn main() {
             }
             None => rejected += 1,
         }
+    }
+    if let Some(run) = current {
+        table = run.close(table);
     }
 
     let mut out = [0u8; JOURNAL_HEADER + TALLY * MAX_OPS];
@@ -351,7 +415,7 @@ fn main() {
 fn take<'a>(advice: &'a [u8], at: &mut usize, n: usize) -> &'a [u8] {
     let bytes = advice
         .get(*at..*at + n)
-        .expect("marketplace: the advice ended inside an op's proof");
+        .expect("marketplace: the advice ended inside a run's proof");
     *at += n;
     bytes
 }

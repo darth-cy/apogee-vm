@@ -147,10 +147,24 @@ let share = U256::from(amount).mul_div(U256::from(total), U256::from(reserve)); 
 - A guest that links a precompile pays one shard of each family it declares, at `2^16` rows: worth
   it once the call replaces more instructions than that ([circuits.md](spec/circuits.md) §1).
 - `guests/marketplace` is the worked example of a table a proof follows by its root: a listings
-  table of `2^20` slots as a Poseidon2 Merkle tree, the root before a batch in the public input,
-  each operation's Merkle proof in the advice, checked before it is used, and the root after the
-  batch in the journal. Each listing's price is in its own currency, an ERC-20 contract's address
-  or zero for the native one, and the journal tallies each currency's volume and fees apart.
+  table of `2^20` slots as a Poseidon2 Merkle tree, the root before a batch in the public input, a
+  Merkle proof in the advice for each run of operations on one listing, checked before it is used,
+  and the root after the batch in the journal. Each listing's price is in its own currency, an
+  ERC-20 contract's address or zero for the native one, and the journal tallies each currency's
+  volume and fees apart.
+
+### 3.2 Fewer cycles
+
+Cutting a guest's cycles has more than one strategy, and two are in use:
+
+- **A precompile module.** The VM proves a hot operation in a circuit of its own, which the guest
+  calls instead of running it (§3.1).
+- **The input's format.** Whoever builds the input, a sequencer say, can shape it so the guest does
+  less, and the guest presumes that shape rather than making it. `guests/marketplace` opens one
+  Merkle proof for each run of consecutive operations on one listing and writes one root back,
+  however long the run, so a sequencer that gathers each listing's operations, in the order they
+  arrived, makes it one proof a listing. The guest never sorts: a batch in any other order is as
+  correct, at a proof a run.
 
 ## 4. Build it
 

@@ -668,9 +668,11 @@ mod market {
 /// does not exist, and buy 1 of the new listing at 1 (fee 0.003); amounts in
 /// units of `10^18`. Six apply and five are refused, and the journal is both
 /// roots and a tally per currency bought in, in first-purchase order, the first
-/// token's two purchases summed. The advice is each slot's proof under the
-/// table the ops before it left. The batch with a record past its `n_ops`
-/// panics, and so does the same advice one sibling off.
+/// token's two purchases summed. The advice is a proof for each run of
+/// consecutive ops on one slot, under the table the runs before it left: the
+/// eleven ops are seven runs of up to three, slot 5's ops in three of them. The
+/// batch with a record past its `n_ops` panics, and so does the same advice one
+/// sibling off.
 #[test]
 fn marketplace_follows_its_table_by_its_root() {
     use market::{listing, Table};
@@ -723,6 +725,7 @@ fn marketplace_follows_its_table_by_its_root() {
     input.extend(30u32.to_le_bytes());
     input.extend((ops.len() as u32).to_le_bytes());
     let mut advice = Vec::new();
+    let mut run_slot = None;
     for ((kind, slot, account, item, price, quantity, currency), after) in ops {
         input.extend(kind.to_le_bytes());
         input.extend(slot.to_le_bytes());
@@ -732,7 +735,10 @@ fn marketplace_follows_its_table_by_its_root() {
         input.extend([0u8; 16]);
         input.extend(quantity.to_le_bytes());
         input.extend(currency);
-        advice.extend(table.proof(slot));
+        if run_slot != Some(slot) {
+            advice.extend(table.proof(slot));
+            run_slot = Some(slot);
+        }
         match after {
             Some(Some(l)) => {
                 table.0.insert(slot, l);
