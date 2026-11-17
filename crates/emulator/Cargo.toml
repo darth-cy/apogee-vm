@@ -15,6 +15,8 @@ program.workspace = true
 trace.workspace = true
 
 [dev-dependencies]
+# Falcon-512 keys and signatures, which the SDK's verifier is held to.
+falcon-rust.workspace = true
 # The Keccak-f[1600] call's answer, held to RustCrypto's permutation.
 keccak.workspace = true
 test-support.workspace = true

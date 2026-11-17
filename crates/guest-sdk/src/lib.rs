@@ -684,6 +684,23 @@ impl Shake256 {
         }
     }
 
+    /// The output's next [`Shake256::RATE`] bytes in place, as the rate's 17
+    /// lanes, output byte `8i + k` lane `i`'s byte `k`: a rate at a time, with
+    /// no copy. Panics unless finalized and squeezed whole rates only.
+    pub(crate) fn squeeze_lanes(&mut self) -> &[u64; Self::RATE / 8] {
+        assert!(
+            self.squeezing && self.at.is_multiple_of(Self::RATE),
+            "Shake256: squeezing a rate from within one"
+        );
+        if self.at == Self::RATE {
+            keccak_f1600(&mut self.state);
+        }
+        self.at = Self::RATE;
+        self.state
+            .first_chunk()
+            .expect("the rate is within the state")
+    }
+
     /// The state's first [`Shake256::RATE`] bytes, lane `i`'s byte `k` at
     /// `8i + k`: the target is little-endian.
     fn rate(&mut self) -> &mut [u8; Self::RATE] {

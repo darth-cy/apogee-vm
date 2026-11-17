@@ -9,8 +9,9 @@
 //! `poseidon2_compress` gives, then a run of them long enough that a path's
 //! levels straddle a shard; Keccak-f[1600] of the state the public input
 //! carries, once and then a chain of it, and SHAKE256 of its message, absorbed
-//! and squeezed in halves; and Falcon-512's lattice check of the three arrays
-//! the public input carries, once and then their rotations in turn.
+//! and squeezed in halves; Falcon-512's lattice check of the three arrays the
+//! public input carries, once and then their rotations in turn; and Falcon-512
+//! verification of the keys, messages and signatures it carries.
 //!
 //! # The public input
 //!
@@ -30,6 +31,9 @@
 //!           s2       512 u16 LE      read mod q
 //!           c        512 u16 LE
 //!           more     u32 LE          s1_norm calls after the first
+//!   then    cases    u32 LE          Falcon-512 verifications, each a key, a
+//!                                    message and a signature, each a u32 LE
+//!                                    length and its bytes
 //! ```
 //!
 //! # The journal
@@ -58,6 +62,8 @@
 //!   falcon512::s1_norm              u64: the sum of more calls', call k's
 //!                                   arrays the input's rotated k times: (s2,
 //!                                   c, h), (c, h, s2), (h, s2, c), …
+//!   PublicKey::verify               a byte a case: 1 the signature verifies,
+//!                                   0 it does not, 2 the key does not decode
 //! ```
 //!
 //! With 126 runs the depth-20 path is levels 4,080 to 4,099: it straddles
@@ -67,7 +73,7 @@
 //! one over mid-execution, and with 1,024 more `s1_norm` calls the Falcon calls
 //! are more than the 1,024 a `FALCON_SPLIT` shard holds.
 
-use guest_sdk::falcon512::{self, Poly};
+use guest_sdk::falcon512::{self, Poly, PublicKey};
 use guest_sdk::{
     keccak_f1600, merkle_root, poseidon2_compress, poseidon2_permute, Digest, Shake256, U256,
 };
@@ -225,6 +231,21 @@ fn main() {
         sum += falcon512::s1_norm(p(0), p(1), p(2));
     }
     put(&sum.to_le_bytes());
+
+    let at_cases = at_falcon + 3 * 1024 + 4;
+    let mut read = at_cases + 4;
+    for _ in 0..word(at_cases) {
+        let mut field = || {
+            let len = word(read) as usize;
+            read += 4 + len;
+            &input[read - len..read]
+        };
+        let (key, message, signature) = (field(), field(), field());
+        put(&[match PublicKey::decode(key) {
+            Some(key) => key.verify(message, signature) as u8,
+            None => 2,
+        }]);
+    }
     guest_sdk::commit(&out[..at]);
 }
 

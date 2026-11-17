@@ -90,6 +90,11 @@ postcard = { version = "1", default-features = false }
 keccak = "0.1.6"
 sha3 = "0.10"
 
+# Test only. A Falcon-512 signer, keys from a seed and signatures, that the
+# SDK's verifier is held to. Never linked by the prover, the verifier or a
+# guest.
+falcon-rust = "0.3.1"
+
 # JSON: the reports `tools/bench` and `tools/profiler` write. Nothing here is
 # reachable from the prover, the verifier or a guest.
 serde_json = "1"

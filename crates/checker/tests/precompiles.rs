@@ -160,6 +160,8 @@ fn input() -> Vec<u8> {
         out.extend((0..512).flat_map(|t| falcon_coefficient(a, t).to_le_bytes()));
     }
     out.extend(MORE.to_le_bytes());
+    // No Falcon-512 verification: `crates/emulator/tests/guests.rs` runs them.
+    out.extend(0u32.to_le_bytes());
     out
 }
 
