@@ -93,9 +93,15 @@ fn traced() -> (Program, TraceArchive) {
     let data = [key_at, dst0, KEY, 0, sig_at, dst1, SIGNATURE, 0];
     // `lui a0, frames`, `li a7, FALCON512_DECODE`, a call, `a0 += 16`, a
     // call, then `exit(0)`.
-    let (a0, a7) = (10, 17);
+    let (a0, a7, t0) = (10, 17, 5);
     let addi = |rd: u32, rs1: u32, imm: u32| imm << 20 | rs1 << 15 | rd << 7 | 0x13;
+    // First 20,480 turns of `t0 -= 1; bnez t0`, so the calls ride cycles
+    // whose `4·cycle` passes `2^16`: an access a mask leaves out still owes
+    // its gap's chunks, which a small cycle's would hide in the low one.
     let code = [
+        5 << 12 | t0 << 7 | 0x37,
+        addi(t0, t0, 0xfff),
+        0xfe02_9ee3,
         frames | a0 << 7 | 0x37,
         addi(a7, 0, ecall::FALCON512_DECODE),
         0x73,

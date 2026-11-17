@@ -1179,6 +1179,7 @@ fn falcon_decode(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)
                 for (_, _, gap, _) in &frame {
                     idle_gap(&mut w, *gap, at, row);
                 }
+                idle_gap(&mut w, flush.gap, at, row);
             }
             let mut v = [0u64; SLOTS];
             for (u, s) in slots.iter().enumerate() {
