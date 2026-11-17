@@ -313,9 +313,11 @@ impl FamilyTrace {
 /// An entry is not a cycle: it rides the cycle whose ecall requested it, and
 /// its memory queries are its words — a call's frame or a level's sibling,
 /// `words[j]` at `base + 4j`, or a call's arrays, each word at its array's
-/// address plus four a word (`constants::delegation::Per::Arrays`) — each
-/// written at `4·cycle + constants::delegation::FRAME_DELTA`. A frame does not
-/// fit [`Row`]'s query slots, so it lives here.
+/// address plus four a word (`constants::delegation::Per::Arrays`), or a
+/// decode call's frame, polynomial and the source words it read, the slots
+/// past them [`Query::ABSENT`] and no query (`Per::Decode`) — each written at
+/// `4·cycle + constants::delegation::FRAME_DELTA`. A frame does not fit
+/// [`Row`]'s query slots, so it lives here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DelegationTrace {
     pub family: FamilyId,
