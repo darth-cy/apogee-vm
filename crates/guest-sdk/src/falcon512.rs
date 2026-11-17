@@ -390,3 +390,18 @@ pub(crate) unsafe fn s1_norm_at(h: *const u16, s2: *const u16, c: *const u16) ->
     super::delegate(&super::FALCON512, frame.as_mut_ptr());
     frame[NORM_LO] as u64 | (frame[NORM_HI] as u64) << 32
 }
+
+/// HashToPoint's sampler by the precompile: each of `lanes`, `x`, rewritten
+/// in place as its four base-`q` digits `⌊x / q^j⌋ mod q`, `j < 4`, `d_0 +
+/// 2^16·d_1 + 2^32·d_2 + 2^48·d_3`, so lane `l` is coefficients `4l` to `4l +
+/// 3` of the 32 `u16` the lanes' bytes are. Panics unless every lane is below
+/// `808·q^4`, the largest multiple of `q^4` below `p`: the call refuses one at
+/// or above it.
+pub fn sample(lanes: &mut [u64; 8]) {
+    assert!(
+        lanes.iter().all(|&x| x < T),
+        "falcon512::sample: eight lanes below 808·q^4"
+    );
+    // SAFETY: a `[u64; 8]` is 16 words, 8-aligned, and the whole frame.
+    unsafe { super::delegate(&super::FALCON512_SAMPLE, lanes.as_mut_ptr().cast()) }
+}

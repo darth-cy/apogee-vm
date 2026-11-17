@@ -78,6 +78,14 @@ int32_t apogee_merkle_root(uint32_t slot, uint32_t depth, const uint64_t leaf[8]
 uint64_t apogee_falcon512_s1_norm(const uint16_t h[512], const uint16_t s2[512],
                                   const uint16_t c[512]);
 
+/* HashToPoint's sampler by the precompile: each of the 8 lanes at `lanes`, x,
+ * rewritten in place as its four base-q digits floor(x / q^j) mod q, j < 4,
+ * d0 + 2^16*d1 + 2^32*d2 + 2^48*d3, so lane l is coefficients 4l to 4l + 3 of
+ * the 32 uint16_t its bytes are. `lanes` is 8-aligned and below the advice
+ * region. A lane at or above 808*q^4, the largest multiple of q^4 below p,
+ * exits 101, a panic. */
+void apogee_falcon512_sample(uint64_t lanes[8]);
+
 /* The guest's entry, which the library's startup calls. Declared here with C
  * linkage because a freestanding C++ compiler does not give `main` any: a
  * C++ guest's `int main()` then defines the symbol startup links to. */

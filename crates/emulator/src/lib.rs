@@ -1269,6 +1269,7 @@ fn frame_function(family: FamilyId) -> FrameFn {
     match family {
         constants::family::POSEIDON2 => poseidon2_frame,
         constants::family::MUL_DIV_U256 => mul_div_u256_frame,
+        constants::family::FALCON_SAMPLE => falcon512_sample_frame,
         other => panic!("emulator: delegation family {other} has no implementation"),
     }
 }
@@ -1346,6 +1347,33 @@ fn mul_div_u256_frame(pc: u32, words: &[u32]) -> Result<Vec<u32>, EmuError> {
     }
     let words = |x: [u64; 4]| x.into_iter().flat_map(|v| [v as u32, (v >> 32) as u32]);
     Ok(words(q).chain(words(r)).chain(words(d)).collect())
+}
+
+/// HashToPoint's sampler: each lane `x`, words `2l` and `2l + 1`
+/// little-endian, becomes its base-`q` digits `d_j = ⌊x/q^j⌋ mod q`, `j < 4`,
+/// word `2l` `d_0 + 2^16·d_1` and word `2l + 1` `d_2 + 2^16·d_3`. Refuses a
+/// lane at or above `T`, the largest multiple of `q^4` below `p`, which no row
+/// proves (`constraints::falcon`).
+fn falcon512_sample_frame(pc: u32, words: &[u32]) -> Result<Vec<u32>, EmuError> {
+    use delegation::falcon::Q;
+    const T: u64 = field::A64_C5 / Q.pow(4) * Q.pow(4);
+    let mut out = Vec::with_capacity(words.len());
+    for lane in words.chunks_exact(2) {
+        let mut x = lane[0] as u64 | (lane[1] as u64) << 32;
+        if x >= T {
+            return Err(EmuError::DelegationFrame {
+                pc,
+                detail: "falcon512_sample's lane is not below 808·q^4",
+            });
+        }
+        let mut d = [0u32; 4];
+        for digit in &mut d {
+            *digit = (x % Q) as u32;
+            x /= Q;
+        }
+        out.extend([d[0] | d[1] << 16, d[2] | d[3] << 16]);
+    }
+    Ok(out)
 }
 
 /// `s1 = (c − s2·h) mod (q, x^512 + 1)`, each coefficient centered to
@@ -2019,5 +2047,74 @@ mod tests {
                 .err(),
             Some(EmuError::OutOfBounds { pc: 0, addr: past })
         );
+    }
+
+    /// `FALCON512_SAMPLE` writes each lane below `T = 808·q^4` over its two
+    /// words as its base-`q` digits `⌊x/q^j⌋ mod q`, two a word: lanes at 0,
+    /// 1, `q^4 − 1`, `q^4` and `T − 1`, and arbitrary ones. It refuses `T`,
+    /// the first lane HashToPoint skips, and `2^64 − 1`, by name, writing
+    /// nothing.
+    #[test]
+    fn falcon512_sample_writes_each_lanes_digits_and_refuses_one_at_t() {
+        let (q, q4) = (12289u64, 12289u64.pow(4));
+        let t = 808 * q4;
+        let io = GuestIo {
+            input: Vec::new(),
+            advice: Vec::new(),
+        };
+        let image = spin();
+        let mut machine = Machine::new(&image, &io);
+        let base = guest_memory::RAM_ORIGIN + 0x2000;
+        let sample = |machine: &mut Machine, lanes: [u64; 8]| {
+            for (l, x) in lanes.iter().enumerate() {
+                machine.set_word(base + 8 * l as u32, *x as u32);
+                machine.set_word(base + 8 * l as u32 + 4, (x >> 32) as u32);
+            }
+            let (number, family) = (ecall::FALCON512_SAMPLE, constants::family::FALCON_SAMPLE);
+            machine.delegate(number, family, 0, base as u64)
+        };
+        let lanes = [
+            0,
+            1,
+            q4 - 1,
+            q4,
+            t - 1,
+            0x0123_4567_89ab_cdef,
+            t / 3,
+            t - q4,
+        ];
+        let call = sample(&mut machine, lanes).expect("a call");
+        let frame: Vec<(u32, u32, u32)> = lanes
+            .iter()
+            .flat_map(|x| {
+                let d = |j: u32| (x / q.pow(j) % q) as u32;
+                [
+                    (*x as u32, d(0) | d(1) << 16),
+                    ((x >> 32) as u32, d(2) | d(3) << 16),
+                ]
+            })
+            .enumerate()
+            .map(|(j, (old, new))| (base + 4 * j as u32, old, new))
+            .collect();
+        assert_eq!(call.frame, frame, "each lane its digits, two a word");
+        assert!(call.levels.is_empty() && call.arrays.is_empty());
+        for (addr, _, new) in &frame {
+            assert_eq!(machine.word(*addr), *new, "{addr:#x} written");
+        }
+
+        let detail = "falcon512_sample's lane is not below 808·q^4";
+        for x in [t, u64::MAX] {
+            let mut lanes = lanes;
+            lanes[5] = x;
+            assert_eq!(
+                sample(&mut machine, lanes).err(),
+                Some(EmuError::DelegationFrame { pc: 0, detail }),
+                "the lane {x:#x}"
+            );
+            for (l, x) in lanes.iter().enumerate() {
+                let at = base + 8 * l as u32;
+                assert_eq!(machine.word(at), *x as u32, "{at:#x} as it was");
+            }
+        }
     }
 }

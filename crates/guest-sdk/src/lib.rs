@@ -454,6 +454,9 @@ static MERKLE_ROOT: u32 = ecall::MERKLE_ROOT;
 #[link_section = ".apogee.delegations.falcon512"]
 static FALCON512: u32 = ecall::FALCON512;
 
+#[link_section = ".apogee.delegations.falcon512_sample"]
+static FALCON512_SAMPLE: u32 = ecall::FALCON512_SAMPLE;
+
 /// One delegation call over the frame at `frame`, its ecall number read back
 /// out of `declared`. Through `black_box`: folded to an immediate, the read
 /// would leave the record unreferenced and the declaration out of the image.
@@ -703,6 +706,16 @@ pub unsafe extern "C" fn apogee_falcon512_s1_norm(
     c: *const u16,
 ) -> u64 {
     falcon512::s1_norm_at(h, s2, c)
+}
+
+/// `falcon512::sample()` over the 8 lanes at `lanes`, in place. Panics unless
+/// each is below `808·q^4`.
+///
+/// # Safety
+/// `lanes` is 8-aligned and valid for reads and writes of 8 `uint64_t`.
+#[no_mangle]
+pub unsafe extern "C" fn apogee_falcon512_sample(lanes: *mut u64) {
+    falcon512::sample(&mut *lanes.cast::<[u64; 8]>())
 }
 
 /// `U256::mul_div_rem()`: `q = floor(a·b/d)` and `r = a·b mod d`, four

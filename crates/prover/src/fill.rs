@@ -177,6 +177,7 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
         family::FALCON => Some(falcon),
         family::FALCON_SPLIT => Some(falcon_split),
         family::FALCON_PRODUCT => Some(falcon_product),
+        family::FALCON_SAMPLE => Some(falcon_sample),
         _ => None,
     }
 }
@@ -912,6 +913,46 @@ fn falcon_product(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly
                     w.put(*col, r, (quotient >> (16 * i)) & 0xffff);
                 }
             }
+        }
+    }
+    Ok(w.finish(src.height))
+}
+
+/// `FALCON_SAMPLE`, `constraints::falcon`: the frame, and each lane's four
+/// digits, its rest past them and the high halfword of `T_HI` less its high
+/// word.
+fn falcon_sample(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constants::delegation::falcon::Q;
+    use constants::delegation::falcon_sample::{DIGITS, LANES};
+    use constraints::falcon::{Q4, T, T_HI};
+    let fam = family::FALCON_SAMPLE;
+    let (calls, mut w) = frame_fill(src, fam)?;
+    let lanes: Vec<([usize; DIGITS], [usize; 2])> = (0..LANES)
+        .map(|l| {
+            let d = std::array::from_fn(|j| w.col(&format!("d{l}_{j}")));
+            (d, [w.col(&format!("e{l}")), w.col(&format!("hb{l}_h16"))])
+        })
+        .collect();
+    for r in 0..calls.len() {
+        let cycle = calls.cycles()[r];
+        for (l, (d, [e, hb])) in lanes.iter().enumerate() {
+            let [lo, hi] = [2 * l, 2 * l + 1].map(|j| frame_word(&calls, j, r, false));
+            let x = lo | hi << 32;
+            if x >= T {
+                return Err(format!(
+                    "cycle {cycle}: FALCON512_SAMPLE's lane {l} is not below T"
+                ));
+            }
+            let digit = |j: usize| x / Q.pow(j as u32) % Q;
+            for (j, col) in d.iter().enumerate() {
+                w.put(*col, r, digit(j));
+            }
+            w.row(r, &[(*e, x / Q4), (*hb, (T_HI - hi) >> 16)]);
+            assert_eq!(
+                [2 * l, 2 * l + 1].map(|j| frame_word(&calls, j, r, true)),
+                [digit(0) | digit(1) << 16, digit(2) | digit(3) << 16],
+                "cycle {cycle}: FALCON512_SAMPLE wrote other than lane {l}'s digits"
+            );
         }
     }
     Ok(w.finish(src.height))

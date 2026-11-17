@@ -8,8 +8,9 @@
 //! `merkle_root`, the first two each checked against the fold
 //! `poseidon2_compress` gives, then a run of them long enough that a path's
 //! levels straddle a shard; Falcon-512's lattice check of the three arrays the
-//! public input carries, once and then their rotations in turn; and Falcon-512
-//! verification of the keys, messages, contexts and signatures it carries.
+//! public input carries, once and then their rotations in turn; HashToPoint's
+//! sampler over lanes at its edges; and Falcon-512 verification of the keys,
+//! messages, contexts and signatures it carries.
 //!
 //! # The public input
 //!
@@ -50,6 +51,10 @@
 //!   falcon512::s1_norm              u64: the sum of more calls', call k's
 //!                                   arrays the input's rotated k times: (s2,
 //!                                   c, h), (c, h, s2), (h, s2, c), …
+//!   falcon512::sample               8 u64: the lanes 0, 1, q^4 − 1, q^4,
+//!                                   T − 1, ⌊T/3⌋, T − q^4 and
+//!                                   0x0123456789abcdef, T = ⌊p/q^4⌋·q^4, each
+//!                                   its four base-q digits, u16 LE
 //!   PublicKey::verify               a byte a case: 1 the signature verifies
 //!                                   under the context, 0 it does not, 2 the
 //!                                   key does not decode
@@ -190,6 +195,21 @@ fn main() {
         sum += falcon512::s1_norm(p(0), p(1), p(2));
     }
     put(&sum.to_le_bytes());
+
+    let q4 = (falcon512::Q as u64).pow(4);
+    let t = p / q4 * q4;
+    let mut lanes = [
+        0,
+        1,
+        q4 - 1,
+        q4,
+        t - 1,
+        t / 3,
+        t - q4,
+        0x0123_4567_89ab_cdef,
+    ];
+    falcon512::sample(&mut lanes);
+    lanes.iter().for_each(|l| put(&l.to_le_bytes()));
 
     let at_cases = at_falcon + 3 * 1024 + 4;
     let mut read = at_cases + 4;
