@@ -3,7 +3,8 @@
 Falcon-512 v1.2 (the NIST round-3 specification) with one change: HashToPoint, the map to the point
 c, is a Poseidon2-A64-C5 sponge over the key digest K, the salt, the application's context (0 to 255
 bytes) and the message instead of SHAKE256(salt ‖ message). Keys, encodings, the signer's sampler and
-the acceptance rule are v1.2's. It is **not interoperable with standard Falcon-512**: a standard
+the acceptance rule are v1.2's. Each signer draws a fresh salt, and so a fresh c, for every attempt: after a
+norm or a compression rejection it starts over, where v1.2's Algorithm 10 keeps its salt. It is **not interoperable with standard Falcon-512**: a standard
 signature does not verify here, nor the reverse. K is a sponge over the key, and a key's address is
 K's first 32 bytes, written `0x`, 64 hex digits and an 8-digit checksum. The construction is
 specified in `docs/spec/precompiles.md`, “HashToPoint” in the section “The Falcon-512 lattice check”.

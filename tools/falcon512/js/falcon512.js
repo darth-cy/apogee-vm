@@ -627,10 +627,13 @@ export function sign(secretKey, message, context = new Uint8Array(0)) {
     cadd(cmul(gh, cadj(Gh)), cmul(fh, cadj(Fh))),
     cadd(cmul(Gh, cadj(Gh)), cmul(Fh, cadj(Fh))),
   );
-  const salt = Uint8Array.from({ length: SALT_BYTES }, randomByte);
-  const c = hashToPoint(encodePublicKey(h), salt, message, context), ch = fft(c);
-  const t0 = cscale(cmul(ch, Fh), -1 / Q), t1 = cscale(cmul(ch, fh), 1 / Q); // (ĉ, 0)·B̂⁻¹
+  const pk = encodePublicKey(h);
   for (;;) {
+    // Every attempt draws a fresh salt and so a fresh c, after a norm or a compression rejection
+    // alike: no two samples ever share a target.
+    const salt = Uint8Array.from({ length: SALT_BYTES }, randomByte);
+    const c = hashToPoint(pk, salt, message, context), ch = fft(c);
+    const t0 = cscale(cmul(ch, Fh), -1 / Q), t1 = cscale(cmul(ch, fh), 1 / Q); // (ĉ, 0)·B̂⁻¹
     const [z0, z1] = ffSampling(t0, t1, tree);
     // s = (c, 0) − z·B: s1 = c − (z0 g + z1 G), s2 = z0 f + z1 F, rounded from the FFT.
     const v = ifft(cadd(cmul(z0, gh), cmul(z1, Gh))).map(Math.round);

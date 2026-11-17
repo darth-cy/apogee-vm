@@ -470,12 +470,14 @@ def sign(secret_key: bytes, message: bytes, context: bytes = b"") -> bytes:
     tree = _ffldl([x * x.conjugate() + y * y.conjugate() for x, y in zip(ga, fa)],
                   [x * u.conjugate() + y * v.conjugate() for x, y, u, v in zip(ga, fa, Ga, Fa)],
                   [u * u.conjugate() + v * v.conjugate() for u, v in zip(Ga, Fa)])
-    salt = os.urandom(SALT_BYTES)
-    c = hash_to_point(_encode_pk(h), salt, msg, ctx)
-    ca = _fft(c)
-    t0, t1 = [-x * y / _Q for x, y in zip(ca, Fa)], [x * y / _Q for x, y in zip(ca, fa)]
-    rng = _Rng()
+    pk, rng = _encode_pk(h), _Rng()
     for _ in range(_SIGN_ATTEMPTS):
+        # Every attempt draws a fresh salt and so a fresh c, after a norm or a compression rejection
+        # alike: no two samples ever share a target.
+        salt = os.urandom(SALT_BYTES)
+        c = hash_to_point(pk, salt, msg, ctx)
+        ca = _fft(c)
+        t0, t1 = [-x * y / _Q for x, y in zip(ca, Fa)], [x * y / _Q for x, y in zip(ca, fa)]
         z0, z1 = _ffsampling(t0, t1, tree, rng)  # s = (c, 0) - z B
         v0 = _ifft([a * x + b * y for a, b, x, y in zip(z0, z1, ga, Ga)])  # z0 g + z1 G
         v1 = _ifft([a * x + b * y for a, b, x, y in zip(z0, z1, fa, Fa)])  # z0 f + z1 F

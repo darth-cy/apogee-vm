@@ -42,9 +42,10 @@ const PSI: i64 = 49;
 const _: () = assert!(pow(PSI, N as i64) == Q - 1);
 
 /// A signature of `msg` under `sk` and the application's `context`: v1.2's
-/// Sign (Algorithm 10), with a fresh random salt and `c` from
-/// [`hash_to_point`] of the public key `sk` implies, the salt, `msg` and
-/// `context`.
+/// Sign (Algorithm 10), with `c` from [`hash_to_point`] of the public key
+/// `sk` implies, a random salt, `msg` and `context`. Every attempt draws a
+/// fresh salt and so a fresh `c`, after a norm or a compression rejection
+/// alike: no two samples ever share a target.
 ///
 /// Panics if `context` is over 255 bytes, or unless `sk` is a secret key:
 /// [`SECRET_KEY_BYTES`] bytes, the header `0x59`, no coefficient
@@ -57,9 +58,6 @@ pub fn sign(sk: &[u8], msg: &[u8], context: &[u8]) -> Vec<u8> {
     );
     let (basis, pk) = expand(sk).expect("sk is a secret key");
     let mut rng = rand::rng();
-    let mut salt = [0; SALT_BYTES];
-    rng.fill_bytes(&mut salt);
-    let c = hash_to_point(&pk, &salt, msg, context).map(i64::from);
     let [f, g, big_f, big_g] = basis.map(|p| fft(&p));
     // The tree of B = [[g, −f], [G, −F]]'s Gram matrix, and t = (c, 0)·B⁻¹.
     let gram =
@@ -69,10 +67,13 @@ pub fn sign(sk: &[u8], msg: &[u8], context: &[u8]) -> Vec<u8> {
         &gram(&g, &big_g, &f, &big_f),
         &gram(&big_g, &big_g, &big_f, &big_f),
     );
-    let c_fft = fft(&c);
-    let t0 = each(N, |i| -c_fft[i] * big_f[i] / Q as f64);
-    let t1 = each(N, |i| c_fft[i] * f[i] / Q as f64);
     loop {
+        let mut salt = [0; SALT_BYTES];
+        rng.fill_bytes(&mut salt);
+        let c = hash_to_point(&pk, &salt, msg, context).map(i64::from);
+        let c_fft = fft(&c);
+        let t0 = each(N, |i| -c_fft[i] * big_f[i] / Q as f64);
+        let t1 = each(N, |i| c_fft[i] * f[i] / Q as f64);
         let (z0, z1) = ff_sampling(&t0, &t1, &tree, &mut || rng.next_u32() as u8);
         // s = (c, 0) − zB, exactly: s1 = c − (z0·g + z1·G), s2 = z0·f + z1·F.
         let combine = |a: &[C], b: &[C]| ifft(&each(N, |i| z0[i] * a[i] + z1[i] * b[i]));
