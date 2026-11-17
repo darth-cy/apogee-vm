@@ -7,8 +7,8 @@ use num_complex::Complex64 as C;
 use rand::Rng;
 
 use crate::{
-    bits, center, compress, encode_public_key, hash_to_point, mul, read, N, Q, SALT_BYTES,
-    SECRET_KEY_BYTES, SQBETA,
+    bits, center, compress, encode_public_key, hash_to_point, mul, read, MAX_CONTEXT_BYTES, N, Q,
+    SALT_BYTES, SECRET_KEY_BYTES, SQBETA,
 };
 
 /// Falcon-512's `σ`, which the tree's leaves are normalized to, and SamplerZ's
@@ -41,19 +41,25 @@ const EXP: [u64; 13] = [
 const PSI: i64 = 49;
 const _: () = assert!(pow(PSI, N as i64) == Q - 1);
 
-/// A signature of `msg` under `sk`: v1.2's Sign (Algorithm 10), with a fresh
-/// random salt and `c` from [`hash_to_point`] of the public key `sk` implies,
-/// the salt and `msg`.
+/// A signature of `msg` under `sk` and the application's `context`: v1.2's
+/// Sign (Algorithm 10), with a fresh random salt and `c` from
+/// [`hash_to_point`] of the public key `sk` implies, the salt, `msg` and
+/// `context`.
 ///
-/// Panics unless `sk` is a secret key: [`SECRET_KEY_BYTES`] bytes, the header
-/// `0x59`, no coefficient `−2^(bits−1)`, `f` invertible mod `q`, and
-/// `fG − gF = q` for the `G` recomputed.
-pub fn sign(sk: &[u8], msg: &[u8]) -> Vec<u8> {
+/// Panics if `context` is over 255 bytes, or unless `sk` is a secret key:
+/// [`SECRET_KEY_BYTES`] bytes, the header `0x59`, no coefficient
+/// `−2^(bits−1)`, `f` invertible mod `q`, and `fG − gF = q` for the `G`
+/// recomputed.
+pub fn sign(sk: &[u8], msg: &[u8], context: &[u8]) -> Vec<u8> {
+    assert!(
+        context.len() <= MAX_CONTEXT_BYTES,
+        "a context is at most 255 bytes"
+    );
     let (basis, pk) = expand(sk).expect("sk is a secret key");
     let mut rng = rand::rng();
     let mut salt = [0; SALT_BYTES];
     rng.fill_bytes(&mut salt);
-    let c = hash_to_point(&pk, &salt, msg).map(i64::from);
+    let c = hash_to_point(&pk, &salt, msg, context).map(i64::from);
     let [f, g, big_f, big_g] = basis.map(|p| fft(&p));
     // The tree of B = [[g, −f], [G, −F]]'s Gram matrix, and t = (c, 0)·B⁻¹.
     let gram =

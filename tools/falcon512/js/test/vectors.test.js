@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import {
-  SIGNATURE_BYTES, SALT_BYTES, verify, hashToPoint, publicKeyDigest, _verifyWithPoint,
+  SIGNATURE_BYTES, SALT_BYTES, verify, hashToPoint, keyDigest, address, formatAddress, parseAddress,
+  _verifyWithPoint,
 } from '../falcon512.js';
 
 const Q = 12289;
@@ -69,25 +70,37 @@ test('standard_kat: official Falcon-512 signatures pass the verify core', () => 
 });
 
 test('hash_to_point: the vectors\' points', () => {
-  for (const { pk, salt, msg, c } of section('hash_to_point')) {
-    assert.deepEqual(Array.from(hashToPoint(hex(pk), hex(salt), hex(msg))), c);
+  for (const { pk, salt, context, msg, c } of section('hash_to_point')) {
+    assert.deepEqual(Array.from(hashToPoint(hex(pk), hex(salt), hex(msg), hex(context))), c);
   }
 });
 
-test('key_digest: the vectors\' digests', () => {
-  for (const { pk, digest } of section('key_digest')) {
-    assert.deepEqual(publicKeyDigest(hex(pk)), digest.map(BigInt));
+test('key_digest: the vectors\' digests, addresses and texts', () => {
+  for (const entry of section('key_digest')) {
+    const pk = hex(entry.pk), text = entry.address_text;
+    assert.deepEqual(keyDigest(pk), hex(entry.key_digest));
+    assert.deepEqual(address(pk), hex(entry.address));
+    assert.equal(formatAddress(address(pk)), text);
+    assert.deepEqual(parseAddress(text), hex(entry.address));
+  }
+});
+
+test('address_text: each text reads as its address, or, with none, is refused', () => {
+  for (const { case: name, text, address: expected } of section('address_text')) {
+    if (expected === null) assert.throws(() => parseAddress(text), name);
+    else assert.deepEqual(parseAddress(text), hex(expected), name);
   }
 });
 
 test('signatures: every implementation\'s signatures verify', () => {
-  for (const { signer, pk, msg, sig } of section('signatures')) {
-    assert.ok(verify(hex(pk), hex(msg), hex(sig)), signer);
+  for (const { signer, pk, msg, context, sig } of section('signatures')) {
+    assert.ok(verify(hex(pk), hex(msg), hex(sig), hex(context)), signer);
   }
 });
 
-test('malformed: a valid signature, or its key, with one departure from the encodings refuses', () => {
+test('malformed: a valid signature, or its key or context, with one departure refuses', () => {
   for (const entry of section('malformed')) {
-    assert.equal(verify(hex(entry.pk), hex(entry.msg), hex(entry.sig)), false, entry.case);
+    const [pk, msg, sig, context] = [entry.pk, entry.msg, entry.sig, entry.context].map(hex);
+    assert.equal(verify(pk, msg, sig, context), false, entry.case);
   }
 });

@@ -1,10 +1,12 @@
 //! Falcon-512 with Poseidon2's HashToPoint: Falcon-512 as v1.2 of its
 //! specification (the NIST round-3 submission) defines it, keys, encodings,
 //! the signer's sampler and the acceptance rule, except for HashToPoint, the
-//! map from the public key, the salt and the message to the point `c`, which is
-//! a Poseidon2-A64-C5 sponge ([`hash_to_point`]) instead of SHAKE256 of the
-//! salt and the message. A standard Falcon signature does not verify here, nor
-//! the reverse.
+//! map to the point `c`, which is a Poseidon2-A64-C5 sponge ([`hash_to_point`])
+//! over the key's digest K ([`key_digest`]), the salt, the application's
+//! context and the message instead of SHAKE256 of the salt and the message. A
+//! standard Falcon signature does not verify here, nor the reverse. A key's
+//! address is K's first 32 bytes ([`address`]), its text form checksummed
+//! ([`format_address`], [`parse_address`]).
 //!
 //! The host's half, for the test suites: keys from a seed, signatures, and the
 //! verifier the guest SDK's is held to. **The signer is not constant time** and
@@ -44,8 +46,15 @@ const Q: i64 = 12289;
 /// `⌊β²⌋`: a signature verifies when `‖s1‖² + ‖s2‖²` is at most this.
 const SQBETA: i64 = 34_034_726;
 
-/// The sponge's first field, which names the construction.
-const CONTEXT: &[u8] = b"apogee/falcon512/hash-to-point/v1";
+/// The first fields of the sponges: K's (its use, then the key's scheme), the
+/// address checksum's, and HashToPoint's, which names the construction.
+const KEY_DOMAIN: &[u8] = b"apogee/key/v1";
+const SCHEME_ID: &[u8] = b"falcon512-poseidon2/v1";
+const CHECKSUM_DOMAIN: &[u8] = b"apogee/address-checksum/v1";
+const SIGNATURE_DOMAIN: &[u8] = b"apogee/falcon512/hash-to-point/v1";
+
+/// A context's most bytes, FIPS 204's and 206's bound.
+const MAX_CONTEXT_BYTES: usize = 255;
 
 /// The largest multiple of `q^4` below `p`: a lane under it is four uniform
 /// coefficients, and one at or above it, about one in a thousand, is skipped.
@@ -65,18 +74,21 @@ pub fn keygen(seed: [u8; 32]) -> (Vec<u8>, Vec<u8>) {
     (sk, pk)
 }
 
-/// Whether `sig` is a signature of `msg` under `pk`: `pk` exactly
-/// [`PUBLIC_KEY_BYTES`], `0x09` and coefficients below `q`; `sig` exactly
-/// [`SIGNATURE_BYTES`], `0x39`, the salt, then `s2` compressed, each
-/// coefficient `s` its sign, the low 7 bits of `|s|`, then `|s| >> 7` zeros
-/// and a one, none `−0` and none above 2047 in size, within the 5,000 bits and
-/// only zeros after them; and `‖s1‖² + ‖s2‖² ≤ ⌊β²⌋`, where `s1 = c − s2·h`
-/// mod `q`, centered, and `c` is [`hash_to_point`] of `pk`, the salt and `msg`.
-pub fn verify(pk: &[u8], msg: &[u8], sig: &[u8]) -> bool {
+/// Whether `sig` is a signature of `msg` under `pk` and `context`: `context`
+/// at most 255 bytes; `pk` exactly [`PUBLIC_KEY_BYTES`], `0x09` and
+/// coefficients below `q`; `sig` exactly [`SIGNATURE_BYTES`], `0x39`, the
+/// salt, then `s2` compressed, each coefficient `s` its sign, the low 7 bits of
+/// `|s|`, then `|s| >> 7` zeros and a one, none `−0` and none above 2047 in
+/// size, within the 5,000 bits and only zeros after them; and
+/// `‖s1‖² + ‖s2‖² ≤ ⌊β²⌋`, where `s1 = c − s2·h` mod `q`, centered, and `c` is
+/// [`hash_to_point`] of `pk`, the bytes `h` is decoded from, the salt, `msg`
+/// and `context`.
+pub fn verify(pk: &[u8], msg: &[u8], sig: &[u8], context: &[u8]) -> bool {
     let Some(salt) = sig.get(1..).and_then(<[u8]>::first_chunk) else {
         return false;
     };
-    verify_point(pk, &hash_to_point(pk, salt, msg), sig)
+    context.len() <= MAX_CONTEXT_BYTES
+        && verify_point(pk, &hash_to_point(pk, salt, msg, context), sig)
 }
 
 /// [`verify`] with the point `c` given: the decoding and the norm, whatever
@@ -91,13 +103,23 @@ pub fn verify_point(pk: &[u8], c: &[u16; N], sig: &[u8]) -> bool {
     s1.chain(s2.iter().copied()).map(|x| x * x).sum::<i64>() <= SQBETA
 }
 
-/// HashToPoint: `c` from the encoded public key `pk`, the salt and `msg`.
+/// HashToPoint: `c` from the encoded public key `pk`, the salt, `msg` and the
+/// application's `context`, which [`sign`] and [`verify`] bound to 255 bytes
+/// and this hashes as given.
 ///
-/// The `sponge` of the fields `(1, CONTEXT)`, `(2, pk)`, `(3, salt)` and
-/// `(4, msg)`; a lane `x` of its squeeze stream below `T` is the next four
-/// coefficients, `⌊x / q^j⌋ mod q` for `j < 4`, and the others are skipped.
-pub fn hash_to_point(pk: &[u8], salt: &[u8; SALT_BYTES], msg: &[u8]) -> [u16; N] {
-    let lanes = sponge(&[(1, CONTEXT), (2, pk), (3, salt), (4, msg)]);
+/// The `sponge` of the fields `(1, SIGNATURE_DOMAIN)`, `(2, K)` with K the
+/// [`key_digest`] of `pk`, `(3, salt)`, `(4, context)` and `(5, msg)`; a lane
+/// `x` of its squeeze stream below `T` is the next four coefficients,
+/// `⌊x / q^j⌋ mod q` for `j < 4`, and the others are skipped.
+pub fn hash_to_point(pk: &[u8], salt: &[u8; SALT_BYTES], msg: &[u8], context: &[u8]) -> [u16; N] {
+    let k = key_digest(pk);
+    let lanes = sponge(&[
+        (1, SIGNATURE_DOMAIN),
+        (2, &k),
+        (3, salt),
+        (4, context),
+        (5, msg),
+    ]);
     let mut c = [0; N];
     for (four, mut x) in c.chunks_exact_mut(4).zip(lanes.filter(|&x| x < T)) {
         for ci in four {
@@ -108,19 +130,58 @@ pub fn hash_to_point(pk: &[u8], salt: &[u8; SALT_BYTES], msg: &[u8]) -> [u16; N]
     c
 }
 
-/// KeyDigest, an account's fingerprint: the first eight lanes of the
-/// `sponge` of `(1, CONTEXT)`, `(2, pk)` and an empty field tagged 5. Defined
-/// for any bytes, a key that does not decode included.
-pub fn key_digest(pk: &[u8]) -> [u64; 8] {
-    let mut lanes = sponge(&[(1, CONTEXT), (2, pk), (5, &[])]);
-    std::array::from_fn(|_| lanes.next().unwrap())
+/// K, the key digest: the first eight lanes of the `sponge` of
+/// `(1, KEY_DOMAIN)`, `(2, SCHEME_ID)` and `(3, pk)`, each little-endian.
+/// Defined for any bytes, a key that does not decode included.
+pub fn key_digest(pk: &[u8]) -> [u8; 64] {
+    let lanes = sponge(&[(1, KEY_DOMAIN), (2, SCHEME_ID), (3, pk)]);
+    let mut k = [0; 64];
+    for (bytes, lane) in k.chunks_exact_mut(8).zip(lanes) {
+        bytes.copy_from_slice(&lane.to_le_bytes());
+    }
+    k
+}
+
+/// The address, 256 bits: K's first 32 bytes, its lanes 0 to 3.
+pub fn address(pk: &[u8]) -> [u8; 32] {
+    *key_digest(pk).first_chunk().unwrap()
+}
+
+/// The address's text: `0x`, then the address and its checksum in lowercase
+/// hex, 74 characters.
+pub fn format_address(address: &[u8; 32]) -> String {
+    let bytes = [&address[..], &checksum(address)].concat();
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!("0x{hex}")
+}
+
+/// The address a text gives: exactly `0x`, then 72 hex digits of either case,
+/// the address and then its checksum; `None` for any other string.
+pub fn parse_address(text: &str) -> Option<[u8; 32]> {
+    let digits = text.strip_prefix("0x")?.chars().map(|d| d.to_digit(16));
+    let digits: Vec<u32> = digits.collect::<Option<_>>()?;
+    if digits.len() != 72 {
+        return None;
+    }
+    let bytes: Vec<u8> = digits.chunks(2).map(|d| (d[0] << 4 | d[1]) as u8).collect();
+    let (address, sum) = bytes.split_first_chunk()?;
+    (*sum == checksum(address)).then_some(*address)
+}
+
+/// The address's checksum: the first four bytes of the first lane of the
+/// `sponge` of `(1, CHECKSUM_DOMAIN)` and `(2, address)`, little-endian, its
+/// low 32 bits.
+fn checksum(address: &[u8; 32]) -> [u8; 4] {
+    let lane = sponge(&[(1, CHECKSUM_DOMAIN), (2, address)]).next();
+    (lane.unwrap() as u32).to_le_bytes()
 }
 
 /// The squeeze stream of Poseidon2-A64-C5's overwrite duplex from the zero
-/// state, rate 8, after absorbing `fields`. A field is its tag, its length in
-/// bytes, then its bytes seven to a lane, little-endian, the last chunk
-/// shorter; each lane overwrites the next rate lane, the rate permuted first
-/// when it is full. The stream is a permutation then the rate, again and again.
+/// state, rate 8, after absorbing `fields`: K's, the checksum's and
+/// HashToPoint's. A field is its tag, its length in bytes, then its bytes
+/// seven to a lane, little-endian, the last chunk shorter; each lane overwrites
+/// the next rate lane, the rate permuted first when it is full. The stream is a
+/// permutation then the rate, again and again.
 fn sponge(fields: &[(u64, &[u8])]) -> impl Iterator<Item = u64> {
     let mut state = [Fp::ZERO; WIDTH];
     let lanes = fields.iter().flat_map(|&(tag, bytes)| {

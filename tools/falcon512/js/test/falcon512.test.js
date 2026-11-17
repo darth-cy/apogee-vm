@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { getRandomValues } from 'node:crypto';
 import {
   PUBLIC_KEY_BYTES, SECRET_KEY_BYTES, SIGNATURE_BYTES, SALT_BYTES,
-  generateKeyPair, sign, verify, hashToPoint, publicKeyDigest, publicKeyFromSecretKey,
-  _verifyWithPoint, _poseidon2,
+  generateKeyPair, sign, verify, hashToPoint, keyDigest, address, formatAddress, parseAddress,
+  publicKeyFromSecretKey, _verifyWithPoint, _poseidon2,
 } from '../falcon512.js';
 
 const Q = 12289, P = 2n ** 64n - 59n;
@@ -38,29 +38,31 @@ test('Poseidon2-A64-C5 at [0, 1, ..., 15] is the generator\'s answer', () => {
   assert.deepEqual(_poseidon2(Array.from({ length: 16 }, (_, i) => BigInt(i))), expected);
 });
 
-test('round trip: generateKeyPair, sign, verify; tampering refuses', () => {
+test('round trip: generateKeyPair, sign, verify under a context; tampering refuses', () => {
   const { secretKey, publicKey } = generateKeyPair();
   assert.equal(secretKey.length, SECRET_KEY_BYTES);
   assert.equal(publicKey.length, PUBLIC_KEY_BYTES);
   assert.deepEqual(publicKeyFromSecretKey(secretKey), publicKey);
-  for (const len of [0, 64, 200]) {
-    const msg = random(len), sig = sign(secretKey, msg);
+  for (const [len, ctx] of [[0, new Uint8Array(0)], [92, random(255)], [200, random(9)]]) {
+    const msg = random(len), sig = sign(secretKey, msg, ctx);
     assert.equal(sig.length, SIGNATURE_BYTES);
     assert.equal(sig[0], 0x39);
-    assert.ok(verify(publicKey, msg, sig));
+    assert.ok(verify(publicKey, msg, sig, ctx));
     const tampered = len ? flip(msg, 8 * len - 1) : new Uint8Array(1);
-    assert.ok(!verify(publicKey, tampered, sig), 'message');
-    assert.ok(!verify(publicKey, msg, flip(sig, SALT_BIT + 7)), 'salt');
-    assert.ok(!verify(publicKey, msg, flip(sig, S2_BIT + 20)), 's2');
+    assert.ok(!verify(publicKey, tampered, sig, ctx), 'message');
+    const otherCtx = ctx.length ? flip(ctx, 8 * ctx.length - 1) : new Uint8Array(1);
+    assert.ok(!verify(publicKey, msg, sig, otherCtx), 'context');
+    assert.ok(!verify(publicKey, msg, flip(sig, SALT_BIT + 7), ctx), 'salt');
+    assert.ok(!verify(publicKey, msg, flip(sig, S2_BIT + 20), ctx), 's2');
     const end = s2End(sig);
     assert.ok(end < 5000);
-    assert.ok(!verify(publicKey, msg, flip(sig, S2_BIT + end)), 'the padding bit after s2');
-    assert.ok(!verify(publicKey, msg, flip(sig, 8 * SIGNATURE_BYTES - 1)), 'the last padding bit');
+    assert.ok(!verify(publicKey, msg, flip(sig, S2_BIT + end), ctx), 'the padding bit after s2');
+    assert.ok(!verify(publicKey, msg, flip(sig, 8 * SIGNATURE_BYTES - 1), ctx), 'the last padding bit');
     for (const header of [0x29, 0x3a, 0x59]) {
-      assert.ok(!verify(publicKey, msg, Uint8Array.of(header, ...sig.subarray(1))), 'header');
+      assert.ok(!verify(publicKey, msg, Uint8Array.of(header, ...sig.subarray(1)), ctx), 'header');
     }
-    assert.ok(!verify(publicKey, msg, sig.subarray(0, SIGNATURE_BYTES - 1)), 'short');
-    assert.ok(!verify(publicKey, msg, Uint8Array.of(...sig, 0)), 'long');
+    assert.ok(!verify(publicKey, msg, sig.subarray(0, SIGNATURE_BYTES - 1), ctx), 'short');
+    assert.ok(!verify(publicKey, msg, Uint8Array.of(...sig, 0), ctx), 'long');
   }
 
   // Strict key decoding: h_i + q has the same residue but is not an encoding.
@@ -85,21 +87,25 @@ test('round trip: generateKeyPair, sign, verify; tampering refuses', () => {
   // Malformed input: verify returns false, sign throws.
   assert.equal(verify(undefined, msg, sig), false);
   assert.equal(verify(publicKey, 'not bytes', sig), false);
+  assert.equal(verify(publicKey, msg, sig, 'not bytes'), false);
   assert.equal(verify(publicKey, msg, Uint8Array.of(0x39, ...new Uint8Array(SIGNATURE_BYTES - 1))), false);
   assert.throws(() => sign(secretKey.subarray(1), msg));
   assert.throws(() => sign(flip(secretKey, 8 + 3), msg)); // f changes: fG − gF = q no longer holds
+  assert.throws(() => sign(secretKey, msg, new Uint8Array(256)), RangeError); // a context over 255 bytes
 });
 
 test('hashToPoint: deterministic, 512 coefficients below q, every input bit matters', () => {
-  const pk = random(PUBLIC_KEY_BYTES), salt = random(SALT_BYTES), msg = random(50);
-  const c = hashToPoint(pk, salt, msg);
+  const pk = random(PUBLIC_KEY_BYTES), salt = random(SALT_BYTES), msg = random(50), ctx = random(20);
+  const c = hashToPoint(pk, salt, msg, ctx);
   assert.ok(c instanceof Uint16Array);
   assert.equal(c.length, 512);
   assert.ok(c.every((x) => x < Q));
-  assert.deepEqual(hashToPoint(pk, salt, msg), c);
+  assert.deepEqual(hashToPoint(pk, salt, msg, ctx), c);
+  assert.notDeepEqual(hashToPoint(pk, salt, msg), c, 'the context left out');
+  assert.notDeepEqual(hashToPoint(pk, salt, ctx, msg), c, 'the message and the context swapped');
   // One random bit in every 7-byte lane of each input, and each input's first and last bits.
-  const inputs = [pk, salt, msg];
-  for (let k = 0; k < 3; k++) {
+  const inputs = [pk, salt, msg, ctx];
+  for (let k = 0; k < 4; k++) {
     const data = inputs[k], bits = [0, 8 * data.length - 1];
     for (let at = 0; at < data.length; at += 7) {
       bits.push(8 * at + Math.floor(Math.random() * 8 * Math.min(7, data.length - at)));
@@ -112,13 +118,29 @@ test('hashToPoint: deterministic, 512 coefficients below q, every input bit matt
   }
 });
 
-test('publicKeyDigest: eight lanes below p, for any bytes', () => {
-  const { publicKey } = generateKeyPair();
+test('keyDigest and address: eight lanes below p, the address their first 32 bytes, for any bytes', () => {
+  const publicKey = random(PUBLIC_KEY_BYTES);
   for (const data of [publicKey, new Uint8Array(0), random(100)]) {
-    const digest = publicKeyDigest(data);
-    assert.equal(digest.length, 8);
-    assert.ok(digest.every((x) => typeof x === 'bigint' && x >= 0n && x < P));
-    assert.deepEqual(publicKeyDigest(data), digest);
+    const k = keyDigest(data), view = new DataView(k.buffer);
+    assert.ok(k instanceof Uint8Array && k.length === 64);
+    for (let i = 0; i < 8; i++) assert.ok(view.getBigUint64(8 * i, true) < P);
+    assert.deepEqual(keyDigest(data), k);
+    assert.deepEqual(address(data), k.slice(0, 32));
   }
-  assert.notDeepEqual(publicKeyDigest(flip(publicKey, 100)), publicKeyDigest(publicKey));
+  assert.notDeepEqual(keyDigest(flip(publicKey, 100)), keyDigest(publicKey));
+});
+
+test('the address text: 0x and 72 lowercase hex digits; read back in either case; any change refused', () => {
+  const addr = address(random(PUBLIC_KEY_BYTES)), text = formatAddress(addr);
+  assert.match(text, /^0x[0-9a-f]{72}$/);
+  assert.deepEqual(parseAddress(text), addr);
+  assert.deepEqual(parseAddress('0x' + text.slice(2).toUpperCase()), addr);
+  for (let at = 2; at < 74; at++) {
+    const changed = text.slice(0, at) + (text[at] === '0' ? '1' : '0') + text.slice(at + 1);
+    assert.throws(() => parseAddress(changed), `digit ${at}`);
+  }
+  for (const other of [text.slice(2), '0X' + text.slice(2), text + '0', text.slice(0, 73), addr]) {
+    assert.throws(() => parseAddress(other));
+  }
+  assert.throws(() => formatAddress(addr.subarray(1)), RangeError);
 });

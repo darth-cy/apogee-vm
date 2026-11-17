@@ -55,7 +55,7 @@ fn the_round_3_kat_verifies() {
     for case in kat() {
         let (pk, msg, sig) = &case;
         assert!(verifies(&case));
-        assert!(!verify(pk, msg, sig));
+        assert!(!verify(pk, msg, sig, &[]));
     }
 }
 

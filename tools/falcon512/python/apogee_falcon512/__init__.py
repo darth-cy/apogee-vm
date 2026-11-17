@@ -1,10 +1,10 @@
 """Falcon-512 with Poseidon2's HashToPoint, in pure Python (standard library only).
 
 Falcon-512 v1.2 (q = 12289, n = 512: its encodings, key generation, sampler and acceptance rule) with
-one change: HashToPoint(public key, salt, message) is a Poseidon2-A64-C5 sponge instead of
-SHAKE256(salt || message), so standard Falcon-512 signatures do not verify here, nor the reverse. The
-construction is specified in the apogee-vm repository's docs/spec/precompiles.md, "HashToPoint" in the section
-"The Falcon-512 lattice check".
+one change: HashToPoint is a Poseidon2-A64-C5 sponge over (the key digest K, salt, context, message)
+instead of SHAKE256(salt || message), so standard Falcon-512 signatures do not verify here, nor the
+reverse. A key's address is K's first 32 bytes. The construction is specified in the apogee-vm
+repository's docs/spec/precompiles.md, "HashToPoint" in the section "The Falcon-512 lattice check".
 
 Signing uses floating point and is not constant time: a secret key belongs on its owner's device.
 """
@@ -19,7 +19,8 @@ from ._constants import APPROX_EXP_C, INTERNAL_DIAG_M_1, RC_INITIAL, RC_PARTIAL,
 
 __all__ = [
     "PUBLIC_KEY_BYTES", "SECRET_KEY_BYTES", "SIGNATURE_BYTES", "SALT_BYTES", "generate_keypair",
-    "sign", "verify", "hash_to_point", "public_key_digest", "public_key_from_secret_key",
+    "sign", "verify", "hash_to_point", "key_digest", "address", "format_address", "parse_address",
+    "public_key_from_secret_key",
 ]
 __version__ = "0.1.0"
 
@@ -75,11 +76,17 @@ def _permute(s):
 
 
 # ---------------------------------------------------------------------------------------------------
-# The sponge: overwrite duplex, rate 8 (lanes 0..8), capacity 8, zero start, lazy permutation.
+# The sponge (overwrite duplex, rate 8 (lanes 0..8), capacity 8, zero start, lazy permutation, no
+# padding) and what it serves: the key digest K, the address and its checksum, and HashToPoint.
 # ---------------------------------------------------------------------------------------------------
 
-_CONTEXT = b"apogee/falcon512/hash-to-point/v1"
+_KEY_DOMAIN = b"apogee/key/v1"
+_SCHEME_ID = b"falcon512-poseidon2/v1"
+_CHECKSUM_DOMAIN = b"apogee/address-checksum/v1"
+_SIGNATURE_DOMAIN = b"apogee/falcon512/hash-to-point/v1"
+_MAX_CONTEXT = 255  # bytes, FIPS 204's and 206's bound
 _T = 808 * _Q ** 4  # floor(p / q^4) q^4: lanes at or above it are rejected
+_HEX = frozenset("0123456789abcdefABCDEF")
 
 
 def _bytes(x):
@@ -87,55 +94,75 @@ def _bytes(x):
     return x if type(x) is bytes else memoryview(x).tobytes()
 
 
-def _field(tag, data):
-    """A message's lanes: its tag, its length in bytes, then its 7-byte little-endian chunks."""
-    return [tag, len(data)] + [int.from_bytes(data[i:i + 7], "little") for i in range(0, len(data), 7)]
-
-
-def _absorb(state, pos, lanes):
-    """Overwrite the next rate lane for each of `lanes`, permuting first when the rate is full."""
-    state = list(state)
-    for x in lanes:
-        if pos == 8:
-            state, pos = _permute(state), 0
-        state[pos] = x
-        pos += 1
-    return state, pos
-
-
-def _prefix(pk):
-    """(state, pos) after field(CONTEXT) and field(PUBLIC_KEY): 17 permutations for a 897-byte key."""
-    state, pos = _absorb([0] * 16, 0, _field(1, _CONTEXT) + _field(2, pk))
-    return tuple(state), pos
-
-
-_cached_prefix = functools.lru_cache(maxsize=256)(_prefix)  # a verifier absorbs each key once
-
-
-def _key_state(pk):
-    return _cached_prefix(pk) if len(pk) == PUBLIC_KEY_BYTES else _prefix(pk)
-
-
-def hash_to_point(public_key: bytes, salt: bytes, message: bytes) -> list[int]:
-    """HashToPoint: c in [0, q)^512 from the sponge over (public key, salt, message)."""
-    state, pos = _key_state(_bytes(public_key))
-    state, _ = _absorb(state, pos, _field(3, _bytes(salt)) + _field(4, _bytes(message)))
-    c = []
-    while len(c) < _N:
+def _sponge(*fields):
+    """The squeeze stream after absorbing fields, (tag, bytes) each: the tag, the length in bytes, then
+    7-byte little-endian chunks, each lane overwriting the next rate lane (the state permuted first when
+    the rate is full); then a permutation and the 8 rate lanes, again and again."""
+    state, pos = [0] * 16, 0
+    for tag, data in fields:
+        for x in [tag, len(data)] + [int.from_bytes(data[i:i + 7], "little") for i in range(0, len(data), 7)]:
+            if pos == 8:
+                state, pos = _permute(state), 0
+            state[pos] = x
+            pos += 1
+    while True:
         state = _permute(state)
-        for x in state[:8]:
-            if x < _T and len(c) < _N:
-                for _ in range(4):  # base-q digits, least significant first
-                    x, d = divmod(x, _Q)
-                    c.append(d)
-    return c
+        yield from state[:8]
 
 
-def public_key_digest(public_key: bytes) -> list[int]:
-    """KeyDigest: 8 lanes in [0, p) fingerprinting any byte string (it need not decode as a key)."""
-    state, pos = _key_state(_bytes(public_key))
-    state, _ = _absorb(state, pos, [5, 0])  # an empty KEY_DIGEST frame
-    return _permute(state)[:8]
+def key_digest(public_key: bytes) -> bytes:
+    """K: the first 8 lanes of the sponge over (KEY_DOMAIN, SCHEME_ID, public_key), each 8 bytes little-
+    endian, 64 bytes. Defined for any bytes (a key that does not decode has one)."""
+    lanes = _sponge((1, _KEY_DOMAIN), (2, _SCHEME_ID), (3, _bytes(public_key)))
+    return b"".join(next(lanes).to_bytes(8, "little") for _ in range(8))
+
+
+_cached_key_digest = functools.lru_cache(maxsize=256)(key_digest)  # a verifier digests each key once
+
+
+def address(public_key: bytes) -> bytes:
+    """The 32-byte address: K's first 32 bytes."""
+    return key_digest(public_key)[:32]
+
+
+def _checksum(addr):
+    """The first 4 bytes of the stream's first lane after (CHECKSUM_DOMAIN, address), little-endian."""
+    return next(_sponge((1, _CHECKSUM_DOMAIN), (2, addr))).to_bytes(8, "little")[:4]
+
+
+def format_address(address: bytes) -> str:
+    """The address's text: "0x", then the address and its 4-byte checksum in lowercase hex (74 characters)."""
+    addr = _bytes(address)
+    if len(addr) != 32:
+        raise ValueError("an address is 32 bytes")
+    return "0x" + (addr + _checksum(addr)).hex()
+
+
+def parse_address(text: str) -> bytes:
+    """The 32-byte address a text gives: exactly "0x", then 72 hex digits of either case, the address and
+    its checksum; ValueError for anything else."""
+    if isinstance(text, str) and len(text) == 74 and text[:2] == "0x" and _HEX.issuperset(text[2:]):
+        data = bytes.fromhex(text[2:])
+        if _checksum(data[:32]) == data[32:]:
+            return data[:32]
+    raise ValueError("not an address: \"0x\", 64 hex digits and their 8-digit checksum")
+
+
+def hash_to_point(public_key: bytes, salt: bytes, message: bytes, context: bytes = b"") -> list[int]:
+    """HashToPoint: c in [0, q)^512 from the sponge over (SIGNATURE_DOMAIN, K of public_key, salt, context,
+    message). The context is hashed as given; sign and verify bound it to 255 bytes."""
+    pk = _bytes(public_key)
+    k = _cached_key_digest(pk) if len(pk) == PUBLIC_KEY_BYTES else key_digest(pk)
+    lanes = _sponge((1, _SIGNATURE_DOMAIN), (2, k), (3, _bytes(salt)), (4, _bytes(context)),
+                    (5, _bytes(message)))
+    c = []
+    for x in lanes:
+        if x < _T:
+            for _ in range(4):  # base-q digits, least significant first
+                x, d = divmod(x, _Q)
+                c.append(d)
+            if len(c) == _N:
+                return c
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -341,14 +368,15 @@ def _verify_with_point(public_key, c, signature):
     return _accepts(h, s2, c)
 
 
-def verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
-    """True iff signature is a valid signature of message under public_key; never raises."""
+def verify(public_key: bytes, message: bytes, signature: bytes, context: bytes = b"") -> bool:
+    """True iff signature is a valid signature of message under public_key and context (at most 255
+    bytes); never raises. K comes from the same bytes h is decoded from."""
     try:
-        pk, msg = _bytes(public_key), _bytes(message)
+        pk, msg, ctx = _bytes(public_key), _bytes(message), _bytes(context)
         h, (salt, s2) = _decode_pk(pk), _decode_sig(_bytes(signature))
     except (TypeError, ValueError):
         return False
-    return _accepts(h, s2, hash_to_point(pk, salt, msg))
+    return len(ctx) <= _MAX_CONTEXT and _accepts(h, s2, hash_to_point(pk, salt, msg, ctx))
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -431,16 +459,19 @@ def _ffsampling(t0, t1, tree, rng):
     return _merge(*_ffsampling(*_split(t0), left, rng)), z1
 
 
-def sign(secret_key: bytes, message: bytes) -> bytes:
-    """A 666-byte signature of message; ValueError when the secret key is malformed."""
+def sign(secret_key: bytes, message: bytes, context: bytes = b"") -> bytes:
+    """A 666-byte signature of message under context; ValueError when the context is over 255 bytes or
+    the secret key is malformed."""
+    msg, ctx = _bytes(message), _bytes(context)
+    if len(ctx) > _MAX_CONTEXT:
+        raise ValueError("a context is at most 255 bytes")
     f, g, F, G, h = _expand(secret_key)
-    msg = _bytes(message)
     fa, ga, Fa, Ga = _fft(f), _fft(g), _fft(F), _fft(G)  # B = [[g, -f], [G, -F]]
     tree = _ffldl([x * x.conjugate() + y * y.conjugate() for x, y in zip(ga, fa)],
                   [x * u.conjugate() + y * v.conjugate() for x, y, u, v in zip(ga, fa, Ga, Fa)],
                   [u * u.conjugate() + v * v.conjugate() for u, v in zip(Ga, Fa)])
     salt = os.urandom(SALT_BYTES)
-    c = hash_to_point(_encode_pk(h), salt, msg)
+    c = hash_to_point(_encode_pk(h), salt, msg, ctx)
     ca = _fft(c)
     t0, t1 = [-x * y / _Q for x, y in zip(ca, Fa)], [x * y / _Q for x, y in zip(ca, fa)]
     rng = _Rng()

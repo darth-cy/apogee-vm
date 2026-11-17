@@ -1,8 +1,8 @@
 // Falcon-512 with Poseidon2's HashToPoint: Falcon-512 v1.2 (the NIST round-3 specification) with one
-// change, HashToPoint, which is a Poseidon2-A64-C5 sponge over (public key, salt, message) instead of
-// SHAKE256(salt || message). The construction is specified in the apogee-vm repository's
-// docs/spec/precompiles.md, "HashToPoint" in the section "The Falcon-512 lattice check". Signatures are NOT interoperable
-// with standard Falcon-512.
+// change, HashToPoint, which is a Poseidon2-A64-C5 sponge over (the key digest K, salt, context,
+// message) instead of SHAKE256(salt || message). A key's address is K's first 32 bytes. The
+// construction is specified in the apogee-vm repository's docs/spec/precompiles.md, "HashToPoint" in
+// the section "The Falcon-512 lattice check". Signatures are NOT interoperable with standard Falcon-512.
 //
 // One isomorphic ES module, no dependencies: Node.js >= 20 and browsers. Randomness comes from
 // globalThis.crypto.getRandomValues. Signing uses floating point and is not constant time, so a
@@ -161,73 +161,95 @@ export function _poseidon2(state) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// HashToPoint and KeyDigest: the transcript's overwrite duplex (rate 8, capacity 8) from a zero
-// state, with lazy permutation and no padding.
+// The sponge, the transcript's overwrite duplex (rate 8, capacity 8) from a zero state with lazy
+// permutation and no padding, and what it serves: the key digest K, the address and its checksum,
+// and HashToPoint.
 // ---------------------------------------------------------------------------------------------
 
-const CONTEXT = Uint8Array.from('apogee/falcon512/hash-to-point/v1', (ch) => ch.charCodeAt(0));
-const TAG_CONTEXT = 1n, TAG_PUBLIC_KEY = 2n, TAG_SALT = 3n, TAG_MESSAGE = 4n, TAG_KEY_DIGEST = 5n;
+const ascii = (text) => Uint8Array.from(text, (ch) => ch.charCodeAt(0));
+const KEY_DOMAIN = ascii('apogee/key/v1'), SCHEME_ID = ascii('falcon512-poseidon2/v1');
+const CHECKSUM_DOMAIN = ascii('apogee/address-checksum/v1');
+const SIGNATURE_DOMAIN = ascii('apogee/falcon512/hash-to-point/v1');
+const MAX_CONTEXT_BYTES = 255; // FIPS 204's and 206's bound
 const QN = BigInt(Q), T = P / QN ** 4n * QN ** 4n; // 808·q^4: lanes ≥ T are rejected
 
-class Sponge {
-  s = Array(16).fill(0n);
-  pos = 0;
-  absorb(x) {
-    if (this.pos === 8) {
-      permute(this.s);
-      this.pos = 0;
+// The squeeze stream after absorbing `fields`, [tag, bytes] each: the tag, the length in bytes, then
+// 7-byte little-endian chunks (the last may be shorter), each lane overwriting the next rate lane, the
+// state permuted first when the rate is full; then a permutation and all eight rate lanes, again.
+function* sponge(...fields) {
+  const s = Array(16).fill(0n);
+  let pos = 0;
+  const absorb = (x) => {
+    if (pos === 8) {
+      permute(s);
+      pos = 0;
     }
-    this.s[this.pos++] = x;
-  }
-  // The tag, the length in bytes, then 7-byte little-endian chunks (the last may be shorter).
-  field(tag, data) {
-    this.absorb(tag);
-    this.absorb(BigInt(data.length));
+    s[pos++] = x;
+  };
+  for (const [tag, data] of fields) {
+    absorb(BigInt(tag));
+    absorb(BigInt(data.length));
     for (let i = 0; i < data.length; i += 7) {
       let lo = 0, hi = 0; // bytes i..i+4 and i+4..i+7: below 2^32 and 2^24, exact as Numbers
       for (let k = Math.min(i + 4, data.length) - 1; k >= i; k--) lo = lo * 256 + data[k];
       for (let k = Math.min(i + 7, data.length) - 1; k >= i + 4; k--) hi = hi * 256 + data[k];
-      this.absorb(BigInt(hi) << 32n | BigInt(lo));
+      absorb(BigInt(hi) << 32n | BigInt(lo));
     }
   }
-  // One permutation before the first lane, then all eight rate lanes of every permutation.
-  *squeeze() {
-    for (;;) {
-      permute(this.s);
-      yield* this.s.slice(0, 8);
-    }
+  for (;;) {
+    permute(s);
+    yield* s.slice(0, 8);
   }
 }
 
-// field(CONTEXT) and field(public key): the per-key prefix both HashToPoint and KeyDigest begin with.
-function keySponge(publicKey) {
-  const sponge = new Sponge();
-  sponge.field(TAG_CONTEXT, CONTEXT);
-  sponge.field(TAG_PUBLIC_KEY, bytes(publicKey, 'publicKey'));
-  return sponge;
+// The first `count` lanes of a stream, each 8 bytes little-endian.
+function laneBytes(lanes, count) {
+  const out = new Uint8Array(8 * count), view = new DataView(out.buffer);
+  for (let i = 0; i < count; i++) view.setBigUint64(8 * i, lanes.next().value, true);
+  return out;
 }
 
-/** The point c in Z_q^512 for (encoded public key, 40-byte salt, message). */
-export function hashToPoint(publicKey, salt, message) {
-  const sponge = keySponge(publicKey);
-  sponge.field(TAG_SALT, bytes(salt, 'salt'));
-  sponge.field(TAG_MESSAGE, bytes(message, 'message'));
+/** K, the 64-byte key digest of any byte string, normally an encoded public key. */
+export function keyDigest(publicKey) {
+  return laneBytes(sponge([1, KEY_DOMAIN], [2, SCHEME_ID], [3, bytes(publicKey, 'publicKey')]), 8);
+}
+
+/** The 32-byte address of a public key: K's first 32 bytes. */
+export function address(publicKey) {
+  return keyDigest(publicKey).slice(0, 32);
+}
+
+// The address's checksum: the first 4 bytes of the stream's first lane after (CHECKSUM_DOMAIN, address).
+const checksum = (addr) => laneBytes(sponge([1, CHECKSUM_DOMAIN], [2, addr]), 1).subarray(0, 4);
+const hex = (data) => Array.from(data, (b) => b.toString(16).padStart(2, '0')).join('');
+
+/** The address's text: "0x", then the address and its 4-byte checksum in lowercase hex (74 characters). */
+export function formatAddress(addr) {
+  if (bytes(addr, 'address').length !== 32) throw new RangeError('falcon512: an address is 32 bytes');
+  return '0x' + hex(addr) + hex(checksum(addr));
+}
+
+/** The 32-byte address a text gives: exactly "0x", then 72 hex digits of either case, the address and
+ * its checksum. Throws for anything else. */
+export function parseAddress(text) {
+  if (typeof text === 'string' && /^0x[0-9a-fA-F]{72}$/.test(text)) {
+    const addr = Uint8Array.from(text.slice(2, 66).match(/../g), (d) => parseInt(d, 16));
+    if (hex(checksum(addr)) === text.slice(66).toLowerCase()) return addr;
+  }
+  throw new Error('falcon512: not an address ("0x", 64 hex digits and their 8-digit checksum)');
+}
+
+/** The point c in Z_q^512 for (encoded public key, 40-byte salt, message, context), K the key's digest. */
+export function hashToPoint(publicKey, salt, message, context = new Uint8Array(0)) {
+  const lanes = sponge([1, SIGNATURE_DOMAIN], [2, keyDigest(publicKey)], [3, bytes(salt, 'salt')],
+    [4, bytes(context, 'context')], [5, bytes(message, 'message')]);
   const c = new Uint16Array(N);
   let i = 0;
-  for (let x of sponge.squeeze()) {
+  for (let x of lanes) {
     if (x >= T) continue;
     for (let j = 0; j < 4; j++, x /= QN) c[i++] = Number(x % QN); // least significant digit first
     if (i === N) return c;
   }
-}
-
-/** KeyDigest: the eight-lane fingerprint of any byte string, normally an encoded public key. */
-export function publicKeyDigest(publicKey) {
-  const sponge = keySponge(publicKey);
-  sponge.absorb(TAG_KEY_DIGEST);
-  sponge.absorb(0n); // an empty KEY_DIGEST frame
-  permute(sponge.s);
-  return sponge.s.slice(0, 8);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -373,14 +395,16 @@ function verifyCore(h, c, s2) {
   return norm <= BOUND;
 }
 
-/** True iff `signature` is a valid signature of `message` under `publicKey`; never throws. */
-export function verify(publicKey, message, signature) {
+/** True iff `signature` is a valid signature of `message` under `publicKey` and `context` (at most
+ * 255 bytes); never throws. K comes from the same bytes h is decoded from. */
+export function verify(publicKey, message, signature, context = new Uint8Array(0)) {
   try {
     const h = decodePublicKey(publicKey), s2 = decodeSignature(signature);
-    if (!h || !s2 || !(message instanceof Uint8Array)) return false;
-    return verifyCore(h, hashToPoint(publicKey, signature.subarray(1, 1 + SALT_BYTES), message), s2);
+    if (!h || !s2 || !(context.length <= MAX_CONTEXT_BYTES)) return false;
+    const salt = signature.subarray(1, 1 + SALT_BYTES);
+    return verifyCore(h, hashToPoint(publicKey, salt, message, context), s2);
   } catch {
-    return false;
+    return false; // a message or context that is not a Uint8Array
   }
 }
 
@@ -592,8 +616,12 @@ function ffSampling(t0, t1, tree) {
 // Sign (Algorithm 10).
 // ---------------------------------------------------------------------------------------------
 
-/** A 666-byte padded signature of `message`; throws on a malformed secret key. */
-export function sign(secretKey, message) {
+/** A 666-byte padded signature of `message` under `context` (at most 255 bytes); throws on a malformed
+ * secret key or a longer context. */
+export function sign(secretKey, message, context = new Uint8Array(0)) {
+  if (bytes(context, 'context').length > MAX_CONTEXT_BYTES) {
+    throw new RangeError('falcon512: a context is at most 255 bytes');
+  }
   const { h, fh, gh, Fh, Gh } = decodeSecretKey(secretKey); // B̂ = [[ĝ, −f̂], [Ĝ, −F̂]]
   bytes(message, 'message');
   const tree = ffLDL(
@@ -602,7 +630,7 @@ export function sign(secretKey, message) {
     cadd(cmul(Gh, cadj(Gh)), cmul(Fh, cadj(Fh))),
   );
   const salt = Uint8Array.from({ length: SALT_BYTES }, randomByte);
-  const c = hashToPoint(encodePublicKey(h), salt, message), ch = fft(c);
+  const c = hashToPoint(encodePublicKey(h), salt, message, context), ch = fft(c);
   const t0 = cscale(cmul(ch, Fh), -1 / Q), t1 = cscale(cmul(ch, fh), 1 / Q); // (ĉ, 0)·B̂⁻¹
   for (;;) {
     const [z0, z1] = ffSampling(t0, t1, tree);

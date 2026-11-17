@@ -1,6 +1,7 @@
 """The shared vectors, ../../vectors.json, which the Rust and JS suites read too: the official Falcon-512
-KAT through the verification core (with standard Falcon's SHAKE256 HashToPoint), HashToPoint's points
-and KeyDigest's digests, every implementation's signatures, and malformed signatures and keys."""
+KAT through the verification core (with standard Falcon's SHAKE256 HashToPoint), HashToPoint's points,
+key digests, addresses and their texts, address texts to read or refuse, every implementation's
+signatures, and malformed signatures, keys and contexts."""
 
 import hashlib
 import json
@@ -71,22 +72,33 @@ class StandardKat(unittest.TestCase):
 class Vectors(unittest.TestCase):
     def test_hash_to_point(self):
         for v in section("hash_to_point"):
-            self.assertEqual(falcon.hash_to_point(*unhex(v, "pk", "salt", "msg")), v["c"])
+            self.assertEqual(falcon.hash_to_point(*unhex(v, "pk", "salt", "msg", "context")), v["c"])
 
-    def test_key_digest(self):
+    def test_key_digest_address_and_text(self):
         for v in section("key_digest"):
-            digest = [int(x, 16) for x in v["digest"]]
-            self.assertEqual(falcon.public_key_digest(*unhex(v, "pk")), digest)
+            pk, k, address = unhex(v, "pk", "key_digest", "address")
+            self.assertEqual(falcon.key_digest(pk), k)
+            self.assertEqual(falcon.address(pk), address)
+            self.assertEqual(falcon.format_address(address), v["address_text"])
+            self.assertEqual(falcon.parse_address(v["address_text"]), address)
+
+    def test_address_text(self):
+        for v in section("address_text"):
+            with self.subTest(case=v["case"]):
+                if v["address"] is None:
+                    self.assertRaises(ValueError, falcon.parse_address, v["text"])
+                else:
+                    self.assertEqual(falcon.parse_address(v["text"]), bytes.fromhex(v["address"]))
 
     def test_signatures_verify(self):
         for v in section("signatures"):
             with self.subTest(signer=v["signer"]):
-                self.assertTrue(falcon.verify(*unhex(v, "pk", "msg", "sig")))
+                self.assertTrue(falcon.verify(*unhex(v, "pk", "msg", "sig", "context")))
 
     def test_malformed_refuse(self):
         for v in section("malformed"):
             with self.subTest(case=v["case"]):
-                self.assertFalse(falcon.verify(*unhex(v, "pk", "msg", "sig")))
+                self.assertFalse(falcon.verify(*unhex(v, "pk", "msg", "sig", "context")))
 
 
 if __name__ == "__main__":
