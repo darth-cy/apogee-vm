@@ -14,8 +14,25 @@ to their own repositories.
 | Directory | Implementation | Suite |
 |---|---|---|
 | `rust/` | crate `apogee-falcon512`: keys from a seed, signing, the verifier the guest SDK's is held to | `cargo test -p apogee-falcon512` |
-| `js/` | one ES module, no dependencies, Node.js ≥ 20 and browsers | `node --test` in `js/` |
+| `js/` | ES modules, no dependencies, Node.js ≥ 20 and browsers; also the wallet (below) | `node --test` in `js/` |
 | `python/` | package `apogee_falcon512`, standard library only, Python ≥ 3.9 | `python3 -m unittest discover -s tests` in `python/` |
+
+## The wallet (JavaScript only)
+
+A user's keys come from 24 generated BIP39 words, never from a sentence the user invents:
+
+```
+root_seed    = BIP39(words, passphrase)                       PBKDF2-HMAC-SHA512, 2048 rounds, 64 bytes
+account_seed = HKDF-SHA512(root_seed, salt empty,
+                           info = u8(26) ‖ "apogee/wallet/falcon512/v1" ‖ u32_be(index), 48 bytes)
+(sk, pk)     = the Falcon round-3 reference keygen of account_seed (SHAKE256 of the seed as its RNG)
+address      = K(pk)[0..32]
+```
+
+The keygen is the reference implementation's, bit for bit, so the same words, passphrase and index
+recover the same keys and address everywhere. `js/README.md` has the API, and
+`js/test/fixtures/wallet.json` holds its vectors: the official BIP39 vectors, account seeds, and keys
+from the compiled reference C. The Rust and Python packages sign and verify, but have no wallet.
 
 ## `vectors.json`
 

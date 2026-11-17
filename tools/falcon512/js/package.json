@@ -4,7 +4,20 @@
   "description": "Falcon-512 with Poseidon2's HashToPoint (not interoperable with standard Falcon-512)",
   "private": true,
   "type": "module",
-  "exports": "./falcon512.js",
+  "exports": {
+    ".": {
+      "types": "./falcon512.d.ts",
+      "default": "./falcon512.js"
+    },
+    "./keygen.js": {
+      "types": "./keygen.d.ts",
+      "default": "./keygen.js"
+    },
+    "./wallet.js": {
+      "types": "./wallet.d.ts",
+      "default": "./wallet.js"
+    }
+  },
   "types": "./falcon512.d.ts",
   "engines": {
     "node": ">=20"

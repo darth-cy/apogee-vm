@@ -4,9 +4,11 @@
 // construction is specified in the apogee-vm repository's docs/spec/precompiles.md, "HashToPoint" in
 // the section "The Falcon-512 lattice check". Signatures are NOT interoperable with standard Falcon-512.
 //
-// One isomorphic ES module, no dependencies: Node.js >= 20 and browsers. Randomness comes from
+// Isomorphic ES modules, no dependencies: Node.js >= 20 and browsers. Randomness comes from
 // globalThis.crypto.getRandomValues. Signing uses floating point and is not constant time, so a
 // secret key belongs on its owner's device.
+
+import { keygen, SEED_BYTES } from './keygen.js';
 
 export const PUBLIC_KEY_BYTES = 897, SECRET_KEY_BYTES = 1281, SIGNATURE_BYTES = 666, SALT_BYTES = 40;
 
@@ -318,10 +320,6 @@ function decodePublicKey(pk) {
   const h = unpack(pk.subarray(1), N, 14);
   return h.every((x) => x < Q) ? h : null;
 }
-
-const encodeSecretKey = (f, g, F) =>
-  Uint8Array.of(SK_HEADER, ...pack(f.map((x) => x & 63), 6), ...pack(g.map((x) => x & 63), 6),
-    ...pack(F.map((x) => x & 255), 8));
 
 // Two's complement fields of `width` bits; −2^(width−1) is not an encoding.
 function signedFields(data, width) {
@@ -656,114 +654,14 @@ export function publicKeyFromSecretKey(secretKey) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Keygen: NTRUGen (Algorithm 5) and NTRUSolve (Algorithms 6–7) over BigInt.
+// Keys
 // ---------------------------------------------------------------------------------------------
 
-// D_{Z, σ_{f,g}} with σ_{f,g} = 1.17 √(q/2n): the sum of 4096/n = 8 draws of SamplerZ(0, σ*) (3.29).
-const SIGMA_STAR = 1.17 * Math.sqrt(Q / 8192);
-const gaussPoly = () =>
-  Array.from({ length: N }, () => {
-    let s = 0;
-    for (let k = 0; k < 8; k++) s += samplerZ(0, SIGMA_STAR);
-    return s;
-  });
-
-// a·b in Z[x]/(x^n + 1), BigInt coefficients.
-function mulZ(a, b) {
-  const n = a.length, r = Array(n).fill(0n);
-  for (let i = 0; i < n; i++) {
-    const x = a[i];
-    if (!x) continue;
-    for (let j = 0; j < n - i; j++) r[i + j] += x * b[j];
-    for (let j = n - i; j < n; j++) r[i + j - n] -= x * b[j];
-  }
-  return r;
-}
-
-const even = (a) => a.filter((_, i) => !(i & 1)), odd = (a) => a.filter((_, i) => i & 1);
-
-// N(f)(x²) = f(x)·f(−x) = f0(x²)² − x² f1(x²)²: over Z[x]/(x^(n/2) + 1), f0² − x·f1².
-function fieldNorm(f) {
-  const a = mulZ(even(f), even(f)), b = mulZ(odd(f), odd(f));
-  return a.map((x, i) => (i ? x - b[i - 1] : x + b[b.length - 1]));
-}
-
-// F'(x²)·g(−x) = (F'·g0)(x²) − x·(F'·g1)(x²).
-function lift(Fp, g) {
-  const e = mulZ(Fp, even(g)), o = mulZ(Fp, odd(g));
-  return e.flatMap((x, i) => [x, -o[i]]);
-}
-
-// [d, u, v] with u·a + v·b = d = gcd(a, b) ≥ 0.
-function xgcd(a, b) {
-  let [r0, r1, u0, u1, v0, v1] = [a, b, 1n, 0n, 0n, 1n];
-  while (r1) {
-    const k = r0 / r1;
-    [r0, r1, u0, u1, v0, v1] = [r1, r0 - k * r1, u1, u0 - k * u1, v1, v0 - k * v1];
-  }
-  return r0 < 0n ? [-r0, -u0, -v0] : [r0, u0, v0];
-}
-
-function bitLength(a) {
-  let max = 0n;
-  for (const x of a) if (x > max || -x > max) max = x < 0n ? -x : x;
-  return max.toString(2).length;
-}
-
-// Reduce (Algorithm 7): (F, G) −= k·(f, g) with k = ⌊(Ff* + Gg*)/(ff* + gg*)⌉ until k = 0. The
-// quotient is computed in floating point from the top 53 bits of each side; while it is large, its
-// top 30 bits are taken and applied shifted (each pass removes ~25 bits of F, G), and the last
-// passes, at shift 0, are Babai's rounding itself. Every pass keeps fG − gF unchanged.
-function reduce(f, g, F, G) {
-  const size = Math.max(53, bitLength(f), bitLength(g));
-  const top = (a, bits) => fft(a.map((x) => Number(x >> BigInt(bits - 53))));
-  const fa = cadj(top(f, size)), ga = cadj(top(g, size));
-  const den = cadd(cmul(fa, cadj(fa)), cmul(ga, cadj(ga)));
-  for (let rounds = 0; rounds < 1000; rounds++) {
-    const Size = Math.max(size, bitLength(F), bitLength(G));
-    const kf = ifft(cdiv(cadd(cmul(top(F, Size), fa), cmul(top(G, Size), ga)), den)); // k / 2^(Size − size)
-    const m = Math.max(...kf.map(Math.abs));
-    if (!(m < 2 ** 1000)) return false; // NaN or overflow: draw f, g again
-    const e = m > 0 ? Math.min(Size - size, 30 - Math.ceil(Math.log2(m))) : 0;
-    const k = kf.map((x) => BigInt(Math.round(x * 2 ** e)));
-    if (k.every((x) => x === 0n)) return true; // only at e = Size − size: Babai's k is 0
-    const fk = mulZ(f, k), gk = mulZ(g, k), shift = BigInt(Size - size - e);
-    for (let i = 0; i < f.length; i++) {
-      F[i] -= fk[i] << shift;
-      G[i] -= gk[i] << shift;
-    }
-  }
-  return false;
-}
-
-// NTRUSolve (Algorithm 6): F, G with fG − gF = q over Z[x]/(x^n + 1), or null.
-function ntruSolve(f, g) {
-  if (f.length === 1) {
-    const [d, u, v] = xgcd(f[0], g[0]);
-    return d === 1n ? [[-v * QN], [u * QN]] : null;
-  }
-  const below = ntruSolve(fieldNorm(f), fieldNorm(g));
-  if (!below) return null;
-  const F = lift(below[0], g), G = lift(below[1], f);
-  return reduce(f, g, F, G) ? [F, G] : null;
-}
-
-const fits = (a, bits) => a.every((x) => Math.abs(x) < 2 ** (bits - 1)); // −2^(bits−1) excluded
-
-/** A fresh key pair: { secretKey: 1281 bytes, publicKey: 897 bytes }. */
+/**
+ * A fresh key pair, { secretKey: 1281 bytes, publicKey: 897 bytes }: the reference keygen (keygen.js)
+ * of 48 random bytes. A wallet derives its keys from a mnemonic instead (wallet.js), so that the same
+ * words recover them.
+ */
 export function generateKeyPair() {
-  for (;;) {
-    const f = gaussPoly(), g = gaussPoly();
-    if (!fits(f, 6) || !fits(g, 6) || ntt(f).includes(0) || !gammaOK(f, g)) continue;
-    const solved = ntruSolve(f.map(BigInt), g.map(BigInt));
-    if (!solved) continue;
-    const F = solved[0].map(Number);
-    if (!fits(F, 8)) continue;
-    const secretKey = encodeSecretKey(f, g, F);
-    try {
-      return { secretKey, publicKey: publicKeyFromSecretKey(secretKey) };
-    } catch {
-      continue; // G does not come back from F mod q: draw again
-    }
-  }
+  return keygen(globalThis.crypto.getRandomValues(new Uint8Array(SEED_BYTES)));
 }

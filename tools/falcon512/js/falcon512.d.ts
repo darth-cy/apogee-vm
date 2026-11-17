@@ -12,7 +12,7 @@ export interface KeyPair {
   publicKey: Uint8Array;
 }
 
-/** A fresh key pair from `globalThis.crypto.getRandomValues`. */
+/** A fresh key pair: the reference keygen (keygen.js) of 48 bytes from `globalThis.crypto.getRandomValues`. */
 export declare function generateKeyPair(): KeyPair;
 
 /**
