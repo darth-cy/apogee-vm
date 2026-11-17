@@ -7,7 +7,9 @@
 //! `u128`'s, overflowing, by zero, and at `U256::MAX`, and Merkle paths by
 //! `merkle_root`, the first two each checked against the fold
 //! `poseidon2_compress` gives, then a run of them long enough that a path's
-//! levels straddle a shard.
+//! levels straddle a shard; Keccak-f[1600] of the state the public input
+//! carries, once and then a chain of it, and SHAKE256 of its message, absorbed
+//! and squeezed in halves.
 //!
 //! # The public input
 //!
@@ -18,6 +20,11 @@
 //!           depth    u32 LE          16..=32
 //!           path     depth siblings  64 bytes each, each lane below p
 //!   then    runs     u32 LE          depth-32 paths before the last, depth-20 one
+//!   then    state    25 lanes        u64 LE each, Keccak-f[1600]'s input
+//!           chain    u32 LE          permutations after the first
+//!   then    len      u32 LE          SHAKE256's message length
+//!           message  len bytes
+//!           squeeze  u32 LE          bytes of SHAKE256 output, at most 2,048
 //! ```
 //!
 //! # The journal
@@ -37,13 +44,22 @@
 //!                                   at slot i, up the same 32 siblings; then a
 //!                                   depth-20 one from the last, at slot 0x5a5a5,
 //!                                   up their first 20
+//!   keccak_f1600                    25 u64: the input's state permuted
+//!   keccak_f1600                    25 u64: that state permuted chain times more
+//!   SHAKE256                        squeeze bytes of the message's output, the
+//!                                   message absorbed and the output squeezed
+//!                                   in two halves
 //! ```
 //!
 //! With 126 runs the depth-20 path is levels 4,080 to 4,099: it straddles
 //! level 4,096, where a `MERKLE_ROUNDS` shard ends at `2^12` rows and at
-//! `2^16`.
+//! `2^16`. With a chain of 520 the Keccak calls are more than the 512 a
+//! `KECCAK_RHO` or `KECCAK_CHI` shard holds at `2^16`, so a streaming run hands
+//! one over mid-execution.
 
-use guest_sdk::{merkle_root, poseidon2_compress, poseidon2_permute, Digest, U256};
+use guest_sdk::{
+    keccak_f1600, merkle_root, poseidon2_compress, poseidon2_permute, Digest, Shake256, U256,
+};
 
 guest_sdk::entry!(main);
 
@@ -58,7 +74,7 @@ fn pow2(k: u32) -> U256 {
 
 fn main() {
     let input = guest_sdk::public_input();
-    let mut out = [0u8; 2048];
+    let mut out = [0u8; 4096];
     let mut at = 0;
     let mut put = |bytes: &[u8]| {
         out[at..at + bytes.len()].copy_from_slice(bytes);
@@ -155,6 +171,33 @@ fn main() {
     }
     let root = merkle_root(0x5a5a5, &node, &Digest::bytes(&ram)[..64 * 20]);
     root.lanes().iter().for_each(|l| put(&l.to_le_bytes()));
+
+    let at_state = at_path + 12 + 64 * depth;
+    let lane = |at: usize| u64::from_le_bytes(input[at..at + 8].try_into().expect("a lane"));
+    let mut state: [u64; 25] = core::array::from_fn(|i| lane(at_state + 8 * i));
+    keccak_f1600(&mut state);
+    state.iter().for_each(|l| put(&l.to_le_bytes()));
+    for _ in 0..word(at_state + 200) {
+        keccak_f1600(&mut state);
+    }
+    state.iter().for_each(|l| put(&l.to_le_bytes()));
+
+    let at_message = at_state + 208;
+    let len = word(at_state + 204) as usize;
+    let message = &input[at_message..at_message + len];
+    let squeeze = word(at_message + len) as usize;
+    let mut bytes = [0u8; 2048];
+    assert!(
+        squeeze <= bytes.len(),
+        "precompiles: SHAKE256 squeezes at most 2,048 bytes"
+    );
+    let mut sponge = Shake256::new();
+    sponge.absorb(&message[..len / 2]);
+    sponge.absorb(&message[len / 2..]);
+    sponge.finalize();
+    sponge.squeeze(&mut bytes[..squeeze / 2]);
+    sponge.squeeze(&mut bytes[squeeze / 2..squeeze]);
+    put(&bytes[..squeeze]);
     guest_sdk::commit(&out[..at]);
 }
 

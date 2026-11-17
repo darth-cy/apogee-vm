@@ -95,8 +95,8 @@ fn a1_the_streamed_block_does_not_depend_on_max_in_flight() {
     );
 }
 
-/// `guests/precompiles`' statement: the three precompiles, so the `Invocations`
-/// arm — each of their six families a shard — beside
+/// `guests/precompiles`' statement: the four precompiles, so the `Invocations`
+/// arm — each of their nine families a shard — beside
 /// its execution and window shards; proved once at the default in flight and verified,
 /// its journal the run's. `crates/checker/tests/precompiles.rs` holds that
 /// journal to the host's and the statement's multiset to its circuits.
@@ -112,6 +112,10 @@ fn a2_a_statement_with_precompile_calls_streams_and_verifies() {
             &16u32.to_le_bytes(),
             &[0u8; 64 * 16],
             &0u32.to_le_bytes(),
+            &[0u8; 200],
+            &0u32.to_le_bytes(),
+            &0u32.to_le_bytes(),
+            &32u32.to_le_bytes(),
         ]
         .concat(),
         advice: Vec::new(),
@@ -132,6 +136,9 @@ fn a2_a_statement_with_precompile_calls_streams_and_verifies() {
         constants::family::MERKLE_ROOT,
         constants::family::MERKLE_LEVELS,
         constants::family::MERKLE_ROUNDS,
+        constants::family::KECCAK,
+        constants::family::KECCAK_RHO,
+        constants::family::KECCAK_CHI,
     ] {
         let at = setup
             .program

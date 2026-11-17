@@ -47,17 +47,22 @@ const GUESTS: [(&str, u32); 11] = [
     // would never run.
     ("shards", 16),
     // The precompiles, their delegation families at `2^12`: 302 Poseidon2
-    // calls fill the rounds' 256-call buffer mid-execution.
+    // calls fill the rounds' 256-call buffer mid-execution. Keccak's are at
+    // `2^16`, and its 530 calls fill an expansion's 512.
     ("precompiles", 16),
 ];
 
 /// Every family at `2^height`; for `precompiles`, the delegation families at
-/// `2^12`.
+/// `2^12`, but Keccak's at `2^16`, its `XOR8` table's floor.
 fn params(name: &str, height: u32) -> ProgramParams {
+    use constants::family::{KECCAK, KECCAK_CHI, KECCAK_RHO};
     let mut p = uniform(1 << height);
     if name == "precompiles" {
         for (family, ..) in constants::delegation::TYPES {
-            p.heights[family as usize] = 1 << 12;
+            p.heights[family as usize] = match family {
+                KECCAK | KECCAK_RHO | KECCAK_CHI => 1 << 16,
+                _ => 1 << 12,
+            };
         }
     }
     p
@@ -157,6 +162,18 @@ fn the_chunks_are_the_planned_shards_row_for_row() {
             );
             if *count > 1 {
                 split_families += 1;
+            }
+        }
+        // Keccak's expansions are cut in two: `precompiles`' 530 calls
+        // against the 512 a shard holds at `2^16`.
+        if name == "precompiles" {
+            for family in [constants::family::KECCAK_RHO, constants::family::KECCAK_CHI] {
+                assert_eq!(
+                    counted.get(&family),
+                    Some(&2),
+                    "{name} {}: two shards",
+                    family_name(family)
+                );
             }
         }
 

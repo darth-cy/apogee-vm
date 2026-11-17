@@ -18,6 +18,7 @@ use constants::extra_mask::system_code;
 use constants::{delegation, ecall, family, guest_memory, memory};
 use constraints::memory::{frame_queries, rd_selected, rd_selected_hi};
 use constraints::PolyAddress;
+use emulator::KeccakRound;
 use field::Fp;
 use poly::{MultilinearPoly, PolyBacking};
 use program::lookup_tables::generic_table;
@@ -659,59 +660,6 @@ fn mul_div_u256(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>
 // Keccak-f[1600]
 // ---------------------------------------------------------------------------
 
-/// One round of Keccak-f[1600] and each state between its steps that
-/// `constraints::keccak` commits, lane `x + 5y`.
-struct KeccakRound {
-    /// The round's input.
-    a: [u64; 25],
-    /// theta's `D`.
-    d: [u64; 5],
-    /// `A ⊕ D`.
-    theta: [u64; 25],
-    /// After rho and pi, at the lane's destination.
-    b: [u64; 25],
-    /// After chi.
-    chi: [u64; 25],
-    /// After iota: the next round's input.
-    out: [u64; 25],
-}
-
-/// The 24 rounds from `a`.
-fn keccak_rounds(mut a: [u64; 25]) -> Vec<KeccakRound> {
-    use constants::delegation::keccak::{ROTATIONS, ROUNDS, ROUND_CONSTANTS};
-    (0..ROUNDS)
-        .map(|t| {
-            let c: [u64; 5] = std::array::from_fn(|x| (0..5).fold(0, |p, y| p ^ a[x + 5 * y]));
-            let d: [u64; 5] =
-                std::array::from_fn(|x| c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1));
-            let theta: [u64; 25] = std::array::from_fn(|i| a[i] ^ d[i % 5]);
-            let mut b = [0u64; 25];
-            for x in 0..5 {
-                for y in 0..5 {
-                    b[y + 5 * ((2 * x + 3 * y) % 5)] =
-                        theta[x + 5 * y].rotate_left(ROTATIONS[y][x]);
-                }
-            }
-            let chi: [u64; 25] = std::array::from_fn(|i| {
-                let (x, y) = (i % 5, 5 * (i / 5));
-                b[i] ^ (!b[(x + 1) % 5 + y] & b[(x + 2) % 5 + y])
-            });
-            let mut out = chi;
-            out[0] ^= ROUND_CONSTANTS[t];
-            let round = KeccakRound {
-                a,
-                d,
-                theta,
-                b,
-                chi,
-                out,
-            };
-            a = out;
-            round
-        })
-        .collect()
-}
-
 /// Entry `c`'s rounds, from its frame's words as read; the words it wrote
 /// are the last round's output.
 fn keccak_call(calls: &FrameSlice, c: usize) -> Vec<KeccakRound> {
@@ -720,7 +668,7 @@ fn keccak_call(calls: &FrameSlice, c: usize) -> Vec<KeccakRound> {
             frame_word(calls, 2 * i, c, write) | frame_word(calls, 2 * i + 1, c, write) << 32
         })
     };
-    let rounds = keccak_rounds(state(false));
+    let rounds: Vec<KeccakRound> = emulator::keccak_rounds(state(false)).collect();
     assert_eq!(
         state(true),
         rounds[rounds.len() - 1].out,

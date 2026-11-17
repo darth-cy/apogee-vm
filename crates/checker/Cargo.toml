@@ -38,6 +38,9 @@ loader.workspace = true
 # The family suites' instructions, each built as an `Instr` and routed
 # through `program::row_kind` to its one mask bit.
 isa.workspace = true
+# `tests/precompiles.rs`' journal: Keccak-f[1600] and SHAKE256 by RustCrypto.
+keccak.workspace = true
+sha3.workspace = true
 # The tests' base-layer binding: their proofs absorb `witness_digest` of the
 # base columns first.
 sumcheck.workspace = true

@@ -1196,6 +1196,7 @@ fn frame_function(family: FamilyId) -> FrameFn {
     match family {
         constants::family::POSEIDON2 => poseidon2_frame,
         constants::family::MUL_DIV_U256 => mul_div_u256_frame,
+        constants::family::KECCAK => keccak_f1600_frame,
         other => panic!("emulator: delegation family {other} has no implementation"),
     }
 }
@@ -1273,6 +1274,70 @@ fn mul_div_u256_frame(pc: u32, words: &[u32]) -> Result<Vec<u32>, EmuError> {
     }
     let words = |x: [u64; 4]| x.into_iter().flat_map(|v| [v as u32, (v >> 32) as u32]);
     Ok(words(q).chain(words(r)).chain(words(d)).collect())
+}
+
+/// Keccak-f[1600] of the 25 lanes, lane `i` words `2i` (low) and `2i + 1`
+/// (high): the last of [`keccak_rounds`]. Every 50 words are a state, so no
+/// frame is refused but one a store could not write.
+fn keccak_f1600_frame(_pc: u32, words: &[u32]) -> Result<Vec<u32>, EmuError> {
+    let state = std::array::from_fn(|i| words[2 * i] as u64 | (words[2 * i + 1] as u64) << 32);
+    let out = keccak_rounds(state).last().expect("24 rounds").out;
+    Ok(out
+        .iter()
+        .flat_map(|l| [*l as u32, (*l >> 32) as u32])
+        .collect())
+}
+
+/// One round of Keccak-f[1600] (FIPS 202 §3.3), lane `A[x][y]` at `x + 5y`,
+/// and each state between its steps: what the precompile answers, and what
+/// the prover's fill commits row by row (`constraints::keccak`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeccakRound {
+    /// The round's input.
+    pub a: [u64; 25],
+    /// theta's `D[x] = C[x − 1] ⊕ rot1(C[x + 1])`, `C` the column parity.
+    pub d: [u64; 5],
+    /// `A ⊕ D`.
+    pub theta: [u64; 25],
+    /// After rho and pi, each lane at its destination.
+    pub b: [u64; 25],
+    /// After chi.
+    pub chi: [u64; 25],
+    /// After iota: the next round's input.
+    pub out: [u64; 25],
+}
+
+/// The 24 rounds of Keccak-f[1600] from the state `a`, in order: the last
+/// one's `out` is the permutation of `a`.
+pub fn keccak_rounds(a: [u64; 25]) -> impl Iterator<Item = KeccakRound> {
+    use delegation::keccak::{ROTATIONS, ROUNDS, ROUND_CONSTANTS};
+    (0..ROUNDS).scan(a, |a, t| {
+        let c: [u64; 5] = std::array::from_fn(|x| (0..5).fold(0, |p, y| p ^ a[x + 5 * y]));
+        let d: [u64; 5] = std::array::from_fn(|x| c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1));
+        let theta: [u64; 25] = std::array::from_fn(|i| a[i] ^ d[i % 5]);
+        let mut b = [0u64; 25];
+        for x in 0..5 {
+            for y in 0..5 {
+                b[y + 5 * ((2 * x + 3 * y) % 5)] = theta[x + 5 * y].rotate_left(ROTATIONS[y][x]);
+            }
+        }
+        let chi: [u64; 25] = std::array::from_fn(|i| {
+            let (x, y) = (i % 5, 5 * (i / 5));
+            b[i] ^ (!b[(x + 1) % 5 + y] & b[(x + 2) % 5 + y])
+        });
+        let mut out = chi;
+        out[0] ^= ROUND_CONSTANTS[t];
+        let round = KeccakRound {
+            a: *a,
+            d,
+            theta,
+            b,
+            chi,
+            out,
+        };
+        *a = out;
+        Some(round)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1762,6 +1827,80 @@ mod tests {
         );
         assert_eq!(
             refused(0, 16, 0x7000),
+            Some(EmuError::OutOfBounds {
+                pc: 0,
+                addr: 0x7000
+            })
+        );
+    }
+
+    /// `KECCAK_F1600` answers RustCrypto's Keccak-f[1600] in place — of the
+    /// zero state, and of one whose lanes are all distinct, the last at
+    /// `2^64 − 1` — reading and writing each of its 50 words once, and refuses
+    /// by name a frame a store could not write: one reaching the advice, a
+    /// misaligned one and one outside RAM. A frame ending at the advice is RAM.
+    #[test]
+    fn keccak_f1600_answers_fips_202_and_refuses_what_a_store_could_not_write() {
+        let io = GuestIo {
+            input: Vec::new(),
+            advice: Vec::new(),
+        };
+        let image = spin();
+        let mut machine = Machine::new(&image, &io);
+        let call = |machine: &mut Machine, base: u32, lanes: [u64; 25]| {
+            for (i, lane) in lanes.iter().enumerate() {
+                machine.set_word(base + 8 * i as u32, *lane as u32);
+                machine.set_word(base + 8 * i as u32 + 4, (*lane >> 32) as u32);
+            }
+            let family = constants::family::KECCAK;
+            let call = machine
+                .delegate(ecall::KECCAK_F1600, family, 0, base as u64)
+                .expect("a frame below the advice");
+            let mut want = lanes;
+            keccak::f1600(&mut want);
+            let words: Vec<(u32, u32, u32)> = (0..50)
+                .map(|j| {
+                    let lane = lanes[j / 2] >> (32 * (j % 2));
+                    let out = want[j / 2] >> (32 * (j % 2));
+                    (base + 4 * j as u32, lane as u32, out as u32)
+                })
+                .collect();
+            assert_eq!((call.number, call.base), (ecall::KECCAK_F1600, base));
+            assert_eq!(call.frame, words, "each word, its old value and its new");
+            assert!(call.levels.is_empty());
+            for (j, (addr, _, new)) in words.iter().enumerate() {
+                assert_eq!(machine.word(*addr), *new, "word {j} written in place");
+            }
+        };
+        let base = guest_memory::RAM_ORIGIN + 0x2000;
+        call(&mut machine, base, [0; 25]);
+        let mut lanes: [u64; 25] =
+            std::array::from_fn(|i| (i as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        lanes[24] = u64::MAX;
+        call(&mut machine, base, lanes);
+        call(&mut machine, guest_memory::ADVICE_ORIGIN - 200, lanes);
+
+        let mut refused = |base: u64| {
+            machine
+                .delegate(ecall::KECCAK_F1600, constants::family::KECCAK, 0, base)
+                .err()
+        };
+        let past = guest_memory::ADVICE_ORIGIN as u64 - 196;
+        assert_eq!(
+            refused(past),
+            Some(EmuError::OutOfBounds { pc: 0, addr: past })
+        );
+        let odd = base as u64 + 2;
+        assert_eq!(
+            refused(odd),
+            Some(EmuError::Misaligned {
+                pc: 0,
+                addr: odd,
+                width: 4
+            })
+        );
+        assert_eq!(
+            refused(0x7000),
             Some(EmuError::OutOfBounds {
                 pc: 0,
                 addr: 0x7000
