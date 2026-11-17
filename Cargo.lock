@@ -21,6 +21,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "apogee-falcon512"
+version = "0.1.0"
+dependencies = [
+ "falcon-rust",
+ "field",
+ "num-complex",
+ "rand 0.10.4",
+ "sha3",
+ "test-support",
+ "transcript",
+]
+
+[[package]]
 name = "ark-ff"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -26,6 +26,7 @@ members = [
     "tools/profiler",
     "tools/artifact-dump",
     "tools/test-support",
+    "tools/falcon512/rust",
 ]
 
 # Excluded: `crates/guest-sdk` says why in its manifest, and `guests/` is the
@@ -94,6 +95,11 @@ sha3 = "0.10"
 # SDK's verifier is held to. Never linked by the prover, the verifier or a
 # guest.
 falcon-rust = "0.3.1"
+
+# Test only. `tools/falcon512/rust`'s signer: its FFT's complex numbers and its
+# randomness, the thread RNG, each the version `falcon-rust` already links.
+num-complex = "0.4"
+rand = "0.10"
 
 # JSON: the reports `tools/bench` and `tools/profiler` write. Nothing here is
 # reachable from the prover, the verifier or a guest.
