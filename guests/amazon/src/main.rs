@@ -42,10 +42,22 @@
 //! computed from the same bytes, and K's address checked against the record's,
 //! which the request found by that address; then kept for the user's later
 //! requests, each verified under that K. A key that does not decode has an
-//! address all the same, checked against the record's, and its user's
-//! requests are rejected. [`PublicKey::verify`] is the SDK's: its lattice
-//! check is the Falcon-512 precompile, and K's and HashToPoint's permutations
-//! Poseidon2's.
+//! address all the same, checked against the record's, and signs nothing.
+//! [`PublicKey::verify`] is the SDK's: its lattice check is the Falcon-512
+//! precompile, and K's and HashToPoint's permutations Poseidon2's.
+//!
+//! **A signature decides no outcome.** The requests are the public input's,
+//! but their signatures are advice, which the prover chooses, so an outcome
+//! that turned on a signature would be the prover's: a valid request advised
+//! a bad signature would be rejected, a censorship the statement cannot show.
+//! A request that reaches its signature check carries one that verifies under
+//! its buyer's key, or the batch is malformed, a panic, and so every request
+//! whose nonce a proof spends is one its buyer signed. The sequencer verifies
+//! the signatures before it batches the requests and drops each request whose
+//! signature does not verify, as a rollup's block producer does, and so every
+//! request from a user whose key does not decode. What rejects a request is
+//! the public input's and the snapshot's alone: its market, its buyer and its
+//! nonce.
 //!
 //! **Until the users are keyed by address.** The users table is `2^DEPTH`
 //! slots, not yet a table keyed by address, and two assumptions stand in for
@@ -145,10 +157,12 @@
 //!
 //! Each request in turn, against the records as the requests before it left
 //! them. It is **rejected**, and changes nothing, where its market is not the
-//! header's, its buyer is the zero address, no account, its nonce is not the
-//! buyer's or is `2^64 − 1`, which leaves none after it, or its signature does
-//! not verify under the buyer's key and the context. Otherwise the nonce is
-//! spent, and the purchase is **applied** where the listing holds the
+//! header's, its buyer is the zero address, no account, or its nonce is not
+//! the buyer's or is `2^64 − 1`, which leaves none after it: checks of the
+//! public input and of the buyer's record, which the snapshot binds, before
+//! the signature's. Otherwise the signature verifies under the buyer's key
+//! and the context, or the batch is malformed, a panic; the nonce is spent,
+//! and the purchase is **applied** where the listing holds the
 //! quantity, at least one unit, at a price no more than the max price, for a
 //! seller who is not the buyer and has an account, an address not zero, at a
 //! cost, `price · quantity`, below `2^256` and no more than the buyer's
@@ -174,9 +188,10 @@
 //!          140..172  volume    U256 LE: the applied purchases' cost
 //! ```
 //!
-//! A malformed batch, a digest or an advised record's address with a lane at
-//! or above `p`, an advised key that is not its user's, and a record or a path
-//! that does not open its table, panic.
+//! A malformed batch, a signature that does not verify where the batch checks
+//! one, a digest or an advised record's address with a lane at or above `p`,
+//! an advised key that is not its user's, and a record or a path that does not
+//! open its table, panic.
 
 extern crate alloc;
 
@@ -402,7 +417,8 @@ impl<'a> Store<'a> {
     }
 
     /// The request `message` signed by `signature`, settled against the
-    /// working set: the records it changes changed there.
+    /// working set: the records it changes changed there. Or a panic, where
+    /// it gets past every rejection and `signature` is not its buyer's.
     fn settle(&mut self, message: &[u8], signature: &[u8], market: u64) -> Outcome {
         let r = Request::decode(message);
         assert!(
@@ -418,9 +434,12 @@ impl<'a> Store<'a> {
             Some(next) if r.nonce == buyer.nonce => next,
             _ => return Outcome::Rejected,
         };
-        if !verifies(&mut self.keys[b], &r.buyer, message, signature) {
-            return Outcome::Rejected;
-        }
+        // Every rejection is above, the public input's or the buyer's
+        // record's. The signature is advice, so it rejects nothing.
+        assert!(
+            verifies(&mut self.keys[b], &r.buyer, message, signature),
+            "amazon: a request's signature does not verify under its buyer's key"
+        );
         self.users[b].now.nonce = next;
 
         let l = find(&self.listings, &r.listing, |h| &h.slot);

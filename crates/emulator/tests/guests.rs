@@ -1146,28 +1146,45 @@ mod amazon {
         pub read_listings: BTreeSet<u32>,
     }
 
+    /// A request that gets past every rejection unsigned by its buyer: no
+    /// outcome, but a batch the guest refuses, a panic.
+    #[derive(Debug)]
+    pub struct Unsigned;
+
     impl Model {
         /// `r`'s outcome and why, the tables moved where it applies; `signed`
-        /// is whether its signature is its buyer's, over it.
-        pub fn settle(&mut self, r: &Request, market: u64, signed: bool) -> &'static str {
+        /// is whether its signature is its buyer's, over it, which no
+        /// rejection reads.
+        pub fn settle(
+            &mut self,
+            r: &Request,
+            market: u64,
+            signed: bool,
+        ) -> Result<&'static str, Unsigned> {
             if r.market != market {
-                return "rejected: another market";
+                return Ok("rejected: another market");
             }
             if r.buyer == NO_ACCOUNT {
-                return "rejected: no account";
+                return Ok("rejected: no account");
             }
             self.read_users.insert(r.buyer);
             let buyer = self.users[&r.buyer];
             if r.nonce == u64::MAX {
-                return "rejected: the last nonce";
+                return Ok("rejected: the last nonce");
             }
             if r.nonce != buyer.nonce {
-                return "rejected: not the nonce";
+                return Ok("rejected: not the nonce");
             }
             if !signed {
-                return "rejected: not signed";
+                return Err(Unsigned);
             }
             self.users.get_mut(&r.buyer).expect("an account").nonce += 1;
+            Ok(self.purchase(r, buyer))
+        }
+
+        /// `r`'s purchase by `buyer`, its nonce spent: applied, the tables
+        /// moved, or declined, and why.
+        fn purchase(&mut self, r: &Request, buyer: User) -> &'static str {
             self.read_listings.insert(r.listing);
             let listing = self.listings.get(&r.listing).copied().unwrap_or_default();
             if r.quantity == 0 || r.quantity > listing.stock {
@@ -1214,7 +1231,7 @@ mod amazon {
 /// Forty users, each named by its key's address and each but one with a key
 /// from a seed of its own, the one a key that does not decode, in slots apart
 /// whose order is not their addresses'; and 22 listings, fourteen of 30 units
-/// and up sold by users who also buy; then 98 requests, sequenced by listing
+/// and up sold by users who also buy; then 94 requests, sequenced by listing
 /// as a sequencer gathering each listing's requests would, each buyer's
 /// nonces in the batch's order. Seventy purchases of one to three units apply,
 /// and so do the last unit of a listing of one, both of a listing of two, a
@@ -1223,15 +1240,18 @@ mod amazon {
 /// than the stock, the listings of one and of two once sold out, a vacant
 /// listing, a max price one below the price, the buyer's own listing, a
 /// seller with no account, the zero address, a cost past `2^256`, a cost past
-/// the balance, a seller's balance and the volume past `2^256`. Eight are
-/// rejected: another market, the zero address as the buyer, a request again,
-/// a nonce skipped, a signature tampered with, a signature under another
-/// user's key, the last nonce, and a key that does not decode; the tampered
-/// request's buyer then applies with the same nonce. Signatures are new each
-/// run, as signing is randomized. The journal is both snapshots, the three
-/// counts and the volume. The batch panics with a byte past its requests, and
-/// with a request from an address the advice does not hold; and so does the
-/// advice with a user's balance one off, and with a user's key another's.
+/// the balance, a seller's balance and the volume past `2^256`. Five are
+/// rejected, each before its signature is checked: another market, the zero
+/// address as the buyer, a request again, a nonce skipped, and the last
+/// nonce. Every request checked is signed by its buyer, new signatures each
+/// run, as signing is randomized. The advice also holds the user whose key
+/// does not decode, which no request reads, opened all the same. The journal
+/// is both snapshots, the three counts and the volume. The batch panics with
+/// a byte past its requests, with a request from an address the advice does
+/// not hold, and with one from the user whose key does not decode; and so
+/// does the advice with a signature one bit off, with a signature its buyer's
+/// over another of its requests, with a user's balance one off, and with a
+/// user's key another's.
 #[test]
 fn amazon_settles_signed_purchases_by_its_snapshot() {
     use std::collections::{BTreeMap, BTreeSet};
@@ -1349,13 +1369,12 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     let price = |j: usize| listings.get(&listing(j)).copied().unwrap_or_default().price;
 
     // How a request is made: signed by its buyer at its nonce, by another
-    // user, tampered with, at the nonce after its buyer's, the request before
-    // it again, or for another market.
+    // user, at the nonce after its buyer's, the request before it again, or
+    // for another market.
     #[derive(Clone, Copy, PartialEq)]
     enum How {
         Signed,
         By(usize),
-        Tampered,
         Skipped,
         Again,
         Elsewhere,
@@ -1395,11 +1414,7 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         (user(15), 6, 1, price(6), Signed),
         (user(15), 6, 1, price(6), Again),
         (user(17), 7, 1, price(7), Skipped),
-        (user(19), 8, 1, price(8), Tampered),
-        (user(19), 8, 1, price(8), Signed),
-        (user(21), 9, 1, price(9), By(23)),
         (user(EXHAUSTED), 10, 1, price(10), Signed),
-        (user(MALFORMED), 11, 1, price(11), By(0)),
     ]);
     // The sequencer's order: each listing's requests together, in the order
     // they came. A stable sort, so a request and its repeat stay adjacent.
@@ -1453,25 +1468,23 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
                     By(i) => user(i),
                     _ => buyer,
                 };
-                let mut signature = sign(&secret[&signer], &request.bytes(), CONTEXT);
-                if how == Tampered {
-                    signature[200] ^= 0x04;
-                }
-                (request, signature, signer == buyer && how != Tampered)
+                let signature = sign(&secret[&signer], &request.bytes(), CONTEXT);
+                (request, signature, signer == buyer)
             }
         };
         assert_eq!(signature.len(), 666);
         input.extend(request.bytes());
         signatures.push(signature.clone());
+        let outcome = model.settle(&request, MARKET, signed);
         *outcomes
-            .entry(model.settle(&request, MARKET, signed))
+            .entry(outcome.expect("every request checked is signed"))
             .or_default() += 1;
         previous = Some((request, signature));
     }
     assert_eq!(
         outcomes,
         BTreeMap::from([
-            ("applied", 78),
+            ("applied", 77),
             ("declined: a cost past 2^256", 1),
             ("declined: a seller with no account", 1),
             ("declined: above the balance", 1),
@@ -1482,7 +1495,6 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
             ("declined: the volume past 2^256", 1),
             ("rejected: another market", 1),
             ("rejected: no account", 1),
-            ("rejected: not signed", 3),
             ("rejected: not the nonce", 2),
             ("rejected: the last nonce", 1),
         ]),
@@ -1492,15 +1504,18 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     // The advice: the roots, each record read as the snapshot holds it, the
     // users by address, each an account and its key beside it, the
     // signatures, and a path a record, each under its table as the records
-    // before it left it.
+    // before it left it. The users are those read and the one whose key does
+    // not decode, which a request below names.
+    let mut advised = model.read_users.clone();
+    assert!(advised.insert(user(MALFORMED)), "no request reads it");
     let mut advice: Vec<u8> = roots
         .iter()
         .flatten()
         .flat_map(|l| l.to_le_bytes())
         .collect();
-    advice.extend((model.read_users.len() as u32).to_le_bytes());
+    advice.extend((advised.len() as u32).to_le_bytes());
     let mut key_at = BTreeMap::new();
-    for a in &model.read_users {
+    for a in &advised {
         advice.extend(slots[a].to_le_bytes());
         advice.extend(users[a].bytes());
         key_at.insert(*a, advice.len());
@@ -1511,9 +1526,10 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         advice.extend(slot.to_le_bytes());
         advice.extend(listings.get(slot).copied().unwrap_or_default().bytes());
     }
+    let signatures_at = advice.len();
     advice.extend(signatures.concat());
     advice.resize(advice.len().next_multiple_of(4), 0);
-    for a in &model.read_users {
+    for a in &advised {
         advice.extend(user_tree.path(slots[a]));
         user_tree.set(slots[a], model.users[a].leaf());
     }
@@ -1569,12 +1585,46 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         "a request from an address the advice does not hold is a malformed batch"
     );
 
+    // The first request from the user whose key does not decode, at its
+    // nonce: the key the advice holds has the record's address, and signs
+    // nothing.
+    let mut unsignable = input.clone();
+    unsignable[76..108].copy_from_slice(&user(MALFORMED));
+    unsignable[152..160].copy_from_slice(&users[&user(MALFORMED)].nonce.to_le_bytes());
+    let e = run(&image, &common::with_advice(&unsignable, &advice)).unwrap();
+    assert_eq!(
+        e.exit_code, 101,
+        "a request from a user whose key does not decode is a malformed batch"
+    );
+
     // That buyer's key, another user's: its address is not the record's.
     let other = user(if buyer == user(0) { 1 } else { 0 });
     let mut swapped = advice.clone();
     swapped[key_at[&buyer]..][..897].copy_from_slice(&keys[&other]);
     let e = run(&image, &common::with_advice(&input, &swapped)).unwrap();
     assert_eq!(e.exit_code, 101, "an advised key that is not its user's");
+
+    // The first request's signature, one bit flipped.
+    let mut flipped = advice.clone();
+    flipped[signatures_at + 200] ^= 0x04;
+    let e = run(&image, &common::with_advice(&input, &flipped)).unwrap();
+    assert_eq!(
+        e.exit_code, 101,
+        "a signature that does not verify is a malformed batch, not a rejection"
+    );
+
+    // The first request's signature, its buyer's over another of its
+    // requests.
+    let k = (1..batch.len())
+        .find(|&k| batch[k].0 == buyer && batch[k].4 == Signed)
+        .expect("the buyer signs another request");
+    let mut reused = advice.clone();
+    reused[signatures_at..][..666].copy_from_slice(&signatures[k]);
+    let e = run(&image, &common::with_advice(&input, &reused)).unwrap();
+    assert_eq!(
+        e.exit_code, 101,
+        "another request's signature is a malformed batch, not a rejection"
+    );
 
     // The first user's balance, one off: its record no longer opens the
     // users table.
