@@ -201,9 +201,10 @@ conditions that single out the quotient. 226 committed columns, 239 obligations 
 | `falcon512::Poly` | 512 `u16` coefficients, word-aligned, coefficient `i` at index `i`: any 512 are a polynomial, read mod `q` |
 | `falcon512::s1_norm(&Poly, &Poly, &Poly) -> u64` | the call over `h`, `s2` and `c` where they lie, its frame five words on the caller's stack: `‖s1‖²`, below `2^35` (§7); panics first unless the three arrays are apart |
 | `falcon512::Q`, `SQBETA`, `PUBLIC_KEY_BYTES`, `SIGNATURE_BYTES` | `q = 12289`; `⌊β²⌋ = 34,034,726`, the most `‖s1‖² + ‖s2‖²` a signature verifies at; 897 and 666, a key's bytes and a signature's |
-| `falcon512::PublicKey::decode(&[u8]) -> Option<PublicKey>` | the key `h` from exactly 897 bytes, v1.2 of the specification: the header `0x09`, then its 512 coefficients in order, 14 bits each, packed big-endian, each below `q`; `None` for any other bytes, so a key has one encoding. A key that decodes is then absorbed, its prefix (§7.7) kept with `h` |
-| `falcon512::PublicKey::digest(&self) -> Digest`, `falcon512::key_digest(&[u8]) -> Digest` | KeyDigest (§7.7): the key's from its prefix, one permutation; any bytes', a key that does not decode included |
-| `falcon512::PublicKey::verify(&self, msg: &[u8], sig: &[u8]) -> bool` | whether `sig` is a v1.2 padded signature of `msg` under the key: exactly 666 bytes, the header `0x39`, the 40-byte salt, then `s2` compressed, each coefficient a sign bit, the low 7 bits of its size, then that size `>> 7` zeros and a one, and zeros to the end; `false` for any other bytes, among them a coefficient `−0`, one above 2047 in size or one reaching past the end, and a one bit after the 512th. `c` is HashToPoint (§7.7) of the key, the salt and `msg`, from the key's prefix; it verifies exactly when `s1_norm(h, s2, c) + ‖s2‖² ≤ SQBETA` |
+| `falcon512::PublicKey::decode(&[u8]) -> Option<PublicKey>` | the key `h` from exactly 897 bytes, v1.2 of the specification: the header `0x09`, then its 512 coefficients in order, 14 bits each, packed big-endian, each below `q`; `None` for any other bytes, so a key has one encoding. A key that decodes then has K computed from the same bytes and HashToPoint's per-key prefix from K (§7.7), both kept with `h` |
+| `falcon512::key_digest(&[u8]) -> Digest`, `falcon512::address(&[u8]) -> [u8; 32]` | K and the address (§7.7) of any bytes, a key that does not decode included |
+| `falcon512::PublicKey::key_digest(&self) -> &Digest`, `falcon512::PublicKey::address(&self) -> [u8; 32]` | the key's K and address, computed once by `decode` |
+| `falcon512::PublicKey::verify(&self, msg: &[u8], sig: &[u8], context: &[u8]) -> bool` | whether `sig` is a v1.2 padded signature of `msg` under the key and `context`: `context` at most 255 bytes; `sig` exactly 666 bytes, the header `0x39`, the 40-byte salt, then `s2` compressed, each coefficient a sign bit, the low 7 bits of its size, then that size `>> 7` zeros and a one, and zeros to the end; `false` for any other bytes, among them a coefficient `−0`, one above 2047 in size or one reaching past the end, and a one bit after the 512th. `c` is HashToPoint (§7.7) of K, the salt, `context` and `msg`, from the key's prefix; it verifies exactly when `s1_norm(h, s2, c) + ‖s2‖² ≤ SQBETA` |
 
 `apogee_poseidon2_permute`, `apogee_mul_div_u256`, `apogee_merkle_root` and
 `apogee_falcon512_s1_norm` are the C ABI's ([ecall-abi.md](ecall-abi.md) §7). Every frame is the
@@ -493,11 +494,11 @@ does a frame's.
 ### 7.7 HashToPoint
 
 Falcon-512 here is v1.2's (the NIST round-3 specification), its keys, encodings, signer and
-acceptance rule, in all but HashToPoint, the map from the public key, the salt (v1.2's nonce `r`)
-and the message to the point `c`: not SHAKE256 of `r ‖ m` but a sponge over `P`, the
-Poseidon2-A64-C5 permutation (§3). A standard Falcon-512 signature does not verify under it, nor
-the reverse. The SDK's `falcon512` computes it over `poseidon2_permute` (§5), and
-`tools/falcon512` signs under it.
+acceptance rule, in all but HashToPoint, the map to the point `c`: not SHAKE256 of the salt (v1.2's
+nonce `r`) and the message but a sponge over `P`, the Poseidon2-A64-C5 permutation (§3), of the
+key digest K, the salt, the application's context and the message. K is a sponge over the key's
+bytes, and the key's address is K's first 32 bytes. The SDK's `falcon512` computes both over
+`poseidon2_permute` (§5).
 
 The sponge is [transcript.md](transcript.md) §2's duplex from the zero state: rate lanes 0–7,
 capacity 8–15, no padding, absorbing overwrites the next rate lane, permuting first when the rate
@@ -507,32 +508,48 @@ permutes, then reads rate lanes 0–7 in order, and again; a rate lane the last 
 keeps its value.
 
 ```text
-CONTEXT   the 33 ASCII bytes "apogee/falcon512/hash-to-point/v1"
-T         ⌊p / q^4⌋·q^4 = 808·q^4 = 0xFFBD4EAA725E0328; (p − T)/p ≈ 1.0177·10^−3
+KEY_DOMAIN        the 13 ASCII bytes "apogee/key/v1"
+SCHEME_ID         the 22 ASCII bytes "falcon512-poseidon2/v1"
+SIGNATURE_DOMAIN  the 33 ASCII bytes "apogee/falcon512/hash-to-point/v1"
+T                 ⌊p / q^4⌋·q^4 = 808·q^4 = 0xFFBD4EAA725E0328; (p − T)/p ≈ 1.0177·10^−3
 
-HashToPoint(pk, salt, msg)  field(1, CONTEXT), field(2, pk), field(3, salt), field(4, msg); then
-                            each lane x of the stream: x ≥ T is skipped, and x < T is the next
-                            four coefficients, ⌊x / q^j⌋ mod q for j = 0, 1, 2, 3, until 512
-KeyDigest(bytes)            field(1, CONTEXT), field(2, bytes), field(5, empty); the stream's
-                            first 8 lanes
+K(pk)             field(1, KEY_DOMAIN), field(2, SCHEME_ID), field(3, pk); the stream's first
+                  8 lanes, 64 bytes as each lane's u64 little-endian
+address(pk)       K(pk)'s first 32 bytes: lanes 0–3
+HashToPoint(pk, salt, context, msg)
+                  field(1, SIGNATURE_DOMAIN), field(2, K(pk)), field(3, salt), field(4, context),
+                  field(5, msg); then each lane x of the stream: x ≥ T is skipped, and x < T is
+                  the next four coefficients, ⌊x / q^j⌋ mod q for j = 0, 1, 2, 3, until 512
 ```
 
-`pk` is the exact 897-byte key the signature is verified under, and `salt` the signature's 40
-bytes after its header. KeyDigest is defined for any bytes, a key that does not decode included;
-verification does not use it, and an account names its key by it (`guests/amazon`).
+`pk` is the exact 897-byte key the signature is verified under: a verifier computes K from the
+bytes it decodes `h` from. `salt` is the signature's 40 bytes after its header. `context` is the
+application's, 0 to 255 bytes, FIPS 204's and 206's convention: a signer refuses a longer one and
+verification is false for it, and a signature under one context does not verify under another. K
+is defined for any bytes, a key that does not decode included. The address is the key's name in a
+guest's state (`guests/amazon`), 256 bits, each of its four lanes below `p`.
 
-**The key's prefix.** `(1, CONTEXT)` and `(2, pk)` are 7 + 131 = 138 lanes, 17 permutations,
-leaving two rate lanes written. HashToPoint and KeyDigest both continue from that state, so a key is
-absorbed once: `PublicKey::decode` absorbs it, `PublicKey::digest` is one permutation, and a
-64-byte message's salt and message fields are 2 permutations and its squeeze 16, one more when a
-lane among the first 128 is skipped, with probability `1 − (1 − 1.0177·10^−3)^128 ≈ 12.2%`.
+**The per-key prefix.** For an 897-byte key K is 141 lanes, 17 permutations absorbing and one to
+squeeze, and `(1, SIGNATURE_DOMAIN)` and `(2, K)` are 7 + 12 = 19 lanes, 2 permutations, leaving
+three rate lanes written. Every signature under the key continues from that state, so `PublicKey::decode`
+computes K and the prefix once. A 92-byte message under a 25-byte context is then 30 lanes, 4
+permutations, and the squeeze 16, one more when a lane among the first 128 is skipped, with
+probability `1 − (1 − 1.0177·10^−3)^128 ≈ 12.2%`.
 
 **Why `c` is uniform.** In the sponge's model the stream's lanes are independent and uniform on
 `[0, p)`. A lane below `T` is then uniform on `[0, 808·q^4)`, so its four low base-`q` digits are
 uniform on `Z_q^4` and independent of the rest of it, and a lane at or above `T` is skipped,
 rejection rather than reduction, so no residue is favored: `c` is exactly uniform on `Z_q^512`, the
 distribution v1.2's security argument takes HashToPoint's output to have. The stream is squeezed
-from the sponge that absorbed the inputs, with no fixed-width digest between them for distinct
-inputs to collide in, and the framing is injective, each field its tag, its length and whole lanes
-in a fixed order, so distinct `(pk, salt, msg)` are distinct lane sequences; `CONTEXT`, the first
-field, separates this sponge from every other over `P`.
+from the sponge that absorbed the salt, the context and the message, with no fixed-width digest
+between them for distinct inputs to collide in; the key enters as K, eight lanes, so two keys
+share a stream only through a collision of K's sponge, whose capacity is eight lanes. Each framing
+is injective, each field its tag, its length and whole lanes in a fixed order, so distinct
+`(K, salt, context, msg)` are distinct lane sequences, and the first field, `KEY_DOMAIN` or
+`SIGNATURE_DOMAIN`, separates each sponge from the other and from every other over `P`.
+
+**Interoperability.** Keys and signatures are v1.2's encodings, and a key from v1.2's keygen is a
+key here, but a signature is not interchangeable with standard Falcon-512's: a standard signature
+does not verify under this HashToPoint, nor the reverse. `tools/falcon512` holds the host
+implementations, Rust, JavaScript and Python, which sign and verify under it, and `vectors.json`,
+the vectors all three agree on, whose signatures the SDK's verifier is held to.

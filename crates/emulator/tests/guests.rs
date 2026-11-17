@@ -789,14 +789,14 @@ fn marketplace_follows_its_table_by_its_root() {
 // Falcon-512 verification, executed
 // ---------------------------------------------------------------------------
 
-/// A Falcon-512 case: a key, a message and a signature.
-type Case = (Vec<u8>, Vec<u8>, Vec<u8>);
+/// A Falcon-512 case: a key, a message, a context and a signature.
+type Case = (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>);
 
 /// What `guests/precompiles` journals for each of `cases` — 1 the signature
-/// verifies, 0 it does not, 2 the key does not decode — run after its other
-/// calls at their fewest: a zero leaf up sixteen zero siblings, no runs, and
-/// the zero arrays' norm once. Seven cases of short messages fill the public
-/// input window.
+/// verifies under the context, 0 it does not, 2 the key does not decode — run
+/// after its other calls at their fewest: a zero leaf up sixteen zero
+/// siblings, no runs, and the zero arrays' norm once. Seven cases of short
+/// messages and contexts fill the public input window.
 fn falcon_verdicts(cases: &[Case]) -> Vec<u8> {
     let mut input = [
         1u32.to_le_bytes().as_slice(),
@@ -810,8 +810,8 @@ fn falcon_verdicts(cases: &[Case]) -> Vec<u8> {
     ]
     .concat();
     input.extend((cases.len() as u32).to_le_bytes());
-    for (key, message, signature) in cases {
-        for field in [key, message, signature] {
+    for (key, message, context, signature) in cases {
+        for field in [key, message, context, signature] {
             input.extend((field.len() as u32).to_le_bytes());
             input.extend(field);
         }
@@ -823,36 +823,41 @@ fn falcon_verdicts(cases: &[Case]) -> Vec<u8> {
 }
 
 /// The host library's signatures, under keys from two fixed seeds, over
-/// messages of 0, 64 and 200 bytes, verify: new ones each run, its signing
-/// randomized.
+/// messages of 0, 64 and 200 bytes under contexts of 0, 25 and 255 bytes,
+/// verify: new ones each run, its signing randomized.
 #[test]
 fn falcon512_verifies_apogee_falcon512_signatures() {
     let mut cases = Vec::new();
     for seed in [[0x5a; 32], [0xc3; 32]] {
         let (sk, pk) = apogee_falcon512::keygen(seed);
-        for len in [0, 64, 200] {
-            let msg: Vec<u8> = (0..len)
-                .map(|i| (i as u8).wrapping_mul(29) ^ seed[0])
-                .collect();
-            let sig = apogee_falcon512::sign(&sk, &msg);
-            cases.push((pk.clone(), msg, sig));
+        for (len, context) in [(0, 0), (64, 25), (200, 255)] {
+            let bytes = |len: usize, k: u8| -> Vec<u8> {
+                (0..len)
+                    .map(|i| (i as u8).wrapping_mul(k) ^ seed[0])
+                    .collect()
+            };
+            let (msg, context) = (bytes(len, 29), bytes(context, 53));
+            let sig = apogee_falcon512::sign(&sk, &msg, &context);
+            cases.push((pk.clone(), msg, context, sig));
         }
     }
     assert_eq!(falcon_verdicts(&cases), [1; 6]);
 }
 
-/// A host library signature of a 64-byte message altered one way a case: a
-/// bit of the message, of the salt, of `s2` and of the padding flipped, the
-/// header `0x29`, the signature a byte short, and the key another seed's,
-/// which HashToPoint hashes too, none of which verifies; and the key's first
-/// coefficient `2^14 − 1`, at least `q`, which does not decode. Two runs, as
-/// seven cases fill the public input window.
+/// A host library signature of a 64-byte message under a 25-byte context
+/// altered one way a case: a bit of the message, of the salt, of `s2` and of
+/// the padding flipped, the header `0x29`, the signature a byte short, the key
+/// another seed's, which K and so HashToPoint hash too, and a bit of the
+/// context flipped, none of which verifies; and the key's first coefficient
+/// `2^14 − 1`, at least `q`, which does not decode. Two runs, as seven cases
+/// fill the public input window.
 #[test]
 fn falcon512_refuses_each_alteration() {
     let (sk, pk) = apogee_falcon512::keygen([0x5a; 32]);
     let (_, other) = apogee_falcon512::keygen([0xc3; 32]);
     let msg: Vec<u8> = (0..64).map(|i| (i as u8).wrapping_mul(29)).collect();
-    let sig = apogee_falcon512::sign(&sk, &msg);
+    let context = b"apogee/amazon/purchase/v1".to_vec();
+    let sig = apogee_falcon512::sign(&sk, &msg, &context);
     let flip = |bytes: &[u8], at: usize, bit: u32| {
         let mut bytes = bytes.to_vec();
         bytes[at] ^= 1 << bit;
@@ -861,25 +866,31 @@ fn falcon512_refuses_each_alteration() {
     let mut key = pk.clone();
     key[1] = 0xff;
     key[2] |= 0xfc;
+    let case = |pk: &[u8], msg: &[u8], context: &[u8], sig: &[u8]| {
+        (pk.to_vec(), msg.to_vec(), context.to_vec(), sig.to_vec())
+    };
     let cases = [
-        (pk.clone(), flip(&msg, 16, 0), sig.clone()),
-        (pk.clone(), msg.clone(), flip(&sig, 18, 3)),
-        (pk.clone(), msg.clone(), flip(&sig, 141, 5)),
-        (pk.clone(), msg.clone(), flip(&sig, 665, 0)),
-        (pk.clone(), msg.clone(), flip(&sig, 0, 4)),
-        (pk, msg.clone(), sig[..665].to_vec()),
-        (other, msg.clone(), sig.clone()),
-        (key, msg, sig),
+        case(&pk, &flip(&msg, 16, 0), &context, &sig),
+        case(&pk, &msg, &context, &flip(&sig, 18, 3)),
+        case(&pk, &msg, &context, &flip(&sig, 141, 5)),
+        case(&pk, &msg, &context, &flip(&sig, 665, 0)),
+        case(&pk, &msg, &context, &flip(&sig, 0, 4)),
+        case(&pk, &msg, &context, &sig[..665]),
+        case(&other, &msg, &context, &sig),
+        case(&pk, &msg, &flip(&context, 24, 0), &sig),
+        case(&key, &msg, &context, &sig),
     ];
     let verdicts = [&cases[..4], &cases[4..]].map(falcon_verdicts).concat();
-    assert_eq!(verdicts, [0, 0, 0, 0, 0, 0, 0, 2]);
+    assert_eq!(verdicts, [0, 0, 0, 0, 0, 0, 0, 0, 2]);
 }
 
 /// The SDK's verifier agrees with the other implementations on
-/// `tools/falcon512/vectors.json`. Every signature there verifies: two each
-/// from the Rust, JavaScript and Python libraries. Every malformed case is
-/// refused, including the two a lenient decoder would pass (negative zero, and
-/// a one bit after the last coefficient). A key that does not decode is 2.
+/// `tools/falcon512/vectors.json`. Every signature there verifies under its
+/// context: two each from the Rust, JavaScript and Python libraries. Every
+/// malformed case is refused, including the two a lenient decoder would pass
+/// (negative zero, and a one bit after the last coefficient), a context
+/// altered, and one of 256 bytes. A key that does not decode is 2. The
+/// malformed cases are two runs, as seven cases fill the public input window.
 #[test]
 fn falcon512_agrees_with_every_implementation() {
     let vectors: serde_json::Value =
@@ -892,15 +903,19 @@ fn falcon512_agrees_with_every_implementation() {
         };
         entries
             .iter()
-            .map(|v| (bytes(v, "pk"), bytes(v, "msg"), bytes(v, "sig")))
+            .map(|v| {
+                let field = |k| bytes(v, k);
+                (field("pk"), field("msg"), field("context"), field("sig"))
+            })
             .collect()
     };
     let signatures = section("signatures");
     assert_eq!(signatures.len(), 6);
     assert_eq!(falcon_verdicts(&cases(&signatures)), [1; 6]);
     let malformed = section("malformed");
-    assert_eq!(malformed.len(), 6);
-    for (v, verdict) in malformed.iter().zip(falcon_verdicts(&cases(&malformed))) {
+    assert_eq!(malformed.len(), 8);
+    let verdicts = [&malformed[..4], &malformed[4..]].map(|half| falcon_verdicts(&cases(half)));
+    for (v, verdict) in malformed.iter().zip(verdicts.concat()) {
         let case = v["case"].as_str().expect("a name");
         let refused = if case.starts_with("key_") { 2 } else { 0 };
         assert_eq!(verdict, refused, "{case}");
@@ -912,16 +927,22 @@ fn falcon512_agrees_with_every_implementation() {
 // ---------------------------------------------------------------------------
 
 /// The host's side of `guests/amazon`: its two tables as sparse trees over
-/// `market`'s node, a user's leaf its key digest beside its balance and nonce
-/// packed seven bytes to a lane and the tag 1, a listing's its 52 bytes packed
-/// the same beside the tag 2; and the store's rules, read apart from the
-/// guest's, over a `U256` of two `u128` halves.
+/// `market`'s node, a record's leaf its address's four lanes, the rest of its
+/// bytes packed seven to a lane, and its table's tag, 1 for a user and 2 for a
+/// listing, in lane 15; and the store's rules, read apart from the guest's,
+/// over a `U256` of two `u128` halves.
 mod amazon {
     use std::collections::{BTreeMap, BTreeSet};
 
     pub use super::market::{compress, Digest};
 
     pub const DEPTH: usize = 20;
+
+    /// A user's name: K's first 32 bytes, K the key digest of its key.
+    pub type Address = [u8; 32];
+
+    /// The zero address, which names no account.
+    pub const NO_ACCOUNT: Address = [0; 32];
 
     /// `hi · 2^128 + lo`: a balance, a price, the volume.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -982,38 +1003,47 @@ mod amazon {
             .collect()
     }
 
+    /// A record's leaf: `address`'s four lanes, then `rest` seven bytes to a
+    /// lane, zeros, and `tag` in lane 15, permuted once.
+    fn leaf(address: &Address, rest: &[u8], tag: u64) -> Digest {
+        let mut lanes = [0u64; 16];
+        for (lane, eight) in lanes.iter_mut().zip(address.chunks(8)) {
+            *lane = u64::from_le_bytes(eight.try_into().expect("8 bytes"));
+        }
+        let rest = pack(rest);
+        lanes[4..4 + rest.len()].copy_from_slice(&rest);
+        lanes[15] = tag;
+        compress(
+            lanes[..8].try_into().expect("8 lanes"),
+            lanes[8..].try_into().expect("8 lanes"),
+        )
+    }
+
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub struct User {
-        pub key: Digest,
+        pub address: Address,
         pub balance: U256,
         pub nonce: u64,
     }
 
     impl User {
         pub fn bytes(&self) -> Vec<u8> {
-            let mut b: Vec<u8> = self.key.iter().flat_map(|l| l.to_le_bytes()).collect();
+            let mut b = self.address.to_vec();
             b.extend(self.balance.le_bytes());
             b.extend(self.nonce.to_le_bytes());
             b
         }
 
-        /// The key, then the balance and the nonce in six lanes, a zero and
-        /// the tag 1, permuted once.
+        /// The address, then the balance and the nonce in six lanes, and the
+        /// tag 1.
         pub fn leaf(&self) -> Digest {
-            let mut right = [0u64; 8];
-            right[..6].copy_from_slice(&pack(&self.bytes()[64..]));
-            right[7] = 1;
-            compress(&self.key, &right)
-        }
-
-        pub fn is_account(&self) -> bool {
-            self.key != [0; 8]
+            leaf(&self.address, &self.bytes()[32..], 1)
         }
     }
 
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub struct Listing {
-        pub seller: u32,
+        pub seller: Address,
         pub item: u64,
         pub price: U256,
         pub stock: u64,
@@ -1021,18 +1051,17 @@ mod amazon {
 
     impl Listing {
         pub fn bytes(&self) -> Vec<u8> {
-            let mut b = self.seller.to_le_bytes().to_vec();
+            let mut b = self.seller.to_vec();
             b.extend(self.item.to_le_bytes());
             b.extend(self.price.le_bytes());
             b.extend(self.stock.to_le_bytes());
             b
         }
 
-        /// The 52 bytes in eight lanes, seven zeros and the tag 2, permuted
-        /// once.
+        /// The seller's address, then the item, the price and the stock in
+        /// seven lanes, and the tag 2.
         pub fn leaf(&self) -> Digest {
-            let lanes: Digest = pack(&self.bytes()).try_into().expect("8 lanes");
-            compress(&lanes, &[0, 0, 0, 0, 0, 0, 0, 2])
+            leaf(&self.seller, &self.bytes()[32..], 2)
         }
     }
 
@@ -1083,10 +1112,10 @@ mod amazon {
         }
     }
 
-    /// A request: the 64 bytes its buyer signs.
+    /// A request: the 92 bytes its buyer signs.
     #[derive(Clone, Copy, Debug)]
     pub struct Request {
-        pub buyer: u32,
+        pub buyer: Address,
         pub listing: u32,
         pub quantity: u64,
         pub max_price: U256,
@@ -1096,7 +1125,7 @@ mod amazon {
 
     impl Request {
         pub fn bytes(&self) -> Vec<u8> {
-            let mut b = self.buyer.to_le_bytes().to_vec();
+            let mut b = self.buyer.to_vec();
             b.extend(self.listing.to_le_bytes());
             b.extend(self.quantity.to_le_bytes());
             b.extend(self.max_price.le_bytes());
@@ -1106,13 +1135,14 @@ mod amazon {
         }
     }
 
-    /// The store as the host reads its rules: the tables, the volume, and the
-    /// slots of each table the requests have read.
+    /// The store as the host reads its rules: the users by address and the
+    /// listings by slot, the volume, and the users and the listings the
+    /// requests have read.
     pub struct Model {
-        pub users: BTreeMap<u32, User>,
+        pub users: BTreeMap<Address, User>,
         pub listings: BTreeMap<u32, Listing>,
         pub volume: U256,
-        pub read_users: BTreeSet<u32>,
+        pub read_users: BTreeSet<Address>,
         pub read_listings: BTreeSet<u32>,
     }
 
@@ -1123,11 +1153,11 @@ mod amazon {
             if r.market != market {
                 return "rejected: another market";
             }
-            self.read_users.insert(r.buyer);
-            let buyer = self.users.get(&r.buyer).copied().unwrap_or_default();
-            if !buyer.is_account() {
+            if r.buyer == NO_ACCOUNT {
                 return "rejected: no account";
             }
+            self.read_users.insert(r.buyer);
+            let buyer = self.users[&r.buyer];
             if r.nonce == u64::MAX {
                 return "rejected: the last nonce";
             }
@@ -1149,8 +1179,8 @@ mod amazon {
             if listing.seller == r.buyer {
                 return "declined: the buyer's own";
             }
-            if listing.seller >= 1 << DEPTH {
-                return "declined: a seller outside the table";
+            if listing.seller == NO_ACCOUNT {
+                return "declined: a seller with no account";
             }
             let Some(cost) = listing.price.checked_mul(r.quantity) else {
                 return "declined: a cost past 2^256";
@@ -1159,10 +1189,7 @@ mod amazon {
                 return "declined: above the balance";
             }
             self.read_users.insert(listing.seller);
-            let seller = self.users.get(&listing.seller).copied().unwrap_or_default();
-            if !seller.is_account() {
-                return "declined: a seller with no account";
-            }
+            let seller = self.users[&listing.seller];
             let Some(paid) = seller.balance.checked_add(cost) else {
                 return "declined: the seller's balance past 2^256";
             };
@@ -1184,35 +1211,37 @@ mod amazon {
 /// `guests/amazon` settles a batch of Falcon-512-signed purchases against its
 /// users and listings by their snapshot.
 ///
-/// Forty users, each but one with a key from a seed of its own and the one a
-/// key that does not decode, and 23 listings, fourteen of 30 units and up sold
-/// by users who also buy; then 99 requests, sequenced by listing as a
-/// sequencer gathering each listing's requests would, each buyer's nonces in
-/// the batch's order. Seventy purchases of one to three units apply, and so
-/// do the last unit of a listing of one, both of a listing of two, a seller's
-/// purchase paid for by a sale earlier in the batch, and a purchase at
-/// `2^255`. Thirteen are declined, each its nonce spent: none asked for, more
+/// Forty users, each named by its key's address and each but one with a key
+/// from a seed of its own, the one a key that does not decode, in slots apart
+/// whose order is not their addresses'; and 22 listings, fourteen of 30 units
+/// and up sold by users who also buy; then 98 requests, sequenced by listing
+/// as a sequencer gathering each listing's requests would, each buyer's
+/// nonces in the batch's order. Seventy purchases of one to three units apply,
+/// and so do the last unit of a listing of one, both of a listing of two, a
+/// seller's purchase paid for by a sale earlier in the batch, and a purchase
+/// at `2^255`. Twelve are declined, each its nonce spent: none asked for, more
 /// than the stock, the listings of one and of two once sold out, a vacant
 /// listing, a max price one below the price, the buyer's own listing, a
-/// seller outside the users table and one with no account, a cost past
-/// `2^256`, a cost past the balance, a seller's balance and the volume past
-/// `2^256`. Eight are rejected: another
-/// market, a buyer with no account, a request again, a nonce skipped, a
-/// signature tampered with, a signature under another user's key, the last
-/// nonce, and a key that does not decode; the tampered request's buyer then
-/// applies with the same nonce. Signatures are new each run, as signing is
-/// randomized. The journal is both snapshots, the three counts and the volume.
-/// The batch with a byte past its requests panics, and so does the advice with
-/// a user's balance one off.
+/// seller with no account, the zero address, a cost past `2^256`, a cost past
+/// the balance, a seller's balance and the volume past `2^256`. Eight are
+/// rejected: another market, the zero address as the buyer, a request again,
+/// a nonce skipped, a signature tampered with, a signature under another
+/// user's key, the last nonce, and a key that does not decode; the tampered
+/// request's buyer then applies with the same nonce. Signatures are new each
+/// run, as signing is randomized. The journal is both snapshots, the three
+/// counts and the volume. The batch panics with a byte past its requests, and
+/// with a request from an address the advice does not hold; and so does the
+/// advice with a user's balance one off, and with a user's key another's.
 #[test]
 fn amazon_settles_signed_purchases_by_its_snapshot() {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use amazon::{compress, Listing, Model, Request, Tree, User, U256};
-    use apogee_falcon512::{key_digest, keygen, sign};
+    use amazon::{compress, Address, Listing, Model, Request, Tree, User, NO_ACCOUNT, U256};
+    use apogee_falcon512::{address, keygen, sign};
 
     const E18: u128 = 1_000_000_000_000_000_000;
     const MARKET: u64 = 0x0a3a_5017;
+    const CONTEXT: &[u8] = b"apogee/amazon/purchase/v1";
     // Users 0..32 buy, the odd ones of them selling the plain listings too.
     const POOR: usize = 32;
     const RICH: [usize; 2] = [33, 34];
@@ -1230,31 +1259,34 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     const BIG: usize = 19;
     const BIG_TOO: usize = 20;
     const UNPAYABLE: usize = 21;
-    const OUTSIDE: usize = 22;
-    const VACANT: usize = 23;
-    let user = |i: usize| (i * 26_800) as u32;
+    const VACANT: usize = 22;
+    let slot = |i: usize| (i * 26_800) as u32;
     let listing = |j: usize| (7 + j * 40_009) as u32;
-    // Two slots with no account: a buyer's, and the last, a seller's.
-    let (nobody, last) = (13u32, (1u32 << amazon::DEPTH) - 1);
     let half = U256 {
         hi: 1 << 127,
         lo: 0,
     };
 
+    // Each user's key, by its address, and the slot its record is in.
     let mut secret = BTreeMap::new();
     let mut keys = BTreeMap::new();
+    let mut slots = BTreeMap::new();
     let mut users = BTreeMap::new();
+    let mut addresses: Vec<Address> = Vec::new();
     for i in 0..40 {
-        let key = if i == MALFORMED {
+        let (sk, key) = if i == MALFORMED {
             // The first coefficient `2^14 − 1`, at least `q`.
             let mut key = vec![0u8; 897];
             key[..3].copy_from_slice(&[0x09, 0xff, 0xfc]);
-            key
+            (None, key)
         } else {
             let (sk, pk) = keygen([i as u8 + 1; 32]);
-            secret.insert(user(i), sk);
-            pk
+            (Some(sk), pk)
         };
+        let a = address(&key);
+        if let Some(sk) = sk {
+            secret.insert(a, sk);
+        }
         let balance = match i {
             POOR => U256::small(E18),
             r if RICH.contains(&r) => U256 {
@@ -1274,15 +1306,18 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
             i as u64 % 3
         };
         users.insert(
-            user(i),
+            a,
             User {
-                key: key_digest(&key),
+                address: a,
                 balance,
                 nonce,
             },
         );
-        keys.insert(user(i), key);
+        keys.insert(a, key);
+        slots.insert(a, slot(i));
+        addresses.push(a);
     }
+    let user = |i: usize| addresses[i];
     let mut listings = BTreeMap::new();
     for j in 0..VACANT {
         let (seller, price, stock) = match j {
@@ -1293,8 +1328,7 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
             OVERFILLS => (user(ALMOST_FULL), U256::small(10 * E18), 5),
             BIG => (user(BIG_SELLER), half, 3),
             BIG_TOO => (user(9), half, 1),
-            UNPAYABLE => (last, U256::small(E18), 5),
-            OUTSIDE => ((1 << amazon::DEPTH) + 5, U256::small(E18), 5),
+            UNPAYABLE => (NO_ACCOUNT, U256::small(E18), 5),
             _ => (
                 user(2 * j + 1),
                 U256::small((j as u128 + 1) * E18 + j as u128 * E18 / 10),
@@ -1327,7 +1361,7 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         Elsewhere,
     }
     use How::*;
-    let mut batch: Vec<(u32, usize, u64, U256, How)> = (0..70)
+    let mut batch: Vec<(Address, usize, u64, U256, How)> = (0..70)
         .map(|k| {
             let j = k % 14;
             let b = match (k * 11 + 3) % 32 {
@@ -1354,11 +1388,10 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         (user(RICH[0]), BIG, 1, half, Signed),
         (user(RICH[1]), BIG_TOO, 1, half, Signed),
         (user(28), UNPAYABLE, 1, price(UNPAYABLE), Signed),
-        (user(30), OUTSIDE, 1, price(OUTSIDE), Signed),
         (user(2), VACANT, 1, price(VACANT), Signed),
         (user(POOR), 13, 1, price(13), Signed),
         (user(13), 4, 1, price(4), Elsewhere),
-        (nobody, 5, 1, price(5), By(0)),
+        (NO_ACCOUNT, 5, 1, price(5), By(0)),
         (user(15), 6, 1, price(6), Signed),
         (user(15), 6, 1, price(6), Again),
         (user(17), 7, 1, price(7), Skipped),
@@ -1372,11 +1405,11 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     // they came. A stable sort, so a request and its repeat stay adjacent.
     batch.sort_by_key(|&(_, j, ..)| listing(j));
 
-    let tables = |users: &BTreeMap<u32, User>, listings: &BTreeMap<u32, Listing>| {
+    let tables = |users: &BTreeMap<Address, User>, listings: &BTreeMap<u32, Listing>| {
         (
             Tree::new(
                 User::default().leaf(),
-                users.iter().map(|(&s, u)| (s, u.leaf())),
+                users.iter().map(|(a, u)| (slots[a], u.leaf())),
             ),
             Tree::new(
                 Listing::default().leaf(),
@@ -1420,7 +1453,7 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
                     By(i) => user(i),
                     _ => buyer,
                 };
-                let mut signature = sign(&secret[&signer], &request.bytes());
+                let mut signature = sign(&secret[&signer], &request.bytes(), CONTEXT);
                 if how == Tampered {
                     signature[200] ^= 0x04;
                 }
@@ -1440,7 +1473,6 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         BTreeMap::from([
             ("applied", 78),
             ("declined: a cost past 2^256", 1),
-            ("declined: a seller outside the table", 1),
             ("declined: a seller with no account", 1),
             ("declined: above the balance", 1),
             ("declined: above the max price", 1),
@@ -1457,22 +1489,22 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         "the batch is each case it claims"
     );
 
-    // The advice: the roots, each record read as the snapshot holds it, an
-    // account's key beside it, the signatures, and a path a record, each under
-    // its table as the records before it left it.
+    // The advice: the roots, each record read as the snapshot holds it, the
+    // users by address, each an account and its key beside it, the
+    // signatures, and a path a record, each under its table as the records
+    // before it left it.
     let mut advice: Vec<u8> = roots
         .iter()
         .flatten()
         .flat_map(|l| l.to_le_bytes())
         .collect();
     advice.extend((model.read_users.len() as u32).to_le_bytes());
-    for slot in &model.read_users {
-        let u = users.get(slot).copied().unwrap_or_default();
-        advice.extend(slot.to_le_bytes());
-        advice.extend(u.bytes());
-        if u.is_account() {
-            advice.extend(&keys[slot]);
-        }
+    let mut key_at = BTreeMap::new();
+    for a in &model.read_users {
+        advice.extend(slots[a].to_le_bytes());
+        advice.extend(users[a].bytes());
+        key_at.insert(*a, advice.len());
+        advice.extend(&keys[a]);
     }
     advice.extend((model.read_listings.len() as u32).to_le_bytes());
     for slot in &model.read_listings {
@@ -1481,12 +1513,9 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     }
     advice.extend(signatures.concat());
     advice.resize(advice.len().next_multiple_of(4), 0);
-    for slot in &model.read_users {
-        advice.extend(user_tree.path(*slot));
-        user_tree.set(
-            *slot,
-            model.users.get(slot).copied().unwrap_or_default().leaf(),
-        );
+    for a in &model.read_users {
+        advice.extend(user_tree.path(slots[a]));
+        user_tree.set(slots[a], model.users[a].leaf());
     }
     for slot in &model.read_listings {
         advice.extend(listing_tree.path(*slot));
@@ -1528,9 +1557,28 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         "a byte past the requests is a malformed batch"
     );
 
+    // The first request, from a user who signed it, now from an address no
+    // user has: the advice cannot hold it, and nothing proves it absent.
+    let (buyer, .., how) = batch[0];
+    assert!(how == Signed && buyer != NO_ACCOUNT);
+    let mut stranger = input.clone();
+    stranger[76..108].copy_from_slice(&address(b"no user's key"));
+    let e = run(&image, &common::with_advice(&stranger, &advice)).unwrap();
+    assert_eq!(
+        e.exit_code, 101,
+        "a request from an address the advice does not hold is a malformed batch"
+    );
+
+    // That buyer's key, another user's: its address is not the record's.
+    let other = user(if buyer == user(0) { 1 } else { 0 });
+    let mut swapped = advice.clone();
+    swapped[key_at[&buyer]..][..897].copy_from_slice(&keys[&other]);
+    let e = run(&image, &common::with_advice(&input, &swapped)).unwrap();
+    assert_eq!(e.exit_code, 101, "an advised key that is not its user's");
+
     // The first user's balance, one off: its record no longer opens the
     // users table.
-    advice[128 + 4 + 4 + 64] ^= 1;
+    advice[128 + 4 + 4 + 32] ^= 1;
     let e = run(&image, &common::with_advice(&input, &advice)).unwrap();
     assert_eq!(e.exit_code, 101, "a balance the table does not hold");
 }

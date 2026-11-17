@@ -147,14 +147,16 @@ let signed = key.verify(&request, sig); // a 666-byte signature of the request's
   costs a level row and sixteen round rows a level and no guest cycles; `Digest::bytes(&path)`
   passes a path the guest holds itself.
 - `falcon512::PublicKey::decode(bytes)` reads a Falcon-512 public key, v1.2 of the specification,
-  and `key.verify(msg, sig)` is whether `sig` signs `msg` under it, a malformed signature `false`:
-  the lattice check is the Falcon-512 call, and HashToPoint, a Poseidon2 sponge of the key, the
-  salt and the message ([precompiles.md](spec/precompiles.md) §7.7), is Poseidon2 calls. A
-  standard Falcon-512 signature does not verify; `tools/falcon512` signs under this HashToPoint.
-  Decoding absorbs the key, once, ≈9.9K cycles; verifying a signature of a 64-byte message
-  continues from there, ≈17.5K, and `key.digest()`, the key's KeyDigest, is one permutation from
-  there. `falcon512::key_digest(bytes)` is the KeyDigest of any bytes, and `falcon512::s1_norm`
-  the lattice check alone, for a guest with encodings of its own.
+  and `key.verify(msg, sig, context)` is whether `sig` signs `msg` under it and the application's
+  `context`, at most 255 bytes, a malformed signature `false`: the lattice check is the Falcon-512
+  call, and HashToPoint, a Poseidon2 sponge of the key digest K, the salt, the context and the
+  message ([precompiles.md](spec/precompiles.md) §7.7), is Poseidon2 calls. A standard Falcon-512
+  signature does not verify; `tools/falcon512` signs under this HashToPoint. Decoding computes K
+  from the key's bytes and HashToPoint's per-key prefix from K, once, ≈10.7K cycles; verifying a
+  signature of a 92-byte message under a 25-byte context continues from there, ≈17.7K.
+  `key.key_digest()` is K and `key.address()` the key's address, K's first 32 bytes, which names
+  an account; `falcon512::key_digest(bytes)` and `falcon512::address(bytes)` are any bytes', and
+  `falcon512::s1_norm` the lattice check alone, for a guest with encodings of its own.
 - A precompile's frame is the guest's own memory below the advice region, which the SDK's calls
   always are: advice is copied in before `poseidon2_permute` hashes it, and a frame reaching the
   advice is the fatal `OutOfBounds`. A path's siblings and `s1_norm`'s arrays are not a frame:
@@ -180,9 +182,10 @@ Cutting a guest's cycles has more than one strategy, and two are in use:
   however long the run, so a batch with each listing's operations gathered is one proof a listing.
   The order is the sequencer's policy and becomes part of the batch: the guest proves the order it
   is given and never sorts. Any order is valid input, at a proof a run, and another order can be
-  another result. `guests/amazon`'s advice holds each record its batch reads once, slots
-  ascending, so its batch runs in memory and a record costs one opening and at most one write-back
-  however its requests interleave: there the order costs nothing (§3.3).
+  another result. `guests/amazon`'s advice holds each record its batch reads once, its users by
+  address and its listings by slot, each ascending, so its batch runs in memory and a record costs
+  one opening and at most one write-back however its requests interleave: there the order costs
+  nothing (§3.3).
 
 ### 3.3 A database's state
 
@@ -213,13 +216,17 @@ proved, which no snapshot holds.
 
 `guests/amazon` is the two-table case, its users and its listings two tables of `2^20` slots and
 its snapshot `compress(users_root, listings_root)`, and it opens each record once: its actions are
-purchases, each a 64-byte request its buyer signed with Falcon-512 (§3.1), settled against a
-working set in memory, so a seller may spend later in a batch what it earned earlier in it. A
-user's record holds its key's KeyDigest, checked from the one absorption of the key that each of
-the user's signatures continues from. The
-advice holds every record the batch reads, each once; after the batch each is verified once and,
-where it changed, written back once, its path under its table's root as the writes before it left
-it, and no record is opened per purchase.
+purchases, each a 92-byte request its buyer signed with Falcon-512 (§3.1) under the context
+`apogee/amazon/purchase/v1`, settled against a working set in memory, so a seller may spend later
+in a batch what it earned earlier in it. A user is named by its key's address: its record holds
+the address, a request names its buyer by it and a listing its seller, and the key advised beside
+the record must have that address, computed from the same bytes the user's signatures are
+verified under. The advice holds every record the batch reads, each once, the users ascending by
+address, each with its slot; after the batch each is verified once and, where it changed, written
+back once, its path under its table's root as the writes before it left it, and no record is
+opened per purchase. Until the users table is keyed by address it is assumed to hold each address
+at most once, and a request from an address the advice does not hold is a malformed batch, as
+nothing proves an address absent.
 
 ## 4. Build it
 

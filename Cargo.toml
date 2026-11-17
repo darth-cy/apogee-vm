@@ -90,8 +90,9 @@ postcard = { version = "1", default-features = false }
 sha3 = "0.10"
 
 # Test only. Falcon-512 with Poseidon2's HashToPoint, the host's half: keys,
-# signatures and KeyDigest, which the SDK's verifier and `guests/amazon` are
-# held to. Never linked by the prover, the verifier or a guest.
+# signatures, the key digest and the address, which the SDK's verifier and
+# `guests/amazon` are held to. Never linked by the prover, the verifier or a
+# guest.
 apogee-falcon512 = { path = "tools/falcon512/rust" }
 
 # Test only. Falcon-512 keys from a seed, `tools/falcon512/rust`'s keygen.

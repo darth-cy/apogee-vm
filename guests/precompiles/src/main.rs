@@ -9,7 +9,7 @@
 //! `poseidon2_compress` gives, then a run of them long enough that a path's
 //! levels straddle a shard; Falcon-512's lattice check of the three arrays the
 //! public input carries, once and then their rotations in turn; and Falcon-512
-//! verification of the keys, messages and signatures it carries.
+//! verification of the keys, messages, contexts and signatures it carries.
 //!
 //! # The public input
 //!
@@ -25,8 +25,8 @@
 //!           c        512 u16 LE
 //!           more     u32 LE          s1_norm calls after the first
 //!   then    cases    u32 LE          Falcon-512 verifications, each a key, a
-//!                                    message and a signature, each a u32 LE
-//!                                    length and its bytes
+//!                                    message, a context and a signature, each
+//!                                    a u32 LE length and its bytes
 //! ```
 //!
 //! # The journal
@@ -50,8 +50,9 @@
 //!   falcon512::s1_norm              u64: the sum of more calls', call k's
 //!                                   arrays the input's rotated k times: (s2,
 //!                                   c, h), (c, h, s2), (h, s2, c), …
-//!   PublicKey::verify               a byte a case: 1 the signature verifies,
-//!                                   0 it does not, 2 the key does not decode
+//!   PublicKey::verify               a byte a case: 1 the signature verifies
+//!                                   under the context, 0 it does not, 2 the
+//!                                   key does not decode
 //! ```
 //!
 //! With 126 runs the depth-20 path is levels 4,080 to 4,099: it straddles
@@ -198,9 +199,9 @@ fn main() {
             read += 4 + len;
             &input[read - len..read]
         };
-        let (key, message, signature) = (field(), field(), field());
+        let (key, message, context, signature) = (field(), field(), field(), field());
         put(&[match PublicKey::decode(key) {
-            Some(key) => key.verify(message, signature) as u8,
+            Some(key) => key.verify(message, signature, context) as u8,
             None => 2,
         }]);
     }

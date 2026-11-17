@@ -15,7 +15,7 @@ program.workspace = true
 trace.workspace = true
 
 [dev-dependencies]
-# Falcon-512 keys, signatures and KeyDigest under Poseidon2's HashToPoint,
+# Falcon-512 keys, signatures and addresses under Poseidon2's HashToPoint,
 # which the SDK's verifier and `guests/amazon` are held to.
 apogee-falcon512.workspace = true
 # `tests/guests.rs` reads `tools/falcon512/vectors.json`, the other

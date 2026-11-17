@@ -1,11 +1,12 @@
 //! Falcon-512 with Poseidon2's HashToPoint: v1.2 of its specification (the
-//! NIST round-3 submission) in all but HashToPoint, the map from the public
-//! key, the salt and the message to the point `c`, which is a Poseidon2-A64-C5
-//! sponge (`docs/spec/precompiles.md` §7.7). The lattice check is the
-//! precompile's (`constants::delegation::falcon`, §7), the sponge's
-//! permutations [`poseidon2_permute`]'s, and the rest is here, in software:
-//! the public key's and the signature's encodings, HashToPoint's sponge and
-//! sampler, and KeyDigest.
+//! NIST round-3 submission) in all but HashToPoint, the map to the point `c`,
+//! which is a Poseidon2-A64-C5 sponge over the key digest K, the salt, the
+//! application's context and the message (`docs/spec/precompiles.md` §7.7). K
+//! is a sponge over the key's bytes, and the key's address K's first 32 bytes.
+//! The lattice check is the precompile's (`constants::delegation::falcon`,
+//! §7), the sponges' permutations [`poseidon2_permute`]'s, and the rest is
+//! here, in software: the public key's and the signature's encodings, K, and
+//! HashToPoint's sponge and sampler.
 
 use constants::delegation::falcon::{self, C, FRAME, H, N, NORM_HI, NORM_LO, S2};
 
@@ -29,8 +30,14 @@ pub const SIGNATURE_BYTES: usize = 666;
 /// compressed and the padding.
 const COMPRESSED: usize = SIGNATURE_BYTES - 41;
 
-/// The sponge's first field, which names the construction.
-const CONTEXT: &[u8] = b"apogee/falcon512/hash-to-point/v1";
+/// K's first fields, its use and then the key's scheme, and HashToPoint's,
+/// which names the construction.
+const KEY_DOMAIN: &[u8] = b"apogee/key/v1";
+const SCHEME_ID: &[u8] = b"falcon512-poseidon2/v1";
+const SIGNATURE_DOMAIN: &[u8] = b"apogee/falcon512/hash-to-point/v1";
+
+/// A context's most bytes, FIPS 204's and 206's bound.
+const MAX_CONTEXT_BYTES: usize = 255;
 
 /// The largest multiple of `q^4` below `p`, `808·q^4`: a lane below it is
 /// four uniform coefficients, and one at or above it, about one in a
@@ -46,11 +53,14 @@ const Q4: u64 = falcon::Q.pow(4);
 #[repr(C, align(4))]
 pub struct Poly(pub [u16; N]);
 
-/// A Falcon-512 public key: the polynomial `h`, each coefficient below `q`,
-/// and its bytes absorbed, the sponge HashToPoint and KeyDigest continue from.
+/// A Falcon-512 public key: the polynomial `h`, each coefficient below `q`;
+/// K, the [`key_digest`] of the bytes `h` was decoded from; and HashToPoint's
+/// sponge after the two fields every signature under the key begins with,
+/// `(1, SIGNATURE_DOMAIN)` and `(2, K)`, its 64 bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicKey {
     h: Poly,
+    k: Digest,
     prefix: Sponge,
 }
 
@@ -58,36 +68,48 @@ impl PublicKey {
     /// The key `bytes` encode: exactly [`PUBLIC_KEY_BYTES`], the header
     /// `0x09`, then `h`'s coefficients in order, 14 bits each, packed
     /// big-endian, each below `q`. `None` for any other bytes, so a key has
-    /// one encoding. The bytes are read first and absorbed only once they
-    /// decode: 17 permutations, once a key.
+    /// one encoding. The bytes are read first, and only once they decode is K
+    /// computed from them, 18 permutations, and HashToPoint's per-key prefix
+    /// from K, 2: once a key.
     // Inline: the key is then built in the caller's frame, not copied there.
     #[inline]
     pub fn decode(bytes: &[u8]) -> Option<PublicKey> {
         let mut key = PublicKey {
             h: Poly([0; N]),
+            k: Digest([0; 8]),
             prefix: Sponge::ZERO,
         };
         if !unpack(bytes, &mut key.h) {
             return None;
         }
-        key.prefix.prefix(bytes);
+        key.k = key_digest(bytes);
+        key.prefix.field(1, SIGNATURE_DOMAIN);
+        key.prefix.field(2, &le_bytes::<64>(&key.k));
         Some(key)
     }
 
-    /// The key's KeyDigest, [`key_digest`] of its bytes: from its prefix, one
-    /// permutation.
-    pub fn digest(&self) -> Digest {
-        self.prefix.clone().digest()
+    /// K, the key digest of the key's bytes.
+    pub fn key_digest(&self) -> &Digest {
+        &self.k
     }
 
-    /// Whether `sig` is a signature of `msg` under this key: exactly
-    /// [`SIGNATURE_BYTES`], the header `0x39`, the salt, then `s2`
-    /// compressed, each coefficient `s` its sign bit, the low 7 bits of `|s|`,
-    /// then `|s| >> 7` zeros and a one, none `−0` and none above 2047 in size,
-    /// and zeros to the end; and `‖s1‖² + ‖s2‖²` at most [`SQBETA`], where
-    /// `s1 = c − s2·h` and `c` is HashToPoint of the key, the salt and `msg`.
-    /// The lattice check is [`s1_norm`]'s, the rest is read here.
-    pub fn verify(&self, msg: &[u8], sig: &[u8]) -> bool {
+    /// The key's address: K's first 32 bytes.
+    pub fn address(&self) -> [u8; 32] {
+        le_bytes(&self.k)
+    }
+
+    /// Whether `sig` is a signature of `msg` under this key and `context`:
+    /// `context` at most 255 bytes; `sig` exactly [`SIGNATURE_BYTES`], the
+    /// header `0x39`, the salt, then `s2` compressed, each coefficient `s` its
+    /// sign bit, the low 7 bits of `|s|`, then `|s| >> 7` zeros and a one,
+    /// none `−0` and none above 2047 in size, and zeros to the end; and
+    /// `‖s1‖² + ‖s2‖²` at most [`SQBETA`], where `s1 = c − s2·h` and `c` is
+    /// HashToPoint of K, the salt, `context` and `msg`. The lattice check is
+    /// [`s1_norm`]'s, the rest is read here.
+    pub fn verify(&self, msg: &[u8], sig: &[u8], context: &[u8]) -> bool {
+        if context.len() > MAX_CONTEXT_BYTES {
+            return false;
+        }
         let Some(([0x39, salt @ ..], compressed)) = sig.split_first_chunk::<41>() else {
             return false;
         };
@@ -99,18 +121,39 @@ impl PublicKey {
             return false;
         };
         let mut c = Poly([0; N]);
-        hash_to_point(&self.prefix, salt, msg, &mut c);
+        hash_to_point(&self.prefix, salt, context, msg, &mut c);
         s1_norm(&self.h, &s2, &c) + s2_norm as u64 <= SQBETA
     }
 }
 
-/// KeyDigest of `bytes`, an account's fingerprint (`docs/spec/precompiles.md`
-/// §7.7): defined for any bytes, a key that does not decode included. A
-/// decoded key's is [`PublicKey::digest`], which does not absorb it again.
+/// K, the key digest of `bytes` (`docs/spec/precompiles.md` §7.7): the first
+/// eight lanes of the squeeze stream after the fields `(1, KEY_DOMAIN)`,
+/// `(2, SCHEME_ID)` and `(3, bytes)`, canonical as the call writes them.
+/// Defined for any bytes, a key that does not decode included; a decoded
+/// key's is [`PublicKey::key_digest`], computed once.
 pub fn key_digest(bytes: &[u8]) -> Digest {
     let mut sponge = Sponge::ZERO;
-    sponge.prefix(bytes);
-    sponge.digest()
+    sponge.field(1, KEY_DOMAIN);
+    sponge.field(2, SCHEME_ID);
+    sponge.field(3, bytes);
+    poseidon2_permute(&mut sponge.state);
+    Digest(core::array::from_fn(|i| sponge.state[i]))
+}
+
+/// The address of `bytes`: their [`key_digest`]'s first 32 bytes, lanes 0 to
+/// 3, each little-endian. A decoded key's is [`PublicKey::address`].
+pub fn address(bytes: &[u8]) -> [u8; 32] {
+    le_bytes(&key_digest(bytes))
+}
+
+/// `k`'s first `B / 8` lanes, each little-endian: its 64 canonical bytes, or
+/// the address.
+fn le_bytes<const B: usize>(k: &Digest) -> [u8; B] {
+    let mut bytes = [0; B];
+    for (eight, lane) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(k.lanes()) {
+        *eight = lane.to_le_bytes();
+    }
+    bytes
 }
 
 /// [`PublicKey::decode`]'s `h` into `h`: whether `bytes` encode one.
@@ -219,7 +262,7 @@ impl Reader<'_> {
 }
 
 /// Poseidon2-A64-C5's overwrite duplex from the zero state, rate 8 and
-/// capacity 8, without padding: HashToPoint's sponge and KeyDigest's. A lane
+/// capacity 8, without padding: K's sponge and HashToPoint's. A lane
 /// absorbed overwrites the next rate lane, the state permuted first when the
 /// rate is full; the squeeze stream is a permutation then the rate's eight
 /// lanes, again and again.
@@ -236,13 +279,6 @@ impl Sponge {
         state: [0; 16],
         at: 0,
     };
-
-    /// A key's prefix from the zero state: the fields `(1, CONTEXT)` and
-    /// `(2, key)`, where HashToPoint and KeyDigest both begin.
-    fn prefix(&mut self, key: &[u8]) {
-        self.field(1, CONTEXT);
-        self.field(2, key);
-    }
 
     /// The field `tag`, `bytes`: the tag, the length in bytes, then the bytes
     /// seven to a lane, little-endian, the last chunk shorter, each lane below
@@ -272,24 +308,17 @@ impl Sponge {
         });
         self.at = at;
     }
-
-    /// KeyDigest from a key's prefix: an empty field tagged 5, then the
-    /// squeeze stream's first eight lanes, canonical as the call writes them.
-    fn digest(mut self) -> Digest {
-        self.field(5, &[]);
-        poseidon2_permute(&mut self.state);
-        Digest(core::array::from_fn(|i| self.state[i]))
-    }
 }
 
-/// HashToPoint into `c`: from a key's prefix, the fields `(3, salt)` and
-/// `(4, msg)`, then each lane `x` of the squeeze stream below [`T`] the next
-/// four coefficients, `⌊x / q^j⌋ mod q` for `j < 4`, the others skipped, until
-/// 512.
-fn hash_to_point(prefix: &Sponge, salt: &[u8; 40], msg: &[u8], c: &mut Poly) {
+/// HashToPoint into `c`: from a key's prefix, the fields `(3, salt)`,
+/// `(4, context)` and `(5, msg)`, then each lane `x` of the squeeze stream
+/// below [`T`] the next four coefficients, `⌊x / q^j⌋ mod q` for `j < 4`, the
+/// others skipped, until 512.
+fn hash_to_point(prefix: &Sponge, salt: &[u8; 40], context: &[u8], msg: &[u8], c: &mut Poly) {
     let mut sponge = prefix.clone();
     sponge.field(3, salt);
-    sponge.field(4, msg);
+    sponge.field(4, context);
+    sponge.field(5, msg);
     let mut fours = c.0.as_chunks_mut::<4>().0.iter_mut();
     loop {
         poseidon2_permute(&mut sponge.state);
