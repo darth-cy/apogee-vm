@@ -55,8 +55,8 @@ in when they are bound ([memory.md](memory.md) §8).
 A virtual table is a closed form, evaluated per row by `gkr_verify::virtual_at_row` and at a point
 by `virtual_at_point`, never materialized, committed or claimed. Each form is its table's
 multilinear extension, so the verifier evaluates what the prover sums
-(`crates/gkr/tests/{lookup,ram_live}.rs` check all but `V[row]`). Wire form: a `u32`, in table
-order from 0.
+(`crates/gkr/tests/{lookup,ram_live}.rs` check all but `V[row]` and the three `XOR8` kinds). Wire
+form: a `u32`, in table order from 0.
 
 | kind | notation | value at row `y` | closed form at `(y_0, …, y_{n−1})` |
 | --- | --- | --- | --- |
@@ -64,9 +64,13 @@ order from 0.
 | `RamLive` | `V[ram_live]` | 1 if `y ≥ 2^14`, else 0 | `1 − Π_{14≤j<n} (1 − y_j)`; 0 if `n ≤ 14` |
 | `Range19` | `V[range19]` | `y mod 2^19` | `Σ_{j<min(19,n)} 2^j·y_j` |
 | `Range16` | `V[range16]` | `y mod 2^16` | `Σ_{j<min(16,n)} 2^j·y_j` |
+| `Xor8A` | `V[xor8_a]` | `a = y mod 2^8` | `Σ_{j<8} 2^j·y_j` |
+| `Xor8B` | `V[xor8_b]` | `b = ⌊y/2^8⌋ mod 2^8` | `Σ_{j<8} 2^j·y_{j+8}` |
+| `Xor8Out` | `V[xor8_out]` | `a ⊕ b` | `Σ_{j<8} 2^j·(y_j + y_{j+8} − 2·y_j·y_{j+8})` |
 
-14 is `constants::memory::RAM_LIVE_BIT` ([memory.md](memory.md) §3); the range kinds are channel
-tables ([lookup.md](lookup.md) §3).
+14 is `constants::memory::RAM_LIVE_BIT` ([memory.md](memory.md) §3); the range and `XOR8` kinds are
+channel tables ([lookup.md](lookup.md) §3), an `XOR8` form taking `y_j = 0` for `j ≥ n` as the range
+forms do. `Xor8Out`'s form is multilinear because `y ⊕ z = y + z − 2yz` is.
 
 ## 3. Gate shapes
 

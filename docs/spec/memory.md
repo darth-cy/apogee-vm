@@ -279,9 +279,9 @@ its own verification.
 
 **The count.** Read each query as an edge from its read tuple to its write tuple. Inits are only
 written and finals only read, so a balanced multiset is paths from inits to finals plus loops. A
-statement has fewer than `2^59` rows, under `2^32` shards a family (a `u32` count), 18 families,
-at most `2^22` rows (the menu's top), and fewer than `2^65` tuples, at most 81 a row
-(`POSEIDON2`'s frame row, both sides) and 66 boundary tuples.
+statement has fewer than `2^59` rows, under `2^32` shards a family (a `u32` count), 24 families,
+at most `2^22` rows (the menu's top), and fewer than `2^66` tuples, at most 123 a row (a `KECCAK`
+frame row, both sides) and 66 boundary tuples.
 
 - **The pc.** A live row is one pc edge, and `pc_step` advances it by exactly 4 (§2.4). A loop of
   `k` edges needs `4k ≡ 0 mod p`, so `k ≥ p` rows, more than a statement has. The live rows are
@@ -289,12 +289,12 @@ at most `2^22` rows (the menu's top), and fewer than `2^65` tuples, at most 81 a
   four times the path's length and below `2^38` (§4.1): every live row's `cycle` is an integer
   below `2^36`.
 - **Every other write** is a live row's query at `4·cycle + Δ` (§2.1's mask rule), or a precompile's
-  word at `4·cycle + FRAME_DELTA` of the ecall row that requested it, whose cycle the frame row
-  reads through the anchor and a Merkle level through its call's state
-  ([precompiles.md](precompiles.md) §2, §6). Every write timestamp, init or not, is therefore an
-  integer below `2^38`, and so is every read one, which equals a write's. Each gap holds over the
-  integers (§2.4), every edge strictly advances, and nothing loops: every path starts at an init at
-  timestamp 0 and ends at a final.
+  word at `4·cycle + FRAME_DELTA` of the ecall row that requested it, whose cycle a frame row
+  reads through the anchor and any other row through its call's state: a Merkle level, a `KECCAK`
+  plane row past the first, a `FALCON_SPLIT` row ([precompiles.md](precompiles.md) §2, §6, §7,
+  §8). Every write timestamp, init or not, is therefore an integer below `2^38`, and so is every
+  read one, which equals a write's. Each gap holds over the integers (§2.4), every edge strictly
+  advances, and nothing loops: every path starts at an init at timestamp 0 and ends at a final.
 
 ## 5. Halting
 
@@ -385,7 +385,7 @@ identity (§6.1).
 
 Both sides of §4.2 are products of linear forms in `(γ_M, α_addr, α_ts, α_val, α_hi)`, one per distinct
 tuple, every tuple fixed before those are drawn (§6.1, §8). By Schwartz–Zippel they agree on
-unequal multisets with probability at most `N/|Fp2| = N/p^2`, below `2^−63` at `N < 2^65` (§4.2),
+unequal multisets with probability at most `N/|Fp2| = N/p^2`, below `2^−62` at `N < 2^66` (§4.2),
 and on equal ones §4.2's paths give:
 
 - **One init per address** of `REG`, `PC` and `RAM`: the 33 boundary inits once per statement,

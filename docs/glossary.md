@@ -44,7 +44,7 @@ the literature fixes (GKR, LogUp, RISC-V) are not listed.
 | multiplicity | a channel's `W` column counting each table row's lookups | [lookup.md §7](spec/lookup.md) |
 | padding contract | `padding.row` makes row-local relations vanish and tree inputs 1 | [gkr.md §4](spec/gkr.md) |
 | pass 1, pass 2 | executing to fix the statement; again to prove each shard | [streaming.md §2](spec/streaming.md) |
-| precompile, delegation | an ecall a circuit of its own answers over a frame: the Poseidon2 permutation, `mul_div_u256`, a Merkle path's root | [precompiles.md](spec/precompiles.md) |
+| precompile, delegation | an ecall a circuit of its own answers over a frame: the Poseidon2 permutation, `mul_div_u256`, a Merkle path's root, Keccak-f[1600], the Falcon-512 lattice check | [precompiles.md](spec/precompiles.md) |
 | public window | windows 2 and 3 at `2^12`: input at `0x8000`, journal at `0xC000` | [public-values.md §2](spec/public-values.md) |
 | query | one read and one write at one address in one cycle | [execution-trace.md §3](spec/execution-trace.md) |
 | reconciliation | `∏ read roots · R_b = ∏ write roots · W_b`, once a statement | [memory.md §4](spec/memory.md) |

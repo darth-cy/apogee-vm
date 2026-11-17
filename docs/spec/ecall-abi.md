@@ -29,16 +29,18 @@ Every number this VM implements.
 | `0x0510` | `POSEIDON2` | deterministic | the Poseidon2-A64-C5 permutation of the 16 lanes at `a0`, two little-endian words each, in place; a lane read mod `p`, written canonical |
 | `0x0511` | `MUL_DIV_U256` | deterministic | `a`, `b`, `d` at `a0`, eight little-endian words each, become `⌊a·b/d⌋`, `a·b mod d`, `d`; the caller owes `d ≠ 0` and a quotient below `2^256`, which the emulator refuses as `DelegationFrame` |
 | `0x0512` | `MERKLE_ROOT` | deterministic | the 19 words at `a0`, a leaf's 8 lanes, its slot, the depth and the siblings' address, get the path's root over the lanes; the caller owes a depth in `16..=32`, a slot below `2^depth` and word-aligned siblings clear of the frame, which the emulator refuses as `DelegationFrame` ([precompiles.md](precompiles.md) §6) |
+| `0x0513` | `KECCAK_F1600` | deterministic | Keccak-f[1600] (FIPS 202, 24 rounds) of the 25 lanes at `a0`, in place, lane `i` words `2i` (low) and `2i + 1` (high); any 50 words are a state ([precompiles.md](precompiles.md) §7) |
+| `0x0514` | `FALCON512` | deterministic | the Falcon-512 lattice check over the 5 words at `a0`: the addresses of `h`, `s2` and `c`, 512 `u16` coefficients each, every one read mod `q = 12289`, then `‖s1‖²`'s low and high words, written, `s1 = (c − s2·h) mod (q, x^512 + 1)` centered; the caller owes word-aligned arrays disjoint from each other and the frame, which the emulator refuses as `DelegationFrame` ([precompiles.md](precompiles.md) §8) |
 
 A class says who chooses the result. **deterministic**: a function of the guest's own state, which
-a circuit proves. **advice**: chosen by the prover; no number has it. A proof admits these four:
+a circuit proves. **advice**: chosen by the prover; no number has it. A proof admits these six:
 `ADD_SUB_LUI_AUIPC` holds an exit row's `a7` to 93, and a delegation call's row writes an anchor only
 the family of its number reads ([precompiles.md](precompiles.md) §2). A delegation call preserves
 `a0`, as every register; its frame is a word-aligned span a store could write, each word checked as
 one, below `ADVICE_ORIGIN` (§5): a frame reaching the advice is the fatal `OutOfBounds`
-([precompiles.md](precompiles.md) §1). `MERKLE_ROOT`'s siblings are not its frame: it reads them,
-each word checked and bounded as a load's, and they may lie anywhere a load reaches, the advice
-included.
+([precompiles.md](precompiles.md) §1). `MERKLE_ROOT`'s siblings and `FALCON512`'s arrays are not
+their frames: each call reads them, each word checked and bounded as a load's, and they may lie
+anywhere a load reaches, the advice included.
 
 ## 3. Retired numbers
 
@@ -132,8 +134,8 @@ makes them true:
 
 ## 6. The guest-sdk surface
 
-`crates/guest-sdk` is the guest's runtime. Only `exit` and the three precompiles' shims issue an
-ecall; the rest is loads and stores.
+`crates/guest-sdk` is the guest's runtime. Only `exit` and the precompiles' shims issue an ecall;
+the rest is loads and stores.
 
 | Item | What |
 | --- | --- |
@@ -149,6 +151,8 @@ ecall; the rest is loads and stores.
 | `poseidon2_permute(state)`, `Digest`, `poseidon2_compress(l, r)` | `POSEIDON2` over a `[u64; 16]`; 8 lanes, each below `p`; and a Merkle node over two `Digest`s ([precompiles.md](precompiles.md) §5) |
 | `U256` | a 256-bit integer; its division and `mul_div` are `MUL_DIV_U256` |
 | `merkle_root(slot, leaf, siblings)`, `Digest::bytes(path)` | `MERKLE_ROOT` over a path of `siblings.len() / 64` siblings, which may be advice read in place; a `Digest` path as those bytes ([precompiles.md](precompiles.md) §5) |
+| `keccak_f1600(state)`, `Shake256` | `KECCAK_F1600` over a `[u64; 25]`, in place; SHAKE256 over it, absorbing, finalizing and squeezing bytes ([precompiles.md](precompiles.md) §5) |
+| `falcon512::s1_norm(h, s2, c)`, `falcon512::Poly` | `FALCON512` over three word-aligned `[u16; 512]`, which may be advice read in place: `‖s1‖²` ([precompiles.md](precompiles.md) §5) |
 
 ## 7. The C ABI
 
@@ -165,6 +169,8 @@ calling it.
 | `void apogee_poseidon2_permute(uint64_t state[16])` | `poseidon2_permute` |
 | `int32_t apogee_mul_div_u256(a, b, d, q, r)` | `U256::mul_div_rem` over four-limb arrays: 0, or 1 and nothing written where it is `None` |
 | `int32_t apogee_merkle_root(slot, depth, leaf, siblings, root)` | `merkle_root` over `depth` siblings: 0, or 1 and nothing written where its precondition or the leaf's `Digest::new` fails |
+| `void apogee_keccak_f1600(uint64_t state[25])` | `keccak_f1600`, `state` 8-aligned and below the advice region |
+| `uint64_t apogee_falcon512_s1_norm(h, s2, c)` | `falcon512::s1_norm` over three `uint16_t[512]`, each 4-aligned, the three apart: a panic, exit 101, otherwise |
 
 The library's `_start` is crt0's (§5): it runs the guest's static initializers and calls its own
 `int main(void)`, exiting with what it returns; the header declares `main` with C linkage, which a

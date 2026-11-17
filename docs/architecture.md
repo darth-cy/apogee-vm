@@ -44,11 +44,10 @@ blinded.
 2. **Execution.** `emulator` runs the guest. A cycle is one row of the family that owns its
    instruction, recording its memory queries: timestamped reads and writes of the pc, registers and
    RAM ([execution-trace.md](spec/execution-trace.md)). A guest issues no system call but `EXIT`
-   and the precompile calls, the Poseidon2 permutation, a 256-bit `mul_div` and a Merkle path's
-   root, each a frame of RAM a circuit of its own answers ([precompiles.md](spec/precompiles.md)):
-   its input, journal and
-   advice are regions of memory ([public-values.md](spec/public-values.md),
-   [ecall-abi.md](spec/ecall-abi.md)).
+   and the precompile calls, the Poseidon2 permutation, a 256-bit `mul_div`, a Merkle path's
+   root, Keccak-f[1600] and the Falcon-512 lattice check, each a frame of RAM a circuit of its own
+   answers ([precompiles.md](spec/precompiles.md)): its input, journal and advice are regions of
+   memory ([public-values.md](spec/public-values.md), [ecall-abi.md](spec/ecall-abi.md)).
 3. **Shards.** A family's rows are cut into **shards** of the family's height, a power of two
    between `2^12` and `2^22`. The memory an execution touches is covered by shards of the window
    families, which give each word its initial and final tuple ([memory.md](spec/memory.md) §3). A
@@ -76,7 +75,7 @@ opening ties those to the committed columns. On top of that, these arguments spa
 | a row's instruction is the program's at its pc | a lookup of the row's pc and fields in the family's decoded table, which the identity commits | [lookup.md](spec/lookup.md) §10 |
 | every read returns the last write | one multiset over all shards: an access reads a tuple `(space, address, timestamp, value)` and writes one with a later timestamp; the verifier multiplies every shard's read and write roots against boundary factors for the registers and the pc | [memory.md](spec/memory.md) |
 | the rows are one path from the entry pc to the exit, in program order | the pc is a cell of that multiset: a row reads its pc and writes the next one exactly four timestamps later, so shard order, cycle uniqueness and continuity need no other argument | [memory.md](spec/memory.md) §5, §9 |
-| a value is in range, a sign, a byte-wise AND | LogUp channels over range tables and the generic table | [lookup.md](spec/lookup.md) |
+| a value is in range, a sign, a byte-wise AND or XOR | LogUp channels over range tables, the generic table and the byte table `XOR8` | [lookup.md](spec/lookup.md) |
 | the public input and the journal are the claimed bytes | the two public windows' initial and final columns, held to the bytes' multilinear extensions | [public-values.md](spec/public-values.md) §5 |
 
 Challenges come from a Poseidon2 duplex transcript over A64-C5, each an element of its quadratic

@@ -61,19 +61,32 @@ only at `s ∈ {0, 1}`. At any other `s` a scaled tuple is looked up instead: on
 | `RANGE16` | 1 | range | `V[range16]`: `y mod 2^16` | 1 | 16 |
 | `GENERIC` | 2 | table, committed | the packed table (§9) | 3 | 0 |
 | `DECODER` | 3 | table, committed | the family's decoded table (§10) | 7 or 6 | 0 |
+| `XOR8` | 4 | table, virtual | `V[xor8_a]`, `V[xor8_b]`, `V[xor8_out]`: `y`'s low two bytes and their XOR | 3 | 16 |
 
 A virtual table is a closed form of the row index, never committed: the verifier evaluates its
 multilinear extension where the GKR pass ends (`gkr_verify::virtual_at_point`, [gkr.md](gkr.md) §2).
-Each is a weighted sum of the row's bits.
+Each is a weighted sum of the row's bits but `V[xor8_out]`, whose form is exact because
+`y ⊕ z = y + z − 2yz` is multilinear ([gkr.md](gkr.md) §2.1). So `XOR8`'s table is no column,
+committed or setup; the channel commits its multiplicity alone (§7).
 
 `constraints::lookup::table_vars` is the fewest variables at which a table is complete: `BITS` for a
-range channel, 0 for a committed table, a setup column at the circuit's own height.
+range channel, 16 for `XOR8`, 0 for a committed table, a setup column at the circuit's own height.
 Below it a virtual table holds only part of its range, which costs completeness, not soundness.
 `family_circuit` returns `None` below the largest `table_vars` of a family's channels, so a key
 naming such a height fails to load ([proof.md](proof.md) §7). On the height menu
 ([program.md](program.md) §7) a family carrying `TIMESTAMP` is at `2^20` or more, and one carrying
-`RANGE16` at `2^16` or more. The packed table needs `2^18` rows (§9), and every family that reads
-it carries `TIMESTAMP`. Above `table_vars` a table repeats, which §7 makes harmless.
+`RANGE16` or `XOR8` at `2^16` or more. The packed table needs `2^18` rows (§9), and every family
+that reads it carries `TIMESTAMP`. Above `table_vars` a table repeats, which §7 makes harmless.
+
+`XOR8`'s tuple is three wide so that membership bounds each entry to `[0, 256)` on its own; a packed
+key `x + 256·y` would bound neither, `(x, y)` and `(x + 256, y − 1)` compressing alike. From one
+lookup `(a, b, e)`, `a ∧ b = (a + b − e)/2` and `¬a ∧ b = (b − a + e)/2` are linear, and a byte
+splits at a bit as one lookup against a mask, so every bitwise operation on bytes is a linear form
+over lookups' entries ([precompiles.md](precompiles.md) §7). Such a form goes at position 0, the
+one that takes weights and a constant (§5): `delegation::Builder::xor8` takes it as its `a`, and
+its `b` and `c` weight their columns by 1 with no constant. A delegation family may read
+`RANGE16`, `XOR8` or both, each obligation under `live` or another boolean column
+(`range16_under`, `xor8_under`).
 
 ## 4. Gated keys
 
@@ -82,13 +95,13 @@ to a **neutral** tuple, which is a real table row:
 
 | gating | channels | gated position `j` | neutral tuple |
 | --- | --- | --- | --- |
-| `NoOffset` | `TIMESTAMP`, `RANGE16` | `s·e_j` | all zero |
+| `NoOffset` | `TIMESTAMP`, `RANGE16`, `XOR8` | `s·e_j` | all zero |
 | `ZeroEntry` | `GENERIC` | `s·(e_0 + 1)`, then `s·e_j` | the all-zero `ZeroEntry` row |
 | `MinusOne` | `DECODER` | `s·(e_j + 1) − 1` | −1 in every column, a padding row |
 
 The `+ 1` keeps every real key of the packed table at 1 or above, so no real entry is the all-zero
 tuple a switched-off row looks up. A range table needs no offset, 0 being in range, and one would
-push `2^BITS − 1` out of it. A decoded table has no all-zero
+push `2^BITS − 1` out of it; `XOR8`'s `(0, 0, 0)` is a true entry. A decoded table has no all-zero
 row, pc 0 being a valid pc, and its `MINUS_ONE` padding rows ([program.md](program.md) §5) are the
 neutral entry.
 
@@ -254,9 +267,9 @@ under the same selector.
 - **Every gated tuple is a table row**: §1's identity over challenges drawn after every column it
   reads (§2), boolean selectors (§2), both root conditions (§8) and
   the GKR pass. The error is at most
-  fractions/`|Fp2|` for `g`, plus looked-up tuples × table rows × (width − 1)/`|Fp2|` for a `β`
-  collision, which only the decoder and generic channels have: below `2^−79` a shard at every menu
-  height.
+  fractions/`|Fp2|` for `g`, plus looked-up tuples × distinct table rows × (width − 1)/`|Fp2|` for
+  a `β` collision, which only the decoder, generic and `XOR8` channels have: below `2^−79` a shard
+  at every menu height.
 - **A lookup answers from its own sub-table**: one width per channel (§11), disjoint key ranges and
   the `+ 1` (§9), and its family's bound on the key (§4).
 - **A switched-off row costs nothing**: its neutral tuple is a table row the multiplicity counts
