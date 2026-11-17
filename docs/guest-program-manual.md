@@ -117,8 +117,8 @@ fn main() {
 - **Every failure ends the run.** Whatever makes the input or the advice malformed, a record that
   does not open, a signature that does not verify, an advice byte too many, ends the execution, a
   panic or a precompile's refusal, and is never a validity flag the guest carries on with: nothing
-  malformed has a proof of a run that exits 0, and no outcome turns on the prover's choice of
-  advice. The SDK's Falcon-512 calls answer so ([precompiles.md](spec/precompiles.md) §5).
+  malformed has a proof of a run that exits 0, and no check of the advice decides an outcome. The
+  SDK's Falcon-512 calls answer so ([precompiles.md](spec/precompiles.md) §5).
 - **The advice is as compact as soundness allows.** It holds only what the state transition uses:
   business data, signed or opened against the state, and what attests it, a key, a signature, a
   Merkle path; no byte that is format alone, a constant header, padding or trailing zeros. Every
@@ -237,18 +237,19 @@ purchases, each a 92-byte request its buyer signed with Falcon-512 (§3.1) under
 in a batch what it earned earlier in it. A user is named by its key's address: its record holds
 the address, a request names its buyer by it and a listing its seller, and the key advised at its
 first signature must have that address, computed from the same bytes the user's signatures are
-verified under. The signatures are advice, so none decides an outcome: an outcome that turned on
-one would publish what the prover chose (§3), a valid request advised a bad signature and
-rejected. A request is rejected only for its market, its buyer or its nonce, which the public
-input and the snapshot hold, and one past those checks carries a signature that verifies under its
-buyer's key, or the batch is malformed. The sequencer verifies the signatures before it batches
-the requests and drops a request whose signature does not verify, as a rollup's block producer
-does. The advice holds every record the batch reads and no other, each once, the users ascending by
-address, each with its slot; after the batch each is verified once and, where it changed, written
-back once, its path under its table's root as the writes before it left it, and no record is
-opened per purchase. Keys and signatures follow the records in the SDK's compact forms, a key only
-at its user's first signature and a signature only for a request that reaches its check, each a
-whole number of words read in place, and a byte after the last path is a panic. Until the users
+verified under. The requests and their signatures are advice the prover chooses (§3), and the
+public input is the snapshot and the market alone: the statement is that signed requests, each its
+buyer's at that buyer's nonce, take the snapshot to the next. So a proof does not say which requests
+a batch settled, only that each was signed and valid for this store and snapshot. A request for
+another market, from the zero address or not at its buyer's nonce, or one whose signature does not
+verify under its buyer's key, is a malformed batch, a panic. The sequencer checks the requests and
+their signatures before it batches them and drops each one that is not valid, as a rollup's block
+producer does. The advice holds every record the batch reads and no other, each once, the users
+ascending by address, each with its slot; after the batch each is verified once and, where it
+changed, written back once, its path under its table's root as the writes before it left it, and no
+record is opened per purchase. After the records come the requests, each followed by its user's
+key, only at the user's first, and its signature, in the SDK's compact forms, each a whole number
+of words read in place, and a byte after the last path is a panic. Until the users
 table is keyed by address it is assumed to hold each address at most once, and a request from an
 address the advice does not hold is a malformed batch, as nothing proves an address absent.
 
