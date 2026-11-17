@@ -1,12 +1,15 @@
-//! The four precompiles over a real execution, `guests/precompiles` built
-//! from source, in ordinary CI and without a proof (`docs/spec/precompiles.md`):
+//! Five of the six precompiles over a real execution, `guests/precompiles`
+//! built from source, in ordinary CI and without a proof
+//! (`docs/spec/precompiles.md`); its input verifies no signature, so
+//! `FALCON512_DECODE` is `crates/checker/tests/falcon_decode.rs`':
 //!
 //! - **the journal is the host's**: the Poseidon2 permutation of the
 //!   generator's own input and of lanes at `2^64 − 1`, read mod `p`, a Merkle
 //!   root, and three `merkle_root` paths, the last after a run of 126, each by
 //!   `transcript`; `mul_div` at edges whose answers are hand-derived or a
-//!   `u128`'s; and Falcon-512's `‖s1‖²` of three arrays and of their
-//!   rotations, each by the host's own negacyclic product;
+//!   `u128`'s; Falcon-512's `‖s1‖²` of three arrays and of their rotations,
+//!   each by the host's own negacyclic product; and HashToPoint's sampler's
+//!   digits of lanes at its edges, each by division;
 //! - **every precompile circuit keeps every rule**, by `constraints` and, with
 //!   no shared code, by this crate;
 //! - **the fill holds**: every live row and the padding after it satisfy every
@@ -24,7 +27,9 @@
 //! - **a path crosses a shard**: the round shard a path continues into fills
 //!   from its streamed chunk exactly as from the archive;
 //! - **a sibling word is a word**: one no load could read is refused by its
-//!   bound alone.
+//!   bound alone;
+//! - **a sampled lane is below `T`**: one at `T` and one at `2^64 − 1`, each
+//!   with digits that keep its identity, are refused by a bound alone.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -45,7 +50,7 @@ use poly::{MultilinearPoly, PolyBacking};
 use prover::{Program, ShardRows, ShardSource};
 use trace::{IoStreams, PhaseTiming, TraceArchive};
 
-const DELEGATIONS: [u32; 9] = [
+const DELEGATIONS: [u32; 10] = [
     family::POSEIDON2,
     family::POSEIDON2_ROUNDS,
     family::MUL_DIV_U256,
@@ -55,6 +60,7 @@ const DELEGATIONS: [u32; 9] = [
     family::FALCON,
     family::FALCON_SPLIT,
     family::FALCON_PRODUCT,
+    family::FALCON_SAMPLE,
 ];
 
 fn f(v: u64) -> Fp {
@@ -102,6 +108,22 @@ fn falcon_coefficient(a: usize, t: usize) -> u16 {
 
 /// The `s1_norm` calls after the first: the arrays rotated once, then twice.
 const MORE: u32 = 2;
+
+/// `q^4`, and HashToPoint's bound `T`, the largest multiple of it below `p`.
+const Q4: u64 = 12289u64.pow(4);
+const T: u64 = 808 * Q4;
+
+/// The lanes the guest samples: at the edges of each digit and of `T`.
+const SAMPLED: [u64; 8] = [
+    0,
+    1,
+    Q4 - 1,
+    Q4,
+    T - 1,
+    T / 3,
+    T - Q4,
+    0x0123_4567_89ab_cdef,
+];
 
 fn input() -> Vec<u8> {
     let mut out = (LEAVES as u32).to_le_bytes().to_vec();
@@ -318,6 +340,9 @@ fn the_journal_is_the_hosts() {
     assert!(norm(0) >> 32 != 0, "the norm has a high word");
     want.extend(norm(0).to_le_bytes());
     want.extend((1..=MORE as usize).map(norm).sum::<u64>().to_le_bytes());
+    for x in SAMPLED {
+        want.extend((0..4).flat_map(|j| ((x / 12289u64.pow(j) % 12289) as u16).to_le_bytes()));
+    }
     assert_eq!(archive.io_streams().output, want);
 }
 
@@ -655,6 +680,52 @@ fn a_sibling_word_no_load_could_read_is_refused() {
         assert!(
             !broken.is_empty() && broken.iter().all(|n| n.starts_with("w1_")),
             "halfword {h:#x}: the forged word is refused by its bound alone, not {broken:?}"
+        );
+    }
+}
+
+/// A sampled lane at or above `T`, the call's lane 0 forged with its digits,
+/// its rest and its writes recomputed from the lane's value mod `p`, so its
+/// identity and every other row-local relation hold. At `T` the digits are 0
+/// and the rest 808, refused by the rest's bound alone. At `2^64 − 1`, two
+/// words that make 58 mod `p`, the digits are 58's, refused by the high
+/// word's bound alone, whatever halfword stands beside it: without it a lane
+/// at or above `p` would sample as its residue.
+#[test]
+fn a_sampled_lane_at_or_above_t_is_refused() {
+    let (program, archive) = traced();
+    let s = Shard::new(&program, &archive, family::FALCON_SAMPLE);
+    let forged = |x: u64| {
+        let mut row = s.row(0);
+        let (lo, hi) = (x & 0xffff_ffff, x >> 32);
+        let v = (f(lo) + f(hi) * f(1 << 32)).to_u64();
+        let d = |j: u32| v / 12289u64.pow(j) % 12289;
+        for (cell, value) in [
+            ("w0_read_value", lo),
+            ("w1_read_value", hi),
+            ("w0_write_value", d(0) | d(1) << 16),
+            ("w1_write_value", d(2) | d(3) << 16),
+            ("d0_0", d(0)),
+            ("d0_1", d(1)),
+            ("d0_2", d(2)),
+            ("d0_3", d(3)),
+            ("e0", v / Q4),
+        ] {
+            row[s.at(cell)] = f(value);
+        }
+        (row, f((T - 1) >> 32) - f(hi))
+    };
+    let (mut row, gap) = forged(T);
+    row[s.at("hb0_h16")] = f(gap.to_u64() >> 16);
+    assert_eq!(s.refused(&row, 0), ["e0_high"], "a lane at T");
+    let (mut row, gap) = forged(u64::MAX);
+    for h in [0, 1, 0xffff, (gap.to_u64() >> 16) & 0xffff] {
+        row[s.at("hb0_h16")] = f(h);
+        let broken = s.refused(&row, 0);
+        assert!(
+            !broken.is_empty() && broken.iter().all(|n| n.starts_with("hb0_")),
+            "halfword {h:#x}: a lane at 2^64 − 1 is refused by its high word's bound alone, \
+             not {broken:?}"
         );
     }
 }

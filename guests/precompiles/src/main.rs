@@ -8,8 +8,10 @@
 //! `merkle_root`, the first two each checked against the fold
 //! `poseidon2_compress` gives, then a run of them long enough that a path's
 //! levels straddle a shard; Falcon-512's lattice check of the three arrays the
-//! public input carries, once and then their rotations in turn; and Falcon-512
-//! verification of the keys, messages, contexts and signatures it carries.
+//! public input carries, once and then their rotations in turn; HashToPoint's
+//! sampler over lanes at its edges; and Falcon-512 verification of the keys,
+//! signatures, messages and contexts it carries, the keys and the signatures
+//! in the SDK's advised forms.
 //!
 //! # The public input
 //!
@@ -24,10 +26,17 @@
 //!           s2       512 u16 LE      read mod q
 //!           c        512 u16 LE
 //!           more     u32 LE          s1_norm calls after the first
-//!   then    cases    u32 LE          Falcon-512 verifications, each a key, a
-//!                                    message, a context and a signature, each
-//!                                    a u32 LE length and its bytes
+//!   then    cases    u32 LE          Falcon-512 verifications
+//!           keys     per case        its key, 896 bytes, then its signature, a
+//!                                    u32 LE length and its bytes, a whole
+//!                                    number of words
+//!           strings  per case        its message, then its context, each a
+//!                                    u32 LE length and its bytes
 //! ```
+//!
+//! Every key and signature starts on a word, as the SDK reads them in place,
+//! and no byte of the input is padding: the messages and contexts, of any
+//! length, follow every case's key and signature.
 //!
 //! # The journal
 //!
@@ -50,9 +59,15 @@
 //!   falcon512::s1_norm              u64: the sum of more calls', call k's
 //!                                   arrays the input's rotated k times: (s2,
 //!                                   c, h), (c, h, s2), (h, s2, c), …
-//!   PublicKey::verify               a byte a case: 1 the signature verifies
-//!                                   under the context, 0 it does not, 2 the
-//!                                   key does not decode
+//!   falcon512::sample               8 u64: the lanes 0, 1, q^4 − 1, q^4,
+//!                                   T − 1, ⌊T/3⌋, T − q^4 and
+//!                                   0x0123456789abcdef, T = ⌊p/q^4⌋·q^4, each
+//!                                   its four base-q digits, u16 LE
+//!   PublicKey::verify               a byte a case, 1: the key decodes, the
+//!                                   signature verifies under the context, and
+//!                                   its length is the one the input gives; any
+//!                                   other case ends the execution, a panic or
+//!                                   the decode call's refusal
 //! ```
 //!
 //! With 126 runs the depth-20 path is levels 4,080 to 4,099: it straddles
@@ -61,7 +76,7 @@
 //! 1,024 a `FALCON_SPLIT` shard holds, so a streaming run hands one over
 //! mid-execution.
 
-use guest_sdk::falcon512::{self, Poly, PublicKey};
+use guest_sdk::falcon512::{self, Poly, PublicKey, KEY_BYTES};
 use guest_sdk::{merkle_root, poseidon2_compress, poseidon2_permute, Digest, U256};
 
 guest_sdk::entry!(main);
@@ -191,19 +206,42 @@ fn main() {
     }
     put(&sum.to_le_bytes());
 
+    let q4 = (falcon512::Q as u64).pow(4);
+    let t = p / q4 * q4;
+    let mut lanes = [
+        0,
+        1,
+        q4 - 1,
+        q4,
+        t - 1,
+        t / 3,
+        t - q4,
+        0x0123_4567_89ab_cdef,
+    ];
+    falcon512::sample(&mut lanes);
+    lanes.iter().for_each(|l| put(&l.to_le_bytes()));
+
     let at_cases = at_falcon + 3 * 1024 + 4;
-    let mut read = at_cases + 4;
-    for _ in 0..word(at_cases) {
-        let mut field = || {
-            let len = word(read) as usize;
-            read += 4 + len;
-            &input[read - len..read]
+    let cases = word(at_cases);
+    let mut signed = at_cases + 4;
+    let next = |at: usize| at + KEY_BYTES + 4 + word(at + KEY_BYTES) as usize;
+    let mut said = (0..cases).fold(signed, |at, _| next(at));
+    for _ in 0..cases {
+        let key = &input[signed..signed + KEY_BYTES];
+        let signature = &input[signed + KEY_BYTES + 4..next(signed)];
+        signed = next(signed);
+        let mut string = || {
+            let len = word(said) as usize;
+            said += 4 + len;
+            &input[said - len..said]
         };
-        let (key, message, context, signature) = (field(), field(), field(), field());
-        put(&[match PublicKey::decode(key) {
-            Some(key) => key.verify(message, signature, context) as u8,
-            None => 2,
-        }]);
+        let (message, context) = (string(), string());
+        let length = PublicKey::decode(key).verify(message, signature, context);
+        assert!(
+            length == signature.len(),
+            "precompiles: verify's length is not the signature's"
+        );
+        put(&[1]);
     }
     guest_sdk::commit(&out[..at]);
 }

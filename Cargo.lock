@@ -191,6 +191,7 @@ dependencies = [
 name = "checker"
 version = "0.1.0"
 dependencies = [
+ "apogee-falcon512",
  "constants",
  "constraints",
  "emulator",

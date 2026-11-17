@@ -10,7 +10,7 @@
  * An Apogee guest has no files and no streams. Its public input, advice and
  * journal are memory the proof binds — or, for advice, does not — and these
  * four calls are the whole of reaching them (docs/guest-program-manual.md §11,
- * docs/spec/public-values.md). The last four calls are precompiles, each
+ * docs/spec/public-values.md). The last six calls are precompiles, each
  * a circuit of its own (docs/spec/precompiles.md).
  *
  * The library also provides `memcpy`, `memmove`, `memset` and `memcmp`, the
@@ -77,6 +77,30 @@ int32_t apogee_merkle_root(uint32_t slot, uint32_t depth, const uint64_t leaf[8]
  * the advice included. Anything else exits 101, a panic. */
 uint64_t apogee_falcon512_s1_norm(const uint16_t h[512], const uint16_t s2[512],
                                   const uint16_t c[512]);
+
+/* HashToPoint's sampler by the precompile: each of the 8 lanes at `lanes`, x,
+ * rewritten in place as its four base-q digits floor(x / q^j) mod q, j < 4,
+ * d0 + 2^16*d1 + 2^32*d2 + 2^48*d3, so lane l is coefficients 4l to 4l + 3 of
+ * the 32 uint16_t its bytes are. `lanes` is 8-aligned and below the advice
+ * region. A lane at or above 808*q^4, the largest multiple of q^4 below p,
+ * exits 101, a panic. */
+void apogee_falcon512_sample(uint64_t lanes[8]);
+
+/* Falcon-512's decoder by the precompile: in `mode` 0 a public key's h at
+ * `src`, its 896 bytes, 512 fields of 14 bits, each below q (the key's v1.2
+ * encoding without its header 0x09); in `mode` 1 a signature's compressed s2
+ * at `src`, 40 bytes into its advised form, after the salt: 512
+ * coefficients, none -0, none above 2047 in size, within 5,000 bits, and the
+ * bits after the last in its word zeros. The coefficients are written to
+ * `dst`, s2's each s mod q. Returns ||s2||^2, 0 for a key, and stores the
+ * stream's end through `end` where not null: the bit after the last
+ * coefficient, counted from `src`'s first, its bytes MSB first, a key's 7168.
+ * `src` and `dst` are 4-aligned and apart; `src` is read a word at a time
+ * through the word holding the stream's last bit, and may be anywhere a load
+ * reaches, the advice included. Anything else, and any stream that is not
+ * one of these, the call refuses: the execution fails. */
+uint32_t apogee_falcon512_decode(uint32_t mode, const uint8_t *src, uint16_t dst[512],
+                                 uint32_t *end);
 
 /* The guest's entry, which the library's startup calls. Declared here with C
  * linkage because a freestanding C++ compiler does not give `main` any: a

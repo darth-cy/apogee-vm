@@ -12,15 +12,14 @@
 //! [`poseidon2_compress`] of its children, and the snapshot is
 //! `compress(users root, listings root)`, the schema's order. Anyone buys and
 //! anyone sells: a user is one record whichever it does. The public input
-//! carries the snapshot before the batch and the batch; the journal, the
-//! snapshot after it.
+//! carries the snapshot before the batch; the journal, the snapshot after it.
 //!
-//! **Each record opened once.** The advice holds every record the batch reads,
-//! each once, the users in ascending address order and the listings in
-//! ascending slot order, and the batch runs against that working set in
-//! memory, finding a record by binary search: a purchase moves the buyer's and
-//! the seller's balances and the listing's stock there, however many
-//! purchases touch them, so a seller may spend later in the batch what it
+//! **Each record opened once.** The advice holds every record the batch reads
+//! and no other, each once, the users in ascending address order and the
+//! listings in ascending slot order, and the batch runs against that working
+//! set in memory, finding a record by binary search: a purchase moves the
+//! buyer's and the seller's balances and the listing's stock there, however
+//! many purchases touch them, so a seller may spend later in the batch what it
 //! earned earlier in it. After the batch each record is checked and written
 //! back once, along a Merkle path the advice holds under its table's root as
 //! it then stands: one [`merkle_root`] call opens the record as the advice
@@ -37,27 +36,27 @@
 //! **Signed requests.** A request is 92 bytes, exactly the message its buyer
 //! signs with Falcon-512 under the context `apogee/amazon/purchase/v1`, the
 //! buyer's address, its nonce and the store's market id inside it, so a
-//! request spends its nonce at most once, and in one store. A key is advised
-//! beside its user's record and read when its user first signs: decoded, K
-//! computed from the same bytes, and K's address checked against the record's,
-//! which the request found by that address; then kept for the user's later
-//! requests, each verified under that K. A key that does not decode has an
-//! address all the same, checked against the record's, and signs nothing.
-//! [`PublicKey::verify`] is the SDK's: its lattice check is the Falcon-512
-//! precompile, and K's and HashToPoint's permutations Poseidon2's.
+//! request spends its nonce at most once, and in one store. A user's key is
+//! advised where the user first signs, ahead of that request's signature, and
+//! read there: decoded, K computed from it, and K's address checked against
+//! the buyer's, by which the request found the record; then kept for the
+//! user's later requests, each verified under that K. A key that does not
+//! decode, or is not its buyer's, ends the execution, as does a signature that
+//! does not verify: [`PublicKey::decode`] and [`PublicKey::verify`] are the
+//! SDK's, which panic, or whose decode call refuses an encoding, rather than
+//! answer a verdict. Their decoding and lattice check are the Falcon-512
+//! precompiles, and K's and HashToPoint's permutations Poseidon2's.
 //!
-//! **A signature decides no outcome.** The requests are the public input's,
-//! but their signatures are advice, which the prover chooses, so an outcome
-//! that turned on a signature would be the prover's: a valid request advised
-//! a bad signature would be rejected, a censorship the statement cannot show.
-//! A request that reaches its signature check carries one that verifies under
-//! its buyer's key, or the batch is malformed, a panic, and so every request
-//! whose nonce a proof spends is one its buyer signed. The sequencer verifies
-//! the signatures before it batches the requests and drops each request whose
-//! signature does not verify, as a rollup's block producer does, and so every
-//! request from a user whose key does not decode. What rejects a request is
-//! the public input's and the snapshot's alone: its market, its buyer and its
-//! nonce.
+//! **The requests are advice.** The statement is that signed requests, each
+//! its buyer's at that buyer's nonce, take the snapshot to the next. The
+//! requests and their signatures are advice the prover chooses, so the proof
+//! does not say which requests a batch settled, only that each one was signed
+//! and valid for this store and snapshot: no one but its buyer can sign a
+//! request. Every request in a batch applies. One that cannot, or whose
+//! signature does not verify under its buyer's key, is a malformed batch, a
+//! panic, never an outcome. The sequencer checks the requests and their
+//! signatures and drops each one that cannot apply before it batches them, as
+//! a rollup's block producer does.
 //!
 //! **Until the users are keyed by address.** The users table is `2^DEPTH`
 //! slots, not yet a table keyed by address, and two assumptions stand in for
@@ -112,9 +111,29 @@
 //! # The public input
 //!
 //! ```text
-//! header     0..64   snapshot  8 lanes, u64 LE, each below p: the tables before the batch
+//!            0..64   snapshot  8 lanes, u64 LE, each below p: the tables before the batch
 //!           64..72   market    u64: this store's id
-//!           72..76   n         u32, at most MAX_REQUESTS
+//! ```
+//!
+//! The input is these 72 bytes and nothing more: any other length is a panic.
+//!
+//! # The advice
+//!
+//! ```text
+//! roots           0..128  the users root, then the listings root: 8 lanes each, u64 LE,
+//!                         each below p
+//! users           u32 count, then for each user the batch reads, in ascending address
+//!                         order: its slot u32, below 2^DEPTH, its record
+//! listings        u32 count, then for each listing the batch reads, in ascending slot
+//!                         order: its slot u32, its record
+//! batch           u32 n, then for each request, in the batch's order: the request; at
+//!                         its buyer's first, the buyer's public key, h's 896 bytes;
+//!                         then the request's signature, its 40-byte salt and s2
+//!                         compressed through the word holding its last bit
+//! paths           for each user above in its order, then each listing: DEPTH siblings from
+//!                 the leaf up, 64 bytes each, under its table's root as the records
+//!                 before it left it
+//!
 //! request    0..32   buyer     an address
 //!           32..36   listing   u32: a listing's slot, below 2^DEPTH
 //!           36..44   quantity  u64
@@ -123,83 +142,77 @@
 //!           84..92   market    u64: the store the buyer signed for
 //! ```
 //!
-//! The input is the header and its `n` requests and nothing more, so no byte of
-//! the statement goes unread.
+//! The advice is these entries and nothing more: a byte after the last path
+//! is a panic.
 //!
-//! # The advice
-//!
-//! ```text
-//! roots           0..128  the users root, then the listings root: 8 lanes each, u64 LE,
-//!                         each below p
-//! users           u32 count, then for each user the batch reads, in ascending address
-//!                         order: its slot u32, below 2^DEPTH, its record, and for an
-//!                         account its public key, 897 bytes
-//! listings        u32 count, then for each listing the batch reads, in ascending slot
-//!                         order: its slot u32, its record
-//! signatures      666 bytes a request, in the batch's order
-//!                 zeros to the next multiple of four bytes
-//! paths           for each user above in its order, then each listing: DEPTH siblings from
-//!                 the leaf up, 64 bytes each, under its table's root as the records
-//!                 before it left it
-//! ```
+//! Every entry is a whole number of words, so each request, each key, each
+//! signature and its compressed `s2`, 40 bytes in, and the paths start on a
+//! word: the decode call and the precompile read them in place, a word at a
+//! time, and K and HashToPoint absorb them a word at a time. A key and a
+//! signature are the SDK's advised forms, v1.2's encodings without their
+//! headers and the signature's padding: a key is 896 bytes, and a signature
+//! `40 + 4·⌈end/32⌉`, `end` the bit after its last coefficient, which the
+//! decode call finds, the bits after it in its last word zeros, which the call
+//! checks. The cursor moves past a signature by the length
+//! [`PublicKey::verify`] returns. No byte of the advice is padding.
 //!
 //! Addresses ascend as 32-byte strings compared from their first byte,
 //! strictly, so no user is advised twice; nor is a slot, as a leaf holds its
 //! record's address and two records at one slot cannot both open it. The
-//! records are the snapshot's, before the batch; the advice may hold more than
-//! the batch reads, each opened all the same. A key is read when its user
-//! first signs a request the guest gets as far as checking, and a signature
-//! when its request is. A path is read in place by the precompile, a word at a
-//! time, each sibling's lanes mod `p`: a sibling's encoding is the prover's,
-//! and no root depends on it.
+//! records are the snapshot's, before the batch, and one the batch does not
+//! read is a panic. The batch is read a request at a time, so it holds a key
+//! for each user that buys, at its first request, and a signature for each
+//! request: a key or a signature missing, or one more, shifts every read after
+//! it, which a request's checks, a key's decoding or address, a signature's
+//! decoding or verification, a path or the advice's end refuses. A path is
+//! read in place by the precompile, a word at a time, each sibling's lanes
+//! mod `p`: a sibling's encoding is the prover's, and no root depends on it.
 //!
 //! # The batch
 //!
 //! Each request in turn, against the records as the requests before it left
-//! them. It is **rejected**, and changes nothing, where its market is not the
-//! header's, its buyer is the zero address, no account, or its nonce is not
-//! the buyer's or is `2^64 − 1`, which leaves none after it: checks of the
-//! public input and of the buyer's record, which the snapshot binds, before
-//! the signature's. Otherwise the signature verifies under the buyer's key
-//! and the context, or the batch is malformed, a panic; the nonce is spent,
-//! and the purchase is **applied** where the listing holds the
-//! quantity, at least one unit, at a price no more than the max price, for a
-//! seller who is not the buyer and has an account, an address not zero, at a
-//! cost, `price · quantity`, below `2^256` and no more than the buyer's
-//! balance, that takes neither the seller's balance nor the batch's volume to
-//! `2^256`: the cost moves from the buyer's balance to the seller's, the
-//! quantity leaves the stock, and the cost joins the volume. Otherwise it is
-//! **declined**.
+//! them. Its market is the public input's, its buyer is not the zero address,
+//! no account, and its nonce is the buyer's and not `2^64 − 1`, which leaves
+//! none after it; its signature, after its buyer's key at the buyer's first
+//! request, verifies under the buyer's key and the context; and the listing
+//! holds the quantity, at least one unit, at a price no more than the max
+//! price, for a seller who is not the buyer and has an account, an address
+//! not zero, at a cost, `price · quantity`, below `2^256` and no more than
+//! the buyer's balance, that takes neither the seller's balance nor the
+//! batch's volume to `2^256`. Otherwise the batch is malformed and the
+//! execution ends. The request is **applied**: the buyer's nonce is spent,
+//! the cost moves from the buyer's balance to the seller's, the quantity
+//! leaves the stock, and the cost joins the volume.
 //!
 //! A record is read where a check first needs it: the buyer's once the market
 //! matches and the address is not zero, the listing's once the nonce is
 //! spent, and the seller's once the listing's terms and the buyer's balance
 //! allow the purchase. A record the batch reads and the advice does not hold
-//! is a panic.
+//! is a panic, and so, where the records are written back, is one the advice
+//! holds and the batch does not read.
 //!
 //! # The journal
 //!
 //! ```text
 //!            0..64   the snapshot before the batch
 //!           64..128  the snapshot after it
-//!          128..132  applied   u32
-//!          132..136  declined  u32
-//!          136..140  rejected  u32
-//!          140..172  volume    U256 LE: the applied purchases' cost
+//!          128..132  purchases u32: n, as every request applies
+//!          132..164  volume    U256 LE: the purchases' cost
 //! ```
 //!
-//! A malformed batch, a signature that does not verify where the batch checks
-//! one, a digest or an advised record's address with a lane at or above `p`,
-//! an advised key that is not its user's, and a record or a path that does not
-//! open its table, panic.
+//! A public input that is not 72 bytes, a request that is not valid, advice
+//! that is not exactly what the batch reads, a key that does not decode or is
+//! not its buyer's, a signature that does not decode or verify, a digest or an
+//! advised record's address with a lane at or above `p`, and a record or a
+//! path that does not open its table, end the execution: a panic, or for a
+//! key or a signature that is not one, the decode call's refusal.
 
 extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use constants::guest_memory;
-use guest_sdk::falcon512::{self, PublicKey, PUBLIC_KEY_BYTES, SIGNATURE_BYTES};
+use guest_sdk::falcon512::{PublicKey, KEY_BYTES};
 use guest_sdk::{merkle_root, poseidon2_compress, Digest, U256};
 
 guest_sdk::entry!(main);
@@ -209,12 +222,19 @@ const DEPTH: usize = 20;
 const PATH: usize = 64 * DEPTH;
 const USER: usize = 72;
 const LISTING: usize = 80;
-const HEADER: usize = 76;
+const INPUT: usize = 72;
 const REQUEST: usize = 92;
-const JOURNAL: usize = 172;
-const PAYLOAD: usize = guest_memory::PUBLIC_PAYLOAD_BYTES as usize;
-/// As many requests as fit the public input beside its header.
-const MAX_REQUESTS: usize = (PAYLOAD - HEADER) / REQUEST;
+const JOURNAL: usize = 164;
+
+// Every advised entry is a whole number of words, a signature's by the SDK's
+// form, so each request starts on a word, as do each key, each signature and
+// the paths.
+const _: () = assert!(
+    (4 + USER).is_multiple_of(4)
+        && KEY_BYTES.is_multiple_of(4)
+        && (4 + LISTING).is_multiple_of(4)
+        && REQUEST.is_multiple_of(4)
+);
 /// The context a buyer signs its requests under.
 const CONTEXT: &[u8] = b"apogee/amazon/purchase/v1";
 /// The tag lanes naming a user's encoding and a listing's.
@@ -246,12 +266,6 @@ impl User {
             balance: u256_at(b, 32),
             nonce: u64_at(b, 64),
         }
-    }
-
-    /// Whether the slot holds an account: an address, a key's, to sign with
-    /// and to be paid at.
-    fn is_account(&self) -> bool {
-        self.address != NO_ACCOUNT
     }
 }
 
@@ -310,24 +324,24 @@ fn leaf(address: &Address, rest: &[u8], tag: u64) -> Digest {
     poseidon2_compress(&digest(&lanes[..8]), &digest(&lanes[8..]))
 }
 
-/// A record the batch reads: as the advice opened it, and as the batch leaves
-/// it.
+/// A record the batch reads: as the advice opened it, as the batch leaves it,
+/// and whether the batch has read it yet.
 struct Held<R> {
     slot: u32,
     opened: R,
     now: R,
+    read: bool,
 }
 
-/// A user's public key, as far as the batch has read it.
-enum Key<'a> {
-    /// No account, so no key advised.
-    Absent,
-    /// The advised bytes, unread: the user has not yet signed.
-    Advised(&'a [u8]),
-    /// The key the bytes decode to, checked against the user's record.
-    Decoded(Box<PublicKey>),
-    /// The user's key bytes, which decode to no key: nothing verifies.
-    Malformed,
+impl<R: Copy> Held<R> {
+    fn new(slot: u32, record: R) -> Held<R> {
+        Held {
+            slot,
+            opened: record,
+            now: record,
+            read: false,
+        }
+    }
 }
 
 struct Request {
@@ -352,29 +366,21 @@ impl Request {
     }
 }
 
-/// A request's outcome, its counter's place in the journal.
-#[derive(Clone, Copy)]
-enum Outcome {
-    Applied,
-    Declined,
-    Rejected,
-}
-
 /// The working set: every record the advice holds, as opened and as the
-/// requests so far leave it, each user's key, and the volume so far.
-struct Store<'a> {
+/// requests so far leave it, each user's key once the user has signed, and
+/// the volume so far.
+struct Store {
     users: Vec<Held<User>>,
-    keys: Vec<Key<'a>>,
+    keys: Vec<Option<Box<PublicKey>>>,
     listings: Vec<Held<Listing>>,
     volume: U256,
 }
 
-impl<'a> Store<'a> {
+impl Store {
     /// The advised users and listings from `at`, or a panic.
-    fn read(advice: &'a [u8], at: &mut usize) -> Store<'a> {
+    fn read(advice: &[u8], at: &mut usize) -> Store {
         let count = u32_at(take(advice, at, 4), 0) as usize;
         let mut users: Vec<Held<User>> = Vec::with_capacity(count);
-        let mut keys = Vec::with_capacity(count);
         for _ in 0..count {
             let slot = slot_at(take(advice, at, 4));
             let user = User::decode(take(advice, at, USER));
@@ -382,16 +388,7 @@ impl<'a> Store<'a> {
                 users.last().is_none_or(|h| h.opened.address < user.address),
                 "amazon: the advised users do not ascend by address"
             );
-            keys.push(if user.is_account() {
-                Key::Advised(take(advice, at, PUBLIC_KEY_BYTES))
-            } else {
-                Key::Absent
-            });
-            users.push(Held {
-                slot,
-                opened: user,
-                now: user,
-            });
+            users.push(Held::new(slot, user));
         }
         let count = u32_at(take(advice, at, 4), 0) as usize;
         let mut listings: Vec<Held<Listing>> = Vec::with_capacity(count);
@@ -401,111 +398,115 @@ impl<'a> Store<'a> {
                 listings.last().is_none_or(|h| h.slot < slot),
                 "amazon: the advised listings do not ascend by slot"
             );
-            let listing = Listing::decode(take(advice, at, LISTING));
-            listings.push(Held {
-                slot,
-                opened: listing,
-                now: listing,
-            });
+            listings.push(Held::new(slot, Listing::decode(take(advice, at, LISTING))));
         }
         Store {
+            keys: users.iter().map(|_| None).collect(),
             users,
-            keys,
             listings,
             volume: U256::ZERO,
         }
     }
 
-    /// The request `message` signed by `signature`, settled against the
-    /// working set: the records it changes changed there. Or a panic, where
-    /// it gets past every rejection and `signature` is not its buyer's.
-    fn settle(&mut self, message: &[u8], signature: &[u8], market: u64) -> Outcome {
+    /// The advice's next request, from `at`, settled against the working set:
+    /// the records it changes changed there. The request is valid, and the
+    /// entries after it, its buyer's key at the buyer's first request and then
+    /// its signature, are the buyer's, `at` moved past them all, or a panic,
+    /// or the decode call's refusal.
+    fn settle(&mut self, market: u64, advice: &[u8], at: &mut usize) {
+        let message = take(advice, at, REQUEST);
         let r = Request::decode(message);
         assert!(
             (r.listing as usize) < 1 << DEPTH,
             "amazon: a slot outside its table"
         );
-        if r.market != market || r.buyer == NO_ACCOUNT {
-            return Outcome::Rejected;
-        }
-        let b = find(&self.users, &r.buyer, |h| &h.opened.address);
-        let buyer = self.users[b].now;
-        let next = match r.nonce.checked_add(1) {
-            Some(next) if r.nonce == buyer.nonce => next,
-            _ => return Outcome::Rejected,
-        };
-        // Every rejection is above, the public input's or the buyer's
-        // record's. The signature is advice, so it rejects nothing.
+        assert!(r.market == market, "amazon: a request for another market");
         assert!(
-            verifies(&mut self.keys[b], &r.buyer, message, signature),
-            "amazon: a request's signature does not verify under its buyer's key"
+            r.buyer != NO_ACCOUNT,
+            "amazon: a request from the zero address"
         );
+        let b = find(&mut self.users, &r.buyer, |h| &h.opened.address);
+        let buyer = self.users[b].now;
+        assert!(
+            r.nonce == buyer.nonce,
+            "amazon: a request not at its buyer's nonce"
+        );
+        let next = r
+            .nonce
+            .checked_add(1)
+            .expect("amazon: a request at the last nonce");
+        // The key is read at the buyer's first request, decoded and checked
+        // against the buyer's address, and kept; the signature verifies under
+        // it, or the execution ends.
+        let key = self.keys[b].get_or_insert_with(|| {
+            let key = PublicKey::decode(take(advice, at, KEY_BYTES));
+            assert!(
+                key.address() == r.buyer,
+                "amazon: an advised key is not its buyer's"
+            );
+            Box::new(key)
+        });
+        *at += key.verify(message, &advice[*at..], CONTEXT);
         self.users[b].now.nonce = next;
 
-        let l = find(&self.listings, &r.listing, |h| &h.slot);
+        let l = find(&mut self.listings, &r.listing, |h| &h.slot);
         let listing = self.listings[l].now;
-        let cost = match listing.price.checked_mul(U256::from(r.quantity)) {
-            Some(cost)
-                if (1..=listing.stock).contains(&r.quantity)
-                    && listing.price <= r.max_price
-                    && listing.seller != r.buyer
-                    && listing.seller != NO_ACCOUNT
-                    && cost <= buyer.balance =>
-            {
-                cost
-            }
-            _ => return Outcome::Declined,
-        };
-        let s = find(&self.users, &listing.seller, |h| &h.opened.address);
+        assert!(
+            (1..=listing.stock).contains(&r.quantity),
+            "amazon: a quantity of 0 or more than the stock"
+        );
+        assert!(
+            listing.price <= r.max_price,
+            "amazon: a price above the max price"
+        );
+        assert!(
+            listing.seller != r.buyer,
+            "amazon: a purchase of the buyer's own listing"
+        );
+        assert!(
+            listing.seller != NO_ACCOUNT,
+            "amazon: a seller with no account"
+        );
+        let cost = listing
+            .price
+            .checked_mul(U256::from(r.quantity))
+            .expect("amazon: a cost past 2^256");
+        assert!(
+            cost <= buyer.balance,
+            "amazon: a cost above the buyer's balance"
+        );
+        let s = find(&mut self.users, &listing.seller, |h| &h.opened.address);
         let seller = self.users[s].now;
-        let (Some(paid), Some(volume)) = (
-            seller.balance.checked_add(cost),
-            self.volume.checked_add(cost),
-        ) else {
-            return Outcome::Declined;
-        };
+        let paid = seller
+            .balance
+            .checked_add(cost)
+            .expect("amazon: the seller's balance past 2^256");
+        let volume = self
+            .volume
+            .checked_add(cost)
+            .expect("amazon: the volume past 2^256");
         self.users[b].now.balance = buyer.balance - cost;
         self.users[s].now.balance = paid;
         self.listings[l].now.stock = listing.stock - r.quantity;
         self.volume = volume;
-        Outcome::Applied
     }
 }
 
-/// Whether `signature` signs `message` under the key of the user at `address`
-/// and [`CONTEXT`]: the advised bytes decoded, K computed from them, and K's
-/// address checked against `address` the first time, from the bytes alone
-/// where they do not decode; and the key they decoded to each time.
-fn verifies(key: &mut Key, address: &Address, message: &[u8], signature: &[u8]) -> bool {
-    if let Key::Advised(bytes) = *key {
-        let decoded = PublicKey::decode(bytes);
-        let advised = match &decoded {
-            Some(key) => key.address(),
-            None => falcon512::address(bytes),
-        };
-        assert!(
-            advised == *address,
-            "amazon: an advised key is not its user's"
-        );
-        *key = decoded.map_or(Key::Malformed, |k| Key::Decoded(Box::new(k)));
-    }
-    match key {
-        Key::Decoded(key) => key.verify(message, signature, CONTEXT),
-        _ => false,
-    }
-}
-
-/// Where the record `name` names is in `held`, which ascends by `name_of`, or
-/// a panic: the batch reads a record the advice does not hold.
-fn find<R, K: Ord>(held: &[Held<R>], name: &K, name_of: impl Fn(&Held<R>) -> &K) -> usize {
-    held.binary_search_by(|h| name_of(h).cmp(name))
-        .expect("amazon: the advice does not hold a record the batch reads")
+/// Where the record `name` names is in `held`, which ascends by `name_of`,
+/// the record marked read; or a panic: the batch reads a record the advice
+/// does not hold.
+fn find<R, K: Ord>(held: &mut [Held<R>], name: &K, name_of: impl Fn(&Held<R>) -> &K) -> usize {
+    let i = held
+        .binary_search_by(|h| name_of(h).cmp(name))
+        .expect("amazon: the advice does not hold a record the batch reads");
+    held[i].read = true;
+    i
 }
 
 /// `held`'s records written back to the tree `root`, each opened by the
 /// advice's next path under the root as the records before it left it, and
 /// written along it where the batch changed it: the tree the batch leaves, or
-/// a panic.
+/// a panic, as for a record the batch did not read.
 fn write_back<R: Record>(
     held: &[Held<R>],
     mut root: Digest,
@@ -513,6 +514,10 @@ fn write_back<R: Record>(
     at: &mut usize,
 ) -> Digest {
     for h in held {
+        assert!(
+            h.read,
+            "amazon: the advice holds a record the batch does not read"
+        );
         let path = take(advice, at, PATH);
         assert!(
             merkle_root(h.slot, &h.opened.leaf(), path) == root,
@@ -528,52 +533,39 @@ fn write_back<R: Record>(
 fn main() {
     let input = guest_sdk::public_input();
     assert!(
-        input.len() >= HEADER,
-        "amazon: the public input ended inside the header"
+        input.len() == INPUT,
+        "amazon: the public input is not the snapshot and the market"
     );
     let before = digest_at(input, 0);
     let market = u64_at(input, 64);
-    let n = u32_at(input, 72) as usize;
-    assert!(
-        n <= MAX_REQUESTS && input.len() == HEADER + REQUEST * n,
-        "amazon: the batch is not n requests"
-    );
 
-    let mut counts = [0u32; 3];
-    let (mut after, mut volume) = (before, U256::ZERO);
-    // Asked for only when there is a request: an execution given no advice
-    // has no region.
-    if n > 0 {
-        let advice = guest_sdk::advice();
-        let mut at = 0;
-        let users_root = digest_at(take(advice, &mut at, 64), 0);
-        let listings_root = digest_at(take(advice, &mut at, 64), 0);
-        assert!(
-            poseidon2_compress(&users_root, &listings_root) == before,
-            "amazon: the advised roots are not the snapshot"
-        );
-        let mut store = Store::read(advice, &mut at);
-        let signatures = take(advice, &mut at, SIGNATURE_BYTES * n);
-        let requests = input[HEADER..].chunks_exact(REQUEST);
-        for (request, signature) in requests.zip(signatures.chunks_exact(SIGNATURE_BYTES)) {
-            counts[store.settle(request, signature, market) as usize] += 1;
-        }
-        // The paths start on a word: the precompile reads them in place.
-        at = at.next_multiple_of(4);
-        let users = write_back(&store.users, users_root, advice, &mut at);
-        let listings = write_back(&store.listings, listings_root, advice, &mut at);
-        after = poseidon2_compress(&users, &listings);
-        volume = store.volume;
+    let advice = guest_sdk::advice();
+    let mut at = 0;
+    let users_root = digest_at(take(advice, &mut at, 64), 0);
+    let listings_root = digest_at(take(advice, &mut at, 64), 0);
+    assert!(
+        poseidon2_compress(&users_root, &listings_root) == before,
+        "amazon: the advised roots are not the snapshot"
+    );
+    let mut store = Store::read(advice, &mut at);
+    let n = u32_at(take(advice, &mut at, 4), 0);
+    for _ in 0..n {
+        store.settle(market, advice, &mut at);
     }
+    let users = write_back(&store.users, users_root, advice, &mut at);
+    let listings = write_back(&store.listings, listings_root, advice, &mut at);
+    assert!(
+        at == advice.len(),
+        "amazon: the advice runs past its last path"
+    );
+    let after = poseidon2_compress(&users, &listings);
 
     let mut out = [0u8; JOURNAL];
     for (i, lane) in before.lanes().iter().chain(after.lanes()).enumerate() {
         out[8 * i..8 * i + 8].copy_from_slice(&lane.to_le_bytes());
     }
-    for (i, count) in counts.iter().enumerate() {
-        out[128 + 4 * i..132 + 4 * i].copy_from_slice(&count.to_le_bytes());
-    }
-    out[140..].copy_from_slice(&volume.to_le_bytes());
+    out[128..132].copy_from_slice(&n.to_le_bytes());
+    out[132..].copy_from_slice(&store.volume.to_le_bytes());
     guest_sdk::commit(&out);
 }
 

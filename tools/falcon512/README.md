@@ -14,7 +14,7 @@ to their own repositories.
 
 | Directory | Implementation | Suite |
 |---|---|---|
-| `rust/` | crate `apogee-falcon512`: keys from a seed, signing, the verifier the guest SDK's is held to | `cargo test -p apogee-falcon512` |
+| `rust/` | crate `apogee-falcon512`: keys from a seed, signing, the verifier the guest SDK's is held to, and the forms a guest is advised a key and a signature in (`key_advice`, `signature_advice`) | `cargo test -p apogee-falcon512` |
 | `js/` | ES modules, no dependencies, Node.js ≥ 20 and browsers; also user addresses (below) | `node --test` in `js/` |
 | `python/` | package `apogee_falcon512`, standard library only, Python ≥ 3.9 | `python3 -m unittest discover -s tests` in `python/` |
 

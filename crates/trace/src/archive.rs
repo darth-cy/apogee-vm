@@ -61,6 +61,7 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
 
+use constants::delegation::Per;
 use constants::{family, memory};
 use serde::de::{Deserialize, Deserializer, SeqAccess, Visitor};
 use serde::Serialize;
@@ -727,16 +728,37 @@ fn check_parts(
         });
         // An invocation's frame events follow the pc query and precede the
         // row's roles: they are at slot `delegation::FRAME_DELTA`, which is 0.
+        // A decode call's entry ends in source slots past the words it read,
+        // each `Query::ABSENT` and no access: address 0 is in no region, so
+        // no word the call touched is one (`Per::Decode`).
         let mut frame: Vec<MemoryEvent> = Vec::new();
         while let Some((_, t, r)) = pending.next_if(|(cycle, ..)| *cycle == row.cycle) {
-            frame.extend(t.words.iter().map(|q| MemoryEvent {
-                space: AddressSpace::Ram,
-                addr: q.addr[*r],
-                ts: base + constants::delegation::FRAME_DELTA,
-                read_ts: q.read_ts[*r],
-                read_value: q.read_value[*r],
-                write_value: q.write_value[*r],
-            }));
+            let decode = program::delegation_per(t.family) == Per::Decode;
+            for q in &t.words {
+                let query = Query {
+                    addr: q.addr[*r],
+                    read_ts: q.read_ts[*r],
+                    read_value: q.read_value[*r],
+                    write_value: q.write_value[*r],
+                };
+                if decode && query.addr == 0 {
+                    if query != Query::ABSENT {
+                        return Err(format!(
+                            "family {}'s entry at cycle {} holds a query at address 0",
+                            t.family, row.cycle
+                        ));
+                    }
+                    continue;
+                }
+                frame.push(MemoryEvent {
+                    space: AddressSpace::Ram,
+                    addr: query.addr,
+                    ts: base + constants::delegation::FRAME_DELTA,
+                    read_ts: query.read_ts,
+                    read_value: query.read_value,
+                    write_value: query.write_value,
+                });
+            }
         }
         for want in std::iter::once(pc).chain(frame).chain(queries) {
             if events.get(next) != Some(&want) {

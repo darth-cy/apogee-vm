@@ -1,7 +1,8 @@
 //! The `FALCON512` precompile: the lattice check of Falcon-512 verification,
 //! `s1 = (c − s2·h) mod (q, x^512 + 1)` centered to `[−6144, 6144]` and
 //! `‖s1‖²`, as three circuits on `crate::delegation`'s builder, through the
-//! CRT `x^512 + 1 = Π_{r < 16} (x^32 − β_r)` over `Z_q`, `q = 12289`.
+//! CRT `x^512 + 1 = Π_{r < 16} (x^32 − β_r)` over `Z_q`, `q = 12289`; and
+//! `FALCON512_SAMPLE`, HashToPoint's sampler, a fourth (*The sampler*).
 //!
 //! Since `x^32 ≡ β_r` mod `x^32 − β_r`, a polynomial's residue `r` has
 //! coefficient `j < 32` equal to `Σ_{m < 16} V[r][m]·a_{32m + j}`, `V[r][m] =
@@ -100,11 +101,26 @@
 //! mod `(q, x^512 + 1)`. A coefficient in `[−6144, 6144]` is its class's
 //! centered representative, `q = 2·6144 + 1`: `s1` is the centered `(c − s2·h)
 //! mod q`, and `n` its squared norm.
+//!
+//! ## The sampler
+//!
+//! `FALCON_SAMPLE`, one row a `FALCON512_SAMPLE` call
+//! (`docs/spec/precompiles.md` §9): the frame's eight lanes, lane `l` the
+//! integer `x = lo + 2^32·hi` of its words `2l` and `2l + 1`, each rewritten
+//! as two of `x`'s base-`q` digits `d_j`, `j < 4`, and `e` the rest of `x`
+//! past them. The frame lies below the advice (`room`), where every value is a
+//! word, so `lo` and `hi` are words with no bound of their own, and `hb` holds
+//! `hi ≤ T_HI`. A lane's identity then has its left side at most `(T_HI +
+//! 1)·2^32 − 1` and its right, each `d_j` below `q` and `e` at most 807, at
+//! most `T − 1`: both below `p`, so it holds over the integers. The `d_j` are
+//! `x`'s base-`q` digits and `e = ⌊x/q^4⌋ ≤ 807`, so `x < T` ([`T`],
+//! [`T_HI`]): a lane at or above `T` has no row.
 
 use alloc::format;
 use alloc::vec::Vec;
 
 use constants::delegation::falcon::{ARRAYS, C, CHAINS, FRAME, N, NORM_HI, NORM_LO, Q};
+use constants::delegation::falcon_sample;
 use constants::{address_space, ecall, family};
 
 use crate::delegation::{access, frame, Builder, Part};
@@ -131,6 +147,16 @@ pub const STRIDE: u64 = COLUMNS as u64 + 1;
 /// The multiple of a call's cycle its residue keys start at: every place is
 /// below it.
 pub const KEY: u64 = 64;
+
+/// `q^4`, the weight of a sampled lane's rest past its four digits.
+pub const Q4: u64 = Q.pow(4);
+/// HashToPoint's bound, the largest multiple of `q^4` below `p`: a lane below
+/// it is four uniform digits and a rest, and one at or above it is skipped.
+pub const T: u64 = field::A64_C5 / Q4 * Q4;
+/// The high word of `T − 1`, the most a lane below [`T`] has in its own.
+pub const T_HI: u64 = (T - 1) >> 32;
+/// The most a lane below [`T`] has past its four digits, `⌊(T − 1)/q^4⌋`.
+const TOP: u64 = (T - 1) / Q4;
 
 /// Chain `p`'s first stamp, the control its frame row sends; its end is
 /// `start(p) + 16`.
@@ -247,6 +273,21 @@ const _: () = {
 /// The chain of `c`, whose `acc` is `‖s1‖²`.
 const C_CHAIN: usize = 2;
 const _: () = assert!(CHAINS[C_CHAIN] == C);
+
+const _: () = {
+    use falcon_sample::{DIGITS, FRAME, LANES};
+    // T is 808·q^4 (`docs/spec/precompiles.md` §7.7), so a rest is at most 807.
+    assert!(T == 808 * Q4 && TOP == 807);
+    // A lane's identity, both sides below p: two words, the high one at most
+    // T_HI, and four digits below q with a rest at most TOP.
+    assert!(((T_HI + 1) << 32) - 1 < field::A64_C5 && (TOP + 1) * Q4 - 1 < field::A64_C5);
+    // Each bound a RANGE16 one; a lane two words, each two digits' halfwords.
+    assert!(Q < 1 << 16 && TOP < 1 << 16 && FRAME == 2 * LANES && DIGITS == 4);
+    // The registry's words an entry and rows a call.
+    let t = &constants::delegation::TYPES[9];
+    assert!(t.0 == family::FALCON_SAMPLE && t.1 == ecall::FALCON512_SAMPLE);
+    assert!(t.2 == FRAME && t.3 == 1);
+};
 
 // ---------------------------------------------------------------------------
 // The circuits
@@ -481,6 +522,49 @@ fn product() -> Builder {
     b
 }
 
+/// `FALCON_SAMPLE`: lane `l`, `lo` the frame's word `2l` and `hi` its word
+/// `2l + 1`, each written over with two digits.
+///
+/// ```text
+/// frame         16 words, each written (delegation::frame)
+/// d{l}_{j}      d_j < 2^16 and q − 1 − d_j < 2^16, j < 4      d_j ∈ [0, q)
+/// e{l}          e < 2^16 and 807 − e < 2^16                   e ∈ [0, 807]
+/// hb{l}         T_HI − hi a word                              hi ≤ T_HI
+/// lane{l}_rule  lo + 2^32·hi − Σ_j q^j·d_j − q^4·e
+/// out{l}_0      write_{2l} − d_0 − 2^16·d_1
+/// out{l}_1      write_{2l+1} − d_2 − 2^16·d_3
+/// ```
+fn sample() -> Builder {
+    let mut b = Builder::new(family::FALCON_SAMPLE);
+    let live = b.live;
+    let f = frame(
+        &mut b,
+        ecall::FALCON512_SAMPLE,
+        falcon_sample::FRAME,
+        |_| true,
+    );
+    for l in 0..falcon_sample::LANES {
+        let (lo, hi) = (f.words[2 * l], f.words[2 * l + 1]);
+        let d: Vec<PolyAddress> = (0..falcon_sample::DIGITS)
+            .map(|j| b.col(&format!("d{l}_{j}")))
+            .collect();
+        let e = b.col(&format!("e{l}"));
+        let mut rule = lo.read + hi.read * T32 - e * Q4;
+        for (j, x) in d.iter().enumerate() {
+            b.range16(&format!("d{l}_{j}_low"), (*x).into());
+            b.range16(&format!("d{l}_{j}_high"), live * (Q - 1) - *x);
+            rule = rule - *x * Q.pow(j as u32);
+        }
+        b.range16(&format!("e{l}_low"), e.into());
+        b.range16(&format!("e{l}_high"), live * TOP - e);
+        b.word(&format!("hb{l}"), live * T_HI - hi.read);
+        b.gate(&format!("lane{l}_rule"), rule);
+        b.gate(&format!("out{l}_0"), lo.write - d[0] - d[1] * T16);
+        b.gate(&format!("out{l}_1"), hi.write - d[2] - d[3] * T16);
+    }
+    b
+}
+
 /// `FALCON`'s circuit over `2^trace_vars` rows; at least `2^16`, its
 /// `RANGE16` table's, which the registry refuses below.
 pub fn artifact(trace_vars: u32) -> CircuitArtifact {
@@ -510,4 +594,14 @@ pub fn product_artifact(trace_vars: u32) -> CircuitArtifact {
 /// `FALCON_PRODUCT`'s one channel, `RANGE16`.
 pub fn product_channels() -> Vec<ChannelSpec> {
     product().channels()
+}
+
+/// `FALCON_SAMPLE`'s circuit over `2^trace_vars` rows, likewise.
+pub fn sample_artifact(trace_vars: u32) -> CircuitArtifact {
+    sample().artifact(trace_vars)
+}
+
+/// `FALCON_SAMPLE`'s one channel, `RANGE16`.
+pub fn sample_channels() -> Vec<ChannelSpec> {
+    sample().channels()
 }

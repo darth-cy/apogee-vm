@@ -30,6 +30,8 @@ verifier.workspace = true
 verifier-core.workspace = true
 
 [dev-dependencies]
+# `tests/falcon_decode.rs`' key and signature, fresh from the host's signer.
+apogee-falcon512.workspace = true
 # `tests/memory.rs`' honest statement and `tests/multiset.rs`' tampers: a
 # guest, built from source, loaded, decoded, traced and filled into the memory
 # columns, then forwarded, reconciled and proved.

@@ -17,8 +17,8 @@
 //! `docs/spec/public-values.md` specifies all three.
 //!
 //! The ecall ABI is [`exit`] and the delegation calls, each a shim over one
-//! frame: [`poseidon2_permute`], [`merkle_root`], [`falcon512::s1_norm`],
-//! and [`U256`]'s divisions. An ecall carries its number in `a7` and its
+//! frame: [`poseidon2_permute`], [`merkle_root`], [`falcon512`]'s decoder,
+//! sampler and [`falcon512::s1_norm`], and [`U256`]'s divisions. An ecall carries its number in `a7` and its
 //! argument in `a0`; `docs/spec/ecall-abi.md` is the table, every number
 //! [`constants::ecall`]'s.
 //!
@@ -454,6 +454,12 @@ static MERKLE_ROOT: u32 = ecall::MERKLE_ROOT;
 #[link_section = ".apogee.delegations.falcon512"]
 static FALCON512: u32 = ecall::FALCON512;
 
+#[link_section = ".apogee.delegations.falcon512_sample"]
+static FALCON512_SAMPLE: u32 = ecall::FALCON512_SAMPLE;
+
+#[link_section = ".apogee.delegations.falcon512_decode"]
+static FALCON512_DECODE: u32 = ecall::FALCON512_DECODE;
+
 /// One delegation call over the frame at `frame`, its ecall number read back
 /// out of `declared`. Through `black_box`: folded to an immediate, the read
 /// would leave the record unreferenced and the declaration out of the image.
@@ -703,6 +709,40 @@ pub unsafe extern "C" fn apogee_falcon512_s1_norm(
     c: *const u16,
 ) -> u64 {
     falcon512::s1_norm_at(h, s2, c)
+}
+
+/// `falcon512::sample()` over the 8 lanes at `lanes`, in place. Panics unless
+/// each is below `808·q^4`.
+///
+/// # Safety
+/// `lanes` is 8-aligned and valid for reads and writes of 8 `uint64_t`.
+#[no_mangle]
+pub unsafe extern "C" fn apogee_falcon512_sample(lanes: *mut u64) {
+    falcon512::sample(&mut *lanes.cast::<[u64; 8]>())
+}
+
+/// The `FALCON512_DECODE` call in `mode` over the stream at `src` into the
+/// 512 coefficients at `dst`: a key's `h`, its 896 bytes, or a signature's
+/// `s2` compressed, 40 bytes into its advised form, the bits after its end in
+/// their word zeros. Returns `‖s2‖²`, 0 for a key, and stores the stream's end
+/// through `end` where not null. The call refuses every other stream, ending
+/// the execution.
+///
+/// # Safety
+/// `src` and `dst` are 4-aligned; `src` is readable through the word holding
+/// the stream's last bit, and `dst` writable for 512 `uint16_t`, apart.
+#[no_mangle]
+pub unsafe extern "C" fn apogee_falcon512_decode(
+    mode: u32,
+    src: *const u8,
+    dst: *mut u16,
+    end: *mut u32,
+) -> u32 {
+    let (norm, at) = falcon512::decode_at(mode, src, dst);
+    if !end.is_null() {
+        *end = at;
+    }
+    norm
 }
 
 /// `U256::mul_div_rem()`: `q = floor(a·b/d)` and `r = a·b mod d`, four

@@ -1,10 +1,10 @@
 # The precompiles
 
 The delegation calls: an `ecall` that hands a frame of RAM words to a circuit other than the CPU's,
-the request and the invocation paired through the memory multiset. Four are registered, the
-Poseidon2-A64-C5 permutation, `mul_div_u256`, `merkle_root` and the Falcon-512 lattice check.
-`constants::delegation::TYPES` is the registry; this page is the mechanism (§1, §2), the calls'
-circuits (§3, §4, §6, §7) and the SDK over them (§5; Falcon-512's HashToPoint, §7.7).
+the request and the invocation paired through the memory multiset. Six are registered, the
+Poseidon2-A64-C5 permutation, `mul_div_u256`, `merkle_root`, and Falcon-512's lattice check, decoder
+and sampler. `constants::delegation::TYPES` is the registry; this page is the mechanism (§1, §2),
+the calls' circuits (§3, §4, §6–§9) and the SDK over them (§5; Falcon-512's HashToPoint, §7.7).
 
 The VM has no Keccak precompile. A bitwise hash is inefficient to prove: in a 254-purchase
 `guests/amazon` proof, Keccak's three families took 25.8% of shard time against Poseidon2's 5.3%.
@@ -24,17 +24,21 @@ construction, as Falcon-512's HashToPoint is (§7.7). Restoring Keccak is a nega
 | `0x0514` | `FALCON` | 21 | a call | 5 | 1 | `RANGE16` |
 | `0x0514` | `FALCON_SPLIT` | 22 | the arrays | 768 | 64 | `RANGE16` |
 | `0x0514` | `FALCON_PRODUCT` | 23 | the arrays | 768 | 16 | `RANGE16` |
+| `0x0515` | `FALCON_SAMPLE` | 24 | a call | 16 | 1 | `RANGE16` |
+| `0x0516` | `FALCON_DECODE` | 25 | a call, all its words | 484 | 128 | `RANGE16` |
 
 A call is one cycle of `ADD_SUB_LUI_AUIPC`: `a7` the number, `a0` the frame's word-aligned base,
 both preserved; the row writes no register and falls through. Each family of the number records
 every entry of its kind (`constants::delegation::Per`): the call, or for `MERKLE_ROOT`'s later two
 families each level of the call's path (§6), or for `FALCON512`'s later two the call's three arrays
-(§7). The first is its **frame family**, whose row reads and writes every frame word at the
-requesting cycle's `4·cycle + FRAME_DELTA`, `FRAME_DELTA = 0`, and reads the anchor (§2); the first
-level family, `MERKLE_LEVELS`, reads its level's sibling at the same timestamp, and the first
-arrays family, `FALCON_SPLIT`, the arrays' words; a later family expands an entry into rows of its
-own, holding its words in its buffer and reaching no memory but its own address space. An entry's
-rows are a block of a power of two, the rows past its live ones all zero, padding:
+(§7), or for `FALCON512_DECODE`'s one family the call with every word it writes and reads (§8.4).
+The first is its **frame family**, whose row reads and writes every frame word at the requesting
+cycle's `4·cycle + FRAME_DELTA`, `FRAME_DELTA = 0`, and reads the anchor (§2); the first level
+family, `MERKLE_LEVELS`, reads its level's sibling at the same timestamp, and the first arrays
+family, `FALCON_SPLIT`, the arrays' words, while a call's 128 `FALCON_DECODE` rows, its frame row
+the first, write the polynomial and read the source; a later family expands an entry into rows of
+its own, holding its words in its buffer and reaching no memory but its own address space. An
+entry's rows are a block of a power of two, the rows past its live ones all zero, padding:
 `FALCON_SPLIT`'s 64 hold 48 (§7). A delegation family owns no cycle and claims no pc: it is in a
 `VmConfig` exactly when the image declares its number ([program.md](program.md) §7), and it plans
 `⌈entries·rows/h⌉` shards ([streaming.md](streaming.md) §4) under the trivial time window
@@ -74,6 +78,12 @@ word below it that no window initializes, unaligned or in the hole, reads a tupl
 and the memory argument refuses it ([memory.md](memory.md) §9). The emulator refuses a frame past
 `ADVICE_ORIGIN` as `OutOfBounds` and checks each word as it checks a store's; every word a call
 writes is bounded by its circuit.
+
+**Under a mask.** `delegation::frame_under` is the frame on the rows a boolean `M` column selects,
+zero wherever `live` is: that column in every rule for `live` and every leaf under it, each gap
+still bounded under `live`, where a row it leaves out holds `read_ts = 0` and the gap `4·cycle`.
+`access_under` is one access so masked. `FALCON_DECODE`'s frame is under `first`, its call's first
+row, and its ports' accesses under their own masks (§8.1).
 
 ## 2. The request and the anchor
 
@@ -200,18 +210,29 @@ conditions that single out the quotient. 226 committed columns, 239 obligations 
 | `Digest::bytes(&[Digest]) -> &[u8]` | a path the guest holds, as `merkle_root` takes it |
 | `falcon512::Poly` | 512 `u16` coefficients, word-aligned, coefficient `i` at index `i`: any 512 are a polynomial, read mod `q` |
 | `falcon512::s1_norm(&Poly, &Poly, &Poly) -> u64` | the call over `h`, `s2` and `c` where they lie, its frame five words on the caller's stack: `‖s1‖²`, below `2^35` (§7); panics first unless the three arrays are apart |
-| `falcon512::Q`, `SQBETA`, `PUBLIC_KEY_BYTES`, `SIGNATURE_BYTES` | `q = 12289`; `⌊β²⌋ = 34,034,726`, the most `‖s1‖² + ‖s2‖²` a signature verifies at; 897 and 666, a key's bytes and a signature's |
-| `falcon512::PublicKey::decode(&[u8]) -> Option<PublicKey>` | the key `h` from exactly 897 bytes, v1.2 of the specification: the header `0x09`, then its 512 coefficients in order, 14 bits each, packed big-endian, each below `q`; `None` for any other bytes, so a key has one encoding. A key that decodes then has K computed from the same bytes and HashToPoint's per-key prefix from K (§7.7), both kept with `h` |
-| `falcon512::key_digest(&[u8]) -> Digest`, `falcon512::address(&[u8]) -> [u8; 32]` | K and the address (§7.7) of any bytes, a key that does not decode included |
+| `falcon512::sample(&mut [u64; 8])` | the `FALCON512_SAMPLE` call over the lanes in place, lane `l` then coefficients `4l` to `4l + 3` of the 32 `u16` the lanes' bytes are (§9); panics first unless every lane is below `T` (§7.7) |
+| `falcon512::Q`, `SQBETA`, `KEY_BYTES`, `SALT_BYTES`, `MAX_SIGNATURE_BYTES` | `q = 12289`; `⌊β²⌋ = 34,034,726`, the most `‖s1‖² + ‖s2‖²` a signature verifies at; 896, 40 and 668: a key's advised form, a salt, and the longest signature's advised form |
+| `falcon512::PublicKey::decode(h: &[u8]) -> PublicKey` | the key whose advised form is `h`: exactly 896 bytes, word-aligned, or a panic; the `FALCON512_DECODE` call reads it in place into the key's `h`, refusing a coefficient at or above `q` (§8). Then K over the key's v1.2 encoding `0x09 ‖ h` and HashToPoint's per-key prefix from K (§7.7), both kept with `h` |
 | `falcon512::PublicKey::key_digest(&self) -> &Digest`, `falcon512::PublicKey::address(&self) -> [u8; 32]` | the key's K and address, computed once by `decode` |
-| `falcon512::PublicKey::verify(&self, msg: &[u8], sig: &[u8], context: &[u8]) -> bool` | whether `sig` is a v1.2 padded signature of `msg` under the key and `context`: `context` at most 255 bytes; `sig` exactly 666 bytes, the header `0x39`, the 40-byte salt, then `s2` compressed, each coefficient a sign bit, the low 7 bits of its size, then that size `>> 7` zeros and a one, and zeros to the end; `false` for any other bytes, among them a coefficient `−0`, one above 2047 in size or one reaching past the end, and a one bit after the 512th. `c` is HashToPoint (§7.7) of K, the salt, `context` and `msg`, from the key's prefix; it verifies exactly when `s1_norm(h, s2, c) + ‖s2‖² ≤ SQBETA` |
+| `falcon512::PublicKey::verify(&self, msg: &[u8], sig: &[u8], context: &[u8]) -> usize` | the length of the signature `sig` begins with, `40 + 4·⌈end/32⌉` bytes, where it signs `msg` under the key and `context`; otherwise the execution ends. The call decodes `s2` from `sig[40..]`, refusing every stream that is not one (§8); a `context` over 255 bytes, a `sig` not word-aligned, a length past `sig`, and `s1_norm(h, s2, c) + ‖s2‖² > SQBETA` panic, `c` HashToPoint (§7.7) of K, the salt, `context` and `msg`, from the key's prefix. `sig` may continue past the signature |
 
-`apogee_poseidon2_permute`, `apogee_mul_div_u256`, `apogee_merkle_root` and
-`apogee_falcon512_s1_norm` are the C ABI's ([ecall-abi.md](ecall-abi.md) §7). Every frame is the
-caller's own memory below the advice region (§1), a guest copying advice in before it permutes it;
-a path's siblings and the lattice check's arrays are not a frame, and their calls read them in
-place where they lie, the advice included (§6, §7). A digest decoded from advice or input, that the
-guest compares or publishes, is `Digest::new`'s to check.
+**The advised forms** are compact: each a whole number of words, read in place a word at a time,
+holding nothing a verification does not read. A key is `h`'s 896 bytes, its v1.2 encoding without
+the header `0x09`, which K absorbs as the constant it is (§7.7). A signature is its 40-byte salt,
+then `s2` compressed through the word holding its last bit, the bits after it zeros:
+`40 + 4·⌈end/32⌉` bytes, v1.2's 666 without the header `0x39` and the padding.
+`tools/falcon512`'s `key_advice` and `signature_advice` convert v1.2's encodings on the host,
+where advice is made, refusing any other length or header. **Nothing answers a verdict**: a key or a
+signature not in its form, and a signature that does not verify, end the execution, a panic or the
+decode call's refusal.
+
+`apogee_poseidon2_permute`, `apogee_mul_div_u256`, `apogee_merkle_root`,
+`apogee_falcon512_s1_norm`, `apogee_falcon512_sample` and `apogee_falcon512_decode` are the C ABI's
+([ecall-abi.md](ecall-abi.md) §7). Every frame is the caller's own memory below the advice region
+(§1), a guest copying advice in before it permutes it; a path's siblings, the lattice check's
+arrays and a decode call's source are not a frame, and their calls read them in place where they
+lie, the advice included (§6–§8). A digest decoded from advice or input, that the guest compares
+or publishes, is `Digest::new`'s to check.
 
 ## 6. `merkle_root`
 
@@ -331,8 +352,9 @@ it does a frame's.
 ## 7. The Falcon-512 lattice check
 
 The lattice check of Falcon-512 verification over `Z_q[x]/(x^512 + 1)`, `q = 12289`
-(`constants::delegation::falcon`): from the public key `h`, the signature's half `s2` and the
-hashed message `c` (§7.7), `s1 = (c − s2·h) mod (q, x^512 + 1)` with each coefficient centered to
+(`constants::delegation::falcon`): from the public key `h` and the signature's half `s2`, each
+decoded by `FALCON512_DECODE` (§8), and the hashed message `c`, HashToPoint's (§7.7) through
+`FALCON512_SAMPLE` (§9), `s1 = (c − s2·h) mod (q, x^512 + 1)` with each coefficient centered to
 `[−6144, 6144]`, and `n = ‖s1‖²`. The frame:
 
 ```text
@@ -497,8 +519,8 @@ Falcon-512 here is v1.2's (the NIST round-3 specification), its keys, encodings,
 acceptance rule, in all but HashToPoint, the map to the point `c`: not SHAKE256 of the salt (v1.2's
 nonce `r`) and the message but a sponge over `P`, the Poseidon2-A64-C5 permutation (§3), of the
 key digest K, the salt, the application's context and the message. K is a sponge over the key's
-bytes, and the key's address is K's first 32 bytes. The SDK's `falcon512` computes both over
-`poseidon2_permute` (§5).
+v1.2 encoding, and the key's address is K's first 32 bytes. The SDK's `falcon512` computes both
+over `poseidon2_permute` (§5).
 
 The sponge is [transcript.md](transcript.md) §2's duplex from the zero state: rate lanes 0–7,
 capacity 8–15, no padding, absorbing overwrites the next rate lane, permuting first when the rate
@@ -522,16 +544,23 @@ HashToPoint(pk, salt, context, msg)
                   the next four coefficients, ⌊x / q^j⌋ mod q for j = 0, 1, 2, 3, until 512
 ```
 
-`pk` is the exact 897-byte key the signature is verified under: a verifier computes K from the
-bytes it decodes `h` from. `salt` is the signature's 40 bytes after its header. `context` is the
-application's, 0 to 255 bytes, FIPS 204's and 206's convention: a signer refuses a longer one and
-verification is false for it, and a signature under one context does not verify under another. K
-is defined for any bytes, a key that does not decode included. The address is the key's name in a
-guest's state (`guests/amazon`), 256 bits, each of its four lanes below `p`.
+`pk` is the key's 897-byte v1.2 encoding, the header `0x09` then `h`'s 896 bytes, the key the
+signature is verified under. A guest is advised `h` alone (§5) and supplies the header, absorbing
+that constant and then the very bytes the decode call reads `h` from (§8), so its K is the host's
+and names the key a signature verifies under. `salt` is the signature's 40 bytes before `s2`.
+`context` is the application's, 0 to 255 bytes, FIPS 204's and 206's convention: a signer refuses
+a longer one, as the SDK's verifier does by a panic, and a signature under one context does not
+verify under another. The address is the key's name in a guest's state (`guests/amazon`), 256
+bits, each of its four lanes below `p`.
 
-**The per-key prefix.** For an 897-byte key K is 141 lanes, 17 permutations absorbing and one to
-squeeze, and `(1, SIGNATURE_DOMAIN)` and `(2, K)` are 7 + 12 = 19 lanes, 2 permutations, leaving
-three rate lanes written. Every signature under the key continues from that state, so `PublicKey::decode`
+**Sampling.** The SDK makes HashToPoint's rejection itself: it compares each squeezed lane with `T`
+in guest code, a proven compare, and keeps each lane below it as the next of `c`'s 128, converting
+each eight with one `FALCON512_SAMPLE` call (§9), 16 a signature. The call refuses a lane at or
+above `T`, so it never sees one the guest should have skipped, and no lane is reduced.
+
+**The per-key prefix.** K is 141 lanes, 17 permutations absorbing and one to squeeze, and
+`(1, SIGNATURE_DOMAIN)` and `(2, K)` are 7 + 12 = 19 lanes, 2 permutations, leaving three rate
+lanes written. Every signature under the key continues from that state, so `PublicKey::decode`
 computes K and the prefix once. A 92-byte message under a 25-byte context is then 30 lanes, 4
 permutations, and the squeeze 16, one more when a lane among the first 128 is skipped, with
 probability `1 − (1 − 1.0177·10^−3)^128 ≈ 12.2%`.
@@ -552,4 +581,183 @@ is injective, each field its tag, its length and whole lanes in a fixed order, s
 key here, but a signature is not interchangeable with standard Falcon-512's: a standard signature
 does not verify under this HashToPoint, nor the reverse. `tools/falcon512` holds the host
 implementations, Rust, JavaScript and Python, which sign and verify under it, and `vectors.json`,
-the vectors all three agree on, whose signatures the SDK's verifier is held to.
+the vectors all three agree on, whose signatures the SDK's verifier is held to in their advised
+forms (§5).
+
+## 8. `FALCON512_DECODE`
+
+Falcon-512's decoder (`constants::delegation::falcon_decode`): the encoding at the frame's source
+decoded into the 512 coefficients the lattice check reads, a public key's `h` or a signature's
+`s2`, written as an array (§7) at its destination. The frame:
+
+```text
+word 0   src    the source's address, word-aligned: the encoding's first byte
+word 1   dst    the polynomial's address, word-aligned: 256 words, written
+word 2   mode   read: 0 a key, 1 a signature; written: ‖s2‖², 0 for a key
+word 3   end    written: the stream's end, in bits from the source's first
+```
+
+The **stream** is the source's bytes in address order, each MSB first. A key's is `h`'s 512
+coefficients, 14 bits each, each below `q`, and no header: 896 bytes, `end = 7168`, a word's end.
+A signature's is `s2` compressed: 512 codewords, each a sign bit `b`, the low 7 bits of `|s|`, then
+`k = |s| >> 7` zeros and a one, `k ≤ 15`, never `−0` (`b = 1`, `|s| = 0`), ending within 5,000
+bits, the bits after `end` in its last word zeros. Coefficient `i` is a key's field, or `|s|`, or
+`q − |s|` where `b = 1`, each below `q`, and `‖s2‖² = Σ |s|² < 2^31`. The call reads the source a
+word at a time as a load does, the advice included, through the word holding the stream's last bit
+and no further: a key's 224 words, a signature's at most 157. `emulator::falcon512_decode` is the
+one copy of the decoder, the executor's and the fill's.
+
+**The call refuses** any other stream — a key's field at or above `q`, `−0`, more than 15 zeros, a
+stream past 5,000 bits, a bit set after `end` in its last word — and a mode but 0 and 1, as
+`EmuError::DelegationFrame`. **The caller owes** the layout: word-aligned addresses, the polynomial
+apart from the frame and from the source words read, and those apart from the frame, which the
+emulator refuses otherwise as `DelegationFrame`; a source word the stream reaches and a polynomial
+word must be ones a load and a store could reach, else `OutOfBounds`. None has a witness.
+
+**The limbs and the state.** A source word, little-endian in RAM, is the 32-bit **limb** `BE` of its
+bytes reversed: the stream's next 32 bits. Between codewords a call's state is
+
+```text
+m     the mode
+o     the bit offset in the current limb, in [0, 32)
+E     2^(32 − o)
+A     the limb's bits before o, at its top: a multiple of E below 2^32
+sa    the current limb's address
+acc   Σ |s|² so far
+da    dst + 8r, row r's two output words
+```
+
+A **slot** takes one codeword `C` of `L` bits at `o`: a key's field `x`, `L = 14`; a signature's
+`C = (128b + low)·2^(k+1) + 1`, `L = 9 + k`, `|s| = low + 128k`. Where `o + L ≥ 32` it completes
+the limb, `c = 1`, and its **port** reads the limb's word at `sa`, at the call's timestamp, and
+writes it back unchanged. **The space**, `address_space::FALCON_DECODE = 9`, holds row `r`'s state:
+
+```text
+T(FALCON_DECODE, cycle, 4r + j, x_j, y_j)     j < 4: (m, o), (E, A), (sa, acc), (da, 0)
+```
+
+Row `r` reads its in-state at `4r + j` and writes its out-state at `4r + 4 + j`; row 0 starts the
+state by gates instead, and reads the end state at `512 + j`.
+
+### 8.1 `FALCON_DECODE`
+
+128 rows a call, row `r` coefficients `4r` to `4r + 3`, one a slot, row 0 `first` and also the
+frame, the rest `rest`:
+
+```text
+M   live first rest cycle stamp m o_in e_in a_in sa_in acc_in da o_out sa_out acc_out
+first, rest, m   boolean; rest − live + first
+frame       4 words (§1) under first, words 2 and 3 written: src, dst, mode read; norm, end written
+start       under first: o_in = 0, e_in = 2^32, a_in = 0, sa_in = src, acc_in = 0, da = dst,
+            stamp = 0, m = mode
+slot u      W  b k0..k3 (bits) low p1 p2 pow x csig cw mag bs inv z a_h16, the port's bytes β_j
+               and gap chunks
+            M  c e a, sa (u ≥ 1), the port's read_ts and word w
+            in: o, E, A, sa the row's, or slot u − 1's o', e, a, sa'
+  c         boolean, and c − c·live
+  pow       2^(k+1), k = Σ 2^i·k_i, by p1 = 2^(k0 + 2k1) and p2 = 2^(4k2 + 8k3)
+  keyk      (live − m)·(k − 5)                     keyx   m·x
+  csig      csig − (128b + low)·pow − live         cw     cw − m·csig − x, C
+  mag       mag − m·(low + 128k), |s|              bs     bs − b·mag, and mz: bs·inv − b
+  e_out     256·e·pow − E·live − (2^32 − 1)·E·c, e = 2^(32 − o')       z    z − cw·e
+  limb      2^32·A + g·z − 2^32·c·BE − g·a,  g = c + 2^32·(live − c)
+  port      w − Σ_j 2^8j·β_j,  BE = Σ_j 2^(24 − 8j)·β_j
+  next      sa' = sa + 4c,  o' = o + 9·live + k − 32c
+  RANGE16   low < 2^7; x < q; o' < 2^5; a a word, its low halfword plus 59·c below 2^16;
+            β_j < 2^8; the port's gap
+  leaves    the port's read (RAM, sa, read_ts, w) and write back at 4·cycle + FRAME_DELTA, under c
+row out     o_out = o'_3, sa_out = sa'_3       acc_out − acc_in − Σ_u mag_u²
+out{i}      write_i − v_2i − 2^16·v_2i+1, v = x + mag + q·b − 2·bs; the word at da + 4i, an
+            access, i < 2
+frame row   M  o_e e_e a_e sa_e acc_e f, the flush port's read_ts and word
+            W  f_inv zz, the flush port's bytes and gap chunks
+  norm      norm − acc_e                         end    end − 8·sa_e + 8·src − o_e
+  key_end   (first − mode)·(end − 7168)          zz     zz − mode·(5000 − end), zz < 2^16
+  f         o_e·f_inv − f, (first − f)·o_e       flush  BE_f − a_e, its port at sa_e under f
+read   (FALCON_DECODE, cycle, stamp + j, in_j) under rest
+write  (FALCON_DECODE, cycle, stamp + 4 + j, out_j), E and A out e_3 and a_3, da out da + 8
+read   (FALCON_DECODE, cycle, 512 + j, end_j) under first: (mode, o_e), (e_e, a_e), (sa_e, acc_e),
+       (dst + 1024, 0)
+```
+
+Every leaf's mask is a bit, zero wherever `live` is: `first` by its rule and `rest`'s, `c` by
+`c − c·live`, and `f = first·[o_e ≠ 0]`, `gadgets::is_zero` over `o_e` with its `z` the column
+`first − f`. 181 committed columns, 119 obligations (the `RANGE16` tree at 128 leaves, 8 free), 20
+and 15 leaves; at `2^16`, 512 calls a shard.
+
+### 8.2 Why the rows are the call
+
+The space's reads and writes are equal multisets: nothing initializes it and no final reads it.
+Fix a cycle and let `n_t` count its `rest` rows of stamp `t`. Each reads `t` to `t + 3` and writes
+`t + 4` to `t + 7`; a frame row, its anchor's and so one a call (§2), writes `4` to `7` and reads
+`512` to `515`. So `N_s = n_s + n_{s−1} + n_{s−2} + n_{s−3}` has
+`N_s − N_{s−4} = [4 ≤ s < 8] − [512 ≤ s < 516]` for every `s` in `Fp`. Two solutions differ by a
+function invariant under `s ↦ s + 4`, which generates `Fp`'s additive group: by a constant, and a
+positive one would need `p/4` rows, more than a statement has. So `N_s = [4 ≤ s < 512]` and, the
+counts being nonnegative, `n_t = 1` exactly at `t = 4, 8, …, 508`; at a cycle with no frame row
+every `n_t` is 0. A call is 128 rows, of stamps `0, 4, …, 508`, each reading what the one before
+wrote and its frame row what the last wrote: `m = mode` and `da = dst + 8r` throughout, and every
+row's `cycle` the request's, so each of its accesses is at the call's timestamp.
+
+### 8.3 Why it is the decoding
+
+By induction `A` is a multiple of `E = 2^(32 − o)` below `2^32`, as it starts, 0 at `o = 0`.
+`C < 2^L`, a key's `x < q < 2^14` and a signature's `C < 2^(k+9)`, and `L ≤ 24`; the bound on `o'`
+puts `o + L − 32c` in `[0, 32)`, so `c = [o + L ≥ 32]` and `e = 2^(32 − o')`, the next slot's `E`.
+
+- `c = 0`: `limb` is `2^32·(A + C·e − a) = 0` with `A + C·e < 2^32` and `a` a word, so
+  `a = A + C·2^(32 − o − L)` over the integers, a multiple of `e`: `C` placed after `A`'s bits.
+- `c = 1`: `o' ≤ 23`, so `2^32·A + C·e ≤ 2^64 − 2^9 < p`, and `2^32·BE + a < p`: `BE` is four
+  bytes, and `a`'s low halfword plus `59 = 2^64 − p` is below `2^16`, so `a ≤ 2^32 − 60`, as an
+  honest `a`, a multiple of `2^9`, is. The two sides are equal integers: `BE`, the limb the port
+  read, is `A`'s bits then `C`'s first `32 − o`, and `a` is `C`'s last `o'` bits at the next limb's
+  top. Without the 59 an all-ones limb would read as `p` less: a key's zeros where the source holds
+  `0xFFFFFFFF`.
+
+So the codewords are the stream, every completed limb read once, at `sa = src + 4·(limbs before)`.
+The stream ends at `end = 8·(sa_e − src) + o_e`: a key's at 7168, on a limb, and a signature's at
+most 5,000 (`zz`). Where `o_e ≠ 0` the flush reads the partial limb at `sa_e` and holds it to `a_e`,
+both below `2^32`, so as integers: its first `o_e` bits are the stream's and the rest zeros. Where
+`o_e = 0`, `a_e = 0` and nothing is read. `csig ≥ 1` and its `k` zeros are what a codeword is, `k`'s
+four bits refuse more than 15, `mz` refuses `−0`, and a key's `b`, its `mag` 0. Each `v` is the
+coefficient, a key's `x < q` or `|s|` or `q − |s|`, below `q`; `norm` is `Σ |s|² < 2^31`, exact.
+Each source, polynomial and frame word is accessed once at the call's timestamp: a word in two of
+those places would be accessed twice at one timestamp, which no memory history allows.
+
+### 8.4 The trace
+
+A call is one `FALCON_DECODE` entry (`constants::delegation::Per::Decode`),
+`falcon_decode::WORDS = 484` words: the frame's 4; the polynomial's 256, each its old value and a
+coefficient pair; the source words the stream reached, in address order, each written back
+unchanged; and past them `Query::ABSENT`, no access, to 224 source slots, a key's all and a
+signature's at most 157. Each word present is accessed at the call's timestamp, in that order, and
+the entry's base is the frame's. It carries nothing: a call's 128 rows divide every height, so a
+shard holds whole calls. `trace::TraceArchive` checks the words against the log as it does a
+frame's and skips the absent slots, which no event records: address 0 is in no region, so no word
+a call touches is one.
+
+## 9. `FALCON512_SAMPLE`
+
+HashToPoint's sampler, one row a call (`constants::delegation::falcon_sample`). The frame is 16
+words, eight lanes, lane `l` the integer `x = lo + 2^32·hi` of its words `2l` and `2l + 1`, each
+below `T = 808·q^4` (§7.7). The call writes lane `l` over as its four base-`q` digits
+`d_j = ⌊x/q^j⌋ mod q`, `j < 4`, word `2l` `d_0 + 2^16·d_1` and word `2l + 1` `d_2 + 2^16·d_3`:
+coefficients `4l` to `4l + 3` of the 32 `u16` the frame's bytes are. **A lane at or above `T` is
+refused** (`EmuError::DelegationFrame`) and has no witness: HashToPoint skips such a lane, and the
+SDK compares each with `T` before it calls (§7.7).
+
+```text
+frame         16 words (§1), each written
+d{l}_{j}      d_j and q − 1 − d_j in [0, 2^16), j < 4        d_j ∈ [0, q)
+e{l}          e and 807 − e in [0, 2^16)                    e ∈ [0, 807]
+hb{l}         T_HI − hi a word                              hi ≤ T_HI = ⌊(T − 1)/2^32⌋
+lane{l}_rule  lo + 2^32·hi − Σ_j q^j·d_j − q^4·e
+out{l}        write_{2l} − d_0 − 2^16·d_1,  write_{2l+1} − d_2 − 2^16·d_3
+```
+
+The frame lies below the advice (§1), where every value is a word, so `lo` and `hi` need no bound of
+their own. A lane's identity then has its left side at most `(T_HI + 1)·2^32 − 1` and its right,
+each `d_j` below `q` and `e` at most 807, at most `T − 1`: both below `p`, so it holds over the
+integers. The `d_j` are `x`'s base-`q` digits and `e = ⌊x/q^4⌋ ≤ 807`, so `x < T`: a lane at or
+above `T` has no row. 149 committed columns, 162 obligations (the `RANGE16` tree at 256 leaves, 93
+free), 17 and 16 leaves. A call is one entry, its frame (`Per::Call`).

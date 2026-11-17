@@ -16,9 +16,10 @@ Families 0–6 (`constants::family`) are the **execution** families, one execute
 row ([add-sub.md](add-sub.md), [jump-branch-slt.md](jump-branch-slt.md),
 [bitwise.md](bitwise.md), [mul-div.md](mul-div.md), [memory-ops.md](memory-ops.md) §3,
 §4, §6); 7–11 the **window** families, one memory word a row ([memory.md](memory.md) §3,
-[public-values.md](public-values.md) §4); 12–17 and 21–23 the **delegation** families, a block of
-1 to 64 rows an entry of a precompile call: the call, a path's level or the call's arrays
-([precompiles.md](precompiles.md) §1); 18–20 are retired, never to be reassigned.
+[public-values.md](public-values.md) §4); 12–17 and 21–25 the **delegation** families, a block of
+1 to 128 rows an entry of a precompile call: the call, a path's level, the call's arrays, or a
+decode call with every word it touches ([precompiles.md](precompiles.md) §1); 18–20 are retired,
+never to be reassigned.
 
 Shapes at the default height `2^n` (`constants::family::DEFAULT_HEIGHTS`): committed columns,
 enforcing gates, obligations per channel (`TIMESTAMP/RANGE16/GENERIC/DECODER`), row-wise gate
@@ -51,6 +52,8 @@ lists (the halving ones are `n`), inner columns, artifact bytes, and a shard pro
 | 21 | `FALCON` | 16 | 27 | 13 | 0 | 10 | 0/25/0/0 | 6 | 254 | 30,823 | 19,776 |
 | 22 | `FALCON_SPLIT` | 16 | 86 | 145 | 0 | 50 | 0/225/0/0 | 9 | 1,344 | 212,715 | 43,368 |
 | 23 | `FALCON_PRODUCT` | 16 | 101 | 144 | 0 | 84 | 0/192/0/0 | 9 | 1,344 | 222,800 | 43,592 |
+| 24 | `FALCON_SAMPLE` | 16 | 67 | 82 | 0 | 41 | 0/162/0/0 | 9 | 1,218 | 152,197 | 40,040 |
+| 25 | `FALCON_DECODE` | 16 | 67 | 114 | 0 | 118 | 0/119/0/0 | 8 | 704 | 190,235 | 31,296 |
 
 The bytes are the GKR pass and outputs; the witness commitment and the opening come on top
 ([proof.md](proof.md) §9, [pcs.md](pcs.md) §7).
@@ -65,9 +68,10 @@ halving lists, one per variable and as wide as the outputs, and no gate below th
 `PUBLIC_INPUT`'s, byte for byte at one height, all `constraints::memory` constructors
 ([memory.md](memory.md) §3). Every other family's is its own module's `artifact`, the delegation
 families' on `constraints::delegation`'s builder: `poseidon2::{artifact, rounds_artifact}`,
-`mul_div_u256::artifact`, `merkle::{artifact, levels_artifact, rounds_artifact}` and
-`falcon::{artifact, split_artifact, product_artifact}`, the two rounds families on one builder,
-`poseidon2::rounds`, keyed for a call or a level.
+`mul_div_u256::artifact`, `merkle::{artifact, levels_artifact, rounds_artifact}`,
+`falcon::{artifact, split_artifact, product_artifact, sample_artifact}` and
+`falcon_decode::artifact`, the two rounds families on one builder, `poseidon2::rounds`, keyed for
+a call or a level.
 
 ## 2. How a family circuit is assembled
 

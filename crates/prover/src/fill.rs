@@ -177,6 +177,8 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
         family::FALCON => Some(falcon),
         family::FALCON_SPLIT => Some(falcon_split),
         family::FALCON_PRODUCT => Some(falcon_product),
+        family::FALCON_SAMPLE => Some(falcon_sample),
+        family::FALCON_DECODE => Some(falcon_decode),
         _ => None,
     }
 }
@@ -913,6 +915,394 @@ fn falcon_product(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly
                 }
             }
         }
+    }
+    Ok(w.finish(src.height))
+}
+
+/// `FALCON_SAMPLE`, `constraints::falcon`: the frame, and each lane's four
+/// digits, its rest past them and the high halfword of `T_HI` less its high
+/// word.
+fn falcon_sample(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constants::delegation::falcon::Q;
+    use constants::delegation::falcon_sample::{DIGITS, LANES};
+    use constraints::falcon::{Q4, T, T_HI};
+    let fam = family::FALCON_SAMPLE;
+    let (calls, mut w) = frame_fill(src, fam)?;
+    let lanes: Vec<([usize; DIGITS], [usize; 2])> = (0..LANES)
+        .map(|l| {
+            let d = std::array::from_fn(|j| w.col(&format!("d{l}_{j}")));
+            (d, [w.col(&format!("e{l}")), w.col(&format!("hb{l}_h16"))])
+        })
+        .collect();
+    for r in 0..calls.len() {
+        let cycle = calls.cycles()[r];
+        for (l, (d, [e, hb])) in lanes.iter().enumerate() {
+            let [lo, hi] = [2 * l, 2 * l + 1].map(|j| frame_word(&calls, j, r, false));
+            let x = lo | hi << 32;
+            if x >= T {
+                return Err(format!(
+                    "cycle {cycle}: FALCON512_SAMPLE's lane {l} is not below T"
+                ));
+            }
+            let digit = |j: usize| x / Q.pow(j as u32) % Q;
+            for (j, col) in d.iter().enumerate() {
+                w.put(*col, r, digit(j));
+            }
+            w.row(r, &[(*e, x / Q4), (*hb, (T_HI - hi) >> 16)]);
+            assert_eq!(
+                [2 * l, 2 * l + 1].map(|j| frame_word(&calls, j, r, true)),
+                [digit(0) | digit(1) << 16, digit(2) | digit(3) << 16],
+                "cycle {cycle}: FALCON512_SAMPLE wrote other than lane {l}'s digits"
+            );
+        }
+    }
+    Ok(w.finish(src.height))
+}
+
+/// A `FALCON_DECODE` port's columns: its access's read timestamp and word,
+/// the word's four bytes and the gap's two chunks.
+struct DecodePort {
+    cols: [usize; 2],
+    bytes: [usize; 4],
+    gap: [usize; 2],
+}
+
+impl DecodePort {
+    fn new(w: &mut Witness, name: &str) -> DecodePort {
+        DecodePort {
+            cols: ["read_ts", "read_value"].map(|c| w.col(&format!("{name}_{c}"))),
+            bytes: std::array::from_fn(|j| w.col(&format!("{name}_b{j}"))),
+            gap: [0, 1].map(|c| w.col(&format!("{name}_gap_c{c}"))),
+        }
+    }
+
+    /// On row `r`, entry `e`'s word `j` read and its bytes, or no word: the
+    /// gap chunks of `4·cycle` its mask leaves.
+    fn put(&self, w: &mut Witness, calls: &FrameSlice, j: Option<usize>, e: usize, r: usize) {
+        let Some(j) = j else {
+            return idle_gap(w, self.gap, calls.cycles()[e], r);
+        };
+        access_at(w, self.cols, self.gap, calls, j, e, r);
+        let word = calls.word(j).read_value[e];
+        for (i, col) in self.bytes.iter().enumerate() {
+            w.put(*col, r, word >> (8 * i) & 0xff);
+        }
+    }
+}
+
+/// The gap chunks of an access a mask leaves out on a live row,
+/// `constraints::delegation::access_under`: `4·cycle`, its read timestamp 0.
+fn idle_gap(w: &mut Witness, [c0, c1]: [usize; 2], cycle: u64, r: usize) {
+    let gap = memory::TS_STEP * cycle;
+    w.row(r, &[(c0, (gap >> 16) & 0xffff), (c1, gap >> 32)]);
+}
+
+/// A `FALCON_DECODE` slot's columns.
+struct DecodeSlot {
+    b: usize,
+    k: [usize; 4],
+    low: usize,
+    p1: usize,
+    p2: usize,
+    pow: usize,
+    x: usize,
+    csig: usize,
+    cw: usize,
+    mag: usize,
+    bs: usize,
+    inv: usize,
+    z: usize,
+    c: usize,
+    e: usize,
+    a: usize,
+    a_h16: usize,
+    /// The slot's `sa`, a column of its own past slot 0.
+    sa: Option<usize>,
+    port: DecodePort,
+}
+
+impl DecodeSlot {
+    fn new(w: &mut Witness, u: usize) -> DecodeSlot {
+        let mut col = |name: &str| w.col(&format!("{name}{u}"));
+        let [b, low, p1, p2, pow, x, csig, cw, mag, bs, z, c, e, a] = [
+            "b", "low", "p1_", "p2_", "pow", "x", "csig", "cw", "mag", "bs", "z", "c", "e", "a",
+        ]
+        .map(&mut col);
+        DecodeSlot {
+            b,
+            k: std::array::from_fn(|i| w.col(&format!("k{u}_{i}"))),
+            low,
+            p1,
+            p2,
+            pow,
+            x,
+            csig,
+            cw,
+            mag,
+            bs,
+            inv: w.fcol(&format!("inv{u}")),
+            z,
+            c,
+            e,
+            a,
+            a_h16: w.col(&format!("a{u}_h16")),
+            sa: (u > 0).then(|| w.col(&format!("sa{u}"))),
+            port: DecodePort::new(w, &format!("p{u}")),
+        }
+    }
+}
+
+/// `FALCON_DECODE`, `constraints::falcon_decode`: 128 rows a call, each call
+/// decoded again from its entry by [`emulator::falcon512_decode`] and placed
+/// slot by slot from the start, its row 0 also the frame, the end state, the
+/// flush, `NORM` and `END`. A live row's frame, ports and flush its masks
+/// leave out hold zeros and the gap chunks of `4·cycle`. Refuses an entry its
+/// call did not write: one whose words are not the call's frame, polynomial
+/// and source as the decoder reads them.
+fn falcon_decode(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constants::delegation::falcon::Q;
+    use constants::delegation::falcon_decode::{
+        DST, END, FRAME, MODE, OUTPUT, ROWS, SIGNATURE_BITS, SLOTS, SOURCE, SRC,
+    };
+    use constraints::falcon_decode::{CODEWORD, KEY_K, LIMB, ROW_BYTES, TUPLES};
+    let fam = family::FALCON_DECODE;
+    let calls = *src.invocations(fam)?;
+    let mut w = Witness::new(fam, ROWS * calls.len());
+    let [live, first, rest, cycle, number, stamp, m] =
+        ["live", "first", "rest", "cycle", "number", "stamp", "m"].map(|c| w.col(c));
+    let [o_in, e_in, a_in, sa_in, acc_in, da, o_out, sa_out, acc_out] = [
+        "o_in", "e_in", "a_in", "sa_in", "acc_in", "da", "o_out", "sa_out", "acc_out",
+    ]
+    .map(|c| w.col(c));
+    let frame: Vec<_> = (0..FRAME)
+        .map(|j| {
+            let addr = w.col(&format!("w{j}_addr"));
+            let cols = ["read_ts", "read_value"].map(|c| w.col(&format!("w{j}_{c}")));
+            let gap = [0, 1].map(|c| w.col(&format!("w{j}_gap_c{c}")));
+            let write = (j == MODE || j == END).then(|| w.col(&format!("w{j}_write_value")));
+            (addr, cols, gap, write)
+        })
+        .collect();
+    let room = w.col("room_h16");
+    let slots: Vec<DecodeSlot> = (0..SLOTS).map(|u| DecodeSlot::new(&mut w, u)).collect();
+    let outs: Vec<([usize; 2], [usize; 2], usize)> = (0..SLOTS / 2)
+        .map(|i| {
+            let cols = ["read_ts", "read_value"].map(|c| w.col(&format!("out{i}_{c}")));
+            let gap = [0, 1].map(|c| w.col(&format!("out{i}_gap_c{c}")));
+            (cols, gap, w.col(&format!("out{i}_write_value")))
+        })
+        .collect();
+    let [o_e, e_e, a_e, sa_e, acc_e, f, zz] =
+        ["o_e", "e_e", "a_e", "sa_e", "acc_e", "f", "zz"].map(|c| w.col(c));
+    let f_inv = w.fcol("f_inv");
+    let flush = DecodePort::new(&mut w, "flush");
+    let number_value = ecall::FALCON512_DECODE as u64;
+    for e in 0..calls.len() {
+        let at = calls.cycles()[e];
+        let word = |j: usize| calls.word(j);
+        let refuse = |what: &str| format!("cycle {at}: FALCON512_DECODE's entry {what}");
+        let base = calls.bases()[e] as u64;
+        if (0..FRAME).any(|j| word(j).addr[e] as u64 != base + 4 * j as u64) {
+            return Err(refuse("has a frame not at its base"));
+        }
+        let read = |j: usize| word(j).read_value[e];
+        let (source, dst, mode) = (read(SRC), read(DST), read(MODE));
+        // The source words: the slots past the polynomial at the source's
+        // addresses, in order; every slot past them absent.
+        let slot = |i: usize| FRAME + OUTPUT + i;
+        let n = (0..SOURCE)
+            .take_while(|&i| word(slot(i)).addr[e] as u64 == source + 4 * i as u64)
+            .count();
+        let words: Vec<u32> = (0..n)
+            .map(|i| {
+                u32::try_from(read(slot(i))).map_err(|_| refuse("has a source word above 2^32"))
+            })
+            .collect::<Result<_, _>>()?;
+        let absent = |j: usize| {
+            let q = word(j);
+            (q.addr[e], q.read_ts[e], q.read_value[e], q.write_value[e]) == (0, 0, 0, 0)
+        };
+        if !(n..SOURCE).all(|i| absent(slot(i))) {
+            return Err(refuse("has a source word out of order"));
+        }
+        let mode32 = u32::try_from(mode).map_err(|_| refuse("has a mode above 2^32"))?;
+        let decoded = emulator::falcon512_decode(mode32, &words).map_err(refuse)?;
+        let pair = |i: usize| {
+            let c = &decoded.coefficients;
+            c[2 * i] as u64 | (c[2 * i + 1] as u64) << 16
+        };
+        let unchanged = |j: usize| word(j).write_value[e] == read(j);
+        if decoded.read != n
+            || !(0..n).all(|i| unchanged(slot(i)))
+            || !unchanged(SRC)
+            || !unchanged(DST)
+            || word(MODE).write_value[e] != decoded.norm as u64
+            || word(END).write_value[e] != decoded.end as u64
+            || (0..OUTPUT).any(|i| {
+                let q = word(FRAME + i);
+                (q.addr[e] as u64, q.write_value[e]) != (dst + 4 * i as u64, pair(i))
+            })
+        {
+            return Err(refuse("is not its call's frame, polynomial and source"));
+        }
+        // The start: the limb empty, in either mode.
+        let r0 = ROWS * e;
+        let (mut o, mut a, mut sa, mut acc) = (0, 0, source, 0u64);
+        // The source word at `sa`: its slot, and the limb its bytes are.
+        let limb_at = |sa: u64| -> Result<(usize, u64), String> {
+            let i = (sa - source) as usize / 4;
+            let w = words
+                .get(i)
+                .ok_or_else(|| refuse("ends before its stream"))?;
+            Ok((slot(i), w.swap_bytes() as u64))
+        };
+        for r in 0..ROWS {
+            let row = r0 + r;
+            w.row(
+                row,
+                &[
+                    (live, 1),
+                    (first, (r == 0) as u64),
+                    (rest, (r > 0) as u64),
+                    (cycle, at),
+                    (stamp, TUPLES * r as u64),
+                    (m, mode),
+                    (o_in, o),
+                    (e_in, 1 << (LIMB - o)),
+                    (a_in, a),
+                    (sa_in, sa),
+                    (acc_in, acc),
+                    (da, dst + ROW_BYTES * r as u64),
+                ],
+            );
+            if r > 0 {
+                for (_, _, gap, _) in &frame {
+                    idle_gap(&mut w, *gap, at, row);
+                }
+                idle_gap(&mut w, flush.gap, at, row);
+            }
+            let mut v = [0u64; SLOTS];
+            for (u, s) in slots.iter().enumerate() {
+                let coefficient = decoded.coefficients[SLOTS * r + u] as u64;
+                // A key's field, or a signature's sign and size.
+                let (b, size, x) = match mode {
+                    0 => (0, 0, coefficient),
+                    _ if coefficient <= 2047 => (0, coefficient, 0),
+                    _ => (1, Q - coefficient, 0),
+                };
+                let (low, k) = match mode {
+                    0 => (0, KEY_K),
+                    _ => (size & 0x7f, size >> 7),
+                };
+                let pow = 2u64 << k;
+                let csig = (128 * b + low) * pow + 1;
+                let cw = if mode == 0 { x } else { csig };
+                let c = (o + CODEWORD + k >= LIMB) as u64;
+                let next = o + CODEWORD + k - LIMB * c;
+                let e_out = 1u64 << (LIMB - next);
+                let z = cw * e_out;
+                let (a_out, port) = match c {
+                    0 => (a + z, None),
+                    _ => {
+                        let (j, limb) = limb_at(sa)?;
+                        let total = (a << 32) + z;
+                        if total >> 32 != limb {
+                            return Err(refuse("has a source its stream does not read"));
+                        }
+                        (total & 0xffff_ffff, Some(j))
+                    }
+                };
+                if let Some(col) = s.sa {
+                    w.put(col, row, sa);
+                }
+                let bits = std::array::from_fn::<u64, 4, _>(|i| k >> i & 1);
+                for (col, bit) in s.k.iter().zip(bits) {
+                    w.put(*col, row, bit);
+                }
+                let (mag, bs) = (mode * size, b * mode * size);
+                w.row(
+                    row,
+                    &[
+                        (s.b, b),
+                        (s.low, low),
+                        (s.p1, 1 << (bits[0] + 2 * bits[1])),
+                        (s.p2, 1 << (4 * bits[2] + 8 * bits[3])),
+                        (s.pow, pow),
+                        (s.x, x),
+                        (s.csig, csig),
+                        (s.cw, cw),
+                        (s.mag, mag),
+                        (s.bs, bs),
+                        (s.z, z),
+                        (s.c, c),
+                        (s.e, e_out),
+                        (s.a, a_out),
+                        (s.a_h16, a_out >> 16),
+                    ],
+                );
+                w.put_fp(s.inv, row, inverse(bs));
+                s.port.put(&mut w, &calls, port, e, row);
+                v[u] = x + mag + Q * b - 2 * bs;
+                if v[u] != coefficient {
+                    return Err(refuse("holds a coefficient its codeword is not"));
+                }
+                (o, a, sa, acc) = (next, a_out, sa + 4 * c, acc + mag * mag);
+            }
+            w.row(row, &[(o_out, o), (sa_out, sa), (acc_out, acc)]);
+            for (i, (cols, gap, write)) in outs.iter().enumerate() {
+                let j = FRAME + (SLOTS / 2) * r + i;
+                access_at(&mut w, *cols, *gap, &calls, j, e, row);
+                w.put(*write, row, v[2 * i] | v[2 * i + 1] << 16);
+            }
+        }
+        // The frame row: the frame, the end state and the flush.
+        let end = 8 * (sa - source) + o;
+        let e_end = 1u64 << (LIMB - o);
+        if end != decoded.end as u64 || n as u64 != (sa - source) / 4 + (o != 0) as u64 {
+            return Err(refuse("ends other than its stream"));
+        }
+        for (j, (addr, cols, gap, write)) in frame.iter().enumerate() {
+            w.put(*addr, r0, word(j).addr[e] as u64);
+            access_at(&mut w, *cols, *gap, &calls, j, e, r0);
+            if let Some(col) = write {
+                w.put(*col, r0, word(j).write_value[e]);
+            }
+        }
+        let left = (guest_memory::ADVICE_ORIGIN as u64)
+            .checked_sub(base + 4 * FRAME as u64)
+            .ok_or_else(|| format!("the frame at cycle {at} reaches the advice"))?;
+        match o {
+            0 => flush.put(&mut w, &calls, None, e, r0),
+            _ => {
+                // The last word: the stream's bits, then zeros.
+                let (j, limb) = limb_at(sa)?;
+                if limb != a {
+                    return Err(refuse("has a last word its stream does not end"));
+                }
+                flush.put(&mut w, &calls, Some(j), e, r0);
+                w.row(r0, &[(f, 1)]);
+                w.put_fp(f_inv, r0, inverse(o));
+            }
+        }
+        let zz_value = match mode {
+            0 => 0,
+            _ => (SIGNATURE_BITS as u64)
+                .checked_sub(end)
+                .ok_or_else(|| refuse("ends past 5000 bits"))?,
+        };
+        w.row(
+            r0,
+            &[
+                (number, number_value),
+                (room, left >> 16),
+                (o_e, o),
+                (e_e, e_end),
+                (a_e, a),
+                (sa_e, sa),
+                (acc_e, acc),
+                (zz, zz_value),
+            ],
+        );
     }
     Ok(w.finish(src.height))
 }

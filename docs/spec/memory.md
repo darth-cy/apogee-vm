@@ -26,8 +26,8 @@ word and the pc have no `HI`, which is 0 in their tuples. `γ_M, α_addr, α_ts,
 Every memory artifact outputs its read product at `outputs[READ_ROOT = 0]` and its write product
 at `outputs[WRITE_ROOT = 1]` (`constants::memory`), before any channel's roots
 ([lookup.md](lookup.md) §6). All tuples of a statement form one multiset, over `REG`, `RAM` and
-`PC`, and the precompiles' `DELEGATION` and `POSEIDON2`, which no init or final reaches: their writes
-pair with their reads ([precompiles.md](precompiles.md) §2, §3).
+`PC`, and the precompiles' spaces, which no init or final reaches: their writes pair with their
+reads ([execution-trace.md](execution-trace.md) §2, [precompiles.md](precompiles.md) §2).
 
 The argument below is sound only because every tuple is fixed before the challenges (§6.1).
 
@@ -279,7 +279,7 @@ its own verification.
 
 **The count.** Read each query as an edge from its read tuple to its write tuple. Inits are only
 written and finals only read, so a balanced multiset is paths from inits to finals plus loops. A
-statement has fewer than `2^59` rows, under `2^32` shards a family (a `u32` count), 21 families,
+statement has fewer than `2^59` rows, under `2^32` shards a family (a `u32` count), 23 families,
 at most `2^22` rows (the menu's top), and fewer than `2^65` tuples, at most 81 a row
 (`POSEIDON2`'s frame row, both sides) and 66 boundary tuples.
 
@@ -291,10 +291,11 @@ at most `2^22` rows (the menu's top), and fewer than `2^65` tuples, at most 81 a
 - **Every other write** is a live row's query at `4·cycle + Δ` (§2.1's mask rule), or a precompile's
   word at `4·cycle + FRAME_DELTA` of the ecall row that requested it, whose cycle a frame row
   reads through the anchor and any other row through its call's state: a Merkle level, a
-  `FALCON_SPLIT` row ([precompiles.md](precompiles.md) §2, §6, §7). Every write timestamp, init or
-  not, is therefore an integer below `2^38`, and so is every read one, which equals a write's. Each
-  gap holds over the integers (§2.4), every edge strictly advances, and nothing loops: every path
-  starts at an init at timestamp 0 and ends at a final.
+  `FALCON_SPLIT` row, a `FALCON_DECODE` row past the first ([precompiles.md](precompiles.md) §2,
+  §6, §7, §8). Every write timestamp, init or not, is therefore an integer below `2^38`, and so is
+  every read one, which equals a write's. Each gap holds over the integers (§2.4), every edge
+  strictly advances, and nothing loops: every path starts at an init at timestamp 0 and ends at a
+  final.
 
 ## 5. Halting
 

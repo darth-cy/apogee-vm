@@ -26,6 +26,7 @@ pub mod bitwise;
 mod build;
 pub mod delegation;
 pub mod falcon;
+pub mod falcon_decode;
 pub mod family;
 pub mod gadgets;
 pub mod jump_branch_slt;
@@ -142,6 +143,8 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
             f::FALCON => (falcon::artifact, falcon::channels()),
             f::FALCON_SPLIT => (falcon::split_artifact, falcon::split_channels()),
             f::FALCON_PRODUCT => (falcon::product_artifact, falcon::product_channels()),
+            f::FALCON_SAMPLE => (falcon::sample_artifact, falcon::sample_channels()),
+            f::FALCON_DECODE => (falcon_decode::artifact, falcon_decode::channels()),
             _ => return None,
         };
     if trace_vars < minimum_trace_vars(&channels) {
