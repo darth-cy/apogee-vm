@@ -153,8 +153,8 @@ let signed = key.verify(&request, sig); // a 666-byte signature of the request's
 - `falcon512::PublicKey::decode(bytes)` reads a Falcon-512 public key, v1.2 of the specification,
   and `key.verify(msg, sig)` is whether `sig` signs `msg` under it, a malformed signature `false`:
   the lattice check is the Falcon-512 call and HashToPoint's permutations are Keccak calls. Decoding
-  a key costs ≈5.7K cycles and verifying a signature of a 64-byte message ≈18.9K, against ≈348K in
-  software. `falcon512::s1_norm` is the lattice check alone, for a guest with encodings of its own.
+  a key costs ≈5.7K cycles and verifying a signature of a 64-byte message ≈18.9K.
+  `falcon512::s1_norm` is the lattice check alone, for a guest with encodings of its own.
 - A precompile's frame is the guest's own memory below the advice region, which the SDK's calls
   always are: advice is copied in before `poseidon2_permute` hashes it, and a frame reaching the
   advice is the fatal `OutOfBounds`. A path's siblings and `s1_norm`'s arrays are not a frame:
@@ -197,10 +197,6 @@ keeps it the same way from here on. This is the common convention for an on-chai
   encoding, an empty slot the empty record's, and every node `poseidon2_compress` of its children,
   so `merkle_root` opens a record by its path from the advice and writes it back along the same
   path (§3.1).
-- **Each record opened once.** A batch runs against a working set in memory: the advice holds
-  every record the batch reads, each once, and the actions read and change the records there. After
-  the batch each record is verified once and, where it changed, written back once, its path under
-  its table's root as the writes before it left it; a record is not opened per action.
 - **The state is one digest.** The global state hash, the snapshot, is the hash of the tables' roots
   concatenated in the schema's fixed order, absorbed one root at a time:
   `compress(… compress(compress(root_1, root_2), root_3) …, root_k)`; a guest with one table
@@ -217,8 +213,11 @@ proved, which no snapshot holds.
 
 `guests/amazon` is the two-table case, its users and its listings two tables of `2^20` slots and
 its snapshot `compress(users_root, listings_root)`, and it opens each record once: its actions are
-purchases, each a 64-byte request its buyer signed with Falcon-512 (§3.1), settled against its
-working set, so a seller may spend later in a batch what it earned earlier in it.
+purchases, each a 64-byte request its buyer signed with Falcon-512 (§3.1), settled against a
+working set in memory, so a seller may spend later in a batch what it earned earlier in it. The
+advice holds every record the batch reads, each once; after the batch each is verified once and,
+where it changed, written back once, its path under its table's root as the writes before it left
+it, and no record is opened per purchase.
 
 ## 4. Build it
 

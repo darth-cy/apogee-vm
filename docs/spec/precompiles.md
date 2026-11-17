@@ -193,7 +193,7 @@ conditions that single out the quotient. 226 committed columns, 239 obligations 
 | `poseidon2_permute(&mut [u64; 16])` | the call over the array itself, in place, each lane read mod `p` |
 | `Digest` | 8 lanes, each below `p`: `Digest::new` refuses any other, so a node has one encoding; what the call writes is one already |
 | `poseidon2_compress(&Digest, &Digest) -> Digest` | a Merkle node: `P(left ‖ right)[0..8]`, truncated |
-| `U256` | four `u64` limbs; `+ − * / %` panic on overflow and a zero divisor, `checked_*`, `overflowing_*`, `wrapping_*` do not; `<< >> & | ^ !`, `Ord`, bytes in either order |
+| `U256` | four `u64` limbs; `+ − * / %` panic on overflow and a zero divisor, `checked_*`, `overflowing_*`, `wrapping_*` do not; `<< >> & \| ^ !`, `Ord`, bytes in either order |
 | `U256::mul_div_rem`, `mul_div`, `div_rem` | the call; `None` where the caller's precondition fails, checked first: `d = 0`, or the high half of `a·b`, skipped when both are below `2^128`, at or above `d` |
 | `merkle_root(slot, &Digest, siblings: &[u8]) -> Digest` | the call over a path of `siblings.len() / 64` siblings where they lie; panics first where its precondition fails (§6) |
 | `Digest::bytes(&[Digest]) -> &[u8]` | a path the guest holds, as `merkle_root` takes it |
