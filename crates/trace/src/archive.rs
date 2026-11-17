@@ -642,8 +642,8 @@ fn check_parts(
     // word events ride the requesting cycle and are checked against the log
     // at that cycle — the first family recording the kind of entry, once: a
     // family expanding the entry holds the same entries and touches no RAM.
-    // Within a cycle the call's frame comes first, then its levels in order,
-    // ascending family id and a stable sort keeping both.
+    // Within a cycle the call's frame comes first, then its levels in order or
+    // its arrays, ascending family id and a stable sort keeping both.
     let mut invocations: Vec<(u64, &DelegationTrace, usize)> = Vec::new();
     for t in &traces.delegations {
         let n = t.cycle.len();

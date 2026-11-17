@@ -416,13 +416,19 @@ struct Cycle {
 }
 
 /// One delegation invocation: the ecall number, the frame base, one
-/// `(address, old, new)` per frame word in frame order, and a path's levels.
+/// `(address, old, new)` per frame word in frame order, a path's levels, and
+/// a call's arrays.
 struct Invocation {
     number: u32,
     base: u32,
     frame: Vec<(u32, u32, u32)>,
     levels: Vec<Level>,
+    arrays: ArrayWords,
 }
+
+/// A `FALCON512` call's arrays: `(address, word)` per word, in
+/// `delegation::falcon::CHAINS` order, each read and left as it was.
+type ArrayWords = Vec<(u32, u32)>;
 
 /// One level of a `MERKLE_ROOT` path: its sibling's address and words, which
 /// the call reads and leaves, and what the level's entry carries
@@ -1060,13 +1066,14 @@ impl<'a> Machine<'a> {
     }
 
     /// Execute delegation `family`, ecall `number`, over the frame at `base`,
-    /// in place, returning each frame word as `(address, old, new)` and a
-    /// path's levels.
+    /// in place, returning each frame word as `(address, old, new)`, a path's
+    /// levels and a call's arrays.
     ///
     /// Every frame word must be one a store could write, below the advice
     /// region; anything else is a fatal guest error, as a misaligned store is.
-    /// What the call computes is [`frame_function`]'s, or for `MERKLE_ROOT`
-    /// [`Machine::merkle_root`]'s.
+    /// What the call computes is [`frame_function`]'s, or for the calls that
+    /// read RAM past their frames, `MERKLE_ROOT` and `FALCON512`,
+    /// [`Machine::merkle_root`]'s and [`Machine::falcon512`]'s.
     fn delegate(
         &mut self,
         number: u32,
@@ -1087,9 +1094,19 @@ impl<'a> Machine<'a> {
         }
         let base = base as u32;
         let old: Vec<u32> = (0..words).map(|j| self.word(base + 4 * j as u32)).collect();
-        let (new, levels) = match family {
-            constants::family::MERKLE_ROOT => self.merkle_root(pc, base, &old)?,
-            _ => (frame_function(family)(pc, &old)?, Vec::new()),
+        let (mut levels, mut arrays) = (Vec::new(), Vec::new());
+        let new = match family {
+            constants::family::MERKLE_ROOT => {
+                let (new, path) = self.merkle_root(pc, base, &old)?;
+                levels = path;
+                new
+            }
+            constants::family::FALCON => {
+                let (new, words) = self.falcon512(pc, base, &old)?;
+                arrays = words;
+                new
+            }
+            _ => frame_function(family)(pc, &old)?,
         };
         let frame = (0..words)
             .map(|j| {
@@ -1103,7 +1120,63 @@ impl<'a> Machine<'a> {
             base,
             frame,
             levels,
+            arrays,
         })
+    }
+
+    /// The `FALCON512` call over the frame at `base`, whose words are
+    /// `frame`: `‖s1‖²` written over its words 3 and 4 by [`falcon512_s1`],
+    /// and the arrays' words, `(address, word)` in chain order, which the call
+    /// reads and leaves (`constants::delegation::falcon`).
+    ///
+    /// The caller owes three word-aligned arrays of 256 words, apart from each
+    /// other and from the frame: the call reads every word of them at one
+    /// timestamp. Any other frame is refused. An array may be anywhere a load
+    /// reaches, the advice included, each of its words checked as a load's;
+    /// every halfword is a coefficient, read mod `q`.
+    fn falcon512(
+        &self,
+        pc: u32,
+        base: u32,
+        frame: &[u32],
+    ) -> Result<(Vec<u32>, ArrayWords), EmuError> {
+        use delegation::falcon::{ARRAY, ARRAYS, C, CHAINS, H, N, NORM_HI, NORM_LO, S2};
+        let refuse = |detail| Err(EmuError::DelegationFrame { pc, detail });
+        // Each array and the frame as a byte range `[start, end)`, in 64 bits:
+        // an array's end may pass `2^32`, where no load reaches.
+        let span = |at: u32, words: usize| (at as u64, at as u64 + 4 * words as u64);
+        let arrays = CHAINS.map(|word| span(frame[word], ARRAY));
+        let apart = |(a, b): (u64, u64), (c, d): (u64, u64)| b <= c || d <= a;
+        if arrays.iter().any(|(at, _)| !at.is_multiple_of(4)) {
+            return refuse("falcon512's array is not word-aligned");
+        }
+        if arrays.iter().any(|a| !apart(*a, span(base, frame.len()))) {
+            return refuse("falcon512's array overlaps its frame");
+        }
+        if !(apart(arrays[0], arrays[1])
+            && apart(arrays[0], arrays[2])
+            && apart(arrays[1], arrays[2]))
+        {
+            return refuse("falcon512's arrays overlap");
+        }
+        let mut words = Vec::with_capacity(ARRAYS);
+        for (at, _) in arrays {
+            for i in 0..ARRAY as u64 {
+                let addr = self.data_word(pc, at + 4 * i, 4)?;
+                words.push((addr, self.word(addr)));
+            }
+        }
+        // Chain `P`'s coefficient `2i` is its word `i`'s low halfword.
+        let poly = |word: usize| -> [u16; N] {
+            let p = CHAINS.iter().position(|w| *w == word).expect("a chain");
+            std::array::from_fn(|t| (words[ARRAY * p + t / 2].1 >> (16 * (t % 2))) as u16)
+        };
+        let s1 = falcon512_s1(&poly(H), &poly(S2), &poly(C));
+        let norm: u64 = s1.iter().map(|x| (*x as i64 * *x as i64) as u64).sum();
+        let mut new = frame.to_vec();
+        new[NORM_LO] = norm as u32;
+        new[NORM_HI] = (norm >> 32) as u32;
+        Ok((new, words))
     }
 
     /// The `MERKLE_ROOT` call over the frame at `base`, whose words are
@@ -1340,6 +1413,37 @@ pub fn keccak_rounds(a: [u64; 25]) -> impl Iterator<Item = KeccakRound> {
     })
 }
 
+/// `s1 = (c − s2·h) mod (q, x^512 + 1)`, each coefficient centered to
+/// `[−6144, 6144]`, `q = 12289 = 2·6144 + 1`, every coefficient of `h`, `s2`
+/// and `c` read mod `q`: Falcon-512 verification's lattice check, whose
+/// squared norm `FALCON512` answers, and the one copy of it, from which the
+/// prover's fills take theirs (`constraints::falcon`). Schoolbook: `x^512`
+/// wraps to `−1`.
+pub fn falcon512_s1(
+    h: &[u16; delegation::falcon::N],
+    s2: &[u16; delegation::falcon::N],
+    c: &[u16; delegation::falcon::N],
+) -> [i16; delegation::falcon::N] {
+    use delegation::falcon::{N, Q};
+    let q = Q as i64;
+    let h = h.map(|x| x as i64 % q);
+    // Each coefficient a sum of 512 products below `q^2`: below `2^37`.
+    let mut product = [0i64; N];
+    for (i, a) in s2.iter().enumerate() {
+        let a = *a as i64 % q;
+        for (j, b) in h.iter().enumerate() {
+            match i + j < N {
+                true => product[i + j] += a * b,
+                false => product[i + j - N] -= a * b,
+            }
+        }
+    }
+    std::array::from_fn(|t| {
+        let x = (c[t] as i64 - product[t]).rem_euclid(q);
+        (if 2 * x > q { x - q } else { x }) as i16
+    })
+}
+
 // ---------------------------------------------------------------------------
 // The recorder: the tracing path's one addition
 // ---------------------------------------------------------------------------
@@ -1428,8 +1532,8 @@ impl<'a> Recorder<'a> {
             .record(AddressSpace::Pc, 0, base, pc as u64, next_pc as u64);
         // An invocation's frame accesses ride this cycle at
         // `delegation::FRAME_DELTA`, 0: after the pc query, before the roles,
-        // its levels' after its frame's. Every family of the number records
-        // the call, or each of its levels.
+        // its levels' or its arrays' after its frame's. Every family of the
+        // number records the call, each of its levels, or its arrays.
         if let Some(call) = &queries.delegation {
             let memory = &mut self.memory;
             let mut query = |addr: u32, read: u32, write: u32| {
@@ -1456,6 +1560,7 @@ impl<'a> Recorder<'a> {
                         .collect()
                 })
                 .collect();
+            let arrays: Vec<Query> = call.arrays.iter().map(|&(a, w)| query(a, w, w)).collect();
             for family in program::delegation_families(call.number) {
                 let at = self
                     .traces
@@ -1477,9 +1582,13 @@ impl<'a> Recorder<'a> {
                             self.flush_calls(at);
                         }
                     }
-                    // UNFINISHED: FALCON512's arrays; no call reaches here
-                    // while `frame_function` has no FALCON arm.
-                    Per::Arrays => unreachable!("emulator: no call records arrays yet"),
+                    // One entry, its base the first array's: `s2`'s.
+                    Per::Arrays => {
+                        let base = call.arrays.first().expect("a call's arrays").0;
+                        self.traces.delegations[at].push(cycle, base, &arrays, &[]);
+                        self.calls[at] += 1;
+                        self.flush_calls(at);
+                    }
                 }
             }
         }
@@ -1908,6 +2017,144 @@ mod tests {
                 pc: 0,
                 addr: 0x7000
             })
+        );
+    }
+
+    /// `‖s1‖²` by its definition, written apart from [`falcon512_s1`]: the
+    /// whole product `s2·h`, of degree 1,022, folded by `x^512 = −1`, and each
+    /// coefficient of `c − s2·h` mod `q` taken at its least absolute value.
+    fn falcon512_norm(h: &[u16; 512], s2: &[u16; 512], c: &[u16; 512]) -> u64 {
+        let q = 12289u64;
+        let mut whole = [0u64; 1023];
+        for (i, a) in s2.iter().enumerate() {
+            for (j, b) in h.iter().enumerate() {
+                whole[i + j] += (*a as u64 % q) * (*b as u64 % q) % q;
+            }
+        }
+        (0..512)
+            .map(|t| {
+                let wrapped = whole.get(t + 512).map_or(0, |x| x % q);
+                let product = (whole[t] % q + q - wrapped) % q;
+                let s = (c[t] as u64 % q + q - product) % q;
+                s.min(q - s).pow(2)
+            })
+            .sum()
+    }
+
+    /// `FALCON512` answers `‖s1‖²` of the arrays its frame names, `h` in the
+    /// advice: held to [`falcon512_norm`] over arbitrary halfwords, most of
+    /// them at or above `q`, and by hand where the product wraps. It reads each
+    /// array word once, in chain order, and leaves it, and writes the norm's
+    /// two words. It refuses by name what its caller owes: a frame reaching
+    /// the advice, an array misaligned, overlapping another or the frame, and
+    /// a word no load could read. An array ending at the frame, and a frame
+    /// ending at the advice, are a call's.
+    #[test]
+    fn falcon512_answers_the_norm_and_refuses_what_its_caller_owes() {
+        let coefficient = |a: u32, t: u32| match t {
+            0 => u16::MAX,
+            _ => ((t + 1).wrapping_mul(0x9e37_79b9) >> 16 ^ a << 13) as u16,
+        };
+        let poly = |a: u32| -> [u16; 512] { std::array::from_fn(|t| coefficient(a, t as u32)) };
+        let (h, s2, c) = (poly(0), poly(1), poly(2));
+        let io = GuestIo {
+            input: Vec::new(),
+            advice: h.iter().flat_map(|x| x.to_le_bytes()).collect(),
+        };
+        let image = spin();
+        let mut machine = Machine::new(&image, &io);
+        let word = |p: &[u16; 512], i: usize| p[2 * i] as u32 | (p[2 * i + 1] as u32) << 16;
+        let put = |machine: &mut Machine, at: u32, p: &[u16; 512]| {
+            for i in 0..256 {
+                machine.set_word(at + 4 * i as u32, word(p, i));
+            }
+        };
+        let base = guest_memory::RAM_ORIGIN + 0x2000;
+        let (h_at, s2_at, c_at) = (guest_memory::ADVICE_ORIGIN + 4, base + 0x400, base - 0x400);
+        put(&mut machine, s2_at, &s2);
+        put(&mut machine, c_at, &c);
+        let falcon = |machine: &mut Machine, base: u32, arrays: [u32; 3]| {
+            let frame = [arrays[0], arrays[1], arrays[2], 0xdead_beef, 0x1234_5678];
+            for (j, w) in frame.iter().enumerate() {
+                machine.set_word(base + 4 * j as u32, *w);
+            }
+            machine.delegate(ecall::FALCON512, constants::family::FALCON, 0, base as u64)
+        };
+
+        let call = falcon(&mut machine, base, [h_at, s2_at, c_at]).expect("a call");
+        let n = falcon512_norm(&h, &s2, &c);
+        assert!(n >> 32 != 0, "the norm {n} has a high word");
+        let frame: Vec<(u32, u32, u32)> = [h_at, s2_at, c_at, n as u32, (n >> 32) as u32]
+            .iter()
+            .zip([h_at, s2_at, c_at, 0xdead_beef, 0x1234_5678])
+            .enumerate()
+            .map(|(j, (new, old))| (base + 4 * j as u32, old, *new))
+            .collect();
+        assert_eq!(
+            call.frame, frame,
+            "the arrays' addresses kept, the norm written"
+        );
+        let arrays: Vec<(u32, u32)> = [(s2_at, &s2), (h_at, &h), (c_at, &c)]
+            .iter()
+            .flat_map(|(at, p)| (0..256).map(move |i| (at + 4 * i as u32, word(p, i))))
+            .collect();
+        assert_eq!(
+            call.arrays, arrays,
+            "s2's, h's and c's words, each as it was"
+        );
+        assert!(call.levels.is_empty());
+        for (addr, w) in &arrays {
+            assert_eq!(machine.word(*addr), *w, "{addr:#x} left as it was");
+        }
+
+        // s2 = x and h = x^511 wrap to −1, so s1 = c + 1: with c_0 = 6144,
+        // s1_0 = 6145, centered to −6144. Each halfword read mod q.
+        let q = 12289u16;
+        let mut wrap = [[0u16; 512]; 3];
+        wrap[0][511] = q + 1;
+        wrap[1][1] = 1;
+        wrap[2][0] = q + 6144;
+        let at = [base + 0x800, base + 0xc00, base + 0x1000];
+        for (p, a) in wrap.iter().zip(at) {
+            put(&mut machine, a, p);
+        }
+        let end = guest_memory::ADVICE_ORIGIN - 20;
+        for b in [base, end] {
+            let call = falcon(&mut machine, b, at).expect("a call");
+            let n = call.frame[3].2 as u64 | (call.frame[4].2 as u64) << 32;
+            assert_eq!(n, 6144 * 6144, "a frame at {b:#x}");
+        }
+
+        let mut refused = |arrays: [u32; 3]| falcon(&mut machine, base, arrays).err();
+        let frame_error = |detail| Some(EmuError::DelegationFrame { pc: 0, detail });
+        let overlap = "falcon512's arrays overlap";
+        let over_frame = "falcon512's array overlaps its frame";
+        assert_eq!(
+            refused([h_at + 2, s2_at, c_at]),
+            frame_error("falcon512's array is not word-aligned")
+        );
+        assert_eq!(refused([h_at, s2_at, s2_at]), frame_error(overlap));
+        assert_eq!(refused([s2_at + 1020, s2_at, c_at]), frame_error(overlap));
+        assert_eq!(refused([h_at, s2_at, base - 1020]), frame_error(over_frame));
+        assert_eq!(refused([h_at, base + 16, c_at]), frame_error(over_frame));
+        let addr = guest_memory::ADVICE_ORIGIN as u64 + 4 + 1024;
+        assert_eq!(
+            refused([h_at + 4, s2_at, c_at]),
+            Some(EmuError::OutOfBounds { pc: 0, addr })
+        );
+        assert_eq!(
+            refused([0x7000, s2_at, c_at]),
+            Some(EmuError::OutOfBounds {
+                pc: 0,
+                addr: 0x7000
+            })
+        );
+        let past = guest_memory::ADVICE_ORIGIN as u64 - 16;
+        assert_eq!(
+            machine
+                .delegate(ecall::FALCON512, constants::family::FALCON, 0, past)
+                .err(),
+            Some(EmuError::OutOfBounds { pc: 0, addr: past })
         );
     }
 }

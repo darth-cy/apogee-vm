@@ -17,10 +17,10 @@
 //! `docs/spec/public-values.md` specifies all three.
 //!
 //! The ecall ABI is [`exit`] and the delegation calls, each a shim over one
-//! frame: [`poseidon2_permute`], [`merkle_root`], [`keccak_f1600`], and
-//! [`U256`]'s divisions. An ecall carries its number in `a7` and its argument
-//! in `a0`; `docs/spec/ecall-abi.md` is the table, every number
-//! [`constants::ecall`]'s.
+//! frame: [`poseidon2_permute`], [`merkle_root`], [`keccak_f1600`],
+//! [`falcon512::s1_norm`], and [`U256`]'s divisions. An ecall carries its
+//! number in `a7` and its argument in `a0`; `docs/spec/ecall-abi.md` is the
+//! table, every number [`constants::ecall`]'s.
 //!
 //! # `unsafe`, and global state
 //!
@@ -454,6 +454,9 @@ static MERKLE_ROOT: u32 = ecall::MERKLE_ROOT;
 #[link_section = ".apogee.delegations.keccak_f1600"]
 static KECCAK_F1600: u32 = ecall::KECCAK_F1600;
 
+#[link_section = ".apogee.delegations.falcon512"]
+static FALCON512: u32 = ecall::FALCON512;
+
 /// One delegation call over the frame at `frame`, its ecall number read back
 /// out of `declared`. Through `black_box`: folded to an immediate, the read
 /// would leave the record unreferenced and the declaration out of the image.
@@ -693,6 +696,8 @@ impl Shake256 {
 mod u256;
 pub use u256::U256;
 
+pub mod falcon512;
+
 // ---------------------------------------------------------------------------
 // The C ABI
 // ---------------------------------------------------------------------------
@@ -796,6 +801,20 @@ pub unsafe extern "C" fn apogee_merkle_root(
 #[no_mangle]
 pub unsafe extern "C" fn apogee_keccak_f1600(state: *mut u64) {
     keccak_f1600(&mut *state.cast::<[u64; 25]>())
+}
+
+/// `falcon512::s1_norm()` over the 512 coefficients at each of `h`, `s2` and
+/// `c`. Panics unless each is 4-aligned and the three are apart.
+///
+/// # Safety
+/// `h`, `s2` and `c` are each valid for reads of 512 `uint16_t`.
+#[no_mangle]
+pub unsafe extern "C" fn apogee_falcon512_s1_norm(
+    h: *const u16,
+    s2: *const u16,
+    c: *const u16,
+) -> u64 {
+    falcon512::s1_norm_at(h, s2, c)
 }
 
 /// `U256::mul_div_rem()`: `q = floor(a·b/d)` and `r = a·b mod d`, four

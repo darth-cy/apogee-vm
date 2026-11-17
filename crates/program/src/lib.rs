@@ -77,8 +77,8 @@ pub fn delegation_family(number: u32) -> Option<FamilyId> {
     delegation_families(number).next()
 }
 
-/// Every family recording an entry of ecall `number`, a call's or a level's,
-/// its frame family first.
+/// Every family recording an entry of ecall `number`, a call's, a level's or
+/// a call's arrays, its frame family first.
 pub fn delegation_families(number: u32) -> impl Iterator<Item = FamilyId> {
     delegation::TYPES
         .iter()

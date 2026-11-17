@@ -944,11 +944,11 @@ impl FalconCall {
     }
 }
 
-/// Entry `e`'s call: its 768 words split into halfwords, `s1` schoolbook mod
-/// `q` and every residue sum.
+/// Entry `e`'s call: its 768 words split into halfwords, `s1` as the emulator
+/// answers it, [`emulator::falcon512_s1`], and every residue sum.
 fn falcon_call(calls: &FrameSlice, e: usize) -> FalconCall {
-    use constants::delegation::falcon::{ARRAY, N, Q};
-    use constraints::falcon::{BLOCKS, BOUND, DEGREE, RESIDUES, V};
+    use constants::delegation::falcon::{ARRAY, C, CHAINS, H, N, S2};
+    use constraints::falcon::{BLOCKS, DEGREE, RESIDUES, V};
     let mut v = [[0u64; N]; 3];
     for (p, chain) in v.iter_mut().enumerate() {
         for i in 0..ARRAY {
@@ -963,29 +963,14 @@ fn falcon_call(calls: &FrameSlice, e: usize) -> FalconCall {
             chain[2 * i + 1] = word.read_value[e] >> 16;
         }
     }
-    let q = Q as i64;
-    let (s2, h, c) = (&v[0], &v[1], &v[2]);
-    let mut product = [0i64; N];
-    for (i, si) in s2.iter().enumerate() {
-        for (j, hj) in h.iter().enumerate() {
-            let t = ((si % Q) * (hj % Q)) as i64;
-            match i + j < N {
-                true => product[i + j] += t,
-                false => product[i + j - N] -= t,
-            }
-        }
-    }
-    let s1: [i64; N] = std::array::from_fn(|t| {
-        let x = (c[t] as i64 - product[t]).rem_euclid(q);
-        if x > BOUND as i64 {
-            x - q
-        } else {
-            x
-        }
-    });
+    let poly = |word: usize| -> [u16; N] {
+        let p = CHAINS.iter().position(|w| *w == word).expect("a chain");
+        v[p].map(|x| x as u16)
+    };
+    let s1 = emulator::falcon512_s1(&poly(H), &poly(S2), &poly(C));
     let mut call = FalconCall {
         v,
-        s1,
+        s1: s1.map(i64::from),
         sum: [[[0; DEGREE]; RESIDUES]; 3],
     };
     call.sum = std::array::from_fn(|p| {

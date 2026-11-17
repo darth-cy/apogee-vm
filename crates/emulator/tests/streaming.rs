@@ -48,19 +48,22 @@ const GUESTS: [(&str, u32); 11] = [
     ("shards", 16),
     // The precompiles, their delegation families at `2^12`: 302 Poseidon2
     // calls fill the rounds' 256-call buffer mid-execution. Keccak's are at
-    // `2^16`, and its 530 calls fill an expansion's 512.
+    // `2^16`, and its 530 calls fill an expansion's 512; Falcon's too, and
+    // its 1,025 calls fill `FALCON_SPLIT`'s 1,024.
     ("precompiles", 16),
 ];
 
 /// Every family at `2^height`; for `precompiles`, the delegation families at
-/// `2^12`, but Keccak's at `2^16`, its `XOR8` table's floor.
+/// `2^12`, but Keccak's at `2^16`, its `XOR8` table's floor, and Falcon's at
+/// `2^16`, its `RANGE16` table's.
 fn params(name: &str, height: u32) -> ProgramParams {
-    use constants::family::{KECCAK, KECCAK_CHI, KECCAK_RHO};
+    use constants::family::{FALCON, FALCON_PRODUCT, FALCON_SPLIT, KECCAK, KECCAK_CHI, KECCAK_RHO};
     let mut p = uniform(1 << height);
     if name == "precompiles" {
         for (family, ..) in constants::delegation::TYPES {
             p.heights[family as usize] = match family {
                 KECCAK | KECCAK_RHO | KECCAK_CHI => 1 << 16,
+                FALCON | FALCON_SPLIT | FALCON_PRODUCT => 1 << 16,
                 _ => 1 << 12,
             };
         }
@@ -164,14 +167,21 @@ fn the_chunks_are_the_planned_shards_row_for_row() {
                 split_families += 1;
             }
         }
-        // Keccak's expansions are cut in two: `precompiles`' 530 calls
-        // against the 512 a shard holds at `2^16`.
+        // Keccak's expansions are cut in two, `precompiles`' 530 calls
+        // against the 512 a shard holds at `2^16`, and so is `FALCON_SPLIT`,
+        // its 1,025 calls against 1,024, while `FALCON_PRODUCT` holds 4,096.
         if name == "precompiles" {
-            for family in [constants::family::KECCAK_RHO, constants::family::KECCAK_CHI] {
+            use constants::family::{FALCON_PRODUCT, FALCON_SPLIT, KECCAK_CHI, KECCAK_RHO};
+            for (family, shards) in [
+                (KECCAK_RHO, 2),
+                (KECCAK_CHI, 2),
+                (FALCON_SPLIT, 2),
+                (FALCON_PRODUCT, 1),
+            ] {
                 assert_eq!(
                     counted.get(&family),
-                    Some(&2),
-                    "{name} {}: two shards",
+                    Some(&shards),
+                    "{name} {}: {shards} shards",
                     family_name(family)
                 );
             }

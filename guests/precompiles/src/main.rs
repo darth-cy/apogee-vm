@@ -9,7 +9,8 @@
 //! `poseidon2_compress` gives, then a run of them long enough that a path's
 //! levels straddle a shard; Keccak-f[1600] of the state the public input
 //! carries, once and then a chain of it, and SHAKE256 of its message, absorbed
-//! and squeezed in halves.
+//! and squeezed in halves; and Falcon-512's lattice check of the three arrays
+//! the public input carries, once and then their rotations in turn.
 //!
 //! # The public input
 //!
@@ -25,6 +26,10 @@
 //!   then    len      u32 LE          SHAKE256's message length
 //!           message  len bytes
 //!           squeeze  u32 LE          bytes of SHAKE256 output, at most 2,048
+//!   then    h        512 u16 LE      Falcon-512's arrays, any halfwords, each
+//!           s2       512 u16 LE      read mod q
+//!           c        512 u16 LE
+//!           more     u32 LE          s1_norm calls after the first
 //! ```
 //!
 //! # The journal
@@ -49,14 +54,20 @@
 //!   SHAKE256                        squeeze bytes of the message's output, the
 //!                                   message absorbed and the output squeezed
 //!                                   in two halves
+//!   falcon512::s1_norm              u64: ‖s1‖² of the input's h, s2 and c
+//!   falcon512::s1_norm              u64: the sum of more calls', call k's
+//!                                   arrays the input's rotated k times: (s2,
+//!                                   c, h), (c, h, s2), (h, s2, c), …
 //! ```
 //!
 //! With 126 runs the depth-20 path is levels 4,080 to 4,099: it straddles
 //! level 4,096, where a `MERKLE_ROUNDS` shard ends at `2^12` rows and at
 //! `2^16`. With a chain of 520 the Keccak calls are more than the 512 a
 //! `KECCAK_RHO` or `KECCAK_CHI` shard holds at `2^16`, so a streaming run hands
-//! one over mid-execution.
+//! one over mid-execution, and with 1,024 more `s1_norm` calls the Falcon calls
+//! are more than the 1,024 a `FALCON_SPLIT` shard holds.
 
+use guest_sdk::falcon512::{self, Poly};
 use guest_sdk::{
     keccak_f1600, merkle_root, poseidon2_compress, poseidon2_permute, Digest, Shake256, U256,
 };
@@ -198,6 +209,22 @@ fn main() {
     sponge.squeeze(&mut bytes[..squeeze / 2]);
     sponge.squeeze(&mut bytes[squeeze / 2..squeeze]);
     put(&bytes[..squeeze]);
+
+    let at_falcon = at_message + len + 4;
+    let poly = |i: usize| {
+        let at = at_falcon + 1024 * i;
+        Poly(core::array::from_fn(|t| {
+            u16::from_le_bytes([input[at + 2 * t], input[at + 2 * t + 1]])
+        }))
+    };
+    let polys = [poly(0), poly(1), poly(2)];
+    put(&falcon512::s1_norm(&polys[0], &polys[1], &polys[2]).to_le_bytes());
+    let mut sum = 0u64;
+    for k in 1..=word(at_falcon + 3 * 1024) as usize {
+        let p = |i: usize| &polys[(i + k) % 3];
+        sum += falcon512::s1_norm(p(0), p(1), p(2));
+    }
+    put(&sum.to_le_bytes());
     guest_sdk::commit(&out[..at]);
 }
 
