@@ -1,0 +1,15 @@
+{
+  "name": "apogee-falcon512",
+  "version": "0.1.0",
+  "description": "Falcon-512 with Poseidon2's HashToPoint (not interoperable with standard Falcon-512)",
+  "private": true,
+  "type": "module",
+  "exports": "./falcon512.js",
+  "types": "./falcon512.d.ts",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

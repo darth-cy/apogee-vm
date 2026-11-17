@@ -28,6 +28,7 @@ dependencies = [
  "field",
  "num-complex",
  "rand 0.10.4",
+ "serde_json",
  "sha3",
  "test-support",
  "transcript",

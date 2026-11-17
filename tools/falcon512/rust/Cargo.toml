@@ -16,6 +16,8 @@ rand.workspace = true
 transcript.workspace = true
 
 [dev-dependencies]
+# The shared vectors, `../vectors.json`.
+serde_json.workspace = true
 # Standard Falcon's HashToPoint, SHAKE256, which the round-3 KAT was signed under.
 sha3.workspace = true
 test-support.workspace = true
