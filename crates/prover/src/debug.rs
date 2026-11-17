@@ -304,6 +304,9 @@ pub fn family_name(f: FamilyId) -> String {
         family::MERKLE_ROOT => "MERKLE_ROOT".to_string(),
         family::MERKLE_LEVELS => "MERKLE_LEVELS".to_string(),
         family::MERKLE_ROUNDS => "MERKLE_ROUNDS".to_string(),
+        family::FALCON => "FALCON".to_string(),
+        family::FALCON_SPLIT => "FALCON_SPLIT".to_string(),
+        family::FALCON_PRODUCT => "FALCON_PRODUCT".to_string(),
         other => format!("family({other})"),
     }
 }
@@ -313,9 +316,11 @@ pub fn family_name(f: FamilyId) -> String {
 fn family_id(name: &str) -> Option<FamilyId> {
     let upper = name.to_ascii_uppercase();
     if let Ok(n) = upper.parse::<u32>() {
-        return (n < family::COUNT).then_some(n);
+        return (n < family::COUNT && !family::RETIRED.contains(&n)).then_some(n);
     }
-    (0..family::COUNT).find(|f| family_name(*f) == upper)
+    (0..family::COUNT)
+        .filter(|f| !family::RETIRED.contains(f))
+        .find(|f| family_name(*f) == upper)
 }
 
 /// `FAMILY#index`: the identity every per-shard line carries.
@@ -547,7 +552,7 @@ mod tests {
 
     #[test]
     fn every_registered_family_has_a_name_and_round_trips() {
-        for f in 0..family::COUNT {
+        for f in (0..family::COUNT).filter(|f| !family::RETIRED.contains(f)) {
             let name = family_name(f);
             assert!(
                 !name.starts_with("family("),
@@ -558,6 +563,9 @@ mod tests {
         }
         assert_eq!(family_id("nonsense"), None);
         assert_eq!(family_id(&family::COUNT.to_string()), None);
+        for f in family::RETIRED {
+            assert_eq!(family_id(&f.to_string()), None, "the retired {f}");
+        }
     }
 
     #[test]

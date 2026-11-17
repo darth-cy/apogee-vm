@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apogee-falcon512"
+version = "0.1.0"
+description = "Falcon-512 with Poseidon2's HashToPoint (Apogee), in pure Python"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Security :: Cryptography",
+]
+
+[tool.setuptools]
+packages = ["apogee_falcon512"]

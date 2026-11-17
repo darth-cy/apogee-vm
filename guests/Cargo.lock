@@ -11,6 +11,14 @@ name = "alu"
 version = "0.1.0"
 
 [[package]]
+name = "amazon"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "guest-sdk",
+]
+
+[[package]]
 name = "amm"
 version = "0.1.0"
 dependencies = [

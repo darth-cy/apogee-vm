@@ -1,11 +1,12 @@
-//! The three precompiles over a real execution, `guests/precompiles` built
+//! The four precompiles over a real execution, `guests/precompiles` built
 //! from source, in ordinary CI and without a proof (`docs/spec/precompiles.md`):
 //!
 //! - **the journal is the host's**: the Poseidon2 permutation of the
 //!   generator's own input and of lanes at `2^64 − 1`, read mod `p`, a Merkle
 //!   root, and three `merkle_root` paths, the last after a run of 126, each by
-//!   `transcript`; and `mul_div` at edges whose answers are hand-derived or a
-//!   `u128`'s;
+//!   `transcript`; `mul_div` at edges whose answers are hand-derived or a
+//!   `u128`'s; and Falcon-512's `‖s1‖²` of three arrays and of their
+//!   rotations, each by the host's own negacyclic product;
 //! - **every precompile circuit keeps every rule**, by `constraints` and, with
 //!   no shared code, by this crate;
 //! - **the fill holds**: every live row and the padding after it satisfy every
@@ -14,10 +15,12 @@
 //!   every row-local gate and lookup refuse, and each written word one off is
 //!   refused by its row alone;
 //! - **the statement reconciles**: every shard forwarded, and the roots of all
-//!   of them and the boundary multiply out, the anchors and the Poseidon2 and
-//!   Merkle state included. A round row moved to another call's cycle keeps
-//!   every row-local relation and does not, nor does a level taking the other
-//!   order, nor a path's continuation one off where it crosses a round shard;
+//!   of them and the boundary multiply out, the anchors and the Poseidon2,
+//!   Merkle and Falcon state included. A round row moved to another call's
+//!   cycle keeps every row-local relation and does not, nor does a level
+//!   taking the other order, nor a path's continuation one off where it
+//!   crosses a round shard, nor a Falcon product row claiming another
+//!   residue, nor a split row another column;
 //! - **a path crosses a shard**: the round shard a path continues into fills
 //!   from its streamed chunk exactly as from the archive;
 //! - **a sibling word is a word**: one no load could read is refused by its
@@ -42,13 +45,16 @@ use poly::{MultilinearPoly, PolyBacking};
 use prover::{Program, ShardRows, ShardSource};
 use trace::{IoStreams, PhaseTiming, TraceArchive};
 
-const DELEGATIONS: [u32; 6] = [
+const DELEGATIONS: [u32; 9] = [
     family::POSEIDON2,
     family::POSEIDON2_ROUNDS,
     family::MUL_DIV_U256,
     family::MERKLE_ROOT,
     family::MERKLE_LEVELS,
     family::MERKLE_ROUNDS,
+    family::FALCON,
+    family::FALCON_SPLIT,
+    family::FALCON_PRODUCT,
 ];
 
 fn f(v: u64) -> Fp {
@@ -84,6 +90,19 @@ fn sibling(l: usize, j: usize) -> u64 {
     }
 }
 
+/// Coefficient `t` of the Falcon case's array `a`, `h`, `s2` and `c` in
+/// turn: arbitrary halfwords, most of them at or above `q`, the first the
+/// largest.
+fn falcon_coefficient(a: usize, t: usize) -> u16 {
+    match t {
+        0 => u16::MAX,
+        _ => ((t as u32 + 1).wrapping_mul(0x85eb_ca6b) >> 13 ^ (a as u32) << 9) as u16,
+    }
+}
+
+/// The `s1_norm` calls after the first: the arrays rotated once, then twice.
+const MORE: u32 = 2;
+
 fn input() -> Vec<u8> {
     let mut out = (LEAVES as u32).to_le_bytes().to_vec();
     for i in 0..LEAVES {
@@ -99,6 +118,12 @@ fn input() -> Vec<u8> {
         }
     }
     out.extend(RUNS.to_le_bytes());
+    for a in 0..3 {
+        out.extend((0..512).flat_map(|t| falcon_coefficient(a, t).to_le_bytes()));
+    }
+    out.extend(MORE.to_le_bytes());
+    // No Falcon-512 verification: `crates/emulator/tests/guests.rs` runs them.
+    out.extend(0u32.to_le_bytes());
     out
 }
 
@@ -197,6 +222,27 @@ fn u128_le(v: u128) -> [u8; 32] {
     out
 }
 
+/// `‖s1‖²` of `s1 = (c − s2·h) mod (q, x^512 + 1)`, each coefficient of the
+/// three read mod `q = 12289` and each of `s1` at its least absolute value:
+/// coefficient `k` of the negacyclic product is `Σ_{i ≤ k} s2_i·h_{k−i}`
+/// less `Σ_{i > k} s2_i·h_{k+512−i}`.
+fn falcon_norm(h: &[u16; 512], s2: &[u16; 512], c: &[u16; 512]) -> u64 {
+    let q = 12289i64;
+    let m = |x: u16| x as i64 % q;
+    (0..512)
+        .map(|k| {
+            let mut x = m(c[k]);
+            for i in 0..512 {
+                let t = m(s2[i]) * m(h[(k + 512 - i) % 512]);
+                x += if i <= k { -t } else { t };
+            }
+            let x = x.rem_euclid(q);
+            let s = x.min(q - x) as u64;
+            s * s
+        })
+        .sum()
+}
+
 #[test]
 fn the_journal_is_the_hosts() {
     let (_, archive) = traced();
@@ -263,6 +309,15 @@ fn the_journal_is_the_hosts() {
     want.extend(lanes(&fold(u32::MAX, leaves[0], &ram)));
     let run = (0..RUNS).fold(leaves[0], |node, i| fold(i, node, &ram));
     want.extend(lanes(&fold(0x5a5a5, run, &ram[..20])));
+    let arrays: [[u16; 512]; 3] =
+        std::array::from_fn(|a| std::array::from_fn(|t| falcon_coefficient(a, t)));
+    let norm = |k: usize| {
+        let p = |i: usize| &arrays[(i + k) % 3];
+        falcon_norm(p(0), p(1), p(2))
+    };
+    assert!(norm(0) >> 32 != 0, "the norm has a high word");
+    want.extend(norm(0).to_le_bytes());
+    want.extend((1..=MORE as usize).map(norm).sum::<u64>().to_le_bytes());
     assert_eq!(archive.io_streams().output, want);
 }
 
@@ -515,10 +570,12 @@ fn every_row_holds_and_every_constraint_bites() {
             let broken = s.refused(&s.row(r), r);
             assert!(broken.is_empty(), "{label} row {r} breaks {broken:?}");
         }
-        // Each kind of row once — a frame row, or a round row of each kind
-        // and the idle one — and the first padding row, where there is one.
+        // Each kind of row once — a frame row, a round row of each kind and
+        // the idle one, or a Falcon split row of chains `s2` and `c`, whose
+        // `s` is 0 and is not — and the first padding row, where there is one.
         let samples: Vec<usize> = match fam {
             family::POSEIDON2_ROUNDS | family::MERKLE_ROUNDS => (0..16).chain(padding).collect(),
+            family::FALCON_SPLIT => [0, 32].into_iter().chain(padding).collect(),
             _ => [0].into_iter().chain(padding).collect(),
         };
         let names: Vec<&String> = s.a.memory.iter().chain(&s.a.witness).collect();
@@ -655,6 +712,32 @@ fn balances(program: &Program, archive: &TraceArchive, roots: &[(Fp2, Fp2)]) -> 
     reconciles(&reads, &writes, factors)
 }
 
+/// An edit of `fam`'s shard 0: row `row` made `forged` where it is not
+/// `honest`, `s`'s committed columns in order.
+fn forge_row<'a>(
+    fam: u32,
+    row: usize,
+    s: &'a Shard,
+    honest: &'a [Fp],
+    forged: &'a [Fp],
+) -> impl Fn(u32, u32, &mut [(PolyAddress, MultilinearPoly)]) + 'a {
+    let committed = s.a.committed();
+    move |f, index, columns| {
+        if (f, index) != (fam, 0) {
+            return;
+        }
+        for (i, v) in forged.iter().enumerate().filter(|(i, v)| **v != honest[*i]) {
+            let (_, c) = columns
+                .iter_mut()
+                .find(|(x, _)| *x == committed[i])
+                .expect("a committed column");
+            let mut values: Vec<Fp> = (0..c.len()).map(|r| c.get_base(r)).collect();
+            values[row] = *v;
+            *c = MultilinearPoly::new(PolyBacking::Fp(values));
+        }
+    }
+}
+
 #[test]
 fn the_statement_reconciles_and_a_round_moved_to_another_call_does_not() {
     let (program, archive) = traced();
@@ -773,6 +856,73 @@ fn the_statement_reconciles_and_a_round_moved_to_another_call_does_not() {
             }
         }
     };
+    assert!(!balances(
+        &program,
+        &archive,
+        &roots(&program, &archive, &edit)
+    ));
+
+    // A Falcon product row claiming another residue: call 0's row of residue
+    // 3, its one-hot and index moved to residue 5 and its 96 residues, its
+    // wrapped products and its quotient chunks recomputed, residue 5's own.
+    // Every row-local relation holds — a residue is nothing to a row but its
+    // one-hot, its `β_r` and the pairs it reads — and the pairs it reads are
+    // residue 5's, which residue 5's row reads too, while residue 3's are
+    // written and never read.
+    let fam = family::FALCON_PRODUCT;
+    let s = Shard::new(&program, &archive, fam);
+    let (row, to) = (3, 5);
+    let honest = s.row(row);
+    assert!(
+        honest[s.at("o3")] == Fp::ONE && honest[s.at("r")] == f(3),
+        "row 3 is residue 3's"
+    );
+    let theirs = s.row(to);
+    let mut moved = honest.clone();
+    moved[s.at("o3")] = Fp::ZERO;
+    moved[s.at("o5")] = Fp::ONE;
+    moved[s.at("r")] = f(5);
+    let recomputed = (0..32)
+        .flat_map(|i| ["a", "b", "d"].map(|x| format!("{x}{i}")))
+        .chain((0..31).map(|k| format!("wrap{k}")))
+        .chain((0..32).flat_map(|k| (0..3).map(move |c| format!("w{k}_c{c}"))));
+    for name in recomputed {
+        moved[s.at(&name)] = theirs[s.at(&name)];
+    }
+    assert!(
+        s.refused(&moved, row).is_empty(),
+        "the moved row is a valid product row"
+    );
+    let edit = forge_row(fam, row, &s, &honest, &moved);
+    assert!(!balances(
+        &program,
+        &archive,
+        &roots(&program, &archive, &edit)
+    ));
+
+    // A Falcon split row claiming the next column: call 0's column 3 of chain
+    // `c`, its stamp and its key one up. Every row-local relation holds — a
+    // column is nothing to a row but its stamp and its key — and it reads a
+    // control at column 4's stamp that no row sends, its pointer column 3's,
+    // and sends its residues at column 4's place, while column 2's control is
+    // sent and never read.
+    let fam = family::FALCON_SPLIT;
+    let s = Shard::new(&program, &archive, fam);
+    let row = 32 + 3;
+    let honest = s.row(row);
+    assert!(
+        honest[s.at("stamp")] == f(constraints::falcon::start(2) + 3),
+        "row 35 is chain c's column 3"
+    );
+    let mut moved = honest.clone();
+    for name in ["stamp", "key"] {
+        moved[s.at(name)] += Fp::ONE;
+    }
+    assert!(
+        s.refused(&moved, row).is_empty(),
+        "the moved row is a valid split row"
+    );
+    let edit = forge_row(fam, row, &s, &honest, &moved);
     assert!(!balances(
         &program,
         &archive,

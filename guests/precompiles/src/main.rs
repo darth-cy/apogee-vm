@@ -7,7 +7,9 @@
 //! `u128`'s, overflowing, by zero, and at `U256::MAX`, and Merkle paths by
 //! `merkle_root`, the first two each checked against the fold
 //! `poseidon2_compress` gives, then a run of them long enough that a path's
-//! levels straddle a shard.
+//! levels straddle a shard; Falcon-512's lattice check of the three arrays the
+//! public input carries, once and then their rotations in turn; and Falcon-512
+//! verification of the keys, messages, contexts and signatures it carries.
 //!
 //! # The public input
 //!
@@ -18,6 +20,13 @@
 //!           depth    u32 LE          16..=32
 //!           path     depth siblings  64 bytes each, each lane below p
 //!   then    runs     u32 LE          depth-32 paths before the last, depth-20 one
+//!   then    h        512 u16 LE      Falcon-512's arrays, any halfwords, each
+//!           s2       512 u16 LE      read mod q
+//!           c        512 u16 LE
+//!           more     u32 LE          s1_norm calls after the first
+//!   then    cases    u32 LE          Falcon-512 verifications, each a key, a
+//!                                    message, a context and a signature, each
+//!                                    a u32 LE length and its bytes
 //! ```
 //!
 //! # The journal
@@ -37,12 +46,22 @@
 //!                                   at slot i, up the same 32 siblings; then a
 //!                                   depth-20 one from the last, at slot 0x5a5a5,
 //!                                   up their first 20
+//!   falcon512::s1_norm              u64: ‖s1‖² of the input's h, s2 and c
+//!   falcon512::s1_norm              u64: the sum of more calls', call k's
+//!                                   arrays the input's rotated k times: (s2,
+//!                                   c, h), (c, h, s2), (h, s2, c), …
+//!   PublicKey::verify               a byte a case: 1 the signature verifies
+//!                                   under the context, 0 it does not, 2 the
+//!                                   key does not decode
 //! ```
 //!
 //! With 126 runs the depth-20 path is levels 4,080 to 4,099: it straddles
 //! level 4,096, where a `MERKLE_ROUNDS` shard ends at `2^12` rows and at
-//! `2^16`.
+//! `2^16`. With 1,024 more `s1_norm` calls the Falcon calls are more than the
+//! 1,024 a `FALCON_SPLIT` shard holds, so a streaming run hands one over
+//! mid-execution.
 
+use guest_sdk::falcon512::{self, Poly, PublicKey};
 use guest_sdk::{merkle_root, poseidon2_compress, poseidon2_permute, Digest, U256};
 
 guest_sdk::entry!(main);
@@ -58,7 +77,7 @@ fn pow2(k: u32) -> U256 {
 
 fn main() {
     let input = guest_sdk::public_input();
-    let mut out = [0u8; 2048];
+    let mut out = [0u8; 4096];
     let mut at = 0;
     let mut put = |bytes: &[u8]| {
         out[at..at + bytes.len()].copy_from_slice(bytes);
@@ -155,6 +174,37 @@ fn main() {
     }
     let root = merkle_root(0x5a5a5, &node, &Digest::bytes(&ram)[..64 * 20]);
     root.lanes().iter().for_each(|l| put(&l.to_le_bytes()));
+
+    let at_falcon = at_path + 12 + 64 * depth;
+    let poly = |i: usize| {
+        let at = at_falcon + 1024 * i;
+        Poly(core::array::from_fn(|t| {
+            u16::from_le_bytes([input[at + 2 * t], input[at + 2 * t + 1]])
+        }))
+    };
+    let polys = [poly(0), poly(1), poly(2)];
+    put(&falcon512::s1_norm(&polys[0], &polys[1], &polys[2]).to_le_bytes());
+    let mut sum = 0u64;
+    for k in 1..=word(at_falcon + 3 * 1024) as usize {
+        let p = |i: usize| &polys[(i + k) % 3];
+        sum += falcon512::s1_norm(p(0), p(1), p(2));
+    }
+    put(&sum.to_le_bytes());
+
+    let at_cases = at_falcon + 3 * 1024 + 4;
+    let mut read = at_cases + 4;
+    for _ in 0..word(at_cases) {
+        let mut field = || {
+            let len = word(read) as usize;
+            read += 4 + len;
+            &input[read - len..read]
+        };
+        let (key, message, context, signature) = (field(), field(), field(), field());
+        put(&[match PublicKey::decode(key) {
+            Some(key) => key.verify(message, signature, context) as u8,
+            None => 2,
+        }]);
+    }
     guest_sdk::commit(&out[..at]);
 }
 

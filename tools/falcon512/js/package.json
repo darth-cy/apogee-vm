@@ -1,0 +1,28 @@
+{
+  "name": "apogee-falcon512",
+  "version": "0.1.0",
+  "description": "Falcon-512 with Poseidon2's HashToPoint (not interoperable with standard Falcon-512)",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./falcon512.d.ts",
+      "default": "./falcon512.js"
+    },
+    "./keygen.js": {
+      "types": "./keygen.d.ts",
+      "default": "./keygen.js"
+    },
+    "./recovery.js": {
+      "types": "./recovery.d.ts",
+      "default": "./recovery.js"
+    }
+  },
+  "types": "./falcon512.d.ts",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

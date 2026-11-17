@@ -62,6 +62,8 @@ only at `s ∈ {0, 1}`. At any other `s` a scaled tuple is looked up instead: on
 | `GENERIC` | 2 | table, committed | the packed table (§9) | 3 | 0 |
 | `DECODER` | 3 | table, committed | the family's decoded table (§10) | 7 or 6 | 0 |
 
+Channel 4 is retired, never to be reassigned.
+
 A virtual table is a closed form of the row index, never committed: the verifier evaluates its
 multilinear extension where the GKR pass ends (`gkr_verify::virtual_at_point`, [gkr.md](gkr.md) §2).
 Each is a weighted sum of the row's bits.

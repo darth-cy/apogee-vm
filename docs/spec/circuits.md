@@ -16,8 +16,9 @@ Families 0–6 (`constants::family`) are the **execution** families, one execute
 row ([add-sub.md](add-sub.md), [jump-branch-slt.md](jump-branch-slt.md),
 [bitwise.md](bitwise.md), [mul-div.md](mul-div.md), [memory-ops.md](memory-ops.md) §3,
 §4, §6); 7–11 the **window** families, one memory word a row ([memory.md](memory.md) §3,
-[public-values.md](public-values.md) §4); 12–17 the **delegation** families, a precompile call or a
-path's level a row, or sixteen ([precompiles.md](precompiles.md)).
+[public-values.md](public-values.md) §4); 12–17 and 21–23 the **delegation** families, a block of
+1 to 64 rows an entry of a precompile call: the call, a path's level or the call's arrays
+([precompiles.md](precompiles.md) §1); 18–20 are retired, never to be reassigned.
 
 Shapes at the default height `2^n` (`constants::family::DEFAULT_HEIGHTS`): committed columns,
 enforcing gates, obligations per channel (`TIMESTAMP/RANGE16/GENERIC/DECODER`), row-wise gate
@@ -44,6 +45,12 @@ lists (the halving ones are `n`), inner columns, artifact bytes, and a shard pro
 | 15 | `MERKLE_ROOT` | 16 | 94 | 72 | 0 | 54 | 0/120/0/0 | 8 | 704 | 103,449 | 31,056 |
 | 16 | `MERKLE_LEVELS` | 16 | 63 | 50 | 0 | 20 | 0/97/0/0 | 8 | 704 | 138,302 | 30,208 |
 | 17 | `MERKLE_ROUNDS` | 16 | 36 | 66 | 0 | 85 | 0/1/0/0 | 4 | 104 | 64,028 | 16,304 |
+| 18 | retired | | | | | | | | | | |
+| 19 | retired | | | | | | | | | | |
+| 20 | retired | | | | | | | | | | |
+| 21 | `FALCON` | 16 | 27 | 13 | 0 | 10 | 0/25/0/0 | 6 | 254 | 30,823 | 19,776 |
+| 22 | `FALCON_SPLIT` | 16 | 86 | 145 | 0 | 50 | 0/225/0/0 | 9 | 1,344 | 212,715 | 43,368 |
+| 23 | `FALCON_PRODUCT` | 16 | 101 | 144 | 0 | 84 | 0/192/0/0 | 9 | 1,344 | 222,800 | 43,592 |
 
 The bytes are the GKR pass and outputs; the witness commitment and the opening come on top
 ([proof.md](proof.md) §9, [pcs.md](pcs.md) §7).
@@ -58,8 +65,9 @@ halving lists, one per variable and as wide as the outputs, and no gate below th
 `PUBLIC_INPUT`'s, byte for byte at one height, all `constraints::memory` constructors
 ([memory.md](memory.md) §3). Every other family's is its own module's `artifact`, the delegation
 families' on `constraints::delegation`'s builder: `poseidon2::{artifact, rounds_artifact}`,
-`mul_div_u256::artifact` and `merkle::{artifact, levels_artifact, rounds_artifact}`, the two rounds
-families on one builder, `poseidon2::rounds`, keyed for a call or a level.
+`mul_div_u256::artifact`, `merkle::{artifact, levels_artifact, rounds_artifact}` and
+`falcon::{artifact, split_artifact, product_artifact}`, the two rounds families on one builder,
+`poseidon2::rounds`, keyed for a call or a level.
 
 ## 2. How a family circuit is assembled
 
@@ -92,9 +100,10 @@ constructor panics on a refusal, so every circuit that exists has passed them. I
   own `M` columns after the frame's, and a leaf folded into `rd`'s write leaf (`ADD_SUB_LUI_AUIPC`'s
   request, [precompiles.md](precompiles.md) §2);
 - the window constructors ([memory.md](memory.md) §3);
-- `delegation::Builder`, the delegation families: `M[0] live` masking every leaf and obligation,
-  columns named once, leaves padded to one power of two a side, the one channel `RANGE16` where
-  there is an obligation, and `lookup::check_copowers` over its scaled chunks
+- `delegation::Builder`, the delegation families: `M[0] live`, each leaf masked by it or by an `M`
+  column held boolean, zero where `live` is (`leaf_under`), each obligation selected by it, columns
+  named once, leaves padded to one power of two a side, the one channel `RANGE16` where there is
+  an obligation, and `lookup::check_copowers` over its scaled chunks
   ([precompiles.md](precompiles.md) §1).
 
 Beyond the frame, each execution family has `m_pc` as the row's liveness and every other mask

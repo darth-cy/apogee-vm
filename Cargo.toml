@@ -26,6 +26,7 @@ members = [
     "tools/profiler",
     "tools/artifact-dump",
     "tools/test-support",
+    "tools/falcon512/rust",
 ]
 
 # Excluded: `crates/guest-sdk` says why in its manifest, and `guests/` is the
@@ -84,8 +85,28 @@ ark-poly = "0.6"
 # Test only. Exercises the `Fp` serde impls over a real wire format.
 postcard = { version = "1", default-features = false }
 
-# JSON: the reports `tools/bench` and `tools/profiler` write. Nothing here is
-# reachable from the prover, the verifier or a guest.
+# Test only. Standard Falcon's HashToPoint, under which `tools/falcon512/rust`'s
+# KAT was signed. Never linked by the prover, the verifier or a guest.
+sha3 = "0.10"
+
+# Test only. Falcon-512 with Poseidon2's HashToPoint, the host's half: keys,
+# signatures, the key digest and the address, which the SDK's verifier and
+# `guests/amazon` are held to. Never linked by the prover, the verifier or a
+# guest.
+apogee-falcon512 = { path = "tools/falcon512/rust" }
+
+# Test only. Falcon-512 keys from a seed, `tools/falcon512/rust`'s keygen.
+# Never linked by the prover, the verifier or a guest.
+falcon-rust = "0.3.1"
+
+# Test only. `tools/falcon512/rust`'s signer: its FFT's complex numbers and its
+# randomness, the thread RNG, each the version `falcon-rust` already links.
+num-complex = "0.4"
+rand = "0.10"
+
+# JSON: the reports `tools/bench` and `tools/profiler` write, and
+# `tools/falcon512/vectors.json`, which its tests and the emulator's read.
+# Nothing here is reachable from the prover, the verifier or a guest.
 serde_json = "1"
 
 # The workspace tests build circuits at their real `2^20` rows and execute

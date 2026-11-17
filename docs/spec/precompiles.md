@@ -1,10 +1,15 @@
 # The precompiles
 
 The delegation calls: an `ecall` that hands a frame of RAM words to a circuit other than the CPU's,
-the request and the invocation paired through the memory multiset. Three are registered, the
-Poseidon2-A64-C5 permutation, `mul_div_u256` and `merkle_root`. `constants::delegation::TYPES` is the
-registry; this page is the mechanism (§1, §2), the calls' circuits (§3, §4, §6) and the SDK over
-them (§5).
+the request and the invocation paired through the memory multiset. Four are registered, the
+Poseidon2-A64-C5 permutation, `mul_div_u256`, `merkle_root` and the Falcon-512 lattice check.
+`constants::delegation::TYPES` is the registry; this page is the mechanism (§1, §2), the calls'
+circuits (§3, §4, §6, §7) and the SDK over them (§5; Falcon-512's HashToPoint, §7.7).
+
+The VM has no Keccak precompile. A bitwise hash is inefficient to prove: in a 254-purchase
+`guests/amazon` proof, Keccak's three families took 25.8% of shard time against Poseidon2's 5.3%.
+A scheme that specifies SHAKE or SHA-3 has its hashing replaced by a Poseidon2-A64-C5
+construction, as Falcon-512's HashToPoint is (§7.7). Restoring Keccak is a negative choice.
 
 ## 1. The mechanism
 
@@ -16,16 +21,22 @@ them (§5).
 | `0x0512` | `MERKLE_ROOT` | 15 | a call | 19 | 1 | `RANGE16` |
 | `0x0512` | `MERKLE_LEVELS` | 16 | a level | 16 | 1 | `RANGE16` |
 | `0x0512` | `MERKLE_ROUNDS` | 17 | a level | 16 | 16 | `RANGE16` |
+| `0x0514` | `FALCON` | 21 | a call | 5 | 1 | `RANGE16` |
+| `0x0514` | `FALCON_SPLIT` | 22 | the arrays | 768 | 64 | `RANGE16` |
+| `0x0514` | `FALCON_PRODUCT` | 23 | the arrays | 768 | 16 | `RANGE16` |
 
 A call is one cycle of `ADD_SUB_LUI_AUIPC`: `a7` the number, `a0` the frame's word-aligned base,
 both preserved; the row writes no register and falls through. Each family of the number records
-every entry of its kind: the call, or for `MERKLE_ROOT`'s later two families each level of the
-call's path (§6). The first is its **frame family**, whose row reads and writes every frame word at
-the requesting cycle's `4·cycle + FRAME_DELTA`, `FRAME_DELTA = 0`, and reads the anchor (§2); the
-first level family, `MERKLE_LEVELS`, reads its level's sibling at the same timestamp; a later family
-expands an entry into rows of its own, holding its words in its buffer and reaching no memory but
-its own address space. A delegation family owns no cycle and claims no pc: it is in a `VmConfig`
-exactly when the image declares its number ([program.md](program.md) §7), and it plans
+every entry of its kind (`constants::delegation::Per`): the call, or for `MERKLE_ROOT`'s later two
+families each level of the call's path (§6), or for `FALCON512`'s later two the call's three arrays
+(§7). The first is its **frame family**, whose row reads and writes every frame word at the
+requesting cycle's `4·cycle + FRAME_DELTA`, `FRAME_DELTA = 0`, and reads the anchor (§2); the first
+level family, `MERKLE_LEVELS`, reads its level's sibling at the same timestamp, and the first
+arrays family, `FALCON_SPLIT`, the arrays' words; a later family expands an entry into rows of its
+own, holding its words in its buffer and reaching no memory but its own address space. An entry's
+rows are a block of a power of two, the rows past its live ones all zero, padding:
+`FALCON_SPLIT`'s 64 hold 48 (§7). A delegation family owns no cycle and claims no pc: it is in a
+`VmConfig` exactly when the image declares its number ([program.md](program.md) §7), and it plans
 `⌈entries·rows/h⌉` shards ([streaming.md](streaming.md) §4) under the trivial time window
 ([proof.md](proof.md) §8).
 
@@ -183,15 +194,23 @@ conditions that single out the quotient. 226 committed columns, 239 obligations 
 | `poseidon2_permute(&mut [u64; 16])` | the call over the array itself, in place, each lane read mod `p` |
 | `Digest` | 8 lanes, each below `p`: `Digest::new` refuses any other, so a node has one encoding; what the call writes is one already |
 | `poseidon2_compress(&Digest, &Digest) -> Digest` | a Merkle node: `P(left ‖ right)[0..8]`, truncated |
-| `U256` | four `u64` limbs; `+ − * / %` panic on overflow and a zero divisor, `checked_*`, `overflowing_*`, `wrapping_*` do not; `<< >> & | ^ !`, `Ord`, bytes in either order |
+| `U256` | four `u64` limbs; `+ − * / %` panic on overflow and a zero divisor, `checked_*`, `overflowing_*`, `wrapping_*` do not; `<< >> & \| ^ !`, `Ord`, bytes in either order |
 | `U256::mul_div_rem`, `mul_div`, `div_rem` | the call; `None` where the caller's precondition fails, checked first: `d = 0`, or the high half of `a·b`, skipped when both are below `2^128`, at or above `d` |
 | `merkle_root(slot, &Digest, siblings: &[u8]) -> Digest` | the call over a path of `siblings.len() / 64` siblings where they lie; panics first where its precondition fails (§6) |
 | `Digest::bytes(&[Digest]) -> &[u8]` | a path the guest holds, as `merkle_root` takes it |
+| `falcon512::Poly` | 512 `u16` coefficients, word-aligned, coefficient `i` at index `i`: any 512 are a polynomial, read mod `q` |
+| `falcon512::s1_norm(&Poly, &Poly, &Poly) -> u64` | the call over `h`, `s2` and `c` where they lie, its frame five words on the caller's stack: `‖s1‖²`, below `2^35` (§7); panics first unless the three arrays are apart |
+| `falcon512::Q`, `SQBETA`, `PUBLIC_KEY_BYTES`, `SIGNATURE_BYTES` | `q = 12289`; `⌊β²⌋ = 34,034,726`, the most `‖s1‖² + ‖s2‖²` a signature verifies at; 897 and 666, a key's bytes and a signature's |
+| `falcon512::PublicKey::decode(&[u8]) -> Option<PublicKey>` | the key `h` from exactly 897 bytes, v1.2 of the specification: the header `0x09`, then its 512 coefficients in order, 14 bits each, packed big-endian, each below `q`; `None` for any other bytes, so a key has one encoding. A key that decodes then has K computed from the same bytes and HashToPoint's per-key prefix from K (§7.7), both kept with `h` |
+| `falcon512::key_digest(&[u8]) -> Digest`, `falcon512::address(&[u8]) -> [u8; 32]` | K and the address (§7.7) of any bytes, a key that does not decode included |
+| `falcon512::PublicKey::key_digest(&self) -> &Digest`, `falcon512::PublicKey::address(&self) -> [u8; 32]` | the key's K and address, computed once by `decode` |
+| `falcon512::PublicKey::verify(&self, msg: &[u8], sig: &[u8], context: &[u8]) -> bool` | whether `sig` is a v1.2 padded signature of `msg` under the key and `context`: `context` at most 255 bytes; `sig` exactly 666 bytes, the header `0x39`, the 40-byte salt, then `s2` compressed, each coefficient a sign bit, the low 7 bits of its size, then that size `>> 7` zeros and a one, and zeros to the end; `false` for any other bytes, among them a coefficient `−0`, one above 2047 in size or one reaching past the end, and a one bit after the 512th. `c` is HashToPoint (§7.7) of K, the salt, `context` and `msg`, from the key's prefix; it verifies exactly when `s1_norm(h, s2, c) + ‖s2‖² ≤ SQBETA` |
 
-`apogee_poseidon2_permute`, `apogee_mul_div_u256` and `apogee_merkle_root` are the C ABI's
-([ecall-abi.md](ecall-abi.md) §7). Every frame is the caller's own memory below the advice region
-(§1), a guest copying advice in before it permutes it; a path's siblings are not a frame, and
-`merkle_root` reads an advised path in place (§6). A digest decoded from advice or input, that the
+`apogee_poseidon2_permute`, `apogee_mul_div_u256`, `apogee_merkle_root` and
+`apogee_falcon512_s1_norm` are the C ABI's ([ecall-abi.md](ecall-abi.md) §7). Every frame is the
+caller's own memory below the advice region (§1), a guest copying advice in before it permutes it;
+a path's siblings and the lattice check's arrays are not a frame, and their calls read them in
+place where they lie, the advice included (§6, §7). A digest decoded from advice or input, that the
 guest compares or publishes, is `Digest::new`'s to check.
 
 ## 6. `merkle_root`
@@ -308,3 +327,229 @@ words at its address, accessed at the call's timestamp after the frame's, and it
 carry is what a row starts from that no word of its entry gives, so a shard may begin mid-path
 ([streaming.md](streaming.md) §4); `trace::TraceArchive` checks a level's words against the log as
 it does a frame's.
+
+## 7. The Falcon-512 lattice check
+
+The lattice check of Falcon-512 verification over `Z_q[x]/(x^512 + 1)`, `q = 12289`
+(`constants::delegation::falcon`): from the public key `h`, the signature's half `s2` and the
+hashed message `c` (§7.7), `s1 = (c − s2·h) mod (q, x^512 + 1)` with each coefficient centered to
+`[−6144, 6144]`, and `n = ‖s1‖²`. The frame:
+
+```text
+word 0   h      the address of h's array
+word 1   s2     the address of s2's array
+word 2   c      the address of c's array
+word 3   n_lo   n's low word, written
+word 4   n_hi   n's high word, below 2^16, written
+```
+
+An array is 256 words, 512 `u16` coefficients: coefficient `2i` is word `i`'s low halfword and
+`2i + 1` its high one, every one read mod `q`. **No value is refused**: any three arrays have an
+`s1`, and `n < 512·6144² < 2^35`. **The caller owes** the layout alone: word-aligned arrays,
+disjoint from each other and from the frame, which the emulator refuses otherwise as
+`EmuError::DelegationFrame`, each word one a load could read, else `OutOfBounds`; neither has a
+witness. **The arrays are not the frame.** `FALCON_SPLIT` reads their words at the call's
+timestamp, writes them back unchanged and holds each to a word as a load does, so an array may lie
+anywhere a load reaches, the advice included.
+
+**The CRT.** `ζ = 11^384 mod q` is a primitive 32nd root of unity, 11 generating `Z_q*`, of order
+`12288 = 32·384`. The `β_r = ζ^(2r + 1)`, `r < 16`, are the sixteen distinct roots of `y^16 + 1`,
+checked at compile time, so `x^512 + 1 = Π_r (x^32 − β_r)`, coprime factors over `Z_q`
+(`constraints::falcon::{ZETA, BETA}`). Since `x^32 ≡ β_r` modulo `x^32 − β_r`, residue `r` of a
+polynomial `a` has coefficient `j < 32` equal to `Σ_{m<16} V[r][m]·a_{32m + j}`,
+`V[r][m] = β_r^m mod q` (`V`). Coefficients `32m + 2j` and `32m + 2j + 1` are an array's word
+`16m + j`, at `ptr + 64m` for `ptr` its word `j`'s address: those sixteen words give coefficients
+`2j` and `2j + 1` of every residue.
+
+**The space**, `address_space::FALCON = 8`, two kinds of tuple:
+
+```text
+T(FALCON, cycle, σ, ptr, acc)                       a chain's control at stamp σ
+T(FALCON, 64·cycle + place(P, j), r, rr_0, rr_1)    split row (P, j)'s residue pair r < 16
+```
+
+The chains `P = 0, 1, 2` are `s2`, `h`, `c` (`delegation::falcon::CHAINS`). Chain `P` takes the
+stamps `start(P) = 16 + 17P` to `start(P) + 16`, and `place(P, j) = 17P + j < 64`
+(`constraints::falcon::{start, place, KEY}`). `SPLIT(P, j)` is row `16P + j` of a call's 64 in
+`FALCON_SPLIT`, rows 48–63 padding, and `PRODUCT(r)` row `r` of its 16 in `FALCON_PRODUCT`:
+
+```text
+tuple      written by                           read by
+control    FALCON, σ = start(P)                 FALCON, σ = start(P) + 16
+           SPLIT(P, j), σ = start(P) + j + 1    SPLIT(P, j), σ = start(P) + j
+residue    SPLIT(P, j), r < 16                  PRODUCT(r)
+```
+
+### 7.1 `FALCON`, the frame row
+
+```text
+frame        5 words (§1), words 3 and 4 written
+n_lo         write_3 a word                    n_hi_range   write_4 ∈ [0, 2^16)
+n_rule       n − write_3 − 2^32·write_4        st{P}_rule   st_P − start(P)·live
+write  (FALCON, cycle, st_P, ptr_P, 0)         ptr_P the read of frame word CHAINS[P]
+read   (FALCON, cycle, st_P + 16, end_P, 0), P = s2, h      (FALCON, cycle, st_2 + 16, end_2, n)
+```
+
+`end_P` is free: the chain's last row sent `ptr_P + 64`. 40 committed columns, 25 obligations (the
+`RANGE16` tree at 32 leaves, 6 free), 9 and 8 leaves.
+
+### 7.2 `FALCON_SPLIT`
+
+Row `(P, j)`, its stamp `σ = start(P) + j`: column `j` of chain `P`.
+
+```text
+M   live cycle stamp key ptr acc acc_out a1..a15 w{m}_read_ts w{m}_read_value (m < 16) rr{r}_{e}
+W   w{m}_gap_c0 w{m}_gap_c1 w{m}_h16 s{m}_{e} kk{r}_{e} kk{r}_{e}_h16              r < 16, e < 2
+stamp_range  σ − 16 ∈ [0, 2^16)                  key_rule   key − 64·cycle − σ + 16
+a{m}_rule    a_m − ptr − 64m·live, m ≥ 1         a_0 = ptr
+w{m}         read (RAM, a_m, read_ts_m, read_m), write (RAM, a_m, 4·cycle + FRAME_DELTA, read_m),
+             its gap in [0, 2^38), and read_m a word: v_{m,1} = w{m}_h16, v_{m,0} = read_m − 2^16·v_{m,1}
+s{m}_{e}     s_{m,e} + 6144 and 6144 − s_{m,e} each in [0, 2^16)
+acc_rule     acc_out − acc − Σ_{m,e} s_{m,e}²
+res{r}_{e}   Σ_m V[r][m]·(v_{m,e} − s_{m,e}) − rr_{r,e} − q·kk_{r,e}
+kk{r}_{e}    kk_{r,e} + 2^31 a word
+read   (FALCON, cycle, σ, ptr, acc)
+write  (FALCON, cycle, σ + 1, ptr + 4, acc_out)     (FALCON, key, r, rr_{r,0}, rr_{r,1}), r < 16
+```
+
+No column says which chain a row is: the frame row ends `s2`'s and `h`'s at `acc = 0`, which holds
+their `s` to 0, and takes `c`'s as `n`. 231 committed columns, 225 obligations (256 leaves, 30
+free), 17 and 33 leaves; at `2^16`, 1,024 calls a shard.
+
+### 7.3 `FALCON_PRODUCT`
+
+Row `r`: residue `r`, its one-hot bit `o_r`.
+
+```text
+M   live r base0 base1 base2 a0..a31 b0..b31 d0..d31
+W   o0..o15 wrap0..wrap30 w{k}_c0 w{k}_c1 w{k}_c2 (k < 32)
+one_o         Σ_i o_i − live, each o_i boolean       r_rule   r − Σ_i i·o_i
+base{P}_rule  base_P − base_0 − 17P·live, P ≥ 1
+{a,b,d}{i}    ∈ [0, 2^16)
+wrap{k}_rule  W_k − Σ_{i+j=k+32} a_i·b_j, k < 31
+prod{k}       Σ_{i+j=k} a_i·b_j + (Σ_i β_i·o_i)·W_k − d_k − q·Σ_c 2^16c·w_{k,c}, no W_31
+w{k}_c{c}     ∈ [0, 2^16), c < 3
+read   (FALCON, base_P + j, r, x_{2j}, x_{2j+1}), j < 16, x = a, b, d for P = s2, h, c
+```
+
+245 committed columns, 192 obligations (256 leaves, 63 free), 48 and 0 leaves; at `2^16`, 4,096
+calls a shard.
+
+### 7.4 Why every key is written once and read once
+
+The space's reads and writes are equal multisets: nothing initializes it and no final reads it.
+
+*Controls and residues never meet.* A split row bounds `σ − 16`, so its controls' timestamps `σ`
+and `σ + 1` lie in `[16, 2^16 + 17)`, as the frame row's `16` to `66` do, while a residue's is
+`r < 16`: a literal in a split row, the one-hot's integer in a product row.
+
+*The split rows are the chains.* Fix an address `A` and let `n_t` count the split rows of cycle `A`
+and stamp `t`. At `(A, t)` the writes are the frame row's start at `t`, if any, and the `n_{t−1}`
+rows before; the reads its end at `t` and the `n_t` rows at `t`. So
+`n_t = n_{t−1} + [t a start] − [t an end]`, with `n_t = 0` below 16. A frame row is its anchor's,
+one a requesting cycle (§2): at any other `A` there is no start and no end and `n` is 0
+throughout, and at a call's cycle the starts `16, 33, 50` and ends `32, 49, 66` give `n_t = 1` on
+`start(P) + j`, `j < 16`, and 0 elsewhere. Every split row is one position `(P, j)` of one call, its
+`cycle` the requesting ecall's, an integer below `2^36`; every control key is written once and read
+once, so row `(P, j)` receives what row `(P, j − 1)` sent: `ptr = ptr_P + 4j` and the running `acc`.
+
+*The product rows are the residues.* A split row's key `64·cycle + place` names its call and
+position, `place < 64`, so each residue key is written once. A product row of one-hot `r` reads
+`(base_0 + ρ, r)` for every place `ρ`; its read at `ρ = 0` is written, so `base_0 = 64·c + u` for a
+call `c` and a place `u`. Were `u ≠ 0`, some place `ρ` would put `(u + ρ) mod 64` where no call
+writes (`falcon::NO_SHIFT`, checked at compile time). So `base_0 = 64·c`, the row reads exactly call
+`c`'s 48 pairs of residue `r`, and since each is written once there is exactly one product row per
+call and residue.
+
+### 7.5 Why the rows are the check
+
+Row `(P, j)` reads the words `ptr_P + 4j + 64m`, `m < 16`: each array's 256 words once each, at the
+call's timestamp, written back unchanged. An array overlapping another or the frame would access a
+word twice at one timestamp, which no memory history allows. Each word is bounded as a load bounds
+the word it reads, so the coefficients are its halfwords, each below `2^16`, read mod `q`.
+
+A split identity's sum is below `2^34` in size, `rr` is below `2^16` at its reader and
+`kk ∈ [−2^31, 2^31)`, so it holds over the integers and `rr_{r,e} ≡ Σ_m V[r][m]·(v_{m,e} − s_{m,e})`
+mod `q`: coefficient `2j + e` of residue `r` of `array_P − s`. Each chain's `acc` sums its rows'
+`Σ s²`, below `512·6144² < 2^35`: the frame ends `s2`'s and `h`'s at the literal 0, so their `s` are
+all 0, and `c`'s at `n = n_lo + 2^32·n_hi`, which with `n_lo` a word and `n_hi` below `2^16` is that
+sum's integer, written as its two words. So `a`, `b` and `d` are residue `r` of `s2`, `h` and
+`c − s1`, `s1` the coefficients chain `c` holds, each in `[−6144, 6144]`, and `n = ‖s1‖²`.
+
+A product identity's left side is below `2^51` in size and `q·w_k` below `2^62`, so it holds over
+the integers: `a·b ≡ d` mod `(x^32 − β_r, q)`. By the CRT, `s2·h ≡ c − s1` mod `(q, x^512 + 1)`. A
+coefficient in `[−6144, 6144]` is its class's centered representative, `q = 2·6144 + 1`: `s1` is
+the centered `(c − s2·h) mod q`, and `n` its squared norm.
+
+### 7.6 The trace
+
+A call is one `FALCON` entry, its frame, and one entry in each of `FALCON_SPLIT` and
+`FALCON_PRODUCT`, its arrays (`constants::delegation::Per::Arrays`): `falcon::ARRAYS = 768` words in
+`CHAINS` order, chain `P`'s word `i` entry word `256P + i`, at the address frame word `CHAINS[P]`
+holds plus `4i`, accessed at the call's timestamp after the frame's and written back unchanged; its
+base is `s2`'s array. It carries nothing: every row of it is a function of its words, so a shard
+holds whole calls, and `trace::TraceArchive` checks `FALCON_SPLIT`'s words against the log as it
+does a frame's.
+
+### 7.7 HashToPoint
+
+Falcon-512 here is v1.2's (the NIST round-3 specification), its keys, encodings, signer and
+acceptance rule, in all but HashToPoint, the map to the point `c`: not SHAKE256 of the salt (v1.2's
+nonce `r`) and the message but a sponge over `P`, the Poseidon2-A64-C5 permutation (§3), of the
+key digest K, the salt, the application's context and the message. K is a sponge over the key's
+bytes, and the key's address is K's first 32 bytes. The SDK's `falcon512` computes both over
+`poseidon2_permute` (§5).
+
+The sponge is [transcript.md](transcript.md) §2's duplex from the zero state: rate lanes 0–7,
+capacity 8–15, no padding, absorbing overwrites the next rate lane, permuting first when the rate
+is full. A field `(tag, bytes)` absorbs the tag, the length in bytes, then the bytes seven to a
+lane, little-endian, the last chunk shorter, so every lane is below `2^56 < p`. The squeeze stream
+permutes, then reads rate lanes 0–7 in order, and again; a rate lane the last absorb did not write
+keeps its value.
+
+```text
+KEY_DOMAIN        the 13 ASCII bytes "apogee/key/v1"
+SCHEME_ID         the 22 ASCII bytes "falcon512-poseidon2/v1"
+SIGNATURE_DOMAIN  the 33 ASCII bytes "apogee/falcon512/hash-to-point/v1"
+T                 ⌊p / q^4⌋·q^4 = 808·q^4 = 0xFFBD4EAA725E0328; (p − T)/p ≈ 1.0177·10^−3
+
+K(pk)             field(1, KEY_DOMAIN), field(2, SCHEME_ID), field(3, pk); the stream's first
+                  8 lanes, 64 bytes as each lane's u64 little-endian
+address(pk)       K(pk)'s first 32 bytes: lanes 0–3
+HashToPoint(pk, salt, context, msg)
+                  field(1, SIGNATURE_DOMAIN), field(2, K(pk)), field(3, salt), field(4, context),
+                  field(5, msg); then each lane x of the stream: x ≥ T is skipped, and x < T is
+                  the next four coefficients, ⌊x / q^j⌋ mod q for j = 0, 1, 2, 3, until 512
+```
+
+`pk` is the exact 897-byte key the signature is verified under: a verifier computes K from the
+bytes it decodes `h` from. `salt` is the signature's 40 bytes after its header. `context` is the
+application's, 0 to 255 bytes, FIPS 204's and 206's convention: a signer refuses a longer one and
+verification is false for it, and a signature under one context does not verify under another. K
+is defined for any bytes, a key that does not decode included. The address is the key's name in a
+guest's state (`guests/amazon`), 256 bits, each of its four lanes below `p`.
+
+**The per-key prefix.** For an 897-byte key K is 141 lanes, 17 permutations absorbing and one to
+squeeze, and `(1, SIGNATURE_DOMAIN)` and `(2, K)` are 7 + 12 = 19 lanes, 2 permutations, leaving
+three rate lanes written. Every signature under the key continues from that state, so `PublicKey::decode`
+computes K and the prefix once. A 92-byte message under a 25-byte context is then 30 lanes, 4
+permutations, and the squeeze 16, one more when a lane among the first 128 is skipped, with
+probability `1 − (1 − 1.0177·10^−3)^128 ≈ 12.2%`.
+
+**Why `c` is uniform.** In the sponge's model the stream's lanes are independent and uniform on
+`[0, p)`. A lane below `T` is then uniform on `[0, 808·q^4)`, so its four low base-`q` digits are
+uniform on `Z_q^4` and independent of the rest of it, and a lane at or above `T` is skipped,
+rejection rather than reduction, so no residue is favored: `c` is exactly uniform on `Z_q^512`, the
+distribution v1.2's security argument takes HashToPoint's output to have. The stream is squeezed
+from the sponge that absorbed the salt, the context and the message, with no fixed-width digest
+between them for distinct inputs to collide in; the key enters as K, eight lanes, so two keys
+share a stream only through a collision of K's sponge, whose capacity is eight lanes. Each framing
+is injective, each field its tag, its length and whole lanes in a fixed order, so distinct
+`(K, salt, context, msg)` are distinct lane sequences, and the first field, `KEY_DOMAIN` or
+`SIGNATURE_DOMAIN`, separates each sponge from the other and from every other over `P`.
+
+**Interoperability.** Keys and signatures are v1.2's encodings, and a key from v1.2's keygen is a
+key here, but a signature is not interchangeable with standard Falcon-512's: a standard signature
+does not verify under this HashToPoint, nor the reverse. `tools/falcon512` holds the host
+implementations, Rust, JavaScript and Python, which sign and verify under it, and `vectors.json`,
+the vectors all three agree on, whose signatures the SDK's verifier is held to.

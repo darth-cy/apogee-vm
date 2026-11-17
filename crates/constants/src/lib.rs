@@ -321,7 +321,7 @@ pub mod challenge_slot {
 }
 
 /// The lookup channels a lookup expression names. A channel number is never
-/// reassigned.
+/// reassigned: **4**, a byte-XOR table's, is retired.
 ///
 /// A `LookupExpr`'s `channel` is one of these numbers. A channel is either a
 /// **range** channel, whose one expression holds on a row when its canonical
@@ -414,8 +414,9 @@ pub mod generic_table {
 /// The number is what everything else cites: canonical ordering is ascending
 /// `FamilyId`, the program-identity digest absorbs families in that order, and
 /// shard transcripts are seeded with it. Ids 0–6 are the execution families,
-/// 7–11 the window families and 12–17 the delegation families
-/// ([`crate::delegation`], `docs/spec/circuits.md` §1).
+/// 7–11 the window families and 12–17 and 21–23 the delegation families
+/// ([`crate::delegation`], `docs/spec/circuits.md` §1); 18–20 are
+/// [`family::RETIRED`].
 ///
 /// Which mnemonic each instruction family claims is `crates/program`'s
 /// `row_kind`, and `docs/spec/program.md` §4 is the table.
@@ -497,9 +498,28 @@ pub mod family {
     /// A level's permutation, 16 rows: [`POSEIDON2_ROUNDS`]' rows keyed by the
     /// level, the last round writing the node alone. Touches no RAM.
     pub const MERKLE_ROUNDS: u32 = 17;
+    /// The Falcon-512 lattice check's **frame** row, one a call: the frame's
+    /// five words, its three chains started and ended in
+    /// `address_space::FALCON`, and `‖s1‖²` written (`constraints::falcon`).
+    pub const FALCON: u32 = 21;
+    /// The arrays split into residues: 64 rows a call, row `16P + j` column
+    /// `j` of chain `P` (`s2`, `h`, `c`), sixteen words of its array read from
+    /// RAM, rows 48–63 dead.
+    pub const FALCON_SPLIT: u32 = 22;
+    /// The residue products: 16 rows a call, row `r` the product of `s2`'s and
+    /// `h`'s residues mod `x^32 − β_r` held to `c − s1`'s. Touches no RAM.
+    pub const FALCON_PRODUCT: u32 = 23;
 
-    /// How many families this table defines.
-    pub const COUNT: u32 = 18;
+    /// How many family numbers this table defines, [`RETIRED`] ones among
+    /// them.
+    pub const COUNT: u32 = 24;
+
+    /// The **retired** family numbers, a Keccak-f[1600] permutation's three:
+    /// struck out and never reassigned. A table indexed by `FamilyId` keeps an
+    /// inert entry at each, and whatever enumerates families or reads one
+    /// from bytes skips or refuses a retired number as it does one at or
+    /// above [`COUNT`].
+    pub const RETIRED: [u32; 3] = [18, 19, 20];
 
     /// The pinned height of [`PUBLIC_INPUT`] and [`PUBLIC_OUTPUT`].
     ///
@@ -560,6 +580,12 @@ pub mod family {
         false, // MERKLE_ROOT
         false, // MERKLE_LEVELS
         false, // MERKLE_ROUNDS
+        false, // 18, retired
+        false, // 19, retired
+        false, // 20, retired
+        false, // FALCON
+        false, // FALCON_SPLIT
+        false, // FALCON_PRODUCT
     ];
 
     /// The trace-height menu, ascending: the heights the registries build
@@ -607,6 +633,12 @@ pub mod family {
         1 << 16, // MERKLE_ROOT, likewise
         1 << 16, // MERKLE_LEVELS, likewise
         1 << 16, // MERKLE_ROUNDS, likewise: its level's bound
+        0,       // 18, retired
+        0,       // 19, retired
+        0,       // 20, retired
+        1 << 16, // FALCON, the floor of its RANGE16 channel
+        1 << 16, // FALCON_SPLIT, likewise
+        1 << 16, // FALCON_PRODUCT, likewise
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -856,9 +888,9 @@ pub mod guest_memory {
 /// redefining a number does not fail loudly — it quietly makes an old program
 /// compute something else — so numbers here are never reused, exactly like
 /// `transcript_tags`. A *retired* number is struck out and never reassigned:
-/// **63 and 64**, POSIX `read` and `write`, and **0x0507 and 0x0508**, a
-/// keccak-f round and four SHA-256 rounds, are retired
-/// (`docs/spec/ecall-abi.md` §3).
+/// **63 and 64**, POSIX `read` and `write`, **0x0507 and 0x0508**, a
+/// keccak-f round and four SHA-256 rounds, and **0x0513**, a Keccak-f[1600]
+/// permutation, are retired (`docs/spec/ecall-abi.md` §3).
 ///
 /// An ecall carries its number in `a7`, its arguments in `a0`-`a5` and its
 /// result in `a0`, with errors as a negated errno. **An Apogee guest is an
@@ -896,6 +928,16 @@ pub mod ecall {
     /// refuses any other. `a0` is preserved.
     pub const MERKLE_ROOT: u32 = 0x0512;
 
+    /// A delegation call: the Falcon-512 lattice check on the five-word frame
+    /// at `a0` (`delegation::falcon`). Words 0–2 are the addresses of `h`,
+    /// `s2` and `c`, 512 `u16` coefficients each, every one read mod `q`;
+    /// words 3 and 4 become `‖s1‖²`'s low and high words, `s1 = (c − s2·h)
+    /// mod (q, x^512 + 1)` centered to `[−6144, 6144]`. The frame lies below
+    /// `guest_memory::ADVICE_ORIGIN`; the arrays are word-aligned, disjoint
+    /// from each other and the frame, anywhere a load reaches. `a0` is
+    /// preserved.
+    pub const FALCON512: u32 = 0x0514;
+
     /// Linux `ENOSYS`. Every number but [`EXIT`] and the delegation calls
     /// returns `-ENOSYS` in `a0`: a number nobody has assigned, or a retired
     /// one (`docs/spec/ecall-abi.md` §4). Such a call executes and cannot be
@@ -909,7 +951,8 @@ pub mod ecall {
 /// compressed tuple `gamma_M + AS + alpha_addr*ADDR + ...`. The tags are
 /// nonzero on purpose: `(REG, x0, ts 0, value 0)` is a real initial tuple, and
 /// with `REG = 0` it would be the all-zero tuple — the same reason the decoded
-/// tables pad with `MINUS_ONE` rather than 0. A tag is never reassigned.
+/// tables pad with `MINUS_ONE` rather than 0. A tag is never reassigned: **7**,
+/// a Keccak-f[1600] call's, is retired.
 pub mod address_space {
     /// The 32 registers. A query's address is the register index, `0..32`,
     /// and its value a 64-bit register as two words: the one space whose tuples
@@ -935,6 +978,11 @@ pub mod address_space {
     /// 2s + 1)`, and a level's control `(MERKLE, cycle, 16b + 8, rest, ptr)`
     /// (`docs/spec/precompiles.md` §6).
     pub const MERKLE: u8 = 6;
+    /// A Falcon-512 call's state between rows: a chain's control at stamp
+    /// `σ` is the tuple `(FALCON, cycle, σ, ptr, acc)`, and a split row's
+    /// residue pair `r` is `(FALCON, 64·cycle + 17P + j, r, rr_0, rr_1)`
+    /// (`constraints::falcon`).
+    pub const FALCON: u8 = 8;
 }
 
 /// The memory argument's clock and its own numbers.
@@ -1025,6 +1073,14 @@ pub mod delegation {
         /// accessed at the call's timestamp like a frame's, and the [`CARRY`]
         /// values it starts from.
         Level,
+        /// One [`ecall::FALCON512`] call's three arrays, [`falcon::ARRAYS`]
+        /// words in [`falcon::CHAINS`] order: chain `P`'s word `i` is entry
+        /// word `ARRAY·P + i`, at the address frame word `CHAINS[P]` holds
+        /// plus `4i`, accessed at the call's timestamp like a frame's and
+        /// written back unchanged. Its base is its first word's, `s2`'s
+        /// array. It carries nothing: every row of it is a function of its
+        /// words.
+        Arrays,
     }
 
     /// The values a level entry carries: what its rows start from that none of
@@ -1055,18 +1111,47 @@ pub mod delegation {
         pub const MAX_DEPTH: u32 = 32;
     }
 
+    /// [`ecall::FALCON512`]'s frame, by word, and its arrays: the lattice
+    /// check of Falcon-512 verification over `Z_q[x]/(x^N + 1)`.
+    pub mod falcon {
+        /// The modulus.
+        pub const Q: u64 = 12289;
+        /// A polynomial's coefficients.
+        pub const N: usize = 512;
+        /// The address of `h`, the public key.
+        pub const H: usize = 0;
+        /// The address of `s2`, the signature's half.
+        pub const S2: usize = 1;
+        /// The address of `c`, the hashed message.
+        pub const C: usize = 2;
+        /// `‖s1‖²`'s low word, written.
+        pub const NORM_LO: usize = 3;
+        /// `‖s1‖²`'s high word, below `2^16`, written.
+        pub const NORM_HI: usize = 4;
+        /// The frame's words.
+        pub const FRAME: usize = 5;
+        /// An array's words: coefficient `2i` is word `i`'s low halfword and
+        /// `2i + 1` its high one.
+        pub const ARRAY: usize = N / 2;
+        /// The chains, in an arrays entry's order: `s2`, `h`, `c`, each the
+        /// frame word holding its array's address.
+        pub const CHAINS: [usize; 3] = [S2, H, C];
+        /// An arrays entry's words, [`ARRAY`] a chain.
+        pub const ARRAYS: usize = CHAINS.len() * ARRAY;
+    }
+
     /// Every delegation family as `(family, ecall number, words an entry, rows
     /// an entry, what an entry is)`, ascending by family. A row is never
     /// reassigned.
     ///
-    /// Each family of a number records every entry of its kind: a call's, or
-    /// one per level of a call's path. The first family of a number and a kind
-    /// reads the entry's words from RAM: for a call, the number's **frame
-    /// family**, whose row a call also reads the anchor through; for a level,
-    /// `MERKLE_LEVELS`. A later one only expands the entry into rows of its
-    /// own, reading its words from its buffer and no memory but its own address
-    /// space.
-    pub const TYPES: [(u32, u32, usize, u32, Per); 6] = [
+    /// Each family of a number records every entry of its kind: a call's, one
+    /// per level of a call's path, or a call's arrays. The first family of a
+    /// number and a kind reads the entry's words from RAM: for a call, the
+    /// number's **frame family**, whose row a call also reads the anchor
+    /// through; for a level, `MERKLE_LEVELS`; for arrays, `FALCON_SPLIT`. A
+    /// later one only expands the entry into rows of its own, reading its words
+    /// from its buffer and no memory but its own address space.
+    pub const TYPES: [(u32, u32, usize, u32, Per); 9] = [
         (family::POSEIDON2, ecall::POSEIDON2, 32, 1, Per::Call),
         (
             family::POSEIDON2_ROUNDS,
@@ -1096,6 +1181,27 @@ pub mod delegation {
             merkle::SIBLING,
             16,
             Per::Level,
+        ),
+        (
+            family::FALCON,
+            ecall::FALCON512,
+            falcon::FRAME,
+            1,
+            Per::Call,
+        ),
+        (
+            family::FALCON_SPLIT,
+            ecall::FALCON512,
+            falcon::ARRAYS,
+            64,
+            Per::Arrays,
+        ),
+        (
+            family::FALCON_PRODUCT,
+            ecall::FALCON512,
+            falcon::ARRAYS,
+            16,
+            Per::Arrays,
         ),
     ];
 }

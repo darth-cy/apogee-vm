@@ -1,0 +1,23 @@
+[package]
+name = "apogee-falcon512"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Falcon-512 with Poseidon2's HashToPoint, the host's half: keys, signatures and
+# the verifier the guest SDK's is held to. Test infrastructure, never linked by
+# the prover, the verifier or a guest.
+
+[dependencies]
+falcon-rust.workspace = true
+field.workspace = true
+num-complex.workspace = true
+rand.workspace = true
+transcript.workspace = true
+
+[dev-dependencies]
+# The shared vectors, `../vectors.json`.
+serde_json.workspace = true
+# Standard Falcon's HashToPoint, SHAKE256, which the round-3 KAT was signed under.
+sha3.workspace = true
+test-support.workspace = true

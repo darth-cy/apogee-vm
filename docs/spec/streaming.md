@@ -81,15 +81,16 @@ them from the event log, independently ([circuits.md](circuits.md) §3).
 A family's rows, in the order they are appended, are cut into shards of its `VmConfig` height
 `h`: shard `i` is rows `[i·h, min((i + 1)·h, len))`, the last padded to `h` with zero rows
 ([memory.md](memory.md) §2). `trace::plan_shards` is `⌈rows/h⌉` per family over the
-`CycleProfile`, a cycle-owning family's rows being its cycles and a delegation family's its calls
+`CycleProfile`, a cycle-owning family's rows being its cycles and a delegation family's its entries
 times its rows an entry, so a family the execution never reached has no shard. A delegation shard
-is whole entries, a call's or a path level's: `h` over the rows an entry of them, a power of two
-dividing `h`. A path's levels may straddle two shards, each level carrying what its rows start
-from ([precompiles.md](precompiles.md) §6). A window family plans 0; its shards are windows ([memory.md](memory.md) §3),
-counted by `shard_counts` in `crates/prover/src/lib.rs`: one `INIT_TEARDOWN` shard and one of each
-public window whatever the execution did, a `ZERO_WINDOWS` shard per entry of `init_windows`, and
-one per advice window supplied (`trace::advice_window_count`). The counts are the statement's
-`shard_counts` ([proof.md](proof.md) §1).
+is whole entries, a call's, a path level's or a call's arrays: `h` over the rows an entry of them,
+a power of two dividing `h`. A path's levels may straddle two shards, each level carrying what its
+rows start from ([precompiles.md](precompiles.md) §6). A window family plans 0; its shards are
+windows ([memory.md](memory.md) §3), counted by `shard_counts` in `crates/prover/src/lib.rs`: one
+`INIT_TEARDOWN` shard and one of each public window whatever the execution did, a `ZERO_WINDOWS`
+shard per entry of `init_windows`, and one per advice window supplied
+(`trace::advice_window_count`). The counts are the statement's `shard_counts`
+([proof.md](proof.md) §1).
 
 **The flush.** `StreamingRun` makes the cut as it runs. After a cycle is recorded, a buffer that
 has reached `h` rows is handed over as `ShardChunk { family, index, rows }`, `index = rows/h − 1`,

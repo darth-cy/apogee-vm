@@ -47,17 +47,22 @@ const GUESTS: [(&str, u32); 11] = [
     // would never run.
     ("shards", 16),
     // The precompiles, their delegation families at `2^12`: 302 Poseidon2
-    // calls fill the rounds' 256-call buffer mid-execution.
+    // calls fill the rounds' 256-call buffer mid-execution. Falcon's are at
+    // `2^16`, and its 1,025 calls fill `FALCON_SPLIT`'s 1,024.
     ("precompiles", 16),
 ];
 
 /// Every family at `2^height`; for `precompiles`, the delegation families at
-/// `2^12`.
+/// `2^12`, but Falcon's at `2^16`, its `RANGE16` table's floor.
 fn params(name: &str, height: u32) -> ProgramParams {
+    use constants::family::{FALCON, FALCON_PRODUCT, FALCON_SPLIT};
     let mut p = uniform(1 << height);
     if name == "precompiles" {
         for (family, ..) in constants::delegation::TYPES {
-            p.heights[family as usize] = 1 << 12;
+            p.heights[family as usize] = match family {
+                FALCON | FALCON_SPLIT | FALCON_PRODUCT => 1 << 16,
+                _ => 1 << 12,
+            };
         }
     }
     p
@@ -157,6 +162,20 @@ fn the_chunks_are_the_planned_shards_row_for_row() {
             );
             if *count > 1 {
                 split_families += 1;
+            }
+        }
+        // `FALCON_SPLIT` is cut in two, `precompiles`' 1,025 calls against
+        // the 1,024 a shard holds at `2^16`, while `FALCON_PRODUCT` holds
+        // 4,096.
+        if name == "precompiles" {
+            use constants::family::{FALCON_PRODUCT, FALCON_SPLIT};
+            for (family, shards) in [(FALCON_SPLIT, 2), (FALCON_PRODUCT, 1)] {
+                assert_eq!(
+                    counted.get(&family),
+                    Some(&shards),
+                    "{name} {}: {shards} shards",
+                    family_name(family)
+                );
             }
         }
 

@@ -118,7 +118,18 @@ fn a_config_of_every_family_round_trips() {
             .collect(),
         bytecode_size_words: 1 << 20,
     };
-    assert_eq!(VmConfig::from_bytes(&all.to_bytes()), Some(all));
+    assert_eq!(VmConfig::from_bytes(&all.to_bytes()), Some(all.clone()));
+    // A retired number in `MERKLE_ROUNDS`' place, between 17 and 21, is
+    // refused as an unknown one is.
+    let at = all
+        .families
+        .iter()
+        .position(|(f, _)| *f == family::MERKLE_ROUNDS);
+    for retired in family::RETIRED {
+        let mut config = all.clone();
+        config.families[at.expect("MERKLE_ROUNDS is present")].0 = retired;
+        assert_eq!(VmConfig::from_bytes(&config.to_bytes()), None, "{retired}");
+    }
 }
 
 /// The statement descriptor is three adjacent typed messages: the `VmConfig`

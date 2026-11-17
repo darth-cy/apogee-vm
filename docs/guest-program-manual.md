@@ -12,7 +12,7 @@ directory below the root.
 
 A guest is an Apogee-SDK program, not a Linux one: no file descriptors, streams, clock, entropy or
 diagnostic output. Its public input, its journal and the prover's advice are memory, read and
-written with ordinary loads and stores, and its only ecalls are `EXIT` and the three precompiles the
+written with ordinary loads and stores, and its only ecalls are `EXIT` and the four precompiles the
 SDK calls (§3.1). Any other number answers `-ENOSYS` and leaves the run unprovable
 ([ecall-abi.md](spec/ecall-abi.md) §4).
 
@@ -48,7 +48,7 @@ fn main() {
 and append it to the list in `guests/Cargo.toml`:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "public-io", "precompiles", "marketplace", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "public-io", "precompiles", "marketplace", "amazon", "hello"]
 ```
 
 - `#![no_std]`: the target is bare metal. `extern crate alloc;` adds `Vec`, `Box` and `String`
@@ -65,6 +65,7 @@ The guests in the tree are worked examples:
 | `fib` | the smallest SDK guest: a `u32` in, a `u32` out |
 | `echo`, `heap` | the allocator: advice copied through heap buffers, `Vec` and `Box` churn |
 | `amm`, `orderbook` | 128- and 256-bit integers with no heap; `BTreeMap`, sorting, a sorted order from advice checked |
+| `marketplace`, `amazon` | a database a proof follows by digest, one table and two (§3.3); requests signed with Falcon-512 (§3.1) |
 | `atomics`, `opcodes`, `rvc-dense` | the A extension from `core::sync::atomic`; every RV64IMAC instruction; RVC expansion |
 | `addsub`, `control`, `alu`, `mem`, `shards` | assembly with its own `_start` and no SDK, exiting with its result; `shards` fills two `2^20` shards |
 | `cpp-primes` | a C++ guest, built by CMake against the C/C++ SDK (§11) |
@@ -119,16 +120,18 @@ fn main() {
 
 ### 3.1 Precompiles and `U256`
 
-Three operations are not RV64IMAC code but a circuit each, which a guest reaches through the SDK
+Four operations are not RV64IMAC code but a circuit each, which a guest reaches through the SDK
 ([precompiles.md](spec/precompiles.md)): the Poseidon2-A64-C5 permutation, the 256-bit `mul_div`
-that a token balance's arithmetic is built on, and a Merkle path's root.
+that a token balance's arithmetic is built on, a Merkle path's root and Falcon-512's lattice check.
 
 ```rust
-use guest_sdk::{merkle_root, poseidon2_compress, Digest, U256};
+use guest_sdk::{falcon512::PublicKey, merkle_root, poseidon2_compress, Digest, U256};
 
 let leaf = poseidon2_compress(&left, &right); // a node over two Digests, each lane below p
 let root = merkle_root(slot, &leaf, &advice[at..at + 64 * 20]); // a 20-level path, read in place
 let share = U256::from(amount).mul_div(U256::from(total), U256::from(reserve)); // Option<U256>
+let key = PublicKey::decode(key_bytes).expect("a key"); // Falcon-512's 897 bytes, v1.2
+let signed = key.verify(&request, sig); // a 666-byte signature of the request's bytes
 ```
 
 - `U256` is four `u64` limbs, least significant first, with `from_be_bytes` for an EVM word. Its
@@ -143,10 +146,21 @@ let share = U256::from(amount).mul_div(U256::from(total), U256::from(reserve)); 
   where the slot's bit is 0, and each sibling lane is read mod `p`, so a path needs no decoding. It
   costs a level row and sixteen round rows a level and no guest cycles; `Digest::bytes(&path)`
   passes a path the guest holds itself.
+- `falcon512::PublicKey::decode(bytes)` reads a Falcon-512 public key, v1.2 of the specification,
+  and `key.verify(msg, sig, context)` is whether `sig` signs `msg` under it and the application's
+  `context`, at most 255 bytes, a malformed signature `false`: the lattice check is the Falcon-512
+  call, and HashToPoint, a Poseidon2 sponge of the key digest K, the salt, the context and the
+  message ([precompiles.md](spec/precompiles.md) §7.7), is Poseidon2 calls. A standard Falcon-512
+  signature does not verify; `tools/falcon512` signs under this HashToPoint. Decoding computes K
+  from the key's bytes and HashToPoint's per-key prefix from K, once, ≈10.7K cycles; verifying a
+  signature of a 92-byte message under a 25-byte context continues from there, ≈17.7K.
+  `key.key_digest()` is K and `key.address()` the key's address, K's first 32 bytes, which names
+  an account; `falcon512::key_digest(bytes)` and `falcon512::address(bytes)` are any bytes', and
+  `falcon512::s1_norm` the lattice check alone, for a guest with encodings of its own.
 - A precompile's frame is the guest's own memory below the advice region, which the SDK's calls
   always are: advice is copied in before `poseidon2_permute` hashes it, and a frame reaching the
-  advice is the fatal `OutOfBounds`. A path's siblings are not a frame: `merkle_root` reads an
-  advised path where it lies.
+  advice is the fatal `OutOfBounds`. A path's siblings and `s1_norm`'s arrays are not a frame:
+  `merkle_root` and `s1_norm` read an advised path or array where it lies.
 - A guest that links a precompile pays one shard of each family it declares, at `2^16` rows: worth
   it once the call replaces more instructions than that ([circuits.md](spec/circuits.md) §1).
 - `guests/marketplace` is the worked example of a table a proof follows by its root: a listings
@@ -168,7 +182,10 @@ Cutting a guest's cycles has more than one strategy, and two are in use:
   however long the run, so a batch with each listing's operations gathered is one proof a listing.
   The order is the sequencer's policy and becomes part of the batch: the guest proves the order it
   is given and never sorts. Any order is valid input, at a proof a run, and another order can be
-  another result.
+  another result. `guests/amazon`'s advice holds each record its batch reads once, its users by
+  address and its listings by slot, each ascending, so its batch runs in memory and a record costs
+  one opening and at most one write-back however its requests interleave: there the order costs
+  nothing (§3.3).
 
 ### 3.3 A database's state
 
@@ -196,6 +213,26 @@ keeps it the same way from here on. This is the common convention for an on-chai
 `guests/marketplace` is the one-table case: its listings are state records under one root, which is
 its snapshot, and its operations are actions; its journal's tallies summarize the actions it
 proved, which no snapshot holds.
+
+`guests/amazon` is the two-table case, its users and its listings two tables of `2^20` slots and
+its snapshot `compress(users_root, listings_root)`, and it opens each record once: its actions are
+purchases, each a 92-byte request its buyer signed with Falcon-512 (§3.1) under the context
+`apogee/amazon/purchase/v1`, settled against a working set in memory, so a seller may spend later
+in a batch what it earned earlier in it. A user is named by its key's address: its record holds
+the address, a request names its buyer by it and a listing its seller, and the key advised beside
+the record must have that address, computed from the same bytes the user's signatures are
+verified under. The signatures are advice, so none decides an outcome: an outcome that turned on
+one would publish what the prover chose (§3), a valid request advised a bad signature and
+rejected. A request is rejected only for its market, its buyer or its nonce, which the public
+input and the snapshot hold, and one past those checks carries a signature that verifies under its
+buyer's key, or the batch is malformed. The sequencer verifies the signatures before it batches
+the requests and drops a request whose signature does not verify, as a rollup's block producer
+does. The advice holds every record the batch reads, each once, the users ascending by
+address, each with its slot; after the batch each is verified once and, where it changed, written
+back once, its path under its table's root as the writes before it left it, and no record is
+opened per purchase. Until the users table is keyed by address it is assumed to hold each address
+at most once, and a request from an address the advice does not hold is a malformed batch, as
+nothing proves an address absent.
 
 ## 4. Build it
 

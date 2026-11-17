@@ -188,7 +188,8 @@ impl<'a> FrameSlice<'a> {
         &self.trace.cycle[self.start..self.start + self.len]
     }
 
-    /// Where each entry's words begin: a call's frame, a level's sibling.
+    /// Where each entry's words begin: a call's frame, a level's sibling, a
+    /// call's first array.
     pub fn bases(&self) -> &'a [u32] {
         &self.trace.base[self.start..self.start + self.len]
     }
@@ -310,10 +311,11 @@ impl FamilyTrace {
 /// level family one per level of a call's path (`program::delegation_per`).
 ///
 /// An entry is not a cycle: it rides the cycle whose ecall requested it, and
-/// its memory queries are its fixed-offset words, `words[j]` at `base + 4j` —
-/// a call's frame, a level's sibling — each written at
-/// `4·cycle + constants::delegation::FRAME_DELTA`. A frame does not fit
-/// [`Row`]'s query slots, so it lives here.
+/// its memory queries are its words — a call's frame or a level's sibling,
+/// `words[j]` at `base + 4j`, or a call's arrays, each word at its array's
+/// address plus four a word (`constants::delegation::Per::Arrays`) — each
+/// written at `4·cycle + constants::delegation::FRAME_DELTA`. A frame does not
+/// fit [`Row`]'s query slots, so it lives here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DelegationTrace {
     pub family: FamilyId,
@@ -322,13 +324,13 @@ pub struct DelegationTrace {
     /// The requesting cycle, one per entry.
     pub cycle: Vec<u64>,
     /// Where an entry's words begin, one per entry: a call's frame, a level's
-    /// sibling.
+    /// sibling, a call's first array.
     pub base: Vec<u32>,
     /// The entry's word queries, in order.
     pub words: Vec<QueryColumns>,
     /// What each entry carries, `program::delegation_carry` columns: a
     /// level's node, its slot's bits not yet taken and its level; none for a
-    /// call.
+    /// call or its arrays.
     pub carry: Vec<Vec<u64>>,
 }
 
