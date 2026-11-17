@@ -219,15 +219,15 @@ its snapshot `compress(users_root, listings_root)`, and it opens each record onc
 purchases, each a 92-byte request its buyer signed with Falcon-512 (§3.1) under the context
 `apogee/amazon/purchase/v1`, settled against a working set in memory, so a seller may spend later
 in a batch what it earned earlier in it. A user is named by its key's address: its record holds
-the address, a request names its buyer by it and a listing its seller, and the key advised beside
-the record must have that address, computed from the same bytes the user's signatures are
+the address, a request names its buyer by it and a listing its seller, and the key advised at its
+first signature must have that address, computed from the same bytes the user's signatures are
 verified under. The signatures are advice, so none decides an outcome: an outcome that turned on
 one would publish what the prover chose (§3), a valid request advised a bad signature and
 rejected. A request is rejected only for its market, its buyer or its nonce, which the public
 input and the snapshot hold, and one past those checks carries a signature that verifies under its
 buyer's key, or the batch is malformed. The sequencer verifies the signatures before it batches
 the requests and drops a request whose signature does not verify, as a rollup's block producer
-does. The advice holds every record the batch reads, each once, the users ascending by
+does. The advice holds every record the batch reads and no other, each once, the users ascending by
 address, each with its slot; after the batch each is verified once and, where it changed, written
 back once, its path under its table's root as the writes before it left it, and no record is
 opened per purchase. Until the users table is keyed by address it is assumed to hold each address

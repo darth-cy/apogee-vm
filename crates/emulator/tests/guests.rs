@@ -1272,16 +1272,20 @@ mod amazon {
 /// rejected, each before its signature is checked: another market, the zero
 /// address as the buyer, a request again, a nonce skipped, and the last
 /// nonce. Every request checked is signed by its buyer, new signatures each
-/// run, as signing is randomized. The advice also holds a user no request
-/// reads, opened all the same, and lays each key and each signature's salt
-/// on a word. The journal is both snapshots, the three counts and the volume.
-/// The batch panics with a byte past its requests and with a request from an
-/// address the advice does not hold; and so does the advice with a pad byte
-/// not zero after a key, the idle user's, or after a signature, with a
-/// signature's salt one bit off, with a signature its buyer's over another of
-/// its requests, with a user's balance one off, and with a user's key
-/// another's. The decode call refuses a key whose first coefficient is at
-/// least `q` and a signature whose `s2` is all zeros, each its own execution.
+/// run, as signing is randomized. The advice holds what the batch reads and
+/// nothing else: the records it reads, a key for each buyer that signs, at
+/// its first signature, and a signature for each request checked, none for
+/// the five rejected, each key and each signature's salt on a word. The
+/// journal is both snapshots, the three counts and the volume. The batch
+/// panics with a byte past its requests and with a request from an address
+/// the advice does not hold; and so does the advice with a byte after its
+/// last path, with a user no request reads, with the first key's pad byte not
+/// zero, the key another user's, or left out, with a key for a buyer whose
+/// request is rejected, or a signature for one, in the stream where the
+/// request is, with a signature's pad byte not zero, its salt one bit off, or
+/// its buyer's over another of its requests, and with a user's balance one
+/// off. The decode call refuses a key whose first coefficient is at least `q`
+/// and a signature whose `s2` is all zeros. Each is its own execution.
 #[test]
 fn amazon_settles_signed_purchases_by_its_snapshot() {
     use std::collections::{BTreeMap, BTreeSet};
@@ -1452,7 +1456,7 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
             ),
         )
     };
-    let (mut user_tree, mut listing_tree) = tables(&users, &listings);
+    let (user_tree, listing_tree) = tables(&users, &listings);
     let roots = [user_tree.root(), listing_tree.root()];
     let before = compress(&roots[0], &roots[1]);
 
@@ -1466,6 +1470,14 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     let mut input: Vec<u8> = before.iter().flat_map(|l| l.to_le_bytes()).collect();
     input.extend(MARKET.to_le_bytes());
     input.extend((batch.len() as u32).to_le_bytes());
+    // The signing stream, in the batch's order: for each request not
+    // rejected, which reaches its signature check, its buyer's key at the
+    // buyer's first, then 3 zero bytes, and its signature between 3 zero
+    // bytes each side; and where each request's entries start in it, or
+    // would.
+    let mut stream = Vec::new();
+    let mut stream_at = Vec::new();
+    let mut signers = BTreeSet::new();
     let mut signatures = Vec::new();
     let mut outcomes: BTreeMap<&str, u32> = BTreeMap::new();
     let mut previous: Option<(Request, Vec<u8>)> = None;
@@ -1494,11 +1506,21 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         };
         assert_eq!(signature.len(), 666);
         input.extend(request.bytes());
+        let outcome = model
+            .settle(&request, MARKET, signed)
+            .expect("every request checked is signed");
+        *outcomes.entry(outcome).or_default() += 1;
+        stream_at.push(stream.len());
+        if !outcome.starts_with("rejected") {
+            if signers.insert(request.buyer) {
+                stream.extend(&keys[&request.buyer]);
+                stream.extend([0u8; 3]);
+            }
+            stream.extend([0u8; 3]);
+            stream.extend(&signature);
+            stream.extend([0u8; 3]);
+        }
         signatures.push(signature.clone());
-        let outcome = model.settle(&request, MARKET, signed);
-        *outcomes
-            .entry(outcome.expect("every request checked is signed"))
-            .or_default() += 1;
         previous = Some((request, signature));
     }
     assert_eq!(
@@ -1521,55 +1543,49 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         "the batch is each case it claims"
     );
 
-    // The advice: the roots, each record read as the snapshot holds it, the
-    // users by address, each an account and its key beside it, then 3 zero
-    // bytes, the signatures, each between 3 zero bytes each side, and a path
-    // a record, each under its table as the records before it left it. The
-    // users are those read and one no request reads, opened all the same.
-    let mut advised = model.read_users.clone();
-    assert!(advised.insert(user(IDLE)), "no request reads it");
-    let mut advice: Vec<u8> = roots
-        .iter()
-        .flatten()
-        .flat_map(|l| l.to_le_bytes())
-        .collect();
-    advice.extend((advised.len() as u32).to_le_bytes());
-    let mut key_at = BTreeMap::new();
-    for a in &advised {
-        advice.extend(slots[a].to_le_bytes());
-        advice.extend(users[a].bytes());
-        key_at.insert(*a, advice.len());
-        advice.extend(&keys[a]);
-        advice.extend([0u8; 3]);
-    }
-    advice.extend((model.read_listings.len() as u32).to_le_bytes());
-    for slot in &model.read_listings {
-        advice.extend(slot.to_le_bytes());
-        advice.extend(listings.get(slot).copied().unwrap_or_default().bytes());
-    }
-    // The first request's signature starts 3 bytes in.
-    let signatures_at = advice.len() + 3;
-    for signature in &signatures {
-        advice.extend([0u8; 3]);
-        advice.extend(signature);
-        advice.extend([0u8; 3]);
-    }
+    // The advice for the users `advised`: the roots, each user's record as
+    // the snapshot holds it, by address, and each listing the batch reads, by
+    // slot; the signing stream; and a path a record, each under its table as
+    // the records before it left it. And where the stream starts, and the
+    // snapshot the paths write.
+    let advice_for = |advised: &BTreeSet<Address>| {
+        let (mut user_tree, mut listing_tree) = tables(&users, &listings);
+        let mut advice: Vec<u8> = roots
+            .iter()
+            .flatten()
+            .flat_map(|l| l.to_le_bytes())
+            .collect();
+        advice.extend((advised.len() as u32).to_le_bytes());
+        for a in advised {
+            advice.extend(slots[a].to_le_bytes());
+            advice.extend(users[a].bytes());
+        }
+        advice.extend((model.read_listings.len() as u32).to_le_bytes());
+        for slot in &model.read_listings {
+            advice.extend(slot.to_le_bytes());
+            advice.extend(listings.get(slot).copied().unwrap_or_default().bytes());
+        }
+        let signing_at = advice.len();
+        advice.extend(&stream);
+        for a in advised {
+            advice.extend(user_tree.path(slots[a]));
+            user_tree.set(slots[a], model.users[a].leaf());
+        }
+        for slot in &model.read_listings {
+            advice.extend(listing_tree.path(*slot));
+            let l = model.listings.get(slot).copied().unwrap_or_default();
+            listing_tree.set(*slot, l.leaf());
+        }
+        let after = compress(&user_tree.root(), &listing_tree.root());
+        (advice, signing_at, after)
+    };
+    let (advice, signing_at, after) = advice_for(&model.read_users);
+    // A key's slot is 900 bytes and a signature's 672, so every key, salt and
+    // path is on a word where the stream is.
     assert!(
-        key_at.values().all(|at| at.is_multiple_of(4))
-            && (signatures_at + 1).is_multiple_of(4)
-            && advice.len().is_multiple_of(4),
-        "every key starts on a word, as do the signatures' salts and the paths"
+        signing_at.is_multiple_of(4) && stream.len().is_multiple_of(4),
+        "the stream starts and ends on a word"
     );
-    for a in &advised {
-        advice.extend(user_tree.path(slots[a]));
-        user_tree.set(slots[a], model.users[a].leaf());
-    }
-    for slot in &model.read_listings {
-        advice.extend(listing_tree.path(*slot));
-        let l = model.listings.get(slot).copied().unwrap_or_default();
-        listing_tree.set(*slot, l.leaf());
-    }
-    let after = compress(&user_tree.root(), &listing_tree.root());
     let (users_after, listings_after) = tables(&model.users, &model.listings);
     assert_eq!(
         after,
@@ -1596,11 +1612,31 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     assert_eq!(e.exit_code, 0);
     assert_eq!(to_hex(&e.io.output), to_hex(&journal));
 
+    // Each alteration below ends its own execution: a panic, exit 101, or the
+    // decode call's refusal of an encoding.
+    let panics = |input: &[u8], advice: &[u8]| {
+        run(&image, &common::with_advice(input, advice))
+            .unwrap()
+            .exit_code
+            == 101
+    };
+    let refused = |advice: &[u8]| {
+        matches!(
+            run(&image, &common::with_advice(&input, advice)),
+            Err(EmuError::DelegationFrame { detail, .. }) if detail.starts_with("falcon512_decode")
+        )
+    };
+    // The advice with `bytes` put in at `at`.
+    let spliced = |at: usize, bytes: &[u8]| {
+        let mut spliced = advice.clone();
+        spliced.splice(at..at, bytes.iter().copied());
+        spliced
+    };
+
     let mut surplus = input.clone();
     surplus.push(0);
-    let e = run(&image, &common::with_advice(&surplus, &advice)).unwrap();
-    assert_eq!(
-        e.exit_code, 101,
+    assert!(
+        panics(&surplus, &advice),
         "a byte past the requests is a malformed batch"
     );
 
@@ -1610,61 +1646,101 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     assert!(how == Signed && buyer != NO_ACCOUNT);
     let mut stranger = input.clone();
     stranger[76..108].copy_from_slice(&address(b"no user's key"));
-    let e = run(&image, &common::with_advice(&stranger, &advice)).unwrap();
-    assert_eq!(
-        e.exit_code, 101,
+    assert!(
+        panics(&stranger, &advice),
         "a request from an address the advice does not hold is a malformed batch"
     );
 
-    // An encoding the decode call refuses ends the execution there.
-    let refused = |advice: &[u8]| {
-        matches!(
-            run(&image, &common::with_advice(&input, advice)),
-            Err(EmuError::DelegationFrame { detail, .. }) if detail.starts_with("falcon512_decode")
-        )
-    };
+    assert!(
+        panics(&input, &spliced(advice.len(), &[0])),
+        "a byte after the last path"
+    );
 
-    // That buyer's key, its first coefficient `2^14 − 1`, at least `q`: the
-    // key does not decode.
+    // The idle user's record and its path, each in its place: it opens the
+    // users table, and the batch does not read it.
+    let mut idle = model.read_users.clone();
+    assert!(idle.insert(user(IDLE)), "no request reads it");
+    assert!(
+        panics(&input, &advice_for(&idle).0),
+        "a record the batch does not read"
+    );
+
+    // The first request is checked, its buyer's first: the stream starts with
+    // the buyer's key, then the request's signature.
+    assert_eq!(stream_at[1], 900 + 672);
+    let key_at = signing_at;
+    let signature_at = signing_at + 900 + 3;
+
+    // That key, its first coefficient `2^14 − 1`, at least `q`: the key does
+    // not decode.
     let mut undecodable = advice.clone();
-    undecodable[key_at[&buyer] + 1] = 0xff;
-    undecodable[key_at[&buyer] + 2] |= 0xfc;
+    undecodable[key_at + 1] = 0xff;
+    undecodable[key_at + 2] |= 0xfc;
     assert!(refused(&undecodable), "an advised key that does not decode");
 
-    // The idle user's key, a pad byte after it not zero: no request reads the
-    // key, and the advice is read all the same.
+    // That key, a pad byte after it not zero.
     let mut padded = advice.clone();
-    padded[key_at[&user(IDLE)] + 897] = 1;
-    let e = run(&image, &common::with_advice(&input, &padded)).unwrap();
-    assert_eq!(e.exit_code, 101, "a key's pad byte that is not zero");
+    padded[key_at + 897] = 1;
+    assert!(panics(&input, &padded), "a key's pad byte that is not zero");
 
-    // That buyer's key, another user's: its address is not the record's.
+    // That key, another user's: its address is not the buyer's.
     let other = user(if buyer == user(0) { 1 } else { 0 });
     let mut swapped = advice.clone();
-    swapped[key_at[&buyer]..][..897].copy_from_slice(&keys[&other]);
-    let e = run(&image, &common::with_advice(&input, &swapped)).unwrap();
-    assert_eq!(e.exit_code, 101, "an advised key that is not its user's");
+    swapped[key_at..][..897].copy_from_slice(&keys[&other]);
+    assert!(
+        panics(&input, &swapped),
+        "an advised key that is not its buyer's"
+    );
+
+    // That key left out: the signature's slot is read as the key, its first
+    // byte a pad's, not a key's header.
+    let mut keyless = advice.clone();
+    keyless.drain(key_at..key_at + 900);
+    assert!(panics(&input, &keyless), "a key the stream lacks");
+
+    // A key for the buyer whose request its last nonce rejects, and a
+    // signature for the request for another market, each in the stream where
+    // its request is: every entry after it is read one entry off.
+    let k = batch
+        .iter()
+        .position(|r| r.0 == user(EXHAUSTED))
+        .expect("its request");
+    let key = [keys[&batch[k].0].as_slice(), &[0; 3]].concat();
+    assert!(
+        panics(&input, &spliced(signing_at + stream_at[k], &key)),
+        "a key for a user that does not sign"
+    );
+    let k = batch
+        .iter()
+        .position(|r| r.4 == Elsewhere)
+        .expect("the request");
+    let signature = [[0; 3].as_slice(), &signatures[k], &[0; 3]].concat();
+    assert!(
+        panics(&input, &spliced(signing_at + stream_at[k], &signature)),
+        "a signature for a request rejected"
+    );
 
     // The first request's signature, one bit of its salt flipped.
     let mut flipped = advice.clone();
-    flipped[signatures_at + 20] ^= 0x04;
-    let e = run(&image, &common::with_advice(&input, &flipped)).unwrap();
-    assert_eq!(
-        e.exit_code, 101,
+    flipped[signature_at + 20] ^= 0x04;
+    assert!(
+        panics(&input, &flipped),
         "a signature that does not verify is a malformed batch, not a rejection"
     );
 
     // The first request's signature, its `s2` all zeros: no coefficient
     // ends within 16 zeros.
     let mut zeroed = advice.clone();
-    zeroed[signatures_at + 41..signatures_at + 666].fill(0);
+    zeroed[signature_at + 41..signature_at + 666].fill(0);
     assert!(refused(&zeroed), "a signature that does not decode");
 
     // The first request's signature, a pad byte after it not zero.
     let mut padded = advice.clone();
-    padded[signatures_at + 666] = 1;
-    let e = run(&image, &common::with_advice(&input, &padded)).unwrap();
-    assert_eq!(e.exit_code, 101, "a signature's pad byte that is not zero");
+    padded[signature_at + 666] = 1;
+    assert!(
+        panics(&input, &padded),
+        "a signature's pad byte that is not zero"
+    );
 
     // The first request's signature, its buyer's over another of its
     // requests.
@@ -1672,16 +1748,18 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         .find(|&k| batch[k].0 == buyer && batch[k].4 == Signed)
         .expect("the buyer signs another request");
     let mut reused = advice.clone();
-    reused[signatures_at..][..666].copy_from_slice(&signatures[k]);
-    let e = run(&image, &common::with_advice(&input, &reused)).unwrap();
-    assert_eq!(
-        e.exit_code, 101,
+    reused[signature_at..][..666].copy_from_slice(&signatures[k]);
+    assert!(
+        panics(&input, &reused),
         "another request's signature is a malformed batch, not a rejection"
     );
 
     // The first user's balance, one off: its record no longer opens the
     // users table.
-    advice[128 + 4 + 4 + 32] ^= 1;
-    let e = run(&image, &common::with_advice(&input, &advice)).unwrap();
-    assert_eq!(e.exit_code, 101, "a balance the table does not hold");
+    let mut unopened = advice.clone();
+    unopened[128 + 4 + 4 + 32] ^= 1;
+    assert!(
+        panics(&input, &unopened),
+        "a balance the table does not hold"
+    );
 }
