@@ -875,6 +875,38 @@ fn falcon512_refuses_each_alteration() {
     assert_eq!(verdicts, [0, 0, 0, 0, 0, 0, 0, 2]);
 }
 
+/// The SDK's verifier agrees with the other implementations on
+/// `tools/falcon512/vectors.json`. Every signature there verifies: two each
+/// from the Rust, JavaScript and Python libraries. Every malformed case is
+/// refused, including the two a lenient decoder would pass (negative zero, and
+/// a one bit after the last coefficient). A key that does not decode is 2.
+#[test]
+fn falcon512_agrees_with_every_implementation() {
+    let vectors: serde_json::Value =
+        serde_json::from_str(include_str!("../../../tools/falcon512/vectors.json"))
+            .expect("the vectors are JSON");
+    let section = |name: &str| vectors[name].as_array().expect("a section").clone();
+    let cases = |entries: &[serde_json::Value]| -> Vec<Case> {
+        let bytes = |v: &serde_json::Value, k: &str| {
+            test_support::hex_to_bytes(v[k].as_str().expect("hex")).expect("hex")
+        };
+        entries
+            .iter()
+            .map(|v| (bytes(v, "pk"), bytes(v, "msg"), bytes(v, "sig")))
+            .collect()
+    };
+    let signatures = section("signatures");
+    assert_eq!(signatures.len(), 6);
+    assert_eq!(falcon_verdicts(&cases(&signatures)), [1; 6]);
+    let malformed = section("malformed");
+    assert_eq!(malformed.len(), 6);
+    for (v, verdict) in malformed.iter().zip(falcon_verdicts(&cases(&malformed))) {
+        let case = v["case"].as_str().expect("a name");
+        let refused = if case.starts_with("key_") { 2 } else { 0 };
+        assert_eq!(verdict, refused, "{case}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // guests/amazon: signed purchases against two tables
 // ---------------------------------------------------------------------------

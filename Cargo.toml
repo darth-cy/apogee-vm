@@ -103,9 +103,9 @@ falcon-rust = "0.3.1"
 num-complex = "0.4"
 rand = "0.10"
 
-# JSON: the reports `tools/bench` and `tools/profiler` write, and the vectors
-# `tools/falcon512` tests read. Nothing here is reachable from the prover, the
-# verifier or a guest.
+# JSON: the reports `tools/bench` and `tools/profiler` write, and
+# `tools/falcon512/vectors.json`, which its tests and the emulator's read.
+# Nothing here is reachable from the prover, the verifier or a guest.
 serde_json = "1"
 
 # The workspace tests build circuits at their real `2^20` rows and execute

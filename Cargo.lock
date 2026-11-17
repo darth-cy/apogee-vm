@@ -343,6 +343,7 @@ dependencies = [
  "isa",
  "loader",
  "program",
+ "serde_json",
  "test-support",
  "trace",
  "transcript",
