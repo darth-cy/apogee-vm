@@ -509,10 +509,18 @@ pub mod family {
     /// The residue products: 16 rows a call, row `r` the product of `s2`'s and
     /// `h`'s residues mod `x^32 − β_r` held to `c − s1`'s. Touches no RAM.
     pub const FALCON_PRODUCT: u32 = 23;
+    /// HashToPoint's sampler, one row a call: eight lanes, each below
+    /// `808·q^4`, become their four base-`q` digits in place
+    /// (`constraints::falcon`).
+    pub const FALCON_SAMPLE: u32 = 24;
+    /// A Falcon-512 encoding decoded into a polynomial: a public key's 14-bit
+    /// fields or a signature's compressed `s2`, 128 rows a call, four
+    /// coefficients a row, row 0 also the frame (`constraints::falcon_decode`).
+    pub const FALCON_DECODE: u32 = 25;
 
     /// How many family numbers this table defines, [`RETIRED`] ones among
     /// them.
-    pub const COUNT: u32 = 24;
+    pub const COUNT: u32 = 26;
 
     /// The **retired** family numbers, a Keccak-f[1600] permutation's three:
     /// struck out and never reassigned. A table indexed by `FamilyId` keeps an
@@ -586,6 +594,8 @@ pub mod family {
         false, // FALCON
         false, // FALCON_SPLIT
         false, // FALCON_PRODUCT
+        false, // FALCON_SAMPLE
+        false, // FALCON_DECODE
     ];
 
     /// The trace-height menu, ascending: the heights the registries build
@@ -639,6 +649,8 @@ pub mod family {
         1 << 16, // FALCON, the floor of its RANGE16 channel
         1 << 16, // FALCON_SPLIT, likewise
         1 << 16, // FALCON_PRODUCT, likewise
+        1 << 16, // FALCON_SAMPLE, likewise
+        1 << 16, // FALCON_DECODE, likewise
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -938,6 +950,21 @@ pub mod ecall {
     /// preserved.
     pub const FALCON512: u32 = 0x0514;
 
+    /// A delegation call: the 16-word frame at `a0`, eight lanes of two
+    /// little-endian words, each below `808·q^4`, rewritten in place as each
+    /// lane's four base-`q` digits, `u16` coefficients
+    /// (`delegation::falcon_sample`). A lane at or above the bound is refused.
+    /// The frame lies below `guest_memory::ADVICE_ORIGIN`. `a0` is preserved.
+    pub const FALCON512_SAMPLE: u32 = 0x0515;
+
+    /// A delegation call: the Falcon-512 encoding the four-word frame at `a0`
+    /// names decoded into 512 coefficients mod `q` at its destination — a
+    /// public key's or a signature's `s2`, `‖s2‖²` and where the stream ended
+    /// written back (`delegation::falcon_decode`). A malformed encoding is
+    /// refused. The frame lies below `guest_memory::ADVICE_ORIGIN`. `a0` is
+    /// preserved.
+    pub const FALCON512_DECODE: u32 = 0x0516;
+
     /// Linux `ENOSYS`. Every number but [`EXIT`] and the delegation calls
     /// returns `-ENOSYS` in `a0`: a number nobody has assigned, or a retired
     /// one (`docs/spec/ecall-abi.md` §4). Such a call executes and cannot be
@@ -983,6 +1010,10 @@ pub mod address_space {
     /// residue pair `r` is `(FALCON, 64·cycle + 17P + j, r, rr_0, rr_1)`
     /// (`constraints::falcon`).
     pub const FALCON: u8 = 8;
+    /// A `FALCON512_DECODE` call's rows chained: row `r`'s state is four
+    /// tuples `(FALCON_DECODE, cycle, 4r + j, x, y)`, `j < 4`
+    /// (`constraints::falcon_decode`).
+    pub const FALCON_DECODE: u8 = 9;
 }
 
 /// The memory argument's clock and its own numbers.
@@ -1081,6 +1112,13 @@ pub mod delegation {
         /// array. It carries nothing: every row of it is a function of its
         /// words.
         Arrays,
+        /// One [`ecall::FALCON512_DECODE`] call, [`falcon_decode::WORDS`]
+        /// words: its frame's, then the [`falcon_decode::OUTPUT`] words it
+        /// writes, then the source words it reads in order, each written back
+        /// unchanged, the slots past the last absent. All at the call's
+        /// timestamp like a frame's. It carries nothing: a call's rows divide
+        /// every height, so no call splits across shards.
+        Decode,
     }
 
     /// The values a level entry carries: what its rows start from that none of
@@ -1140,6 +1178,56 @@ pub mod delegation {
         pub const ARRAYS: usize = CHAINS.len() * ARRAY;
     }
 
+    /// [`ecall::FALCON512_SAMPLE`]'s frame: HashToPoint's lanes, each
+    /// rewritten in place as its four base-`q` digits.
+    pub mod falcon_sample {
+        /// The lanes a call converts: one permutation's rate.
+        pub const LANES: usize = 8;
+        /// The frame's words: lane `l` is words `2l` (low) and `2l + 1`.
+        pub const FRAME: usize = 2 * LANES;
+        /// The coefficients a lane becomes.
+        pub const DIGITS: usize = 4;
+    }
+
+    /// [`ecall::FALCON512_DECODE`]'s frame and its entry: a Falcon-512
+    /// encoding, MSB first, decoded into a polynomial of
+    /// [`falcon::ARRAY`] words, coefficient `2i` word `i`'s low halfword.
+    pub mod falcon_decode {
+        /// The source's address, word-aligned: a key's first byte, its
+        /// header; a signature's compressed `s2`, its byte 41.
+        pub const SRC: usize = 0;
+        /// The polynomial's address, word-aligned.
+        pub const DST: usize = 1;
+        /// Read: the mode, [`KEY`] or [`SIGNATURE`]. Written: `‖s2‖²`, 0 for
+        /// a key.
+        pub const MODE: usize = 2;
+        /// Written: the stream's end, in bits from the source's first.
+        pub const END: usize = 3;
+        /// The frame's words.
+        pub const FRAME: usize = 4;
+        /// A public key: its header, then 512 fields of 14 bits, each below
+        /// `q`.
+        pub const KEY: u32 = 0;
+        /// A signature's `s2`: 512 compressed coefficients.
+        pub const SIGNATURE: u32 = 1;
+        /// A public key's header byte.
+        pub const HEADER: u32 = 0x09;
+        /// A key's end: its header byte and 512 fields of 14 bits.
+        pub const KEY_END: u32 = 8 + 14 * super::falcon::N as u32;
+        /// The most bits a signature's compressed `s2` takes: 625 bytes.
+        pub const SIGNATURE_BITS: u32 = 8 * 625;
+        /// The words a call writes: the polynomial.
+        pub const OUTPUT: usize = super::falcon::ARRAY;
+        /// The most source words a call reads: a key's 897 bytes.
+        pub const SOURCE: usize = (KEY_END as usize).div_ceil(32);
+        /// An entry's words: the frame, the output, the source slots.
+        pub const WORDS: usize = FRAME + OUTPUT + SOURCE;
+        /// Coefficients a row.
+        pub const SLOTS: usize = 4;
+        /// Rows a call.
+        pub const ROWS: usize = super::falcon::N / SLOTS;
+    }
+
     /// Every delegation family as `(family, ecall number, words an entry, rows
     /// an entry, what an entry is)`, ascending by family. A row is never
     /// reassigned.
@@ -1151,7 +1239,7 @@ pub mod delegation {
     /// through; for a level, `MERKLE_LEVELS`; for arrays, `FALCON_SPLIT`. A
     /// later one only expands the entry into rows of its own, reading its words
     /// from its buffer and no memory but its own address space.
-    pub const TYPES: [(u32, u32, usize, u32, Per); 9] = [
+    pub const TYPES: [(u32, u32, usize, u32, Per); 11] = [
         (family::POSEIDON2, ecall::POSEIDON2, 32, 1, Per::Call),
         (
             family::POSEIDON2_ROUNDS,
@@ -1202,6 +1290,20 @@ pub mod delegation {
             falcon::ARRAYS,
             16,
             Per::Arrays,
+        ),
+        (
+            family::FALCON_SAMPLE,
+            ecall::FALCON512_SAMPLE,
+            falcon_sample::FRAME,
+            1,
+            Per::Call,
+        ),
+        (
+            family::FALCON_DECODE,
+            ecall::FALCON512_DECODE,
+            falcon_decode::WORDS,
+            falcon_decode::ROWS as u32,
+            Per::Decode,
         ),
     ];
 }

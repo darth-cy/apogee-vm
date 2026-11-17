@@ -67,6 +67,8 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize - family::RETIRED.len()] =
     family::FALCON,
     family::FALCON_SPLIT,
     family::FALCON_PRODUCT,
+    family::FALCON_SAMPLE,
+    family::FALCON_DECODE,
 ];
 
 /// The **frame family** of ecall `number`, the one whose row reads the frame
@@ -116,7 +118,7 @@ pub fn delegation_per(family: FamilyId) -> Per {
 /// `delegation::CARRY` for a level's, none for a call's or its arrays.
 pub fn delegation_carry(family: FamilyId) -> usize {
     match delegation_per(family) {
-        Per::Call | Per::Arrays => 0,
+        Per::Call | Per::Arrays | Per::Decode => 0,
         Per::Level => delegation::CARRY,
     }
 }
@@ -168,6 +170,8 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::FALCON => "FALCON",
         family::FALCON_SPLIT => "FALCON_SPLIT",
         family::FALCON_PRODUCT => "FALCON_PRODUCT",
+        family::FALCON_SAMPLE => "FALCON_SAMPLE",
+        family::FALCON_DECODE => "FALCON_DECODE",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -331,7 +335,9 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::MERKLE_ROUNDS
         | family::FALCON
         | family::FALCON_SPLIT
-        | family::FALCON_PRODUCT => &[],
+        | family::FALCON_PRODUCT
+        | family::FALCON_SAMPLE
+        | family::FALCON_DECODE => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }

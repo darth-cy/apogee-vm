@@ -1517,6 +1517,8 @@ impl<'a> Recorder<'a> {
                             self.flush_calls(at);
                         }
                     }
+                    // UNFINISHED: S-FALCON-CODEC's FALCON512_DECODE recording.
+                    Per::Decode => unimplemented!("FALCON512_DECODE entries"),
                     // One entry, its base the first array's: `s2`'s.
                     Per::Arrays => {
                         let base = call.arrays.first().expect("a call's arrays").0;
