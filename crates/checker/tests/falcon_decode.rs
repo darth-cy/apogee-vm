@@ -1,8 +1,8 @@
 //! `FALCON512_DECODE` over a real execution, without a proof
 //! (`docs/spec/precompiles.md` §7, `constraints::falcon_decode`): a
-//! hand-assembled guest decoding a public key and a signature's `s2`, both
-//! fresh from `apogee-falcon512`'s randomized signer, its `FALCON_DECODE`
-//! shard filled from the run:
+//! hand-assembled guest decoding a public key's `h` and a signature's `s2`,
+//! both compact and fresh from `apogee-falcon512`'s randomized signer, its
+//! `FALCON_DECODE` shard filled from the run:
 //!
 //! - **the circuit keeps every rule**, by `constraints` and, with no shared
 //!   code, by this crate, at every height it builds at;
@@ -22,8 +22,9 @@
 //!   not;
 //! - **a forged row is refused by its one rule**: a key field at or above `q`,
 //!   a `−0`, a codeword placed one bit late, a flushed limb that disagrees
-//!   with its word, and a signature ending past 5,000 bits, each with every
-//!   other cell the forgery moves recomputed.
+//!   with its word, a flushed word with a bit set after the end, and a
+//!   signature ending past 5,000 bits, each with every other cell the forgery
+//!   moves recomputed.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -67,13 +68,24 @@ fn le_words(bytes: &[u8]) -> Vec<u32> {
     bytes.chunks(4).map(word).collect()
 }
 
-/// The guest: a fresh key at one address and its signature's `s2` at
-/// another, both in the image, and two calls, the key's and the signature's,
-/// each into a polynomial of its own; then `exit(0)`. Traced with its
-/// execution families at `2^20`, their floor, and every other at `2^16`.
+/// The guest: a fresh key's `h` at one address and a signature's `s2` at
+/// another, both compact in the image — the key's 224 words, the stream's
+/// words through its last bit — and two calls, the key's and the
+/// signature's, each into a polynomial of its own; then `exit(0)`. The
+/// signature is drawn until its stream ends inside a word, so that its call
+/// flushes: a key's never does. Traced with its execution families at
+/// `2^20`, their floor, and every other at `2^16`.
 fn traced() -> (Program, TraceArchive) {
     let (sk, pk) = apogee_falcon512::keygen([7; 32]);
-    let sig = apogee_falcon512::sign(&sk, b"a purchase", b"");
+    assert_eq!(pk[0], 0x09, "a v1.2 key");
+    let stream = loop {
+        let sig = apogee_falcon512::sign(&sk, b"a purchase", b"");
+        let words = le_words(&sig[41..]);
+        let d = emulator::falcon512_decode(SIGNATURE, &words).expect("a signature");
+        if !d.end.is_multiple_of(32) {
+            break words[..d.read].to_vec();
+        }
+    };
     let code_at = guest_memory::RAM_ORIGIN;
     let frames = code_at + 0x2000;
     let (dst0, dst1) = (frames + 0x1000, frames + 0x2000);
@@ -103,8 +115,8 @@ fn traced() -> (Program, TraceArchive) {
         segments: vec![
             segment(code_at, &code),
             segment(frames, &data),
-            segment(key_at, &le_words(&pk)),
-            segment(sig_at, &le_words(&sig[41..])),
+            segment(key_at, &le_words(&pk[1..])),
+            segment(sig_at, &stream),
         ],
         slot_base: code_at,
         slots: code
@@ -431,10 +443,10 @@ fn the_decode_circuit_keeps_every_rule() {
 }
 
 /// Each row's slots are its codewords placed by the definitions; each row's
-/// in-state the row before's out-state, a call's first row's the start — a
-/// key's header placed at `o = 8`, a signature's nothing — with stamps `4r`
-/// and outputs `8r` past the destination; and every live row and the padding
-/// after it hold every row-local rule.
+/// in-state the row before's out-state, a call's first row's the start — the
+/// limb empty at the source, in either mode — with stamps `4r` and outputs
+/// `8r` past the destination; and every live row and the padding after it
+/// hold every row-local rule.
 #[test]
 fn every_row_is_its_codewords_placed_and_holds() {
     let (program, archive) = traced();
@@ -454,10 +466,7 @@ fn every_row_is_its_codewords_placed_and_holds() {
         assert_eq!(stamp_da, [4 * at as u64, dst + 8 * at as u64], "row {r}");
         let state_in = names.map(|n| s.get(&honest, &format!("{n}_in")));
         let want = match at {
-            0 => match call {
-                0 => [8, 1 << 24, 0x09 << 24, s.get(&first, "w0_read_value"), 0],
-                _ => [0, 1 << 32, 0, s.get(&first, "w0_read_value"), 0],
-            },
+            0 => [0, 1 << 32, 0, s.get(&first, "w0_read_value"), 0],
             _ => {
                 let before = s.row(r - 1);
                 let out = ["o_out", "e3", "a3", "sa_out", "acc_out"];
@@ -508,7 +517,8 @@ type Change<'a> = &'a dyn Fn(&mut trace::DelegationTrace);
 
 /// The fill refuses, by `Err`, an entry its call did not write: a source
 /// word of the key's with a bit flipped, a coefficient one off, `END` one
-/// off, or the word after the signature's stream present.
+/// off, the word after the signature's stream present, or its last word's
+/// last bit, after its end, set.
 #[test]
 fn the_fill_refuses_an_entry_its_call_did_not_write() {
     let (program, archive) = traced();
@@ -538,10 +548,11 @@ fn the_fill_refuses_an_entry_its_call_did_not_write() {
     };
     let coefficient = |t: &mut trace::DelegationTrace| t.words[FRAME + 5].write_value[0] += 1;
     let end = |t: &mut trace::DelegationTrace| t.words[END].write_value[0] += 1;
+    // The signature's source words, the slots before the first absent.
+    let n = (0..SOURCE)
+        .take_while(|i| honest.words[source + i].addr[1] != 0)
+        .count();
     let past = |t: &mut trace::DelegationTrace| {
-        let n = (0..SOURCE)
-            .take_while(|i| t.words[source + i].addr[1] != 0)
-            .count();
         let (at, ts) = (
             t.words[source + n - 1].addr[1] + 4,
             t.words[source].read_ts[1],
@@ -549,11 +560,17 @@ fn the_fill_refuses_an_entry_its_call_did_not_write() {
         let q = &mut t.words[source + n];
         (q.addr[1], q.read_ts[1]) = (at, ts);
     };
-    let edits: [(&str, Change); 4] = [
+    let after = |t: &mut trace::DelegationTrace| {
+        let q = &mut t.words[source + n - 1];
+        q.read_value[1] |= 1 << 24;
+        q.write_value[1] |= 1 << 24;
+    };
+    let edits: [(&str, Change); 5] = [
         ("a flipped source bit", &flipped),
         ("a coefficient one off", &coefficient),
         ("END one off", &end),
         ("a word past the stream", &past),
+        ("a bit set after the end", &after),
     ];
     for (what, edit) in edits {
         assert!(attempt(edit).is_err(), "{what} is filled");
@@ -622,23 +639,45 @@ fn a_codeword_placed_one_bit_off_is_refused() {
     }
 }
 
-/// The key's last word with a bit of the stream flipped, its bytes and its
-/// word the flipped ones: the limb the chain placed disagrees with the word
-/// the flush read, and the flush's rule alone refuses it.
+/// The signature's last word with a bit of the stream flipped, its bytes and
+/// its word the flipped ones: the limb the chain placed disagrees with the
+/// word the flush read, and the flush's rule alone refuses it. A key, ending
+/// on a word, flushes nothing.
 #[test]
 fn a_flushed_limb_that_disagrees_with_its_word_is_refused() {
     let (program, archive) = traced();
     let s = Shard::new(&program, &archive);
-    let mut row = s.row(0);
-    assert_eq!(
-        (s.get(&row, "f"), s.get(&row, "o_e")),
-        (1, 8),
-        "a key flushes"
-    );
+    let key = s.row(0);
+    let ended = (s.get(&key, "f"), s.get(&key, "o_e"));
+    assert_eq!(ended, (0, 0), "a key flushes nothing");
+    let mut row = s.row(SIGNED);
+    let ended = (s.get(&row, "f"), s.get(&row, "o_e"));
+    let end = s.get(&row, "w3_write_value");
+    assert_eq!(ended, (1, end % 32), "the signature flushes");
     let (b0, w) = (s.get(&row, "flush_b0"), s.get(&row, "flush_read_value"));
     s.set(&mut row, "flush_b0", f(b0 ^ 0x80));
     s.set(&mut row, "flush_read_value", f(w ^ 0x80));
-    assert_eq!(s.refused(&row, 0), ["flush"]);
+    assert_eq!(s.refused(&row, SIGNED), ["flush"]);
+}
+
+/// The signature's last word with the first bit after its end set, its bytes
+/// and its word the set ones: the word is the stream's bits but not zeros
+/// after them, and the flush's rule alone refuses it.
+#[test]
+fn a_flushed_word_with_a_bit_set_after_the_end_is_refused() {
+    let (program, archive) = traced();
+    let s = Shard::new(&program, &archive);
+    let mut row = s.row(SIGNED);
+    let o_e = s.get(&row, "o_e");
+    assert_eq!(s.get(&row, "f"), 1, "the signature flushes");
+    // Bit `o_e` of the limb, its first after the end: byte `o_e / 8`'s.
+    let (j, bit) = (o_e / 8, 7 - o_e % 8);
+    let name = format!("flush_b{j}");
+    let (b, w) = (s.get(&row, &name), s.get(&row, "flush_read_value"));
+    assert_eq!(b >> bit & 1, 0, "a zero after the end");
+    s.set(&mut row, &name, f(b | 1 << bit));
+    s.set(&mut row, "flush_read_value", f(w | 1 << (8 * j + bit)));
+    assert_eq!(s.refused(&row, SIGNED), ["flush"]);
 }
 
 /// The signature's stream claimed to end past 5,000 bits: `END` and the end

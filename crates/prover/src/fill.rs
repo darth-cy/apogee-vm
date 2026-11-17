@@ -1062,9 +1062,9 @@ impl DecodeSlot {
 fn falcon_decode(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     use constants::delegation::falcon::Q;
     use constants::delegation::falcon_decode::{
-        DST, END, FRAME, HEADER, MODE, OUTPUT, ROWS, SIGNATURE_BITS, SLOTS, SOURCE, SRC,
+        DST, END, FRAME, MODE, OUTPUT, ROWS, SIGNATURE_BITS, SLOTS, SOURCE, SRC,
     };
-    use constraints::falcon_decode::{CODEWORD, HEADER_BITS, KEY_K, LIMB, ROW_BYTES, TUPLES};
+    use constraints::falcon_decode::{CODEWORD, KEY_K, LIMB, ROW_BYTES, TUPLES};
     let fam = family::FALCON_DECODE;
     let calls = *src.invocations(fam)?;
     let mut w = Witness::new(fam, ROWS * calls.len());
@@ -1092,19 +1092,8 @@ fn falcon_decode(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)
             (cols, gap, w.col(&format!("out{i}_write_value")))
         })
         .collect();
-    let [o_e, e_e, a_e, sa_e, acc_e, f, tail, tail_h16, tail_room, zz] = [
-        "o_e",
-        "e_e",
-        "a_e",
-        "sa_e",
-        "acc_e",
-        "f",
-        "tail",
-        "tail_h16",
-        "tail_room_h16",
-        "zz",
-    ]
-    .map(|c| w.col(c));
+    let [o_e, e_e, a_e, sa_e, acc_e, f, zz] =
+        ["o_e", "e_e", "a_e", "sa_e", "acc_e", "f", "zz"].map(|c| w.col(c));
     let f_inv = w.fcol("f_inv");
     let flush = DecodePort::new(&mut w, "flush");
     let number_value = ecall::FALCON512_DECODE as u64;
@@ -1156,15 +1145,9 @@ fn falcon_decode(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)
         {
             return Err(refuse("is not its call's frame, polynomial and source"));
         }
-        // The start: a key's header placed at the limb's top, a signature's
-        // nothing.
+        // The start: the limb empty, in either mode.
         let r0 = ROWS * e;
-        let key = 1 - mode;
-        let (mut o, mut a) = (
-            HEADER_BITS * key,
-            (key * HEADER as u64) << (LIMB - HEADER_BITS),
-        );
-        let (mut sa, mut acc) = (source, 0u64);
+        let (mut o, mut a, mut sa, mut acc) = (0, 0, source, 0u64);
         // The source word at `sa`: its slot, and the limb its bytes are.
         let limb_at = |sa: u64| -> Result<(usize, u64), String> {
             let i = (sa - source) as usize / 4;
@@ -1287,23 +1270,19 @@ fn falcon_decode(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)
         let left = (guest_memory::ADVICE_ORIGIN as u64)
             .checked_sub(base + 4 * FRAME as u64)
             .ok_or_else(|| format!("the frame at cycle {at} reaches the advice"))?;
-        let rest_bits = match o {
-            0 => {
-                flush.put(&mut w, &calls, None, e, r0);
-                0
-            }
+        match o {
+            0 => flush.put(&mut w, &calls, None, e, r0),
             _ => {
+                // The last word: the stream's bits, then zeros.
                 let (j, limb) = limb_at(sa)?;
-                let past = limb
-                    .checked_sub(a)
-                    .filter(|t| *t < e_end)
-                    .ok_or_else(|| refuse("has a last word its stream does not end"))?;
+                if limb != a {
+                    return Err(refuse("has a last word its stream does not end"));
+                }
                 flush.put(&mut w, &calls, Some(j), e, r0);
                 w.row(r0, &[(f, 1)]);
                 w.put_fp(f_inv, r0, inverse(o));
-                past
             }
-        };
+        }
         let zz_value = match mode {
             0 => 0,
             _ => (SIGNATURE_BITS as u64)
@@ -1320,9 +1299,6 @@ fn falcon_decode(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)
                 (a_e, a),
                 (sa_e, sa),
                 (acc_e, acc),
-                (tail, rest_bits),
-                (tail_h16, rest_bits >> 16),
-                (tail_room, (e_end - 1 - rest_bits) >> 16),
                 (zz, zz_value),
             ],
         );

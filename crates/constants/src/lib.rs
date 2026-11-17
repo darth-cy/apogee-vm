@@ -1193,8 +1193,8 @@ pub mod delegation {
     /// encoding, MSB first, decoded into a polynomial of
     /// [`falcon::ARRAY`] words, coefficient `2i` word `i`'s low halfword.
     pub mod falcon_decode {
-        /// The source's address, word-aligned: a key's first byte, its
-        /// header; a signature's compressed `s2`, its byte 41.
+        /// The source's address, word-aligned: a key's `h` or a signature's
+        /// compressed `s2`, its first byte.
         pub const SRC: usize = 0;
         /// The polynomial's address, word-aligned.
         pub const DST: usize = 1;
@@ -1205,21 +1205,26 @@ pub mod delegation {
         pub const END: usize = 3;
         /// The frame's words.
         pub const FRAME: usize = 4;
-        /// A public key: its header, then 512 fields of 14 bits, each below
-        /// `q`.
+        /// A public key's `h`: 512 fields of 14 bits, each below `q`, and no
+        /// header.
         pub const KEY: u32 = 0;
-        /// A signature's `s2`: 512 compressed coefficients.
+        /// A signature's `s2`: 512 compressed coefficients, the bits after
+        /// the last in its word zeros.
         pub const SIGNATURE: u32 = 1;
-        /// A public key's header byte.
+        /// A public key's header byte, which a key's source does not hold.
         pub const HEADER: u32 = 0x09;
-        /// A key's end: its header byte and 512 fields of 14 bits.
-        pub const KEY_END: u32 = 8 + 14 * super::falcon::N as u32;
+        /// A key's end: 512 fields of 14 bits, on a word.
+        pub const KEY_END: u32 = 14 * super::falcon::N as u32;
         /// The most bits a signature's compressed `s2` takes: 625 bytes.
         pub const SIGNATURE_BITS: u32 = 8 * 625;
         /// The words a call writes: the polynomial.
         pub const OUTPUT: usize = super::falcon::ARRAY;
-        /// The most source words a call reads: a key's 897 bytes.
-        pub const SOURCE: usize = (KEY_END as usize).div_ceil(32);
+        /// The most source words a call reads, through the word holding the
+        /// longest stream's last bit: a key's 224, a signature's at most 157.
+        pub const SOURCE: usize = {
+            let (key, signature) = (KEY_END.div_ceil(32), SIGNATURE_BITS.div_ceil(32));
+            (if key > signature { key } else { signature }) as usize
+        };
         /// An entry's words: the frame, the output, the source slots.
         pub const WORDS: usize = FRAME + OUTPUT + SOURCE;
         /// Coefficients a row.

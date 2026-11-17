@@ -33,8 +33,8 @@
 //! rest_boolean   rest − rest²         m_boolean   m − m²
 //! frame       FRAME words under first, MODE and END written
 //!             (delegation::frame_under): src, dst, mode read; norm, end written
-//! start_o     first·(o_in − 8 + 8m)          start_a   first·(a_in − 9·2^24·(1 − m))
-//! start_e     first·(e_in − 2^24 − (2^32 − 2^24)·m)        start_m   first·(m − mode)
+//! start_o     first·o_in                     start_a      first·a_in
+//! start_e     first·(e_in − 2^32)            start_m      first·(m − mode)
 //! start_sa    first·(sa_in − src)            start_acc    first·acc_in
 //! start_da    first·(da − dst)               start_stamp  first·stamp
 //! slot u      W b k_0..k_3 (bits) low p1 p2 pow x csig cw mag bs inv z a_h16,
@@ -64,15 +64,14 @@
 //!             out{i}_rule write_i − v_2i − 2^16·v_2i+1,  v = x + mag + q·b − 2·bs,
 //!             the word at da + 4i, an access (delegation::access)
 //! frame row   M o_e e_e a_e sa_e acc_e f, the flush port's read_ts and word;
-//!             W f_inv tail zz, the flush port's bytes and gap chunks
+//!             W f_inv zz, the flush port's bytes and gap chunks
 //!   norm        norm − acc_e
 //!   end         end − 8·sa_e + 8·src − o_e
-//!   key_end     (first − mode)·(end − 7176)
+//!   key_end     (first − mode)·(end − 7168)
 //!   zz_rule     zz − mode·(5000 − end)              zz < 2^16
 //!   f_inverse   o_e·f_inv − f   f_zero  (first − f)·o_e     f = first·[o_e ≠ 0]
 //!   f_boolean   f − f²
-//!   flush       BE_f − a_e − tail                   tail, e_e − first − tail words
-//!               the flush port at sa_e under f
+//!   flush       BE_f − a_e, the flush port at sa_e under f
 //! space 9     read  (cycle, stamp + j, in_j) under rest
 //!             write (cycle, stamp + 4 + j, out_j)
 //!             read  (cycle, 512 + j, end_j) under first
@@ -103,10 +102,10 @@
 //! ## Why it is the decoding
 //!
 //! By induction `A` is a multiple of `E = 2^(32 − o)` below `2^32`: at the
-//! start a key's header `9·2^24` at `o = 8`, the bits before its first field,
-//! or a signature's 0 at 0. `C < 2^L`: a key's `x < q < 2^14`, a signature's
-//! `C < 2^(k+9)`; and `L ≤ 24`. The bound on `o'` puts `o + L − 32c` in `[0,
-//! 32)`, so `c = [o + L ≥ 32]` and `e = 2^(32 − o')`, the next slot's `E`.
+//! start, in either mode, 0 at 0, the limb empty. `C < 2^L`: a key's `x < q <
+//! 2^14`, a signature's `C < 2^(k+9)`; and `L ≤ 24`. The bound on `o'` puts
+//! `o + L − 32c` in `[0, 32)`, so `c = [o + L ≥ 32]` and `e = 2^(32 − o')`,
+//! the next slot's `E`.
 //!
 //! - `c = 0`: `limb` is `2^32·(A + C·e − a) = 0` with `A + C·e < 2^32` and `a`
 //!   a word, so `a = A + C·2^(32 − o − L)` over the integers, a multiple of
@@ -119,22 +118,24 @@
 //!   limb's top. Without the 59 an all-ones limb would read as `p` less: a
 //!   key's zeros where the source holds `0xFFFFFFFF`.
 //!
-//! So the codewords, after the start's bits, are the stream: every completed
-//! limb read once, at `sa = src + 4·(limbs before)`, its first one holding a
-//! key's header. The stream ends at bit `end = 8·(sa_e − src) + o_e`; a key's
-//! is 7176 and a signature's at most 5000 (`zz`). Where `o_e ≠ 0` the flush
-//! reads the partial limb at `sa_e`, whose first `o_e` bits are `a_e`'s, the
-//! rest `tail < e_e` free; where `o_e = 0`, `a_e = 0` and nothing is read.
-//! `csig ≥ 1` and its `k` zeros are what a codeword is; `mz` refuses `−0`, and
-//! a key's `b`, its `mag` 0. Each `v` is the coefficient: a key's `x < q`,
-//! `|s|` or `q − |s|`, below `q`; `norm` is `Σ |s|² < 2^31`, exact.
+//! So the codewords are the stream: every completed limb read once, at `sa =
+//! src + 4·(limbs before)`. The stream ends at bit `end = 8·(sa_e − src) +
+//! o_e`; a key's is 7168, on a limb, and a signature's at most 5000 (`zz`).
+//! Where `o_e ≠ 0` the flush reads the partial limb at `sa_e` and `flush`
+//! holds it to `a_e`, both below `2^32`, so as integers: its first `o_e` bits
+//! are the stream's and the rest zeros. Where `o_e = 0`, `a_e = 0`: nothing
+//! is read and the port's bytes are zeros; off the frame row `f = 0` and `a_e`
+//! is in no leaf. `csig ≥ 1` and its `k` zeros are what a codeword is; `mz`
+//! refuses `−0`, and a key's `b`, its `mag` 0. Each `v` is the coefficient: a
+//! key's `x < q`, `|s|` or `q − |s|`, below `q`; `norm` is `Σ |s|² < 2^31`,
+//! exact.
 
 use alloc::format;
 use alloc::vec::Vec;
 
 use constants::delegation::falcon::{N, Q};
 use constants::delegation::falcon_decode::{
-    DST, END, FRAME, HEADER, KEY_END, MODE, OUTPUT, ROWS, SIGNATURE_BITS, SLOTS, SRC, WORDS,
+    DST, END, FRAME, KEY_END, MODE, OUTPUT, ROWS, SIGNATURE_BITS, SLOTS, SRC, WORDS,
 };
 use constants::delegation::Per;
 use constants::{address_space, ecall, family};
@@ -146,8 +147,6 @@ use crate::{CircuitArtifact, PolyAddress};
 
 /// A limb's bits: the source is read a word at a time.
 pub const LIMB: u64 = 32;
-/// A key's header bits, its first byte, which the start places.
-pub const HEADER_BITS: u64 = 8;
 /// A key coefficient's bits.
 pub const FIELD_BITS: u64 = 14;
 /// A codeword's bits but its zeros: the sign, the low bits and the one.
@@ -167,18 +166,13 @@ pub const ROW_BYTES: u64 = 4 * (SLOTS / 2) as u64;
 /// `2^64 − p`, 59: a completing slot's `a` is at most `2^32 − 1 − WRAP`.
 pub const WRAP: u64 = 0u64.wrapping_sub(field::A64_C5);
 
-/// `A` at a key's start: its header, the limb's top byte.
-const KEY_A: u64 = (HEADER as u64) << (LIMB - HEADER_BITS);
-/// `E` at a key's start, `2^(32 − 8)`.
-const KEY_E: u64 = 1 << (LIMB - HEADER_BITS);
-
 const _: () = {
     // Four slots a row, two coefficients an output word.
     assert!(ROWS * SLOTS == N && SLOTS.is_multiple_of(2) && OUTPUT == ROWS * SLOTS / 2);
     assert!(END_STAMP == ROWS as u64 * TUPLES && ROW_BYTES * ROWS as u64 == 4 * OUTPUT as u64);
-    // A key: the header byte, then 512 fields of 14 bits, each below q.
-    assert!(KEY_END as u64 == HEADER_BITS + FIELD_BITS * N as u64);
-    assert!(Q < 1 << FIELD_BITS && (HEADER as u64) < 1 << HEADER_BITS);
+    // A key: 512 fields of 14 bits, each below q.
+    assert!(KEY_END as u64 == FIELD_BITS * N as u64);
+    assert!(Q < 1 << FIELD_BITS);
     // A codeword's longest is 24 bits, a key's 14 among them: one spans two
     // limbs at most, and completing one leaves o' ≤ 23, so e ≥ 2^9 > 59:
     // 2^32·A + C·e ≤ 2^64 − e < p, and a, a multiple of e, has its low
@@ -232,17 +226,10 @@ fn decode() -> Builder {
     b.gate("rest_rule", rest - live + first);
     b.gate("rest_boolean", rest - rest * rest);
     b.gate("m_boolean", m - m * m);
-    // The start, on the frame row: a key's header placed, a signature's
-    // nothing.
-    b.gate(
-        "start_o",
-        (o_in + m * HEADER_BITS) * first - first * HEADER_BITS,
-    );
-    b.gate(
-        "start_e",
-        (e_in - m * (T32 - KEY_E)) * first - first * KEY_E,
-    );
-    b.gate("start_a", (a_in + m * KEY_A) * first - first * KEY_A);
+    // The start, on the frame row: the limb empty, in either mode.
+    b.gate("start_o", o_in * first);
+    b.gate("start_e", (e_in - konst(T32)) * first);
+    b.gate("start_a", a_in * first);
     b.gate("start_sa", (sa_in - src) * first);
     b.gate("start_acc", acc_in * first);
     b.gate("start_da", (da - dst) * first);
@@ -335,10 +322,7 @@ fn decode() -> Builder {
     let [read_ts, w] = ["flush_read_ts", "flush_read_value"].map(|c| b.mcol(c));
     let be = port(&mut b, "flush", w);
     access_under(&mut b, fm, "flush", cycle, Part::of(sa_e), read_ts, w, w);
-    let tail = b.col("tail");
-    b.gate("flush", be - a_e - tail);
-    b.word("tail", tail.into());
-    b.word("tail_room", e_e - first - tail);
+    b.gate("flush", be - a_e);
 
     // The chain through space 9.
     let space = address_space::FALCON_DECODE;
@@ -394,8 +378,8 @@ mod tests {
 
     /// The budgets, counted: at most `MAX_COMMITTED` committed columns, and
     /// `RANGE16`'s obligations each slot's 20, the outputs' gaps, the frame's
-    /// gaps and room, `zz` and the flush's 16 — 123, a tree of 128 leaves
-    /// with 4 obligations to spare before the next, 256.
+    /// gaps and room, `zz` and the flush's 12 — 119, a tree of 128 leaves
+    /// with 8 obligations to spare before the next, 256.
     #[test]
     fn falcon_decode_keeps_its_budgets() {
         let a = artifact(16);
@@ -406,10 +390,10 @@ mod tests {
         );
         let obligations = a.lookups.iter().filter(|l| l.channel == RANGE16).count();
         let slot = 2 + 2 + 2 + 2 + 2 * 4 + 4;
-        let flush = 2 * 4 + 4 + 2 + 2;
+        let flush = 2 * 4 + 4;
         let want = SLOTS * slot + (SLOTS / 2) * 4 + FRAME * 4 + 2 + 1 + flush;
-        assert_eq!((obligations, want), (123, 123));
+        assert_eq!((obligations, want), (119, 119));
         let leaves = (obligations + 1).next_power_of_two();
-        assert_eq!((leaves, leaves - 1 - obligations), (128, 4));
+        assert_eq!((leaves, leaves - 1 - obligations), (128, 8));
     }
 }

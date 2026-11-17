@@ -1543,21 +1543,20 @@ const SHORT: &str = "falcon512_decode's source ends before its stream";
 /// rows (`constraints::falcon_decode`).
 ///
 /// `source` is the words as RAM holds them, little-endian: the stream is
-/// their bytes in address order, each byte MSB first. A key is its header,
-/// `0x09`, then 512 fields of 14 bits, each a coefficient below `q`. A
+/// their bytes in address order, each byte MSB first. A key is `h`'s 512
+/// fields of 14 bits, each a coefficient below `q`, and no header. A
 /// signature's `s2` is 512 codewords, each a sign bit `b`, the low 7 bits of
 /// `|s|`, then `k = |s| >> 7` zeros and a one: `k` at most 15, so `|s|` at
 /// most 2047, never `−0` (`b = 1`, `|s| = 0`), and the last codeword ending
-/// within `SIGNATURE_BITS`; its coefficient is `|s|`, or `q − |s|` where
-/// `b = 1`.
+/// within `SIGNATURE_BITS`, the bits after it in its word zeros; its
+/// coefficient is `|s|`, or `q − |s|` where `b = 1`.
 ///
-/// Refuses anything else by name, and a stream running past `source`.
-/// **Nothing past the end is read**, neither the last word's bits after it
-/// nor a word after that: a key's are past its 897 bytes, and a signature's
-/// must be zeros, which its verifier checks (the SDK's), not this.
+/// Refuses anything else by name, and a stream running past `source`. **No
+/// word past the one holding the end is read**: a key's end is a word's, and
+/// a signature's last word is read whole, a bit set after the end refused.
 pub fn falcon512_decode(mode: u32, source: &[u32]) -> Result<FalconDecode, &'static str> {
     use delegation::falcon::{N, Q};
-    use delegation::falcon_decode::{HEADER, KEY, KEY_END, SIGNATURE, SIGNATURE_BITS};
+    use delegation::falcon_decode::{KEY, KEY_END, SIGNATURE, SIGNATURE_BITS};
     let limit = match mode {
         KEY => KEY_END,
         SIGNATURE => SIGNATURE_BITS,
@@ -1570,9 +1569,6 @@ pub fn falcon512_decode(mode: u32, source: &[u32]) -> Result<FalconDecode, &'sta
     };
     let (mut coefficients, mut norm) = ([0u16; N], 0u32);
     if mode == KEY {
-        if bits.take(8)? != HEADER {
-            return Err("falcon512_decode's key header is not 0x09");
-        }
         for x in &mut coefficients {
             let field = bits.take(14)?;
             if field as u64 >= Q {
@@ -1598,11 +1594,17 @@ pub fn falcon512_decode(mode: u32, source: &[u32]) -> Result<FalconDecode, &'sta
             *x = if negative { Q as u32 - size } else { size } as u16;
         }
     }
+    // The last word's `rest` bits after the end: zeros. A key ends on a word.
+    let (end, read) = (bits.at, bits.at.div_ceil(32) as usize);
+    let rest = 32 * read as u32 - end;
+    if source[read - 1].swap_bytes() & ((1 << rest) - 1) != 0 {
+        return Err("falcon512_decode's signature has a bit set after its end");
+    }
     Ok(FalconDecode {
         coefficients,
         norm,
-        end: bits.at,
-        read: bits.at.div_ceil(32) as usize,
+        end,
+        read,
     })
 }
 
@@ -2395,6 +2397,13 @@ mod tests {
         d.coefficients.chunks(2).map(pair).collect()
     }
 
+    /// A v1.2 public key's compact form, a key's source: `h`, its header
+    /// `0x09` dropped.
+    fn compact(pk: &[u8]) -> &[u8] {
+        assert_eq!((pk.len(), pk[0]), (897, 0x09), "a v1.2 key");
+        &pk[1..]
+    }
+
     /// [`falcon512_decode`]'s answer to an encoding by the definitions,
     /// written apart from it over the bytes one bit at a time: the
     /// coefficients, `Σ s²` and the bit after the last coefficient's. The
@@ -2407,11 +2416,10 @@ mod tests {
         let field = |at: usize, n: usize| bits[at..at + n].iter().fold(0, |x, b| x << 1 | b);
         let mut c = [0u16; 512];
         if mode == delegation::falcon_decode::KEY {
-            assert_eq!(field(0, 8), 0x09, "a key's header");
             for (i, x) in c.iter_mut().enumerate() {
-                *x = field(8 + 14 * i, 14) as u16;
+                *x = field(14 * i, 14) as u16;
             }
-            return (c, 0, 8 + 14 * 512);
+            return (c, 0, 14 * 512);
         }
         let (mut at, mut norm) = (0, 0);
         for x in &mut c {
@@ -2430,10 +2438,10 @@ mod tests {
 
     /// `falcon512_decode` answers what the encodings' definitions do, read
     /// apart from it: the coefficients, `‖s2‖²` and the stream's end, for the
-    /// keys and signatures of every implementation in
+    /// keys, compact, and signatures of every implementation in
     /// `tools/falcon512/vectors.json` and this one's signer. It reads the
-    /// words up to the one holding the end and no further, and no bit past
-    /// the end: a tail of ones changes nothing.
+    /// words up to the one holding the end and no further, ones past it
+    /// changing nothing, and refuses each bit set after the end in that word.
     #[test]
     fn falcon512_decode_answers_every_implementations_encodings() {
         use delegation::falcon_decode::{KEY, SIGNATURE};
@@ -2446,14 +2454,14 @@ mod tests {
         let mut encodings = Vec::new();
         for section in ["standard_kat", "signatures"] {
             for v in vectors[section].as_array().expect("a section") {
-                encodings.push((KEY, hex(&v["pk"])));
+                encodings.push((KEY, compact(&hex(&v["pk"])).to_vec()));
                 encodings.push((SIGNATURE, hex(&v["sig"])[41..].to_vec()));
             }
         }
         for seed in 0..2 {
             let (sk, pk) = apogee_falcon512::keygen([seed; 32]);
             let sig = apogee_falcon512::sign(&sk, b"a purchase", b"");
-            encodings.push((KEY, pk));
+            encodings.push((KEY, compact(&pk).to_vec()));
             encodings.push((SIGNATURE, sig[41..].to_vec()));
         }
         assert_eq!(encodings.len(), 24);
@@ -2471,24 +2479,30 @@ mod tests {
             assert_eq!(falcon512_decode(mode, &words[..read]), Ok(want.clone()));
             assert_eq!(falcon512_decode(mode, &words[..read - 1]), Err(SHORT));
             let mut ones = words.clone();
-            for t in end as usize..32 * words.len() {
-                ones[t / 32] |= 1 << (8 * (t / 8 % 4) + 7 - t % 8);
-            }
+            ones.push(0);
+            ones[read..].fill(!0);
             assert_eq!(falcon512_decode(mode, &ones), Ok(want), "a tail of ones");
+            for t in end as usize..32 * read {
+                let mut one = words.clone();
+                one[t / 32] |= 1 << (8 * (t / 8 % 4) + 7 - t % 8);
+                let after = Err("falcon512_decode's signature has a bit set after its end");
+                assert_eq!(falcon512_decode(mode, &one), after, "bit {t}");
+            }
         }
     }
 
-    /// `FALCON512_DECODE` decodes a key and a signature in the advice into
-    /// the polynomial at its destination, writes `‖s2‖²` and the stream's end
-    /// over its frame, and answers its stream: the polynomial's words, old
-    /// and new, then the source words it read, as they were. A signature
-    /// ending the advice is a call's — no word past its end's is read — as
-    /// are a frame ending at the advice, the edges of `|s| ≤ 2047`, of `q`
-    /// and of 5,000 bits, and a destination ending at the frame or starting
-    /// just past the source words read. It refuses by name every malformed
-    /// encoding and what its caller owes: a mode, alignment, a destination
-    /// clear of the frame and the source, a source clear of the frame, and
-    /// words a load reaches or a store could write.
+    /// `FALCON512_DECODE` decodes a key and a signature in the advice, both
+    /// compact, into the polynomial at its destination, writes `‖s2‖²` and
+    /// the stream's end over its frame, and answers its stream: the
+    /// polynomial's words, old and new, then the source words it read, as
+    /// they were. A signature ending the advice is a call's — no word past
+    /// its end's is read — as are a frame ending at the advice, the edges of
+    /// `|s| ≤ 2047`, of `q` and of 5,000 bits, and a destination ending at
+    /// the frame or starting just past the source words read. It refuses by
+    /// name every malformed encoding, a bit set after a signature's end among
+    /// them, and what its caller owes: a mode, alignment, a destination clear
+    /// of the frame and the source, a source clear of the frame, and words a
+    /// load reaches or a store could write.
     #[test]
     fn falcon512_decode_answers_and_refuses_what_its_caller_owes() {
         use delegation::falcon_decode::{KEY, SIGNATURE};
@@ -2496,9 +2510,8 @@ mod tests {
         let sig = apogee_falcon512::sign(&sk, b"a purchase", b"");
         let compressed = le_words(&sig[41..]);
         let signed = falcon512_decode(SIGNATURE, &compressed).expect("a signature");
-        let key = falcon512_decode(KEY, &le_words(&pk)).expect("a key");
-        let mut advice = pk.clone();
-        advice.resize(900, 0);
+        let key = falcon512_decode(KEY, &le_words(compact(&pk))).expect("a key");
+        let mut advice = compact(&pk).to_vec();
         advice.extend(
             compressed[..signed.read]
                 .iter()
@@ -2511,7 +2524,7 @@ mod tests {
         let image = spin();
         let mut machine = Machine::new(&image, &io);
         let key_at = guest_memory::ADVICE_ORIGIN + 4;
-        let (sig_at, advice_end) = (key_at + 900, key_at + 900 + 4 * signed.read as u32);
+        let (sig_at, advice_end) = (key_at + 896, key_at + 896 + 4 * signed.read as u32);
         let base = guest_memory::RAM_ORIGIN + 0x2000;
         let (dst, raw) = (base + 0x400, base + 0x1000);
         let decode = |machine: &mut Machine, base: u32, src: u32, dst: u32, mode: u32| {
@@ -2532,12 +2545,12 @@ mod tests {
             (base, key_at, key_at),
             (base + 4, dst, dst),
             (base + 8, KEY, 0),
-            (base + 12, 0xdead_beef, 7176),
+            (base + 12, 0xdead_beef, 7168),
         ];
         assert_eq!(call.frame, frame);
         assert_eq!(
             call.stream,
-            stream(&[0; 256], &pairs(&key), key_at, &le_words(&pk))
+            stream(&[0; 256], &pairs(&key), key_at, &le_words(compact(&pk)))
         );
         assert!(call.levels.is_empty() && call.arrays.is_empty());
         let call = decode(&mut machine, base, sig_at, dst, SIGNATURE).expect("a signature");
@@ -2573,15 +2586,11 @@ mod tests {
         };
         let frame_error = |detail| Err(EmuError::DelegationFrame { pc: 0, detail });
         let (q, zeros) = (12289, |n: usize| "0".repeat(n));
-        let key_of = |head: u32, first: u32| format!("{head:08b}{first:014b}{}", zeros(14 * 511));
-        assert_eq!(answer(&key_of(9, q - 1), KEY, dst), Ok((0, 7176, q - 1, 0)));
+        let key_of = |first: u32| format!("{first:014b}{}", zeros(14 * 511));
+        assert_eq!(answer(&key_of(q - 1), KEY, dst), Ok((0, 7168, q - 1, 0)));
         assert_eq!(
-            answer(&key_of(9, q), KEY, dst),
+            answer(&key_of(q), KEY, dst),
             frame_error("falcon512_decode's key coefficient is not below q")
-        );
-        assert_eq!(
-            answer(&key_of(0x0a, 0), KEY, dst),
-            frame_error("falcon512_decode's key header is not 0x09")
         );
         let edges = codewords(&[&[2047, -2047][..], &[1; 510]].concat());
         let pair = 2047 | (q - 2047) << 16;
@@ -2596,6 +2605,10 @@ mod tests {
         assert_eq!(
             answer(&edges, SIGNATURE, raw + 4 * 144),
             frame_error("falcon512_decode's destination overlaps its source")
+        );
+        assert_eq!(
+            answer(&format!("{edges}1"), SIGNATURE, dst),
+            frame_error("falcon512_decode's signature has a bit set after its end")
         );
         let full = codewords(&[&[128; 392][..], &[-1; 120]].concat());
         let norm = 392 * 128 * 128 + 120;
@@ -2629,13 +2642,14 @@ mod tests {
             frame_error("falcon512_decode's mode is neither a key's nor a signature's")
         );
 
-        // The frame's addresses. A zero key at `raw`, 256-aligned, for a frame
-        // on its last word: that word's low byte, the key's last, is then the
-        // frame's source's, 0.
-        for (i, w) in stream_words(&key_of(9, 0)).iter().enumerate() {
+        // The frame's addresses. A key at `raw`, zeros but its last word, for
+        // a frame there: that word is the frame's source, `raw`, as it was.
+        let mut held = vec![0; 224];
+        held[223] = raw;
+        falcon512_decode(KEY, &held).expect("a key ending in `raw`");
+        for (i, w) in held.iter().enumerate() {
             machine.set_word(raw + 4 * i as u32, *w);
         }
-        assert_eq!(raw % 256, 0);
         let mut refused =
             |base: u32, src: u32, dst: u32| decode(&mut machine, base, src, dst, KEY).err();
         let frame_error = |detail| Some(EmuError::DelegationFrame { pc: 0, detail });
@@ -2653,12 +2667,12 @@ mod tests {
         assert_eq!(refused(base, key_at, base - 1024), None);
         assert_eq!(refused(base, key_at, base + 16), None);
         assert_eq!(
-            refused(raw + 4 * 224, raw, dst),
+            refused(raw + 4 * 223, raw, dst),
             frame_error("falcon512_decode's source overlaps its frame")
         );
-        assert_eq!(refused(raw + 4 * 225, raw, dst), None);
+        assert_eq!(refused(raw + 4 * 224, raw, dst), None);
         assert_eq!(
-            refused(base, raw, raw + 4 * 224),
+            refused(base, raw, raw + 4 * 223),
             frame_error("falcon512_decode's destination overlaps its source")
         );
         let out = |addr: u32| {
@@ -2674,7 +2688,7 @@ mod tests {
         // A key the advice cuts short: the first word it does not reach.
         let io = GuestIo {
             input: Vec::new(),
-            advice: pk[..800].to_vec(),
+            advice: compact(&pk)[..800].to_vec(),
         };
         let mut machine = Machine::new(&image, &io);
         assert_eq!(
@@ -2683,24 +2697,26 @@ mod tests {
         );
     }
 
-    /// A guest's `FALCON512_DECODE` calls, a key's and a signature's, are one
-    /// entry each: the frame's words, the polynomial's, then the source words
-    /// the stream reached, the slots past them `Query::ABSENT` and in no
-    /// event. The archive's check and the log's self-check take the run.
+    /// A guest's `FALCON512_DECODE` calls, a key's and a signature's, both
+    /// compact in the advice, are one entry each: the frame's words, the
+    /// polynomial's, then the source words the stream reached, the slots past
+    /// them `Query::ABSENT` and in no event. The archive's check and the log's
+    /// self-check take the run.
     #[test]
     fn falcon512_decode_records_the_words_its_stream_reached() {
         use delegation::falcon_decode::{KEY, SIGNATURE, SOURCE, WORDS};
         let (sk, pk) = apogee_falcon512::keygen([5; 32]);
         let sig = apogee_falcon512::sign(&sk, b"a purchase", b"");
-        let mut advice = pk.clone();
-        advice.resize(900, 0);
-        advice.extend(&sig[41..]);
+        let (h, compressed) = (le_words(compact(&pk)), le_words(&sig[41..]));
+        let key = falcon512_decode(KEY, &h).expect("a key");
+        let signed = falcon512_decode(SIGNATURE, &compressed).expect("a signature");
+        let words = [&h[..], &compressed[..signed.read]].concat();
         let io = GuestIo {
             input: Vec::new(),
-            advice,
+            advice: words.iter().flat_map(|w| w.to_le_bytes()).collect(),
         };
         let key_at = guest_memory::ADVICE_ORIGIN + 4;
-        let sig_at = key_at + 900;
+        let sig_at = key_at + 896;
         let frames = guest_memory::RAM_ORIGIN + 0x2000;
         let (dst0, dst1) = (frames + 0x1000, frames + 0x2000);
         let data = [key_at, dst0, KEY, 0, sig_at, dst1, SIGNATURE, 0];
@@ -2753,8 +2769,6 @@ mod tests {
             .delegation(constants::family::FALCON_DECODE)
             .expect("its buffer");
         assert_eq!((calls.len(), calls.words.len()), (2, WORDS));
-        let key = falcon512_decode(KEY, &le_words(&pk)).expect("a key");
-        let signed = falcon512_decode(SIGNATURE, &le_words(&sig[41..])).expect("a signature");
         assert!(key.read == SOURCE && signed.read < SOURCE);
         for (e, (decoded, src, dst)) in [(&key, key_at, dst0), (&signed, sig_at, dst1)]
             .into_iter()
