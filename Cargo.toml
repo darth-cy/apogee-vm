@@ -91,9 +91,13 @@ postcard = { version = "1", default-features = false }
 keccak = "0.1.6"
 sha3 = "0.10"
 
-# Test only. A Falcon-512 signer, keys from a seed and signatures, that the
-# SDK's verifier is held to. Never linked by the prover, the verifier or a
-# guest.
+# Test only. Falcon-512 with Poseidon2's HashToPoint, the host's half: keys,
+# signatures and KeyDigest, which the SDK's verifier and `guests/amazon` are
+# held to. Never linked by the prover, the verifier or a guest.
+apogee-falcon512 = { path = "tools/falcon512/rust" }
+
+# Test only. Falcon-512 keys from a seed, `tools/falcon512/rust`'s keygen.
+# Never linked by the prover, the verifier or a guest.
 falcon-rust = "0.3.1"
 
 # Test only. `tools/falcon512/rust`'s signer: its FFT's complex numbers and its

@@ -153,7 +153,7 @@ the rest is loads and stores.
 | `merkle_root(slot, leaf, siblings)`, `Digest::bytes(path)` | `MERKLE_ROOT` over a path of `siblings.len() / 64` siblings, which may be advice read in place; a `Digest` path as those bytes ([precompiles.md](precompiles.md) §5) |
 | `keccak_f1600(state)`, `Shake256` | `KECCAK_F1600` over a `[u64; 25]`, in place; SHAKE256 over it, absorbing, finalizing and squeezing bytes ([precompiles.md](precompiles.md) §5) |
 | `falcon512::s1_norm(h, s2, c)`, `falcon512::Poly` | `FALCON512` over three word-aligned `[u16; 512]`, which may be advice read in place: `‖s1‖²` ([precompiles.md](precompiles.md) §5) |
-| `falcon512::PublicKey::{decode, verify}` | a Falcon-512 key from its bytes, and a signature's verification under it: its lattice check `FALCON512`, its HashToPoint `Shake256`'s `KECCAK_F1600` ([precompiles.md](precompiles.md) §5) |
+| `falcon512::PublicKey::{decode, digest, verify}`, `falcon512::key_digest` | a Falcon-512 key from its bytes, its KeyDigest, and a signature's verification under it: its lattice check `FALCON512`, its HashToPoint and KeyDigest `POSEIDON2` ([precompiles.md](precompiles.md) §5, §8.7) |
 
 ## 7. The C ABI
 

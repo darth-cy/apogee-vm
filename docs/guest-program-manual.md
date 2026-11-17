@@ -152,9 +152,13 @@ let signed = key.verify(&request, sig); // a 666-byte signature of the request's
   `finalize`, then `squeeze` any number.
 - `falcon512::PublicKey::decode(bytes)` reads a Falcon-512 public key, v1.2 of the specification,
   and `key.verify(msg, sig)` is whether `sig` signs `msg` under it, a malformed signature `false`:
-  the lattice check is the Falcon-512 call and HashToPoint's permutations are Keccak calls. Decoding
-  a key costs ≈5.7K cycles and verifying a signature of a 64-byte message ≈18.9K.
-  `falcon512::s1_norm` is the lattice check alone, for a guest with encodings of its own.
+  the lattice check is the Falcon-512 call, and HashToPoint, not v1.2's SHAKE256 but a Poseidon2
+  sponge of the key, the salt and the message ([precompiles.md](spec/precompiles.md) §8.7), is
+  Poseidon2 calls. A standard Falcon-512 signature does not verify; `tools/falcon512` signs under
+  this HashToPoint. Decoding absorbs the key, once, ≈9.9K cycles; verifying a signature of a
+  64-byte message continues from there, ≈17.5K, and `key.digest()`, the key's KeyDigest, is one
+  permutation from there. `falcon512::key_digest(bytes)` is the KeyDigest of any bytes, and
+  `falcon512::s1_norm` the lattice check alone, for a guest with encodings of its own.
 - A precompile's frame is the guest's own memory below the advice region, which the SDK's calls
   always are: advice is copied in before `poseidon2_permute` hashes it, and a frame reaching the
   advice is the fatal `OutOfBounds`. A path's siblings and `s1_norm`'s arrays are not a frame:
@@ -214,7 +218,9 @@ proved, which no snapshot holds.
 `guests/amazon` is the two-table case, its users and its listings two tables of `2^20` slots and
 its snapshot `compress(users_root, listings_root)`, and it opens each record once: its actions are
 purchases, each a 64-byte request its buyer signed with Falcon-512 (§3.1), settled against a
-working set in memory, so a seller may spend later in a batch what it earned earlier in it. The
+working set in memory, so a seller may spend later in a batch what it earned earlier in it. A
+user's record holds its key's KeyDigest, checked from the one absorption of the key that each of
+the user's signatures continues from. The
 advice holds every record the batch reads, each once; after the batch each is verified once and,
 where it changed, written back once, its path under its table's root as the writes before it left
 it, and no record is opened per purchase.

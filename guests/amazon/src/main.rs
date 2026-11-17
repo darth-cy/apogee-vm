@@ -31,10 +31,12 @@
 //! signs with Falcon-512 under the key whose digest the buyer's record holds,
 //! the buyer's nonce and the store's market id inside it, so a request spends
 //! its nonce at most once, and in one store. A key is advised beside its
-//! user's record, checked against the record's digest and decoded when its
-//! user first signs, and kept for the user's later requests.
-//! [`PublicKey::verify`] is the SDK's: its lattice check is the Falcon-512
-//! precompile, and HashToPoint's permutations the Keccak-f[1600] one.
+//! user's record and read when its user first signs: decoded, its digest
+//! checked against the record's, and kept for the user's later requests. Its
+//! bytes are absorbed once, into the sponge its digest and every HashToPoint
+//! of its user's signatures continue from. [`PublicKey::verify`] is the SDK's:
+//! its lattice check is the Falcon-512 precompile, and HashToPoint's
+//! permutations Poseidon2's.
 //!
 //! **The order is the sequencer's.** The guest settles the requests in the
 //! order the batch gives and never sorts. A buyer's nonces order its own
@@ -67,10 +69,11 @@
 //! is paid. An empty slot holds the all-zero record: a user with no account, a
 //! listing with no stock.
 //!
-//! A key's digest is a fold over its 897 bytes packed seven to a lane, 129
-//! lanes and seven zeros, seventeen blocks of eight: `d = block 0`, then `d =
-//! compress(d, block i)` for `i` in `1..17`. Every key is that long, so the
-//! zeros are no second encoding of a shorter one.
+//! A key's digest is its KeyDigest (`docs/spec/precompiles.md` §8.7): the
+//! first eight lanes HashToPoint's sponge squeezes after the context, the
+//! key's bytes and an empty field tagged 5. It is defined for any bytes: an
+//! advised key that does not decode is checked against its record all the
+//! same, and its user's requests are rejected.
 //!
 //! The tags do not keep a leaf's preimage apart from a node's: a node
 //! compresses any two digests, and a leaf's sixteen lanes are two digests as
@@ -161,7 +164,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use constants::guest_memory;
-use guest_sdk::falcon512::{PublicKey, PUBLIC_KEY_BYTES, SIGNATURE_BYTES};
+use guest_sdk::falcon512::{self, PublicKey, PUBLIC_KEY_BYTES, SIGNATURE_BYTES};
 use guest_sdk::{merkle_root, poseidon2_compress, Digest, U256};
 
 guest_sdk::entry!(main);
@@ -180,8 +183,6 @@ const MAX_REQUESTS: usize = (PAYLOAD - HEADER) / REQUEST;
 /// The tag lanes naming a user's encoding and a listing's.
 const USER_TAG: u64 = 1;
 const LISTING_TAG: u64 = 2;
-/// A public key's blocks: its bytes packed seven to a lane, eight lanes each.
-const KEY_BLOCKS: usize = PUBLIC_KEY_BYTES.div_ceil(7).div_ceil(8);
 
 // A user's balance and nonce pack into six lanes, a listing into eight.
 const _: () = assert!((USER - 64).div_ceil(7) == 6 && LISTING.div_ceil(7) == 8);
@@ -413,29 +414,26 @@ impl<'a> Store<'a> {
 }
 
 /// Whether `signature` signs `message` under the key of the user whose record
-/// holds `digest`: the advised bytes checked against `digest` and decoded the
-/// first time, the key they decoded to each time.
+/// holds `digest`: the advised bytes decoded and their digest checked against
+/// `digest` the first time, from the decoded key where they decode, and the key
+/// they decoded to each time.
 fn verifies(key: &mut Key, digest: &Digest, message: &[u8], signature: &[u8]) -> bool {
     if let Key::Advised(bytes) = *key {
+        let decoded = PublicKey::decode(bytes);
+        let advised = match &decoded {
+            Some(key) => key.digest(),
+            None => falcon512::key_digest(bytes),
+        };
         assert!(
-            key_digest(bytes) == *digest,
+            advised == *digest,
             "amazon: an advised key is not its user's"
         );
-        *key = PublicKey::decode(bytes).map_or(Key::Malformed, |k| Key::Decoded(Box::new(k)));
+        *key = decoded.map_or(Key::Malformed, |k| Key::Decoded(Box::new(k)));
     }
     match key {
         Key::Decoded(key) => key.verify(message, signature),
         _ => false,
     }
-}
-
-/// A public key's digest: its bytes packed seven to a lane, eight lanes a
-/// block, the blocks folded by [`poseidon2_compress`] from the first.
-fn key_digest(key: &[u8]) -> Digest {
-    let mut lanes = [0u64; 8 * KEY_BLOCKS];
-    pack(key, &mut lanes);
-    let block = |i: usize| digest(&lanes[8 * i..8 * i + 8]);
-    (1..KEY_BLOCKS).fold(block(0), |d, i| poseidon2_compress(&d, &block(i)))
 }
 
 /// Where `slot`'s record is in `held`, or a panic: the batch reads a record
