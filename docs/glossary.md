@@ -26,7 +26,7 @@ the literature fixes (GKR, LogUp, RISC-V) are not listed.
 | discharge | the rule that each lookup is one leaf of its tree | [lookup.md §11](spec/lookup.md) |
 | enforcing, producing | a gate vanishing on every row; one writing the next layer | [gkr.md §1](spec/gkr.md) |
 | extra mask, kind, kind bit | `family_extra_mask` = `1 << kind`, a kind being a mnemonic's index; `b_k` its bit | [program.md §6](spec/program.md) |
-| family | a circuit and the rows it proves: instructions (0–6), memory locations (7–11) or precompile calls (12–14) | [circuits.md §1](spec/circuits.md) |
+| family | a circuit and the rows it proves: instructions (0–6), memory locations (7–11) or precompile calls (12–23) | [circuits.md §1](spec/circuits.md) |
 | frame | an execution family's queries; a precompile call's RAM words, which its frame family's row reads and writes | [memory.md §2](spec/memory.md), [precompiles.md §1](spec/precompiles.md) |
 | gate list, row-wise, halving | the gates from layer `k` to `k + 1`, keeping the height or halving it | [gkr.md §1](spec/gkr.md) |
 | gated key, neutral tuple | a lookup tuple under its selector; off, it reads a neutral table row | [lookup.md §4](spec/lookup.md) |

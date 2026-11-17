@@ -12,7 +12,7 @@ directory below the root.
 
 A guest is an Apogee-SDK program, not a Linux one: no file descriptors, streams, clock, entropy or
 diagnostic output. Its public input, its journal and the prover's advice are memory, read and
-written with ordinary loads and stores, and its only ecalls are `EXIT` and the three precompiles the
+written with ordinary loads and stores, and its only ecalls are `EXIT` and the five precompiles the
 SDK calls (§3.1). Any other number answers `-ENOSYS` and leaves the run unprovable
 ([ecall-abi.md](spec/ecall-abi.md) §4).
 
@@ -48,7 +48,7 @@ fn main() {
 and append it to the list in `guests/Cargo.toml`:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "public-io", "precompiles", "marketplace", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "public-io", "precompiles", "marketplace", "amazon", "hello"]
 ```
 
 - `#![no_std]`: the target is bare metal. `extern crate alloc;` adds `Vec`, `Box` and `String`
@@ -65,6 +65,7 @@ The guests in the tree are worked examples:
 | `fib` | the smallest SDK guest: a `u32` in, a `u32` out |
 | `echo`, `heap` | the allocator: advice copied through heap buffers, `Vec` and `Box` churn |
 | `amm`, `orderbook` | 128- and 256-bit integers with no heap; `BTreeMap`, sorting, a sorted order from advice checked |
+| `marketplace`, `amazon` | a database a proof follows by digest, one table and two (§3.3); requests signed with Falcon-512 (§3.1) |
 | `atomics`, `opcodes`, `rvc-dense` | the A extension from `core::sync::atomic`; every RV64IMAC instruction; RVC expansion |
 | `addsub`, `control`, `alu`, `mem`, `shards` | assembly with its own `_start` and no SDK, exiting with its result; `shards` fills two `2^20` shards |
 | `cpp-primes` | a C++ guest, built by CMake against the C/C++ SDK (§11) |
@@ -119,16 +120,19 @@ fn main() {
 
 ### 3.1 Precompiles and `U256`
 
-Three operations are not RV64IMAC code but a circuit each, which a guest reaches through the SDK
+Five operations are not RV64IMAC code but a circuit each, which a guest reaches through the SDK
 ([precompiles.md](spec/precompiles.md)): the Poseidon2-A64-C5 permutation, the 256-bit `mul_div`
-that a token balance's arithmetic is built on, and a Merkle path's root.
+that a token balance's arithmetic is built on, a Merkle path's root, the Keccak-f[1600] permutation
+and Falcon-512's lattice check.
 
 ```rust
-use guest_sdk::{merkle_root, poseidon2_compress, Digest, U256};
+use guest_sdk::{falcon512::PublicKey, merkle_root, poseidon2_compress, Digest, U256};
 
 let leaf = poseidon2_compress(&left, &right); // a node over two Digests, each lane below p
 let root = merkle_root(slot, &leaf, &advice[at..at + 64 * 20]); // a 20-level path, read in place
 let share = U256::from(amount).mul_div(U256::from(total), U256::from(reserve)); // Option<U256>
+let key = PublicKey::decode(key_bytes).expect("a key"); // Falcon-512's 897 bytes, v1.2
+let signed = key.verify(&request, sig); // a 666-byte signature of the request's bytes
 ```
 
 - `U256` is four `u64` limbs, least significant first, with `from_be_bytes` for an EVM word. Its
@@ -143,10 +147,18 @@ let share = U256::from(amount).mul_div(U256::from(total), U256::from(reserve)); 
   where the slot's bit is 0, and each sibling lane is read mod `p`, so a path needs no decoding. It
   costs a level row and sixteen round rows a level and no guest cycles; `Digest::bytes(&path)`
   passes a path the guest holds itself.
+- `keccak_f1600(&mut state)` is FIPS 202's Keccak-f[1600] of 25 `u64` lanes, in place, the
+  permutation under every SHA-3 and SHAKE hash; `Shake256` is SHAKE256 over it: `absorb` bytes,
+  `finalize`, then `squeeze` any number.
+- `falcon512::PublicKey::decode(bytes)` reads a Falcon-512 public key, v1.2 of the specification,
+  and `key.verify(msg, sig)` is whether `sig` signs `msg` under it, a malformed signature `false`:
+  the lattice check is the Falcon-512 call and HashToPoint's permutations are Keccak calls. Decoding
+  a key costs ≈5.7K cycles and verifying a signature of a 64-byte message ≈18.9K, against ≈348K in
+  software. `falcon512::s1_norm` is the lattice check alone, for a guest with encodings of its own.
 - A precompile's frame is the guest's own memory below the advice region, which the SDK's calls
   always are: advice is copied in before `poseidon2_permute` hashes it, and a frame reaching the
-  advice is the fatal `OutOfBounds`. A path's siblings are not a frame: `merkle_root` reads an
-  advised path where it lies.
+  advice is the fatal `OutOfBounds`. A path's siblings and `s1_norm`'s arrays are not a frame:
+  `merkle_root` and `s1_norm` read an advised path or array where it lies.
 - A guest that links a precompile pays one shard of each family it declares, at `2^16` rows: worth
   it once the call replaces more instructions than that ([circuits.md](spec/circuits.md) §1).
 - `guests/marketplace` is the worked example of a table a proof follows by its root: a listings
@@ -168,7 +180,9 @@ Cutting a guest's cycles has more than one strategy, and two are in use:
   however long the run, so a batch with each listing's operations gathered is one proof a listing.
   The order is the sequencer's policy and becomes part of the batch: the guest proves the order it
   is given and never sorts. Any order is valid input, at a proof a run, and another order can be
-  another result.
+  another result. `guests/amazon`'s advice holds each record its batch reads once, slots
+  ascending, so its batch runs in memory and a record costs one opening and at most one write-back
+  however its requests interleave: there the order costs nothing (§3.3).
 
 ### 3.3 A database's state
 
@@ -183,6 +197,10 @@ keeps it the same way from here on. This is the common convention for an on-chai
   encoding, an empty slot the empty record's, and every node `poseidon2_compress` of its children,
   so `merkle_root` opens a record by its path from the advice and writes it back along the same
   path (§3.1).
+- **Each record opened once.** A batch runs against a working set in memory: the advice holds
+  every record the batch reads, each once, and the actions read and change the records there. After
+  the batch each record is verified once and, where it changed, written back once, its path under
+  its table's root as the writes before it left it; a record is not opened per action.
 - **The state is one digest.** The global state hash, the snapshot, is the hash of the tables' roots
   concatenated in the schema's fixed order, absorbed one root at a time:
   `compress(… compress(compress(root_1, root_2), root_3) …, root_k)`; a guest with one table
@@ -196,6 +214,11 @@ keeps it the same way from here on. This is the common convention for an on-chai
 `guests/marketplace` is the one-table case: its listings are state records under one root, which is
 its snapshot, and its operations are actions; its journal's tallies summarize the actions it
 proved, which no snapshot holds.
+
+`guests/amazon` is the two-table case, its users and its listings two tables of `2^20` slots and
+its snapshot `compress(users_root, listings_root)`, and it opens each record once: its actions are
+purchases, each a 64-byte request its buyer signed with Falcon-512 (§3.1), settled against its
+working set, so a seller may spend later in a batch what it earned earlier in it.
 
 ## 4. Build it
 
