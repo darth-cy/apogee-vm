@@ -1254,10 +1254,9 @@ mod amazon {
     }
 
     impl Model {
-        /// `r`'s outcome and why, its nonce spent and the tables moved where
-        /// it applies; or, for a request that is not valid, a panic, as the
-        /// guest's.
-        pub fn settle(&mut self, r: &Request, market: u64) -> &'static str {
+        /// `r` applied, its nonce spent and the tables moved; or, for a request
+        /// that is not valid or does not apply, a panic, as the guest's.
+        pub fn settle(&mut self, r: &Request, market: u64) {
             assert!(r.market == market, "a request for another market");
             assert!(r.buyer != NO_ACCOUNT, "a request from the zero address");
             self.read_users.insert(r.buyer);
@@ -1265,40 +1264,39 @@ mod amazon {
             assert!(r.nonce != u64::MAX, "a request at the last nonce");
             assert!(r.nonce == buyer.nonce, "a request not at its buyer's nonce");
             self.users.get_mut(&r.buyer).expect("an account").nonce += 1;
-            self.purchase(r, buyer)
+            self.purchase(r, buyer);
         }
 
         /// `r`'s purchase by `buyer`, its nonce spent: applied, the tables
-        /// moved, or declined, and why.
-        fn purchase(&mut self, r: &Request, buyer: User) -> &'static str {
+        /// moved, or a panic.
+        fn purchase(&mut self, r: &Request, buyer: User) {
             self.read_listings.insert(r.listing);
             let listing = self.listings.get(&r.listing).copied().unwrap_or_default();
-            if r.quantity == 0 || r.quantity > listing.stock {
-                return "declined: not in stock";
-            }
-            if listing.price > r.max_price {
-                return "declined: above the max price";
-            }
-            if listing.seller == r.buyer {
-                return "declined: the buyer's own";
-            }
-            if listing.seller == NO_ACCOUNT {
-                return "declined: a seller with no account";
-            }
-            let Some(cost) = listing.price.checked_mul(r.quantity) else {
-                return "declined: a cost past 2^256";
-            };
-            if cost > buyer.balance {
-                return "declined: above the balance";
-            }
+            assert!(
+                r.quantity != 0 && r.quantity <= listing.stock,
+                "a quantity of 0 or more than the stock"
+            );
+            assert!(listing.price <= r.max_price, "a price above the max price");
+            assert!(
+                listing.seller != r.buyer,
+                "a purchase of the buyer's own listing"
+            );
+            assert!(listing.seller != NO_ACCOUNT, "a seller with no account");
+            let cost = listing
+                .price
+                .checked_mul(r.quantity)
+                .expect("a cost past 2^256");
+            assert!(cost <= buyer.balance, "a cost above the buyer's balance");
             self.read_users.insert(listing.seller);
             let seller = self.users[&listing.seller];
-            let Some(paid) = seller.balance.checked_add(cost) else {
-                return "declined: the seller's balance past 2^256";
-            };
-            let Some(volume) = self.volume.checked_add(cost) else {
-                return "declined: the volume past 2^256";
-            };
+            let paid = seller
+                .balance
+                .checked_add(cost)
+                .expect("the seller's balance past 2^256");
+            let volume = self
+                .volume
+                .checked_add(cost)
+                .expect("the volume past 2^256");
             self.users.get_mut(&r.buyer).expect("an account").balance = buyer.balance.minus(cost);
             self.users
                 .get_mut(&listing.seller)
@@ -1306,7 +1304,6 @@ mod amazon {
                 .balance = paid;
             self.listings.get_mut(&r.listing).expect("in stock").stock -= r.quantity;
             self.volume = volume;
-            "applied"
         }
     }
 }
@@ -1317,29 +1314,29 @@ mod amazon {
 /// Forty users, each named by its key's address and each with a key from a
 /// seed of its own, in slots apart whose order is not their addresses'; and
 /// 22 listings, fourteen of 30 units
-/// and up sold by users who also buy; then 89 requests, sequenced by listing
+/// and up sold by users who also buy; then 77 requests, sequenced by listing
 /// as a sequencer gathering each listing's requests would, each buyer's
-/// nonces in the batch's order. Seventy-one purchases of one to three units
-/// apply, and so do the last unit of a listing of one, both of a listing of
-/// two, a seller's purchase paid for by a sale earlier in the batch, and a
-/// purchase at `2^255`. Twelve are declined, each its nonce spent: none asked
-/// for, more than the stock, the listings of one and of two once sold out, a
-/// vacant listing, a max price one below the price, the buyer's own listing,
-/// a seller with no account, the zero address, a cost past `2^256`, a cost
-/// past the balance, a seller's balance and the volume past `2^256`. Every
-/// request is signed by its buyer, new signatures each run, as signing is
-/// randomized. The advice holds what the batch reads and nothing else: the
-/// records it reads, then each request, its buyer's key at the buyer's first,
-/// and its signature, the key and the signature in the SDK's advised forms,
-/// converted as a host converts them. The journal is both snapshots, the two
-/// counts and the volume. The execution panics with a byte past the public
-/// input's market; with the first request from an address the advice does
-/// not hold, and, signed again by its signer, for another market, from the
-/// zero address, or at the nonce after its buyer's; with a request at the
-/// last nonce, its buyer's record advised; and with a byte after the advice's
-/// last path, a user no request reads, the first key another user's, the
-/// first signature one bit of its salt off, or its buyer's over another of
-/// its requests, and a user's balance one off. The decode call refuses the
+/// nonces in the batch's order. Each applies: seventy-one purchases of one to
+/// three units, the last unit of a listing of one, both of a listing of two,
+/// a seller's purchase paid for by a sale earlier in the batch, and a
+/// purchase at `2^255`. Every request is signed by its buyer, new signatures
+/// each run, as signing is randomized. The advice holds what the batch reads
+/// and nothing else: the records it reads, then each request, its buyer's key
+/// at the buyer's first, and its signature, the key and the signature in the
+/// SDK's advised forms, converted as a host converts them. The journal is
+/// both snapshots, the count of purchases and the volume. The execution
+/// panics with a byte past the public input's market; with the first request
+/// from an address the advice does not hold, and, signed again by its signer,
+/// for another market, from the zero address, or at the nonce after its
+/// buyer's; with a request at the last nonce, its buyer's record advised;
+/// with a request that does not apply, signed by its buyer and last in the
+/// batch: a unit of the listing of one once sold, a max price one below the
+/// price, the buyer's own listing, a seller with no account, a cost past
+/// `2^256`, a cost past the balance, or a seller's balance or the volume past
+/// `2^256`; and with a byte after the advice's last path, a user no request
+/// reads, the first key another user's, the first signature one bit of its
+/// salt off, or its buyer's over another of its requests, and a user's
+/// balance one off. The decode call refuses the
 /// first key with its first coefficient at least `q`, the first signature
 /// with its `s2` all zeros, and a signature with a one just after its end, in
 /// its last word. The first key left out, and the first signature a word
@@ -1462,24 +1459,12 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         })
         .collect();
     batch.extend([
-        (user(5), 0, 0, price(0)),
-        (user(7), 1, 1000, price(1)),
-        (user(11), 2, 1, price(2).minus(U256::small(1))),
-        (user(7), 3, 1, price(3)),
         (user(6), SINGLE, 1, price(SINGLE)),
-        (user(8), SINGLE, 1, price(SINGLE)),
         (user(12), PAIR, 1, price(PAIR)),
         (user(14), PAIR, 1, price(PAIR)),
-        (user(16), PAIR, 1, price(PAIR)),
         (user(20), EARNS, 2, price(EARNS)),
         (user(EARNER), SPENDS, 1, price(SPENDS)),
-        (user(24), OVERFILLS, 1, price(OVERFILLS)),
-        (user(26), BIG, 2, half),
         (user(RICH[0]), BIG, 1, half),
-        (user(RICH[1]), BIG_TOO, 1, half),
-        (user(28), UNPAYABLE, 1, price(UNPAYABLE)),
-        (user(2), VACANT, 1, price(VACANT)),
-        (user(POOR), 13, 1, price(13)),
         (user(15), 6, 1, price(6)),
     ]);
     // The sequencer's order: each listing's requests together, in the order
@@ -1520,7 +1505,6 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     let mut signed_at = Vec::new();
     let mut signers = BTreeSet::new();
     let mut signatures = Vec::new();
-    let mut outcomes: BTreeMap<&str, u32> = BTreeMap::new();
     for &(buyer, j, quantity, max_price) in &batch {
         let request = Request {
             buyer,
@@ -1532,7 +1516,7 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         };
         let signature = sign(&secret[&buyer], &request.bytes(), CONTEXT);
         assert_eq!(signature.len(), 666);
-        *outcomes.entry(model.settle(&request, MARKET)).or_default() += 1;
+        model.settle(&request, MARKET);
         stream_at.push(stream.len());
         stream.extend(request.bytes());
         if signers.insert(buyer) {
@@ -1542,52 +1526,40 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         stream.extend(signature_advice(&signature).unwrap());
         signatures.push(signature);
     }
-    assert_eq!(
-        outcomes,
-        BTreeMap::from([
-            ("applied", 77),
-            ("declined: a cost past 2^256", 1),
-            ("declined: a seller with no account", 1),
-            ("declined: above the balance", 1),
-            ("declined: above the max price", 1),
-            ("declined: not in stock", 5),
-            ("declined: the buyer's own", 1),
-            ("declined: the seller's balance past 2^256", 1),
-            ("declined: the volume past 2^256", 1),
-        ]),
-        "the batch is each case it claims"
-    );
+    // The model panics at a request that does not apply.
+    assert_eq!(batch.len(), 77, "the batch is each case it claims");
 
-    // The advice for the users `advised` and the `n` requests of `stream`:
-    // the roots, each user's record as the snapshot holds it, by address, and
-    // each listing the batch reads, by slot; `n`, then the stream; and a path
-    // a record, each under its table as the records before it left it. And
-    // where the stream starts, and the snapshot the paths write.
-    let advice_for = |advised: &BTreeSet<Address>, n: usize, stream: &[u8]| {
+    // The advice for the users `held`, the listings at the slots `listed` and
+    // the `n` requests of `stream`: the roots, each user's record as the
+    // snapshot holds it, by address, and each listing's, by slot; `n`, then
+    // the stream; and a path a record, each under its table as the records
+    // before it left it. And where the stream starts, and the snapshot the
+    // paths write.
+    let advice_for = |held: &BTreeSet<Address>, listed: &BTreeSet<u32>, n: usize, stream: &[u8]| {
         let (mut user_tree, mut listing_tree) = tables(&users, &listings);
         let mut advice: Vec<u8> = roots
             .iter()
             .flatten()
             .flat_map(|l| l.to_le_bytes())
             .collect();
-        advice.extend((advised.len() as u32).to_le_bytes());
-        for a in advised {
+        advice.extend((held.len() as u32).to_le_bytes());
+        for a in held {
             advice.extend(slots[a].to_le_bytes());
             advice.extend(users[a].bytes());
         }
-        advice.extend((model.read_listings.len() as u32).to_le_bytes());
-        for slot in &model.read_listings {
+        advice.extend((listed.len() as u32).to_le_bytes());
+        for slot in listed {
             advice.extend(slot.to_le_bytes());
             advice.extend(listings.get(slot).copied().unwrap_or_default().bytes());
         }
         advice.extend((n as u32).to_le_bytes());
         let batch_at = advice.len();
         advice.extend(stream);
-        for a in advised {
+        for a in held {
             advice.extend(user_tree.path(slots[a]));
             user_tree.set(slots[a], model.users[a].leaf());
         }
-        for slot in &model.read_listings {
+        for slot in listed {
             advice.extend(listing_tree.path(*slot));
             let l = model.listings.get(slot).copied().unwrap_or_default();
             listing_tree.set(*slot, l.leaf());
@@ -1595,7 +1567,12 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         let after = compress(&user_tree.root(), &listing_tree.root());
         (advice, batch_at, after)
     };
-    let (advice, batch_at, after) = advice_for(&model.read_users, batch.len(), &stream);
+    let (advice, batch_at, after) = advice_for(
+        &model.read_users,
+        &model.read_listings,
+        batch.len(),
+        &stream,
+    );
     // Every request, key and signature is a whole number of words, so every
     // one and every path is on a word where the stream is.
     assert!(
@@ -1614,14 +1591,7 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         .chain(&after)
         .flat_map(|l| l.to_le_bytes())
         .collect();
-    for outcome in ["applied", "declined"] {
-        let count: u32 = outcomes
-            .iter()
-            .filter(|(why, _)| why.starts_with(outcome))
-            .map(|(_, n)| n)
-            .sum();
-        journal.extend(count.to_le_bytes());
-    }
+    journal.extend((batch.len() as u32).to_le_bytes());
     journal.extend(model.volume.le_bytes());
     let image = image("amazon");
     let e = run(&image, &common::with_advice(&input, &advice)).unwrap();
@@ -1681,7 +1651,10 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     let mut idle = model.read_users.clone();
     assert!(idle.insert(user(IDLE)), "no request reads it");
     assert!(
-        panics(&input, &advice_for(&idle, batch.len(), &stream).0),
+        panics(
+            &input,
+            &advice_for(&idle, &model.read_listings, batch.len(), &stream).0
+        ),
         "a record the batch does not read"
     );
 
@@ -1761,9 +1734,59 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     requests.extend(signature_advice(&sign(&secret[&last.buyer], &last.bytes(), CONTEXT)).unwrap());
     requests.extend(&stream);
     assert!(
-        panics(&input, &advice_for(&advised, batch.len() + 1, &requests).0),
+        panics(
+            &input,
+            &advice_for(&advised, &model.read_listings, batch.len() + 1, &requests).0
+        ),
         "a request at the last nonce"
     );
+
+    // A request that does not apply, its buyer's at the buyer's nonce after
+    // the batch, signed, last in the batch, its buyer's key with it where the
+    // buyer has no request before it, and the records it reads advised: one
+    // for each reason a purchase cannot apply, a unit of a listing of one
+    // once sold, a max price one below the price, the buyer's own listing, a
+    // seller with no account, a cost past `2^256`, a cost past the balance,
+    // and a seller's balance and the volume past `2^256`. Each is a malformed
+    // batch.
+    let appended = |(buyer, j, quantity, max_price): (Address, usize, u64, U256)| {
+        let r = Request {
+            buyer,
+            listing: listing(j),
+            quantity,
+            max_price,
+            nonce: model.users[&buyer].nonce,
+            market: MARKET,
+        };
+        let mut requests = stream.clone();
+        requests.extend(r.bytes());
+        if !signers.contains(&buyer) {
+            requests.extend(key_advice(&keys[&buyer]).unwrap());
+        }
+        requests.extend(signature_advice(&sign(&secret[&buyer], &r.bytes(), CONTEXT)).unwrap());
+        let mut advised = model.read_users.clone();
+        let seller = listings[&r.listing].seller;
+        advised.extend([buyer, seller].into_iter().filter(|&a| a != NO_ACCOUNT));
+        let mut advised_listings = model.read_listings.clone();
+        advised_listings.insert(r.listing);
+        advice_for(&advised, &advised_listings, batch.len() + 1, &requests).0
+    };
+    for request in [
+        (user(8), SINGLE, 1, price(SINGLE)),
+        (user(11), 2, 1, price(2).minus(U256::small(1))),
+        (user(7), 3, 1, price(3)),
+        (user(28), UNPAYABLE, 1, price(UNPAYABLE)),
+        (user(26), BIG, 2, half),
+        (user(POOR), 13, 1, price(13)),
+        (user(24), OVERFILLS, 1, price(OVERFILLS)),
+        (user(RICH[1]), BIG_TOO, 1, half),
+    ] {
+        assert!(
+            panics(&input, &appended(request)),
+            "a request for listing {} that does not apply",
+            request.1
+        );
+    }
 
     // The first request's signature, one bit of its salt flipped.
     let mut flipped = advice.clone();

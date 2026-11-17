@@ -240,10 +240,11 @@ first signature must have that address, computed from the same bytes the user's 
 verified under. The requests and their signatures are advice the prover chooses (§3), and the
 public input is the snapshot and the market alone: the statement is that signed requests, each its
 buyer's at that buyer's nonce, take the snapshot to the next. So a proof does not say which requests
-a batch settled, only that each was signed and valid for this store and snapshot. A request for
-another market, from the zero address or not at its buyer's nonce, or one whose signature does not
-verify under its buyer's key, is a malformed batch, a panic. The sequencer checks the requests and
-their signatures before it batches them and drops each one that is not valid, as a rollup's block
+a batch settled, only that each was signed and valid for this store and snapshot. Every request in
+a batch applies: one for another market, from the zero address or not at its buyer's nonce, one
+whose signature does not verify under its buyer's key, or one its listing or the balances cannot
+settle is a malformed batch, a panic. The sequencer checks the requests and their signatures and
+drops each one that cannot apply before it batches them, as a rollup's block
 producer does. The advice holds every record the batch reads and no other, each once, the users
 ascending by address, each with its slot; after the batch each is verified once and, where it
 changed, written back once, its path under its table's root as the writes before it left it, and no

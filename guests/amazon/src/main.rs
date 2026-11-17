@@ -52,10 +52,11 @@
 //! requests and their signatures are advice the prover chooses, so the proof
 //! does not say which requests a batch settled, only that each one was signed
 //! and valid for this store and snapshot: no one but its buyer can sign a
-//! request. A request that is not valid, or whose signature does not verify
-//! under its buyer's key, is a malformed batch, a panic, never an outcome. The
-//! sequencer checks the requests and their signatures before it batches them
-//! and drops each one that is not valid, as a rollup's block producer does.
+//! request. Every request in a batch applies. One that cannot, or whose
+//! signature does not verify under its buyer's key, is a malformed batch, a
+//! panic, never an outcome. The sequencer checks the requests and their
+//! signatures and drops each one that cannot apply before it batches them, as
+//! a rollup's block producer does.
 //!
 //! **Until the users are keyed by address.** The users table is `2^DEPTH`
 //! slots, not yet a table keyed by address, and two assumptions stand in for
@@ -172,18 +173,16 @@
 //! Each request in turn, against the records as the requests before it left
 //! them. Its market is the public input's, its buyer is not the zero address,
 //! no account, and its nonce is the buyer's and not `2^64 − 1`, which leaves
-//! none after it; and its signature, after its buyer's key at the buyer's
-//! first request, verifies under the buyer's key and the context. Otherwise
-//! the batch is malformed and the execution ends. Then the buyer's
-//! nonce is spent, and the purchase is **applied** where the listing holds the
-//! quantity, at least one unit, at a price no more than the max price, for a
-//! seller who is not the buyer and has an account, an address not zero, at a
-//! cost, `price · quantity`, below `2^256` and no more than the buyer's
-//! balance, that takes neither the seller's balance nor the batch's volume to
-//! `2^256`: the cost moves from the buyer's balance to the seller's, the
-//! quantity leaves the stock, and the cost joins the volume. Otherwise it is
-//! **declined**, and nothing changes but the nonce: spending it is what keeps
-//! a declined request from being replayed later.
+//! none after it; its signature, after its buyer's key at the buyer's first
+//! request, verifies under the buyer's key and the context; and the listing
+//! holds the quantity, at least one unit, at a price no more than the max
+//! price, for a seller who is not the buyer and has an account, an address
+//! not zero, at a cost, `price · quantity`, below `2^256` and no more than
+//! the buyer's balance, that takes neither the seller's balance nor the
+//! batch's volume to `2^256`. Otherwise the batch is malformed and the
+//! execution ends. The request is **applied**: the buyer's nonce is spent,
+//! the cost moves from the buyer's balance to the seller's, the quantity
+//! leaves the stock, and the cost joins the volume.
 //!
 //! A record is read where a check first needs it: the buyer's once the market
 //! matches and the address is not zero, the listing's once the nonce is
@@ -197,9 +196,8 @@
 //! ```text
 //!            0..64   the snapshot before the batch
 //!           64..128  the snapshot after it
-//!          128..132  applied   u32
-//!          132..136  declined  u32
-//!          136..168  volume    U256 LE: the applied purchases' cost
+//!          128..132  purchases u32: n, as every request applies
+//!          132..164  volume    U256 LE: the purchases' cost
 //! ```
 //!
 //! A public input that is not 72 bytes, a request that is not valid, advice
@@ -226,7 +224,7 @@ const USER: usize = 72;
 const LISTING: usize = 80;
 const INPUT: usize = 72;
 const REQUEST: usize = 92;
-const JOURNAL: usize = 168;
+const JOURNAL: usize = 164;
 
 // Every advised entry is a whole number of words, a signature's by the SDK's
 // form, so each request starts on a word, as do each key, each signature and
@@ -368,13 +366,6 @@ impl Request {
     }
 }
 
-/// A request's outcome, its counter's place in the journal.
-#[derive(Clone, Copy)]
-enum Outcome {
-    Applied,
-    Declined,
-}
-
 /// The working set: every record the advice holds, as opened and as the
 /// requests so far leave it, each user's key once the user has signed, and
 /// the volume so far.
@@ -422,7 +413,7 @@ impl Store {
     /// entries after it, its buyer's key at the buyer's first request and then
     /// its signature, are the buyer's, `at` moved past them all, or a panic,
     /// or the decode call's refusal.
-    fn settle(&mut self, market: u64, advice: &[u8], at: &mut usize) -> Outcome {
+    fn settle(&mut self, market: u64, advice: &[u8], at: &mut usize) {
         let message = take(advice, at, REQUEST);
         let r = Request::decode(message);
         assert!(
@@ -460,31 +451,44 @@ impl Store {
 
         let l = find(&mut self.listings, &r.listing, |h| &h.slot);
         let listing = self.listings[l].now;
-        let cost = match listing.price.checked_mul(U256::from(r.quantity)) {
-            Some(cost)
-                if (1..=listing.stock).contains(&r.quantity)
-                    && listing.price <= r.max_price
-                    && listing.seller != r.buyer
-                    && listing.seller != NO_ACCOUNT
-                    && cost <= buyer.balance =>
-            {
-                cost
-            }
-            _ => return Outcome::Declined,
-        };
+        assert!(
+            (1..=listing.stock).contains(&r.quantity),
+            "amazon: a quantity of 0 or more than the stock"
+        );
+        assert!(
+            listing.price <= r.max_price,
+            "amazon: a price above the max price"
+        );
+        assert!(
+            listing.seller != r.buyer,
+            "amazon: a purchase of the buyer's own listing"
+        );
+        assert!(
+            listing.seller != NO_ACCOUNT,
+            "amazon: a seller with no account"
+        );
+        let cost = listing
+            .price
+            .checked_mul(U256::from(r.quantity))
+            .expect("amazon: a cost past 2^256");
+        assert!(
+            cost <= buyer.balance,
+            "amazon: a cost above the buyer's balance"
+        );
         let s = find(&mut self.users, &listing.seller, |h| &h.opened.address);
         let seller = self.users[s].now;
-        let (Some(paid), Some(volume)) = (
-            seller.balance.checked_add(cost),
-            self.volume.checked_add(cost),
-        ) else {
-            return Outcome::Declined;
-        };
+        let paid = seller
+            .balance
+            .checked_add(cost)
+            .expect("amazon: the seller's balance past 2^256");
+        let volume = self
+            .volume
+            .checked_add(cost)
+            .expect("amazon: the volume past 2^256");
         self.users[b].now.balance = buyer.balance - cost;
         self.users[s].now.balance = paid;
         self.listings[l].now.stock = listing.stock - r.quantity;
         self.volume = volume;
-        Outcome::Applied
     }
 }
 
@@ -544,10 +548,9 @@ fn main() {
         "amazon: the advised roots are not the snapshot"
     );
     let mut store = Store::read(advice, &mut at);
-    let mut counts = [0u32; 2];
     let n = u32_at(take(advice, &mut at, 4), 0);
     for _ in 0..n {
-        counts[store.settle(market, advice, &mut at) as usize] += 1;
+        store.settle(market, advice, &mut at);
     }
     let users = write_back(&store.users, users_root, advice, &mut at);
     let listings = write_back(&store.listings, listings_root, advice, &mut at);
@@ -561,10 +564,8 @@ fn main() {
     for (i, lane) in before.lanes().iter().chain(after.lanes()).enumerate() {
         out[8 * i..8 * i + 8].copy_from_slice(&lane.to_le_bytes());
     }
-    for (i, count) in counts.iter().enumerate() {
-        out[128 + 4 * i..132 + 4 * i].copy_from_slice(&count.to_le_bytes());
-    }
-    out[136..].copy_from_slice(&store.volume.to_le_bytes());
+    out[128..132].copy_from_slice(&n.to_le_bytes());
+    out[132..].copy_from_slice(&store.volume.to_le_bytes());
     guest_sdk::commit(&out);
 }
 
