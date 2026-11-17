@@ -1477,6 +1477,9 @@ impl<'a> Recorder<'a> {
                             self.flush_calls(at);
                         }
                     }
+                    // UNFINISHED: FALCON512's arrays; no call reaches here
+                    // while `frame_function` has no FALCON arm.
+                    Per::Arrays => unreachable!("emulator: no call records arrays yet"),
                 }
             }
         }

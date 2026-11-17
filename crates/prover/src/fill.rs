@@ -178,6 +178,9 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
         family::KECCAK => Some(keccak),
         family::KECCAK_RHO => Some(keccak_rho),
         family::KECCAK_CHI => Some(keccak_chi),
+        family::FALCON => Some(falcon),
+        family::FALCON_SPLIT => Some(falcon_split),
+        family::FALCON_PRODUCT => Some(falcon_product),
         _ => None,
     }
 }
@@ -903,6 +906,283 @@ fn keccak_chi(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, 
                 if next {
                     put_lanes(&mut w, &s, r, rot1_split(parity));
                     put_lanes(&mut w, &d, r, rounds[t + 1].d);
+                }
+            }
+        }
+    }
+    Ok(w.finish(src.height))
+}
+
+// ---------------------------------------------------------------------------
+// Falcon-512
+// ---------------------------------------------------------------------------
+
+/// One `FALCON512` call as `constraints::falcon` splits it, from its arrays
+/// entry's words: each chain's halfwords, `s1`, and every residue.
+struct FalconCall {
+    /// Chain `P`'s coefficient `t`, its array's halfword `t` as read.
+    v: [[u64; delegation::falcon::N]; 3],
+    /// `(c − s2·h) mod (q, x^512 + 1)`, centered to `[−6144, 6144]`.
+    s1: [i64; delegation::falcon::N],
+    /// `sum[P][r][j] = Σ_m V[r][m]·(v_P − s_P)_{32m + j}` over the integers,
+    /// `s_P` being `s1` on chain `c` and 0 on the others.
+    sum: [[[i64; constraints::falcon::DEGREE]; constraints::falcon::RESIDUES]; 3],
+}
+
+impl FalconCall {
+    /// Coefficient `t` of what chain `p` splits off its array.
+    fn s(&self, p: usize, t: usize) -> i64 {
+        match delegation::falcon::CHAINS[p] == delegation::falcon::C {
+            true => self.s1[t],
+            false => 0,
+        }
+    }
+
+    /// Residue `r`'s coefficient `j` of chain `p`, in `[0, q)`.
+    fn residue(&self, p: usize, r: usize, j: usize) -> u64 {
+        self.sum[p][r][j].rem_euclid(delegation::falcon::Q as i64) as u64
+    }
+}
+
+/// Entry `e`'s call: its 768 words split into halfwords, `s1` schoolbook mod
+/// `q` and every residue sum.
+fn falcon_call(calls: &FrameSlice, e: usize) -> FalconCall {
+    use constants::delegation::falcon::{ARRAY, N, Q};
+    use constraints::falcon::{BLOCKS, BOUND, DEGREE, RESIDUES, V};
+    let mut v = [[0u64; N]; 3];
+    for (p, chain) in v.iter_mut().enumerate() {
+        for i in 0..ARRAY {
+            let word = calls.word(ARRAY * p + i);
+            assert_eq!(
+                word.write_value[e],
+                word.read_value[e],
+                "cycle {}: FALCON512 wrote a word of its arrays",
+                calls.cycles()[e]
+            );
+            chain[2 * i] = word.read_value[e] & 0xffff;
+            chain[2 * i + 1] = word.read_value[e] >> 16;
+        }
+    }
+    let q = Q as i64;
+    let (s2, h, c) = (&v[0], &v[1], &v[2]);
+    let mut product = [0i64; N];
+    for (i, si) in s2.iter().enumerate() {
+        for (j, hj) in h.iter().enumerate() {
+            let t = ((si % Q) * (hj % Q)) as i64;
+            match i + j < N {
+                true => product[i + j] += t,
+                false => product[i + j - N] -= t,
+            }
+        }
+    }
+    let s1: [i64; N] = std::array::from_fn(|t| {
+        let x = (c[t] as i64 - product[t]).rem_euclid(q);
+        if x > BOUND as i64 {
+            x - q
+        } else {
+            x
+        }
+    });
+    let mut call = FalconCall {
+        v,
+        s1,
+        sum: [[[0; DEGREE]; RESIDUES]; 3],
+    };
+    call.sum = std::array::from_fn(|p| {
+        std::array::from_fn(|r| {
+            std::array::from_fn(|j| {
+                (0..BLOCKS)
+                    .map(|m| {
+                        let t = DEGREE * m + j;
+                        V[r][m] as i64 * (call.v[p][t] as i64 - call.s(p, t))
+                    })
+                    .sum()
+            })
+        })
+    });
+    call
+}
+
+/// `FALCON`, `constraints::falcon`: the frame, the norm's halfword and its
+/// value, each chain's start stamp and its end's pointer.
+fn falcon(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constants::delegation::falcon::{CHAINS, NORM_HI, NORM_LO};
+    use constraints::falcon::{start, COLUMNS};
+    let fam = family::FALCON;
+    let (calls, mut w) = frame_fill(src, fam)?;
+    let [n, n_lo] = ["n", "n_lo_h16"].map(|c| w.col(c));
+    let chains: Vec<[usize; 2]> = (0..CHAINS.len())
+        .map(|p| [w.col(&format!("st{p}")), w.col(&format!("end{p}"))])
+        .collect();
+    for r in 0..calls.len() {
+        let (lo, hi) = (
+            frame_word(&calls, NORM_LO, r, true),
+            frame_word(&calls, NORM_HI, r, true),
+        );
+        w.row(r, &[(n, lo | hi << 32), (n_lo, lo >> 16)]);
+        for (p, [st, end]) in chains.iter().enumerate() {
+            let ptr = frame_word(&calls, CHAINS[p], r, false);
+            w.row(r, &[(*st, start(p)), (*end, ptr + 4 * COLUMNS as u64)]);
+        }
+    }
+    Ok(w.finish(src.height))
+}
+
+/// `FALCON_SPLIT`, `constraints::falcon`: 64 rows a call, row `16P + j`
+/// column `j` of chain `P` — its control in and out, its sixteen words and
+/// their halfwords, its `s`, and its residues with their quotients — and rows
+/// 48–63 zero.
+fn falcon_split(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constants::delegation::falcon::{ARRAY, CHAINS, Q};
+    use constraints::falcon::{place, start, BLOCKS, COLUMNS, DEGREE, KEY, RESIDUES};
+    let fam = family::FALCON_SPLIT;
+    let calls = *src.invocations(fam)?;
+    let per = program::delegation_rows(fam) as usize;
+    let mut w = Witness::new(fam, per * calls.len());
+    let [live, cycle, stamp, key, ptr, acc, acc_out] =
+        ["live", "cycle", "stamp", "key", "ptr", "acc", "acc_out"].map(|c| w.col(c));
+    let addr: Vec<usize> = (1..BLOCKS).map(|m| w.col(&format!("a{m}"))).collect();
+    let words: Vec<([usize; 2], [usize; 2], usize)> = (0..BLOCKS)
+        .map(|m| {
+            let cols = [
+                w.col(&format!("w{m}_read_ts")),
+                w.col(&format!("w{m}_read_value")),
+            ];
+            let chunks = [0, 1].map(|c| w.col(&format!("w{m}_gap_c{c}")));
+            (cols, chunks, w.col(&format!("w{m}_h16")))
+        })
+        .collect();
+    let s: Vec<[usize; 2]> = (0..BLOCKS)
+        .map(|m| [0, 1].map(|e| w.fcol(&format!("s{m}_{e}"))))
+        .collect();
+    let rr: Vec<[[usize; 3]; 2]> = (0..RESIDUES)
+        .map(|r| {
+            [0, 1].map(|e| {
+                [
+                    w.col(&format!("rr{r}_{e}")),
+                    w.fcol(&format!("kk{r}_{e}")),
+                    w.col(&format!("kk{r}_{e}_h16")),
+                ]
+            })
+        })
+        .collect();
+    for c in 0..calls.len() {
+        let call = falcon_call(&calls, c);
+        let at = calls.cycles()[c];
+        for p in 0..CHAINS.len() {
+            let array = calls.word(ARRAY * p).addr[c] as u64;
+            let mut total = 0u64;
+            for j in 0..COLUMNS {
+                let r = per * c + COLUMNS * p + j;
+                let base = array + 4 * j as u64;
+                let squares: u64 = (0..BLOCKS)
+                    .flat_map(|m| [0, 1].map(|e| call.s(p, DEGREE * m + 2 * j + e)))
+                    .map(|x| (x * x) as u64)
+                    .sum();
+                w.row(
+                    r,
+                    &[
+                        (live, 1),
+                        (cycle, at),
+                        (stamp, start(p) + j as u64),
+                        (key, KEY * at + place(p, j)),
+                        (ptr, base),
+                        (acc, total),
+                        (acc_out, total + squares),
+                    ],
+                );
+                total += squares;
+                for (m, col) in addr.iter().enumerate() {
+                    w.put(*col, r, base + 64 * (m as u64 + 1));
+                }
+                for (m, (cols, chunks, h16)) in words.iter().enumerate() {
+                    let word = ARRAY * p + COLUMNS * m + j;
+                    access_at(&mut w, *cols, *chunks, &calls, word, c, r);
+                    w.put(*h16, r, calls.word(word).read_value[c] >> 16);
+                }
+                for (m, pair) in s.iter().enumerate() {
+                    for (e, col) in pair.iter().enumerate() {
+                        let x = call.s(p, DEGREE * m + 2 * j + e);
+                        w.put_fp(*col, r, signed(x as i128));
+                    }
+                }
+                for (res, pair) in rr.iter().enumerate() {
+                    for (e, [out, kk, kk_h16]) in pair.iter().enumerate() {
+                        let sum = call.sum[p][res][2 * j + e];
+                        let residue = call.residue(p, res, 2 * j + e);
+                        let quotient = (sum - residue as i64) / Q as i64;
+                        w.put(*out, r, residue);
+                        w.put_fp(*kk, r, signed(quotient as i128));
+                        w.put(*kk_h16, r, (quotient + (1 << 31)) as u64 >> 16);
+                    }
+                }
+            }
+        }
+    }
+    Ok(w.finish(src.height))
+}
+
+/// `FALCON_PRODUCT`, `constraints::falcon`: 16 rows a call, row `r` residue
+/// `r` — its one-hot, the three bases, the residues of `s2`, `h` and
+/// `c − s1`, the wrapped products and each coefficient's quotient by `q`.
+fn falcon_product(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constants::delegation::falcon::{CHAINS, Q};
+    use constraints::falcon::{place, BETA, DEGREE, KEY, RESIDUES};
+    let fam = family::FALCON_PRODUCT;
+    let calls = *src.invocations(fam)?;
+    let per = program::delegation_rows(fam) as usize;
+    let mut w = Witness::new(fam, per * calls.len());
+    let [live, index] = ["live", "r"].map(|c| w.col(c));
+    let bases: Vec<usize> = (0..CHAINS.len())
+        .map(|p| w.col(&format!("base{p}")))
+        .collect();
+    let x: Vec<Vec<usize>> = ["a", "b", "d"]
+        .iter()
+        .map(|n| (0..DEGREE).map(|i| w.col(&format!("{n}{i}"))).collect())
+        .collect();
+    let o: Vec<usize> = (0..RESIDUES).map(|i| w.col(&format!("o{i}"))).collect();
+    let wrap: Vec<usize> = (0..DEGREE - 1)
+        .map(|k| w.col(&format!("wrap{k}")))
+        .collect();
+    let chunks: Vec<[usize; 3]> = (0..DEGREE)
+        .map(|k| [0, 1, 2].map(|c| w.col(&format!("w{k}_c{c}"))))
+        .collect();
+    for c in 0..calls.len() {
+        let call = falcon_call(&calls, c);
+        let at = calls.cycles()[c];
+        for res in 0..RESIDUES {
+            let r = per * c + res;
+            w.row(r, &[(live, 1), (index, res as u64), (o[res], 1)]);
+            for (p, col) in bases.iter().enumerate() {
+                w.put(*col, r, KEY * at + place(p, 0));
+            }
+            let values: Vec<[u64; DEGREE]> = (0..CHAINS.len())
+                .map(|p| std::array::from_fn(|j| call.residue(p, res, j)))
+                .collect();
+            for (cols, vals) in x.iter().zip(&values) {
+                for (col, v) in cols.iter().zip(vals) {
+                    w.put(*col, r, *v);
+                }
+            }
+            let (a, b, d) = (&values[0], &values[1], &values[2]);
+            let wrapped: Vec<u64> = (0..DEGREE - 1)
+                .map(|k| (k + 1..DEGREE).map(|i| a[i] * b[k + DEGREE - i]).sum())
+                .collect();
+            for (col, v) in wrap.iter().zip(&wrapped) {
+                w.put(*col, r, *v);
+            }
+            for (k, cols) in chunks.iter().enumerate() {
+                let direct: u64 = (0..=k).map(|i| a[i] * b[k - i]).sum();
+                let folded = wrapped.get(k).map_or(0, |v| BETA[res] * v);
+                let left = (direct + folded) as i128 - d[k] as i128;
+                assert!(
+                    left >= 0 && left % Q as i128 == 0,
+                    "cycle {at}: residue {res}'s coefficient {k} of s2·h is not c − s1's"
+                );
+                let quotient = (left / Q as i128) as u64;
+                assert!(quotient < 1 << 48, "a product's quotient off its chunks");
+                for (i, col) in cols.iter().enumerate() {
+                    w.put(*col, r, (quotient >> (16 * i)) & 0xffff);
                 }
             }
         }

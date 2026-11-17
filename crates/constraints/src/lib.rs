@@ -25,6 +25,7 @@ pub mod atomics;
 pub mod bitwise;
 mod build;
 pub mod delegation;
+pub mod falcon;
 pub mod family;
 pub mod gadgets;
 pub mod jump_branch_slt;
@@ -142,6 +143,9 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
             f::KECCAK => (keccak::artifact, keccak::channels()),
             f::KECCAK_RHO => (keccak::rho_artifact, keccak::rho_channels()),
             f::KECCAK_CHI => (keccak::chi_artifact, keccak::chi_channels()),
+            f::FALCON => (falcon::artifact, falcon::channels()),
+            f::FALCON_SPLIT => (falcon::split_artifact, falcon::split_channels()),
+            f::FALCON_PRODUCT => (falcon::product_artifact, falcon::product_channels()),
             _ => return None,
         };
     if trace_vars < minimum_trace_vars(&channels) {

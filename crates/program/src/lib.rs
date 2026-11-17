@@ -66,6 +66,9 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::KECCAK,
     family::KECCAK_RHO,
     family::KECCAK_CHI,
+    family::FALCON,
+    family::FALCON_SPLIT,
+    family::FALCON_PRODUCT,
 ];
 
 /// The **frame family** of ecall `number`, the one whose row reads the frame
@@ -89,8 +92,8 @@ fn delegation_type(family: FamilyId) -> Option<&'static (u32, u32, usize, u32, P
 }
 
 /// The words of an entry of `family` in 32-bit words, or `None` if it is not
-/// a delegation family: a call's frame, or a level's sibling. A family
-/// expanding an entry holds its words too.
+/// a delegation family: a call's frame, a level's sibling, or a call's
+/// arrays. A family expanding an entry holds its words too.
 pub fn delegation_frame_words(family: FamilyId) -> Option<usize> {
     delegation_type(family).map(|(_, _, words, ..)| *words)
 }
@@ -103,8 +106,8 @@ pub fn delegation_rows(family: FamilyId) -> u32 {
         .unwrap_or_else(|| panic!("family {family} is not a delegation family"))
 }
 
-/// What an entry of delegation `family` is, a call or a level of one. Panics
-/// on a family that is not a delegation family.
+/// What an entry of delegation `family` is, a call, a level of one or a
+/// call's arrays. Panics on a family that is not a delegation family.
 pub fn delegation_per(family: FamilyId) -> Per {
     delegation_type(family)
         .map(|(.., per)| *per)
@@ -112,18 +115,18 @@ pub fn delegation_per(family: FamilyId) -> Per {
 }
 
 /// How many values an entry of delegation `family` carries:
-/// `delegation::CARRY` for a level's, none for a call's.
+/// `delegation::CARRY` for a level's, none for a call's or its arrays.
 pub fn delegation_carry(family: FamilyId) -> usize {
     match delegation_per(family) {
-        Per::Call => 0,
+        Per::Call | Per::Arrays => 0,
         Per::Level => delegation::CARRY,
     }
 }
 
 /// Whether delegation `family`'s rows read their entries' words from RAM: it
 /// is the first family of its number recording its kind of entry, a call's
-/// frame family or `MERKLE_LEVELS`. A later family holds the same entries and
-/// touches no RAM.
+/// frame family, `MERKLE_LEVELS` or `FALCON_SPLIT`. A later family holds the
+/// same entries and touches no RAM.
 pub fn reads_ram(family: FamilyId) -> bool {
     delegation_type(family).is_some_and(|(_, n, _, _, per)| {
         delegation::TYPES
@@ -167,6 +170,9 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::KECCAK => "KECCAK",
         family::KECCAK_RHO => "KECCAK_RHO",
         family::KECCAK_CHI => "KECCAK_CHI",
+        family::FALCON => "FALCON",
+        family::FALCON_SPLIT => "FALCON_SPLIT",
+        family::FALCON_PRODUCT => "FALCON_PRODUCT",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -330,7 +336,10 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::MERKLE_ROUNDS
         | family::KECCAK
         | family::KECCAK_RHO
-        | family::KECCAK_CHI => &[],
+        | family::KECCAK_CHI
+        | family::FALCON
+        | family::FALCON_SPLIT
+        | family::FALCON_PRODUCT => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }
