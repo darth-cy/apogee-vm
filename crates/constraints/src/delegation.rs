@@ -209,6 +209,16 @@ impl Builder {
         h
     }
 
+    /// The column `x ∈ [0, 2^bits)` for `bits < 16`: `<name>_range`, `x <
+    /// 2^16`, and `<name>_scaled`, `2^(16 − bits)·x < 2^16`, which bounds
+    /// nothing alone (as [`Builder::bounded`]'s top chunk).
+    pub fn small(&mut self, name: &str, x: PolyAddress, bits: u32) {
+        assert!(bits < 16, "{name}: {bits} bits is a halfword's or more");
+        self.range16(&format!("{name}_range"), x.into());
+        self.range16(&format!("{name}_scaled"), x * (1u64 << (16 - bits)));
+        self.scaled.push(x);
+    }
+
     /// `value ∈ [0, 2^bits)` for a `bits` that is not a multiple of 16: `q`
     /// committed chunks of weight `2^16 … 2^16q`, the remainder derived.
     ///
@@ -372,6 +382,21 @@ pub struct Frame {
 /// `2^36` (`docs/spec/memory.md` §4.2).
 pub fn frame(b: &mut Builder, number: u32, words: usize, written: impl Fn(usize) -> bool) -> Frame {
     let live = b.live;
+    frame_under(b, live, number, words, written)
+}
+
+/// [`frame`] on the rows `mask` selects, a boolean `M` column zero wherever
+/// `live` is: each rule above with `mask` for `live`, every leaf under it. A
+/// live row `mask` leaves out reads and writes nothing and holds zeros, but
+/// in each word's gap chunks ([`access_under`]).
+pub fn frame_under(
+    b: &mut Builder,
+    mask: PolyAddress,
+    number: u32,
+    words: usize,
+    written: impl Fn(usize) -> bool,
+) -> Frame {
+    let live = mask;
     let cycle = b.mcol("cycle");
     let n = b.mcol("number");
     b.gate("number_rule", n - live * number as u64);
@@ -401,9 +426,11 @@ pub fn frame(b: &mut Builder, number: u32, words: usize, written: impl Fn(usize)
             );
         }
         let addr = Part::of(w.addr);
-        access(b, &format!("w{j}"), cycle, addr, w.read_ts, w.read, w.write);
+        let name = format!("w{j}");
+        access_under(b, mask, &name, cycle, addr, w.read_ts, w.read, w.write);
     }
-    b.leaf(
+    b.leaf_under(
+        mask,
         false,
         "read_anchor",
         address_space::DELEGATION,
@@ -433,10 +460,31 @@ pub fn access(
     write: PolyAddress,
 ) {
     let live = b.live;
+    access_under(b, live, name, cycle, addr, read_ts, read, write);
+}
+
+/// [`access`] on the rows `mask` selects, a boolean `M` column zero wherever
+/// `live` is: both leaves under it, and the gap `4·cycle − read_ts +
+/// mask·(FRAME_DELTA − 1)` bounded under `live`, as every obligation is. A
+/// live row `mask` leaves out holds `read_ts = 0` and the chunks of the gap
+/// `4·cycle`, below `2^38`.
+#[allow(clippy::too_many_arguments)]
+pub fn access_under(
+    b: &mut Builder,
+    mask: PolyAddress,
+    name: &str,
+    cycle: PolyAddress,
+    addr: Part,
+    read_ts: PolyAddress,
+    read: PolyAddress,
+    write: PolyAddress,
+) {
+    let live = mask;
     let gap = cycle * mem::TS_STEP - read_ts + Expr::from(live) * delegation::FRAME_DELTA
         - Expr::from(live);
     b.bounded(&format!("{name}_gap"), gap, mem::TS_BITS);
-    b.leaf(
+    b.leaf_under(
+        mask,
         false,
         &format!("read_{name}"),
         address_space::RAM,
@@ -451,7 +499,8 @@ pub fn access(
         columns: vec![cycle; mem::TS_STEP as usize],
         plus: delegation::FRAME_DELTA,
     };
-    b.leaf(
+    b.leaf_under(
+        mask,
         true,
         &format!("write_{name}"),
         address_space::RAM,
