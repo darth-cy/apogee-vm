@@ -83,7 +83,7 @@ use alloc::format;
 use alloc::vec::Vec;
 
 use constants::delegation::keccak::{FRAME, IOTA_BYTES, ROTATIONS, ROUNDS, ROUND_CONSTANTS};
-use constants::{address_space, ecall, family, guest_memory, lookup_channel};
+use constants::{address_space, ecall, family, guest_memory};
 use field::Fp;
 
 use crate::delegation::{access, Builder, Part};
@@ -103,13 +103,6 @@ pub const PAIRS: usize = 20;
 pub const GROUP: u64 = 32;
 /// The base's place in a `KECCAK` parity group.
 pub const BASE: u64 = 20;
-
-/// Akita's widest commitment at `2^22` rows (measured): a circuit committing
-/// more `M`, `W` and `S` columns has no opening schedule there.
-pub const MAX_COMMITTED: usize = 372;
-/// The most obligations a channel takes a row: with its table's fraction, 256
-/// leaves, the next being 512.
-pub const MAX_OBLIGATIONS: usize = 255;
 
 const _: () = {
     assert!(WORDS * PLANES == FRAME && PAIRS == 4 * PLANES);
@@ -618,31 +611,10 @@ fn chi() -> Builder {
     b
 }
 
-/// The budgets every circuit here keeps: Akita's width at `2^22` and the
-/// LogUp tree of 256 leaves a channel. A bound only a comment states is not a
-/// bound, so each artifact is held to it as it is built.
-fn checked(name: &str, b: Builder, trace_vars: u32) -> CircuitArtifact {
-    let a = b.artifact(trace_vars);
-    let committed = a.memory.len() + a.witness.len() + a.setup.len();
-    assert!(
-        committed <= MAX_COMMITTED,
-        "{name}: {committed} committed columns, over Akita's {MAX_COMMITTED} at 2^22"
-    );
-    for channel in [lookup_channel::RANGE16, lookup_channel::XOR8] {
-        let n = a.lookups.iter().filter(|l| l.channel == channel).count();
-        let label = lookup_channel::NAMES[channel as usize];
-        assert!(
-            n <= MAX_OBLIGATIONS,
-            "{name}: {n} {label} obligations a row, over a tree of 256 leaves"
-        );
-    }
-    a
-}
-
 /// `KECCAK`'s circuit over `2^trace_vars` rows; at least `2^16`, its
 /// `RANGE16` and `XOR8` tables', which the registry refuses below.
 pub fn artifact(trace_vars: u32) -> CircuitArtifact {
-    checked("KECCAK", frame_rows(), trace_vars)
+    frame_rows().artifact(trace_vars)
 }
 
 /// `KECCAK`'s channels, `RANGE16` and `XOR8`.
@@ -652,7 +624,7 @@ pub fn channels() -> Vec<ChannelSpec> {
 
 /// `KECCAK_RHO`'s circuit over `2^trace_vars` rows, likewise.
 pub fn rho_artifact(trace_vars: u32) -> CircuitArtifact {
-    checked("KECCAK_RHO", rho(), trace_vars)
+    rho().artifact(trace_vars)
 }
 
 /// `KECCAK_RHO`'s one channel, `XOR8`.
@@ -662,7 +634,7 @@ pub fn rho_channels() -> Vec<ChannelSpec> {
 
 /// `KECCAK_CHI`'s circuit over `2^trace_vars` rows, likewise.
 pub fn chi_artifact(trace_vars: u32) -> CircuitArtifact {
-    checked("KECCAK_CHI", chi(), trace_vars)
+    chi().artifact(trace_vars)
 }
 
 /// `KECCAK_CHI`'s one channel, `XOR8`.

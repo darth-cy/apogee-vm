@@ -4,7 +4,7 @@
 //! words every frame family carries.
 //!
 //! ```text
-//! every family   M[0] live: every leaf's mask, every obligation's default selector
+//! every family   M[0] live: the default leaf mask and obligation selector
 //! a frame        M[1] cycle, M[2] number, then per frame word j
 //!                M[..] w{j}_addr w{j}_read_ts w{j}_read_value [w{j}_write_value]
 //!                W[..] w{j}_gap_c0 w{j}_gap_c1, RANGE16 chunks of 4·cycle − 1 − read_ts
@@ -15,10 +15,13 @@
 //!                read value for a word written back
 //! ```
 //!
-//! A row is live or padding: every leaf is masked by `live`, so a padding row,
-//! all zero, is the identity of both products, and every obligation's selector,
-//! `live` or another boolean column, is 0 there. Every enforcing gate is zero on
-//! the all-zero row.
+//! A row is live or padding. Every leaf is masked by `live` or by a boolean
+//! column zero wherever `live` is ([`Builder::leaf_under`]), and every
+//! obligation's selector is `live` or another boolean column
+//! ([`Builder::range16_under`], [`Builder::xor8_under`]), so a padding row, all
+//! zero, is the identity of both products and under no obligation. Every
+//! enforcing gate is zero on the all-zero row, and every artifact keeps
+//! [`MAX_COMMITTED`] and [`MAX_OBLIGATIONS`].
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -33,6 +36,13 @@ use field::Fp;
 use crate::family::{Expr, T16};
 use crate::lookup::ChannelSpec;
 use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
+
+/// Akita's widest commitment at `2^22` rows (measured): a circuit committing
+/// more `M`, `W` and `S` columns has no opening schedule there.
+pub const MAX_COMMITTED: usize = 372;
+/// The most obligations a channel takes a row: with its table's fraction, 256
+/// leaves, the next being 512.
+pub const MAX_OBLIGATIONS: usize = 255;
 
 /// One part of a memory tuple, `docs/spec/memory.md` §1: the sum of `columns`,
 /// each weighted 1, plus the integer `plus`. A coefficient is one literal or
@@ -300,7 +310,9 @@ impl Builder {
     /// The circuit over `2^trace_vars` rows: the two product trees, each side
     /// padded to one power of two with leaves that are literally 1, and a
     /// fraction tree for each channel used. Panics on every refusal of the
-    /// assembly, and on a copower chunk with no direct bound.
+    /// assembly, on a copower chunk with no direct bound, and on a circuit
+    /// over a budget, [`MAX_COMMITTED`] or [`MAX_OBLIGATIONS`]: a bound only a
+    /// comment states is not a bound.
     pub fn artifact(mut self, trace_vars: u32) -> CircuitArtifact {
         let channels = self.channels();
         for spec in &channels {
@@ -344,6 +356,21 @@ impl Builder {
             "family {}: a gate is nonzero on the all-zero row",
             self.family
         );
+        let committed = a.memory.len() + a.witness.len() + a.setup.len();
+        assert!(
+            committed <= MAX_COMMITTED,
+            "family {}: {committed} committed columns, over Akita's {MAX_COMMITTED} at 2^22",
+            self.family
+        );
+        for channel in channels.iter().map(|spec| spec.channel) {
+            let n = a.lookups.iter().filter(|l| l.channel == channel).count();
+            let label = lookup_channel::NAMES[channel as usize];
+            assert!(
+                n <= MAX_OBLIGATIONS,
+                "family {}: {n} {label} obligations a row, over a tree of 256 leaves",
+                self.family
+            );
+        }
         let scaled: Vec<(PolyAddress, PolyAddress)> =
             self.scaled.iter().map(|x| (*x, self.live)).collect();
         if let Err(e) = crate::lookup::check_copowers(&a, &scaled) {

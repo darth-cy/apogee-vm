@@ -109,7 +109,6 @@ use constants::{address_space, ecall, family};
 
 use crate::delegation::{access, frame, Builder, Part};
 use crate::family::{sum, Expr, T16, T32};
-use crate::keccak::{MAX_COMMITTED, MAX_OBLIGATIONS};
 use crate::lookup::ChannelSpec;
 use crate::{CircuitArtifact, PolyAddress};
 
@@ -482,28 +481,10 @@ fn product() -> Builder {
     b
 }
 
-/// The budgets every circuit here keeps, `crate::keccak`'s: Akita's width at
-/// `2^22` and the LogUp tree of 256 leaves for each one's one channel,
-/// `RANGE16`, held as the artifact is built.
-fn checked(name: &str, b: Builder, trace_vars: u32) -> CircuitArtifact {
-    let a = b.artifact(trace_vars);
-    let committed = a.memory.len() + a.witness.len() + a.setup.len();
-    assert!(
-        committed <= MAX_COMMITTED,
-        "{name}: {committed} committed columns, over Akita's {MAX_COMMITTED} at 2^22"
-    );
-    let n = a.lookups.len();
-    assert!(
-        n <= MAX_OBLIGATIONS,
-        "{name}: {n} obligations a row, over a tree of 256 leaves"
-    );
-    a
-}
-
 /// `FALCON`'s circuit over `2^trace_vars` rows; at least `2^16`, its
 /// `RANGE16` table's, which the registry refuses below.
 pub fn artifact(trace_vars: u32) -> CircuitArtifact {
-    checked("FALCON", frame_row(), trace_vars)
+    frame_row().artifact(trace_vars)
 }
 
 /// `FALCON`'s one channel, `RANGE16`.
@@ -513,7 +494,7 @@ pub fn channels() -> Vec<ChannelSpec> {
 
 /// `FALCON_SPLIT`'s circuit over `2^trace_vars` rows, likewise.
 pub fn split_artifact(trace_vars: u32) -> CircuitArtifact {
-    checked("FALCON_SPLIT", split(), trace_vars)
+    split().artifact(trace_vars)
 }
 
 /// `FALCON_SPLIT`'s one channel, `RANGE16`.
@@ -523,7 +504,7 @@ pub fn split_channels() -> Vec<ChannelSpec> {
 
 /// `FALCON_PRODUCT`'s circuit over `2^trace_vars` rows, likewise.
 pub fn product_artifact(trace_vars: u32) -> CircuitArtifact {
-    checked("FALCON_PRODUCT", product(), trace_vars)
+    product().artifact(trace_vars)
 }
 
 /// `FALCON_PRODUCT`'s one channel, `RANGE16`.

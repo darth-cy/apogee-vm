@@ -55,7 +55,7 @@ in when they are bound ([memory.md](memory.md) §8).
 A virtual table is a closed form, evaluated per row by `gkr_verify::virtual_at_row` and at a point
 by `virtual_at_point`, never materialized, committed or claimed. Each form is its table's
 multilinear extension, so the verifier evaluates what the prover sums
-(`crates/gkr/tests/{lookup,ram_live}.rs` check all but `V[row]` and the three `XOR8` kinds). Wire
+(`crates/gkr/tests/{lookup,ram_live}.rs` check all but `V[row]`). Wire
 form: a `u32`, in table order from 0.
 
 | kind | notation | value at row `y` | closed form at `(y_0, …, y_{n−1})` |
