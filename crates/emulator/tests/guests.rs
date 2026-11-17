@@ -792,12 +792,11 @@ fn marketplace_follows_its_table_by_its_root() {
 /// A Falcon-512 case: a key, a message, a context and a signature.
 type Case = (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>);
 
-/// What `guests/precompiles` journals for each of `cases` — 1 the signature
-/// verifies under the context, 0 it does not, 2 the key does not decode — run
-/// after its other calls at their fewest: a zero leaf up sixteen zero
-/// siblings, no runs, and the zero arrays' norm once. Seven cases of short
-/// messages and contexts fill the public input window.
-fn falcon_verdicts(cases: &[Case]) -> Vec<u8> {
+/// `guests/precompiles` over `cases`, after its other calls at their fewest:
+/// a zero leaf up sixteen zero siblings, no runs, and the zero arrays' norm
+/// once. Seven cases of short messages and contexts fill the public input
+/// window.
+fn falcon_run(cases: &[Case]) -> Result<emulator::Execution, EmuError> {
     let mut input = [
         1u32.to_le_bytes().as_slice(),
         &[0u8; 64],
@@ -816,10 +815,34 @@ fn falcon_verdicts(cases: &[Case]) -> Vec<u8> {
             input.extend(field);
         }
     }
-    let execution = run(&image("precompiles"), &io(&input)).unwrap();
+    run(&image("precompiles"), &io(&input))
+}
+
+/// Every one of `cases` verifies: the guest exits 0, a 1 journaled a case.
+fn falcon_verifies(cases: &[Case]) {
+    let execution = falcon_run(cases).unwrap();
     assert_eq!(execution.exit_code, 0);
     let journal = execution.io.output;
-    journal[journal.len() - cases.len()..].to_vec()
+    assert_eq!(journal[journal.len() - cases.len()..], vec![1; cases.len()]);
+}
+
+/// How a Falcon-512 case ends its execution: the SDK's panic, exit 101, or
+/// the decode call's refusal of an encoding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Failure {
+    Panic,
+    Refused,
+}
+
+/// How `case`, run alone, ends the execution; a panic if it does not.
+fn falcon_failure(case: Case) -> Failure {
+    match falcon_run(&[case]) {
+        Ok(e) if e.exit_code == 101 => Failure::Panic,
+        Err(EmuError::DelegationFrame { detail, .. }) if detail.starts_with("falcon512_decode") => {
+            Failure::Refused
+        }
+        other => panic!("the case does not end the execution: {other:?}"),
+    }
 }
 
 /// The host library's signatures, under keys from two fixed seeds, over
@@ -841,18 +864,22 @@ fn falcon512_verifies_apogee_falcon512_signatures() {
             cases.push((pk.clone(), msg, context, sig));
         }
     }
-    assert_eq!(falcon_verdicts(&cases), [1; 6]);
+    falcon_verifies(&cases);
 }
 
 /// A host library signature of a 64-byte message under a 25-byte context
-/// altered one way a case: a bit of the message, of the salt, of `s2` and of
-/// the padding flipped, the header `0x29`, the signature a byte short, the key
-/// another seed's, which K and so HashToPoint hash too, and a bit of the
-/// context flipped, none of which verifies; and the key's first coefficient
-/// `2^14 − 1`, at least `q`, which does not decode. Two runs, as seven cases
-/// fill the public input window.
+/// altered one way a case, each ending its own execution: a bit of the
+/// message, of the salt, of `s2` and of the padding flipped, the header
+/// `0x29`, the signature a byte short, the key another seed's, which K and so
+/// HashToPoint hash too, and a bit of the context flipped, all panics; the
+/// key's first coefficient `2^14 − 1`, at least `q`, the decode call's
+/// refusal; and the key's header `0x0b`, and the key a byte short, panics. A
+/// flipped bit of `s2`'s encoding is either: the signing is randomized, and
+/// the stream can decode to other coefficients or to none; and so is one of
+/// the last byte, which the stream reaches when it ends past bit 4,992.
 #[test]
 fn falcon512_refuses_each_alteration() {
+    use Failure::{Panic, Refused};
     let (sk, pk) = apogee_falcon512::keygen([0x5a; 32]);
     let (_, other) = apogee_falcon512::keygen([0xc3; 32]);
     let msg: Vec<u8> = (0..64).map(|i| (i as u8).wrapping_mul(29)).collect();
@@ -870,55 +897,56 @@ fn falcon512_refuses_each_alteration() {
         (pk.to_vec(), msg.to_vec(), context.to_vec(), sig.to_vec())
     };
     let cases = [
-        case(&pk, &flip(&msg, 16, 0), &context, &sig),
-        case(&pk, &msg, &context, &flip(&sig, 18, 3)),
-        case(&pk, &msg, &context, &flip(&sig, 141, 5)),
-        case(&pk, &msg, &context, &flip(&sig, 665, 0)),
-        case(&pk, &msg, &context, &flip(&sig, 0, 4)),
-        case(&pk, &msg, &context, &sig[..665]),
-        case(&other, &msg, &context, &sig),
-        case(&pk, &msg, &flip(&context, 24, 0), &sig),
-        case(&key, &msg, &context, &sig),
+        (case(&pk, &flip(&msg, 16, 0), &context, &sig), Some(Panic)),
+        (case(&pk, &msg, &context, &flip(&sig, 18, 3)), Some(Panic)),
+        (case(&pk, &msg, &context, &flip(&sig, 141, 5)), None),
+        (case(&pk, &msg, &context, &flip(&sig, 665, 0)), None),
+        (case(&pk, &msg, &context, &flip(&sig, 0, 4)), Some(Panic)),
+        (case(&pk, &msg, &context, &sig[..665]), Some(Panic)),
+        (case(&other, &msg, &context, &sig), Some(Panic)),
+        (case(&pk, &msg, &flip(&context, 24, 0), &sig), Some(Panic)),
+        (case(&key, &msg, &context, &sig), Some(Refused)),
+        (case(&flip(&pk, 0, 1), &msg, &context, &sig), Some(Panic)),
+        (case(&pk[..896], &msg, &context, &sig), Some(Panic)),
     ];
-    let verdicts = [&cases[..4], &cases[4..]].map(falcon_verdicts).concat();
-    assert_eq!(verdicts, [0, 0, 0, 0, 0, 0, 0, 0, 2]);
+    for (k, (case, want)) in cases.into_iter().enumerate() {
+        let failure = falcon_failure(case);
+        assert!(
+            want.is_none_or(|want| failure == want),
+            "case {k}: {failure:?}"
+        );
+    }
 }
 
 /// The SDK's verifier agrees with the other implementations on
 /// `tools/falcon512/vectors.json`. Every signature there verifies under its
 /// context: two each from the Rust, JavaScript and Python libraries. Every
-/// malformed case is refused, including the two a lenient decoder would pass
-/// (negative zero, and a one bit after the last coefficient), a context
-/// altered, and one of 256 bytes. A key that does not decode is 2. The
-/// malformed cases are two runs, as seven cases fill the public input window.
+/// malformed case ends its own execution, including the two a lenient decoder
+/// would pass: negative zero, and a one bit after the last coefficient. The
+/// decode call refuses negative zero and the key's coefficient `2^14 − 1`;
+/// the SDK panics at the rest.
 #[test]
 fn falcon512_agrees_with_every_implementation() {
     let vectors: serde_json::Value =
         serde_json::from_str(include_str!("../../../tools/falcon512/vectors.json"))
             .expect("the vectors are JSON");
     let section = |name: &str| vectors[name].as_array().expect("a section").clone();
-    let cases = |entries: &[serde_json::Value]| -> Vec<Case> {
-        let bytes = |v: &serde_json::Value, k: &str| {
-            test_support::hex_to_bytes(v[k].as_str().expect("hex")).expect("hex")
-        };
-        entries
-            .iter()
-            .map(|v| {
-                let field = |k| bytes(v, k);
-                (field("pk"), field("msg"), field("context"), field("sig"))
-            })
-            .collect()
+    let case = |v: &serde_json::Value| -> Case {
+        let field = |k: &str| test_support::hex_to_bytes(v[k].as_str().expect("hex")).expect("hex");
+        (field("pk"), field("msg"), field("context"), field("sig"))
     };
     let signatures = section("signatures");
     assert_eq!(signatures.len(), 6);
-    assert_eq!(falcon_verdicts(&cases(&signatures)), [1; 6]);
+    falcon_verifies(&signatures.iter().map(case).collect::<Vec<_>>());
     let malformed = section("malformed");
     assert_eq!(malformed.len(), 8);
-    let verdicts = [&malformed[..4], &malformed[4..]].map(|half| falcon_verdicts(&cases(half)));
-    for (v, verdict) in malformed.iter().zip(verdicts.concat()) {
-        let case = v["case"].as_str().expect("a name");
-        let refused = if case.starts_with("key_") { 2 } else { 0 };
-        assert_eq!(verdict, refused, "{case}");
+    for v in &malformed {
+        let name = v["case"].as_str().expect("a name");
+        let want = match name {
+            "negative_zero" | "key_coefficient_16383" => Failure::Refused,
+            _ => Failure::Panic,
+        };
+        assert_eq!(falcon_failure(case(v)), want, "{name}");
     }
 }
 
@@ -1228,9 +1256,9 @@ mod amazon {
 /// `guests/amazon` settles a batch of Falcon-512-signed purchases against its
 /// users and listings by their snapshot.
 ///
-/// Forty users, each named by its key's address and each but one with a key
-/// from a seed of its own, the one a key that does not decode, in slots apart
-/// whose order is not their addresses'; and 22 listings, fourteen of 30 units
+/// Forty users, each named by its key's address and each with a key from a
+/// seed of its own, in slots apart whose order is not their addresses'; and
+/// 22 listings, fourteen of 30 units
 /// and up sold by users who also buy; then 94 requests, sequenced by listing
 /// as a sequencer gathering each listing's requests would, each buyer's
 /// nonces in the batch's order. Seventy purchases of one to three units apply,
@@ -1244,14 +1272,16 @@ mod amazon {
 /// rejected, each before its signature is checked: another market, the zero
 /// address as the buyer, a request again, a nonce skipped, and the last
 /// nonce. Every request checked is signed by its buyer, new signatures each
-/// run, as signing is randomized. The advice also holds the user whose key
-/// does not decode, which no request reads, opened all the same. The journal
-/// is both snapshots, the three counts and the volume. The batch panics with
-/// a byte past its requests, with a request from an address the advice does
-/// not hold, and with one from the user whose key does not decode; and so
-/// does the advice with a signature one bit off, with a signature its buyer's
-/// over another of its requests, with a user's balance one off, and with a
-/// user's key another's.
+/// run, as signing is randomized. The advice also holds a user no request
+/// reads, opened all the same, and lays each key and each signature's salt
+/// on a word. The journal is both snapshots, the three counts and the volume.
+/// The batch panics with a byte past its requests and with a request from an
+/// address the advice does not hold; and so does the advice with a pad byte
+/// not zero after a key, the idle user's, or after a signature, with a
+/// signature's salt one bit off, with a signature its buyer's over another of
+/// its requests, with a user's balance one off, and with a user's key
+/// another's. The decode call refuses a key whose first coefficient is at
+/// least `q` and a signature whose `s2` is all zeros, each its own execution.
 #[test]
 fn amazon_settles_signed_purchases_by_its_snapshot() {
     use std::collections::{BTreeMap, BTreeSet};
@@ -1267,7 +1297,7 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     const RICH: [usize; 2] = [33, 34];
     const ALMOST_FULL: usize = 35;
     const EXHAUSTED: usize = 36;
-    const MALFORMED: usize = 37;
+    const IDLE: usize = 37;
     const EARNER: usize = 38;
     const BIG_SELLER: usize = 39;
     // Listings 0..14 are plain; the rest are each a case.
@@ -1294,19 +1324,9 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     let mut users = BTreeMap::new();
     let mut addresses: Vec<Address> = Vec::new();
     for i in 0..40 {
-        let (sk, key) = if i == MALFORMED {
-            // The first coefficient `2^14 − 1`, at least `q`.
-            let mut key = vec![0u8; 897];
-            key[..3].copy_from_slice(&[0x09, 0xff, 0xfc]);
-            (None, key)
-        } else {
-            let (sk, pk) = keygen([i as u8 + 1; 32]);
-            (Some(sk), pk)
-        };
+        let (sk, key) = keygen([i as u8 + 1; 32]);
         let a = address(&key);
-        if let Some(sk) = sk {
-            secret.insert(a, sk);
-        }
+        secret.insert(a, sk);
         let balance = match i {
             POOR => U256::small(E18),
             r if RICH.contains(&r) => U256 {
@@ -1502,12 +1522,12 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     );
 
     // The advice: the roots, each record read as the snapshot holds it, the
-    // users by address, each an account and its key beside it, the
-    // signatures, and a path a record, each under its table as the records
-    // before it left it. The users are those read and the one whose key does
-    // not decode, which a request below names.
+    // users by address, each an account and its key beside it, then 3 zero
+    // bytes, the signatures, each between 3 zero bytes each side, and a path
+    // a record, each under its table as the records before it left it. The
+    // users are those read and one no request reads, opened all the same.
     let mut advised = model.read_users.clone();
-    assert!(advised.insert(user(MALFORMED)), "no request reads it");
+    assert!(advised.insert(user(IDLE)), "no request reads it");
     let mut advice: Vec<u8> = roots
         .iter()
         .flatten()
@@ -1520,15 +1540,26 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         advice.extend(users[a].bytes());
         key_at.insert(*a, advice.len());
         advice.extend(&keys[a]);
+        advice.extend([0u8; 3]);
     }
     advice.extend((model.read_listings.len() as u32).to_le_bytes());
     for slot in &model.read_listings {
         advice.extend(slot.to_le_bytes());
         advice.extend(listings.get(slot).copied().unwrap_or_default().bytes());
     }
-    let signatures_at = advice.len();
-    advice.extend(signatures.concat());
-    advice.resize(advice.len().next_multiple_of(4), 0);
+    // The first request's signature starts 3 bytes in.
+    let signatures_at = advice.len() + 3;
+    for signature in &signatures {
+        advice.extend([0u8; 3]);
+        advice.extend(signature);
+        advice.extend([0u8; 3]);
+    }
+    assert!(
+        key_at.values().all(|at| at.is_multiple_of(4))
+            && (signatures_at + 1).is_multiple_of(4)
+            && advice.len().is_multiple_of(4),
+        "every key starts on a word, as do the signatures' salts and the paths"
+    );
     for a in &advised {
         advice.extend(user_tree.path(slots[a]));
         user_tree.set(slots[a], model.users[a].leaf());
@@ -1585,17 +1616,27 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         "a request from an address the advice does not hold is a malformed batch"
     );
 
-    // The first request from the user whose key does not decode, at its
-    // nonce: the key the advice holds has the record's address, and signs
-    // nothing.
-    let mut unsignable = input.clone();
-    unsignable[76..108].copy_from_slice(&user(MALFORMED));
-    unsignable[152..160].copy_from_slice(&users[&user(MALFORMED)].nonce.to_le_bytes());
-    let e = run(&image, &common::with_advice(&unsignable, &advice)).unwrap();
-    assert_eq!(
-        e.exit_code, 101,
-        "a request from a user whose key does not decode is a malformed batch"
-    );
+    // An encoding the decode call refuses ends the execution there.
+    let refused = |advice: &[u8]| {
+        matches!(
+            run(&image, &common::with_advice(&input, advice)),
+            Err(EmuError::DelegationFrame { detail, .. }) if detail.starts_with("falcon512_decode")
+        )
+    };
+
+    // That buyer's key, its first coefficient `2^14 − 1`, at least `q`: the
+    // key does not decode.
+    let mut undecodable = advice.clone();
+    undecodable[key_at[&buyer] + 1] = 0xff;
+    undecodable[key_at[&buyer] + 2] |= 0xfc;
+    assert!(refused(&undecodable), "an advised key that does not decode");
+
+    // The idle user's key, a pad byte after it not zero: no request reads the
+    // key, and the advice is read all the same.
+    let mut padded = advice.clone();
+    padded[key_at[&user(IDLE)] + 897] = 1;
+    let e = run(&image, &common::with_advice(&input, &padded)).unwrap();
+    assert_eq!(e.exit_code, 101, "a key's pad byte that is not zero");
 
     // That buyer's key, another user's: its address is not the record's.
     let other = user(if buyer == user(0) { 1 } else { 0 });
@@ -1604,14 +1645,26 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     let e = run(&image, &common::with_advice(&input, &swapped)).unwrap();
     assert_eq!(e.exit_code, 101, "an advised key that is not its user's");
 
-    // The first request's signature, one bit flipped.
+    // The first request's signature, one bit of its salt flipped.
     let mut flipped = advice.clone();
-    flipped[signatures_at + 200] ^= 0x04;
+    flipped[signatures_at + 20] ^= 0x04;
     let e = run(&image, &common::with_advice(&input, &flipped)).unwrap();
     assert_eq!(
         e.exit_code, 101,
         "a signature that does not verify is a malformed batch, not a rejection"
     );
+
+    // The first request's signature, its `s2` all zeros: no coefficient
+    // ends within 16 zeros.
+    let mut zeroed = advice.clone();
+    zeroed[signatures_at + 41..signatures_at + 666].fill(0);
+    assert!(refused(&zeroed), "a signature that does not decode");
+
+    // The first request's signature, a pad byte after it not zero.
+    let mut padded = advice.clone();
+    padded[signatures_at + 666] = 1;
+    let e = run(&image, &common::with_advice(&input, &padded)).unwrap();
+    assert_eq!(e.exit_code, 101, "a signature's pad byte that is not zero");
 
     // The first request's signature, its buyer's over another of its
     // requests.

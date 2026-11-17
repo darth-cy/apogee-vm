@@ -3,12 +3,25 @@
 //! which is a Poseidon2-A64-C5 sponge over the key digest K, the salt, the
 //! application's context and the message (`docs/spec/precompiles.md` §7.7). K
 //! is a sponge over the key's bytes, and the key's address K's first 32 bytes.
-//! The lattice check is the precompile's (`constants::delegation::falcon`,
-//! §7), the sponges' permutations [`poseidon2_permute`]'s, and the rest is
-//! here, in software: the public key's and the signature's encodings, K, and
-//! HashToPoint's sponge and sampler.
+//!
+//! Precompiles do the work (`constants::delegation`, §7): `FALCON512_DECODE`
+//! decodes a public key's `h` and a signature's `s2`, refusing every encoding
+//! that is not one; `FALCON512_SAMPLE` turns HashToPoint's accepted lanes
+//! into coefficients; `FALCON512` is the lattice check, [`s1_norm`]; and the
+//! sponges' permutations are [`poseidon2_permute`]'s. Here are the lengths
+//! and the headers, the signature's padding, K's and HashToPoint's sponges,
+//! and HashToPoint's rejection, a lane compared with the sampler's bound.
+//!
+//! **Every failure panics.** A key or a signature that is not an encoding,
+//! and a signature that does not verify, end the execution: a panic here, or
+//! the decode call's refusal. Nothing answers a verdict a caller could pass
+//! over, so a guest past [`PublicKey::decode`] holds a valid key, and past
+//! [`PublicKey::verify`] a valid signature.
+
+use core::mem::MaybeUninit;
 
 use constants::delegation::falcon::{self, C, FRAME, H, N, NORM_HI, NORM_LO, S2};
+use constants::delegation::falcon_decode;
 
 use crate::{poseidon2_permute, Digest};
 
@@ -26,9 +39,15 @@ pub const PUBLIC_KEY_BYTES: usize = 897;
 /// compressed and padded with zeros.
 pub const SIGNATURE_BYTES: usize = 666;
 
+/// A key's header byte, and a signature's.
+const KEY_HEADER: u8 = falcon_decode::HEADER as u8;
+const SIGNATURE_HEADER: u8 = 0x39;
+
 /// A signature's bytes after its header and salt: 5,000 bits, `s2`
 /// compressed and the padding.
 const COMPRESSED: usize = SIGNATURE_BYTES - 41;
+
+const _: () = assert!(COMPRESSED * 8 == falcon_decode::SIGNATURE_BITS as usize);
 
 /// K's first fields, its use and then the key's scheme, and HashToPoint's,
 /// which names the construction.
@@ -54,7 +73,7 @@ const Q4: u64 = falcon::Q.pow(4);
 pub struct Poly(pub [u16; N]);
 
 /// A Falcon-512 public key: the polynomial `h`, each coefficient below `q`;
-/// K, the [`key_digest`] of the bytes `h` was decoded from; and HashToPoint's
+/// K, the key digest of the bytes `h` was decoded from; and HashToPoint's
 /// sponge after the two fields every signature under the key begins with,
 /// `(1, SIGNATURE_DOMAIN)` and `(2, K)`, its 64 bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,27 +84,58 @@ pub struct PublicKey {
 }
 
 impl PublicKey {
-    /// The key `bytes` encode: exactly [`PUBLIC_KEY_BYTES`], the header
-    /// `0x09`, then `h`'s coefficients in order, 14 bits each, packed
-    /// big-endian, each below `q`. `None` for any other bytes, so a key has
-    /// one encoding. The bytes are read first, and only once they decode is K
-    /// computed from them, 18 permutations, and HashToPoint's per-key prefix
-    /// from K, 2: once a key.
+    /// The key `bytes` encode, or a panic: exactly [`PUBLIC_KEY_BYTES`], the
+    /// header `0x09`, then `h`'s coefficients in order, 14 bits each, packed
+    /// big-endian, each below `q`, so a key has one encoding. The length and
+    /// the header are checked here; the `FALCON512_DECODE` call writes `h`
+    /// into the key and refuses a coefficient at or above `q`, ending the
+    /// execution. Then K from the same bytes, 18 permutations, and
+    /// HashToPoint's per-key prefix from K, 2: once a key.
+    ///
+    /// Word-aligned `bytes` are read in place, a word at a time, the word
+    /// holding the last byte whole: the 3 bytes after the key must be
+    /// readable, in RAM or in the advice, or the execution fails. Other
+    /// `bytes` are copied to a word-aligned buffer first.
     // Inline: the key is then built in the caller's frame, not copied there.
     #[inline]
-    pub fn decode(bytes: &[u8]) -> Option<PublicKey> {
-        let mut key = PublicKey {
-            h: Poly([0; N]),
-            k: Digest([0; 8]),
-            prefix: Sponge::ZERO,
+    pub fn decode(bytes: &[u8]) -> PublicKey {
+        assert!(
+            bytes.len() == PUBLIC_KEY_BYTES,
+            "falcon512::PublicKey::decode: a key is 897 bytes"
+        );
+        assert!(
+            bytes[0] == KEY_HEADER,
+            "falcon512::PublicKey::decode: a key's header is 0x09"
+        );
+        let mut copy = MaybeUninit::uninit();
+        let bytes = word_aligned::<{ falcon_decode::SOURCE }>(bytes, &mut copy);
+        let mut key = MaybeUninit::<PublicKey>::uninit();
+        let at = key.as_mut_ptr();
+        // SAFETY: the source is word-aligned and readable through the word
+        // holding its byte 896, the caller's or the copy's; `h` is 256 words
+        // of the key, word-aligned, which the call writes whole.
+        unsafe {
+            decode_at(
+                falcon_decode::KEY,
+                bytes.as_ptr(),
+                (&raw mut (*at).h).cast(),
+            )
         };
-        if !unpack(bytes, &mut key.h) {
-            return None;
+        let mut sponge = Sponge::ZERO;
+        sponge.field(1, KEY_DOMAIN);
+        sponge.field(2, SCHEME_ID);
+        sponge.field(3, bytes);
+        poseidon2_permute(&mut sponge.state);
+        let k = Digest(core::array::from_fn(|i| sponge.state[i]));
+        let mut prefix = Sponge::ZERO;
+        prefix.field(1, SIGNATURE_DOMAIN);
+        prefix.field(2, &le_bytes::<64>(&k));
+        // SAFETY: `h` is the call's, and the rest of the key is written here.
+        unsafe {
+            (&raw mut (*at).k).write(k);
+            (&raw mut (*at).prefix).write(prefix);
+            key.assume_init()
         }
-        key.k = key_digest(bytes);
-        key.prefix.field(1, SIGNATURE_DOMAIN);
-        key.prefix.field(2, &le_bytes::<64>(&key.k));
-        Some(key)
     }
 
     /// K, the key digest of the key's bytes.
@@ -98,52 +148,70 @@ impl PublicKey {
         le_bytes(&self.k)
     }
 
-    /// Whether `sig` is a signature of `msg` under this key and `context`:
-    /// `context` at most 255 bytes; `sig` exactly [`SIGNATURE_BYTES`], the
-    /// header `0x39`, the salt, then `s2` compressed, each coefficient `s` its
-    /// sign bit, the low 7 bits of `|s|`, then `|s| >> 7` zeros and a one,
-    /// none `−0` and none above 2047 in size, and zeros to the end; and
-    /// `‖s1‖² + ‖s2‖²` at most [`SQBETA`], where `s1 = c − s2·h` and `c` is
-    /// HashToPoint of K, the salt, `context` and `msg`. The lattice check is
-    /// [`s1_norm`]'s, the rest is read here.
-    pub fn verify(&self, msg: &[u8], sig: &[u8], context: &[u8]) -> bool {
-        if context.len() > MAX_CONTEXT_BYTES {
-            return false;
-        }
-        let Some(([0x39, salt @ ..], compressed)) = sig.split_first_chunk::<41>() else {
-            return false;
+    /// Returns when `sig` is a signature of `msg` under this key and
+    /// `context`, and otherwise ends the execution: `context` at most 255
+    /// bytes; `sig` exactly [`SIGNATURE_BYTES`], the header `0x39`, the salt,
+    /// then `s2` compressed, each coefficient `s` its sign bit, the low 7 bits
+    /// of `|s|`, then `|s| >> 7` zeros and a one, none `−0` and none above
+    /// 2047 in size, and zeros to the end; and `‖s1‖² + ‖s2‖²` at most
+    /// [`SQBETA`], where `s1 = c − s2·h` and `c` is HashToPoint of K, the
+    /// salt, `context` and `msg`. The `FALCON512_DECODE` call decodes `s2`,
+    /// refusing every encoding that is not one; the zeros after it are
+    /// checked here, a panic, as are the rest; and the lattice check is
+    /// [`s1_norm`]'s.
+    ///
+    /// Where `s2`'s bytes, 41 into `sig`, are word-aligned they are read in
+    /// place, a word at a time through the word holding the stream's last
+    /// bit, which can be the 3 bytes after `sig`: those must be readable, in
+    /// RAM or in the advice, or the execution fails. Otherwise they are copied
+    /// to a word-aligned buffer first.
+    pub fn verify(&self, msg: &[u8], sig: &[u8], context: &[u8]) {
+        assert!(
+            context.len() <= MAX_CONTEXT_BYTES,
+            "falcon512::PublicKey::verify: a context is at most 255 bytes"
+        );
+        assert!(
+            sig.len() == SIGNATURE_BYTES,
+            "falcon512::PublicKey::verify: a signature is 666 bytes"
+        );
+        assert!(
+            sig[0] == SIGNATURE_HEADER,
+            "falcon512::PublicKey::verify: a signature's header is 0x39"
+        );
+        let (salt, compressed) = sig[1..].split_at(40);
+        let mut copy = MaybeUninit::uninit();
+        let compressed = word_aligned::<{ COMPRESSED.div_ceil(4) }>(compressed, &mut copy);
+        // Written whole by the calls, so neither is zeroed first.
+        let mut s2 = MaybeUninit::<Poly>::uninit();
+        let mut c = MaybeUninit::<[u64; N / 4]>::uninit();
+        // SAFETY: the source is word-aligned and readable through the word
+        // holding the stream's last bit, the caller's or the copy's; `s2` is
+        // 256 words on the stack, word-aligned, which the call writes whole.
+        let (s2_norm, end) = unsafe {
+            decode_at(
+                falcon_decode::SIGNATURE,
+                compressed.as_ptr(),
+                s2.as_mut_ptr().cast(),
+            )
         };
-        let Ok(compressed) = <&[u8; COMPRESSED]>::try_from(compressed) else {
-            return false;
-        };
-        let mut s2 = Poly([0; N]);
-        let Some(s2_norm) = decompress(compressed, &mut s2) else {
-            return false;
-        };
-        let mut c = Poly([0; N]);
+        // The stream's bits from its end to the 5,000th are zero: the call
+        // reads up to the word holding its last bit, and checks none after it.
+        let (byte, bit) = (end as usize / 8, end % 8);
+        let mut padding = compressed[byte..].iter();
+        assert!(
+            padding.next().is_none_or(|&b| b & (0xff >> bit) == 0) && padding.all(|&b| b == 0),
+            "falcon512::PublicKey::verify: a signature's padding is zeros"
+        );
         hash_to_point(&self.prefix, salt, context, msg, &mut c);
-        s1_norm(&self.h, &s2, &c) + s2_norm as u64 <= SQBETA
+        // SAFETY: `h`, `s2` and `c` are 512 coefficients each, word-aligned,
+        // `s2` and `c` written whole by the calls.
+        let s1_norm =
+            unsafe { s1_norm_at(self.h.0.as_ptr(), s2.as_ptr().cast(), c.as_ptr().cast()) };
+        assert!(
+            s1_norm + s2_norm as u64 <= SQBETA,
+            "falcon512::PublicKey::verify: the signature does not verify"
+        );
     }
-}
-
-/// K, the key digest of `bytes` (`docs/spec/precompiles.md` §7.7): the first
-/// eight lanes of the squeeze stream after the fields `(1, KEY_DOMAIN)`,
-/// `(2, SCHEME_ID)` and `(3, bytes)`, canonical as the call writes them.
-/// Defined for any bytes, a key that does not decode included; a decoded
-/// key's is [`PublicKey::key_digest`], computed once.
-pub fn key_digest(bytes: &[u8]) -> Digest {
-    let mut sponge = Sponge::ZERO;
-    sponge.field(1, KEY_DOMAIN);
-    sponge.field(2, SCHEME_ID);
-    sponge.field(3, bytes);
-    poseidon2_permute(&mut sponge.state);
-    Digest(core::array::from_fn(|i| sponge.state[i]))
-}
-
-/// The address of `bytes`: their [`key_digest`]'s first 32 bytes, lanes 0 to
-/// 3, each little-endian. A decoded key's is [`PublicKey::address`].
-pub fn address(bytes: &[u8]) -> [u8; 32] {
-    le_bytes(&key_digest(bytes))
 }
 
 /// `k`'s first `B / 8` lanes, each little-endian: its 64 canonical bytes, or
@@ -156,109 +224,47 @@ fn le_bytes<const B: usize>(k: &Digest) -> [u8; B] {
     bytes
 }
 
-/// [`PublicKey::decode`]'s `h` into `h`: whether `bytes` encode one.
-fn unpack(bytes: &[u8], h: &mut Poly) -> bool {
-    let Some(([0x09], packed)) = bytes.split_first_chunk() else {
-        return false;
-    };
-    if packed.len() != PUBLIC_KEY_BYTES - 1 {
-        return false;
+/// `bytes` where they are word-aligned, and otherwise a copy of them at the
+/// start of `copy`, its other bytes zero: the same bytes, word-aligned, which
+/// a decode call reads in place and [`Sponge::field`] a word at a time.
+/// Panics unless `W` words hold them.
+fn word_aligned<'a, const W: usize>(
+    bytes: &'a [u8],
+    copy: &'a mut MaybeUninit<[u32; W]>,
+) -> &'a [u8] {
+    if bytes.as_ptr().addr().is_multiple_of(4) {
+        return bytes;
     }
-    // Seven bytes are four coefficients.
-    for (seven, four) in packed.chunks_exact(7).zip(h.0.chunks_exact_mut(4)) {
-        let bits = seven.iter().fold(0u64, |bits, &b| bits << 8 | b as u64);
-        for (k, x) in four.iter_mut().enumerate() {
-            *x = (bits >> (42 - 14 * k)) as u16 & 0x3fff;
-            if *x >= Q {
-                return false;
-            }
-        }
-    }
-    true
+    let words = copy.write([0; W]);
+    // SAFETY: `W` words are `4·W` bytes.
+    let copy = unsafe { core::slice::from_raw_parts_mut(words.as_mut_ptr().cast::<u8>(), 4 * W) };
+    let copy = &mut copy[..bytes.len()];
+    copy.copy_from_slice(bytes);
+    copy
 }
 
-// Five bytes a load, so the loads land on the end of the compressed bytes.
-const _: () = assert!(COMPRESSED.is_multiple_of(5));
-
-/// `s2` from its compressed bytes into `s2`, a coefficient `s` as `s mod q`,
-/// and `‖s2‖²`; `None` unless `bytes` are 512 coefficients, none `−0` and none
-/// above 2047 in size, then zeros.
-fn decompress(bytes: &[u8; COMPRESSED], s2: &mut Poly) -> Option<u32> {
-    let mut reader = Reader {
-        bytes,
-        bits: 0,
-        have: 0,
-        at: 0,
-        norm: 0,
-    };
-    // Two a pass, which share its count and its address.
-    for [x, y] in s2.0.as_chunks_mut().0 {
-        *x = reader.coefficient()?;
-        *y = reader.coefficient()?;
-    }
-    // Every bit after the last coefficient is zero: those loaded, and the
-    // bytes not.
-    let rest = bytes.get(reader.at..).unwrap_or_default();
-    (reader.bits == 0 && rest.iter().all(|&b| b == 0)).then_some(reader.norm)
-}
-
-/// [`decompress`]'s place in the compressed bytes.
-struct Reader<'a> {
-    bytes: &'a [u8; COMPRESSED],
-    /// The bits not yet read, the next at bit 63 and zeros below them.
-    bits: u64,
-    /// How many: the bytes', then zeros past their end.
-    have: u32,
-    /// The next five bytes to load: at most `5 · 512`.
-    at: usize,
-    /// `‖s2‖²` so far.
-    norm: u32,
-}
-
-impl Reader<'_> {
-    /// The next coefficient `s`, as `s mod q`; `None` if it is `−0`, above
-    /// 2047 in size, or reaches past the bytes.
-    #[inline(always)]
-    fn coefficient(&mut self) -> Option<u16> {
-        // A coefficient is at most 24 bits: 8, then at most 15 zeros and a one.
-        if self.have < 24 {
-            if let Some(&[b0, b1, b2, b3, b4]) =
-                self.bytes.get(self.at..).and_then(<[u8]>::first_chunk)
-            {
-                let five = (b0 as u64) << 32
-                    | (b1 as u64) << 24
-                    | (b2 as u64) << 16
-                    | (b3 as u64) << 8
-                    | b4 as u64;
-                self.bits |= five << (24 - self.have);
-            }
-            self.at = self.at.wrapping_add(5);
-            self.have += 40;
-        }
-        let top = (self.bits >> 56) as u32;
-        let mut bits = self.bits << 8;
-        // A one within the next 16 bits, or `|s| > 2047`. Past the end there
-        // is none, so a coefficient reaching it is refused here.
-        if bits >> 48 == 0 {
-            return None;
-        }
-        // At most 15 zeros: `size` stays at most 2047, `have` at least 0, and
-        // `norm` below `512 · 2047² < 2^32`.
-        let mut size = top & 0x7f;
-        while (bits as i64) >= 0 {
-            bits <<= 1;
-            size = size.wrapping_add(128);
-            self.have = self.have.wrapping_sub(1);
-        }
-        self.bits = bits << 1;
-        self.have = self.have.wrapping_sub(9);
-        self.norm = self.norm.wrapping_add(size.wrapping_mul(size));
-        match (top >> 7, size) {
-            (0, _) => Some(size as u16),
-            (_, 0) => None,
-            _ => Some(Q.wrapping_sub(size as u16)),
-        }
-    }
+/// The `FALCON512_DECODE` call: the encoding at `src` decoded in `mode`,
+/// `falcon_decode::KEY` or `SIGNATURE`, into the 512 coefficients at `dst`,
+/// each below `q`, a signature's `s` as `s mod q`; `(‖s2‖², end)`, the norm 0
+/// for a key, `end` the bit after the last coefficient, counted from `src`'s
+/// first, its bytes MSB first. The call refuses every stream that is not an
+/// encoding, a key's header and a field at or above `q`, a signature's `−0`,
+/// more than 15 zeros and more than 5,000 bits, and anything misplaced,
+/// ending the execution; it checks no bit after `end`.
+///
+/// # Safety
+/// `src` and `dst` are word-aligned; `src` is readable through the word
+/// holding the stream's last bit, a key's 225 words and a signature's at most
+/// 157, and `dst` is writable for 512 `u16`, apart from them.
+pub(crate) unsafe fn decode_at(mode: u32, src: *const u8, dst: *mut u16) -> (u32, u32) {
+    let mut frame = [0u32; falcon_decode::FRAME];
+    frame[falcon_decode::SRC] = src as u32;
+    frame[falcon_decode::DST] = dst as u32;
+    frame[falcon_decode::MODE] = mode;
+    // SAFETY: the frame is four words on the stack, below the advice region
+    // and apart from the source and the polynomial.
+    super::delegate(&super::FALCON512_DECODE, frame.as_mut_ptr());
+    (frame[falcon_decode::MODE], frame[falcon_decode::END])
 }
 
 /// Poseidon2-A64-C5's overwrite duplex from the zero state, rate 8 and
@@ -282,57 +288,93 @@ impl Sponge {
 
     /// The field `tag`, `bytes`: the tag, the length in bytes, then the bytes
     /// seven to a lane, little-endian, the last chunk shorter, each lane below
-    /// `2^56 < p`.
+    /// `2^56 < p`. Word-aligned `bytes` are read 28 at a time, four lanes from
+    /// seven word loads; other bytes, and those after the last 28, a byte at a
+    /// time.
+    // Inline: most fields are a few lanes, and a call's overhead a large part
+    // of their cost.
+    #[inline(always)]
     fn field(&mut self, tag: u64, bytes: &[u8]) {
-        let (sevens, rest) = bytes.as_chunks::<7>();
-        let sevens = sevens.iter().map(|seven| lane(seven));
-        let rest = (!rest.is_empty()).then(|| lane(rest));
-        let header = [tag, bytes.len() as u64];
-        self.absorb(header.into_iter().chain(sevens).chain(rest));
+        // Held apart from `self`, which the call may write, so in a register.
+        let mut at = self.at;
+        self.absorb(&mut at, tag);
+        self.absorb(&mut at, bytes.len() as u64);
+        let (fours, rest) = if bytes.as_ptr().addr().is_multiple_of(4) {
+            bytes.as_chunks::<28>()
+        } else {
+            (&[][..], bytes)
+        };
+        for four in fours {
+            // SAFETY: 28 bytes, word-aligned, as `bytes` are and 28 is a
+            // multiple of 4: seven words.
+            let w = |i: usize| unsafe { four.as_ptr().cast::<u32>().add(i).read() } as u64;
+            self.absorb(&mut at, w(0) | (w(1) & 0xff_ffff) << 32);
+            self.absorb(&mut at, w(1) >> 24 | w(2) << 8 | (w(3) & 0xffff) << 40);
+            self.absorb(&mut at, w(3) >> 16 | w(4) << 16 | (w(5) & 0xff) << 48);
+            self.absorb(&mut at, w(5) >> 8 | w(6) << 24);
+        }
+        let (sevens, rest) = rest.as_chunks::<7>();
+        for seven in sevens {
+            self.absorb(&mut at, lane(seven));
+        }
+        if !rest.is_empty() {
+            self.absorb(&mut at, lane(rest));
+        }
+        self.at = at;
     }
 
-    /// Each of `lanes` into the next rate lane, the state permuted first when
-    /// the rate is full.
+    /// `x` into rate lane `at`, the state permuted first when the rate is
+    /// full, and `at` the next.
     #[inline(always)]
-    fn absorb(&mut self, lanes: impl Iterator<Item = u64>) {
-        // Held apart from `self`, which the call may write, so in a register;
-        // at most 8, and below it after the test, so the index is unchecked.
-        let mut at = self.at;
-        lanes.for_each(|x| {
-            if at >= 8 {
-                poseidon2_permute(&mut self.state);
-                at = 0;
-            }
-            self.state[at] = x;
-            at += 1;
-        });
-        self.at = at;
+    fn absorb(&mut self, at: &mut usize, x: u64) {
+        // At most 8, and below it after the test, so the index is unchecked.
+        if *at >= 8 {
+            poseidon2_permute(&mut self.state);
+            *at = 0;
+        }
+        self.state[*at] = x;
+        *at += 1;
     }
 }
 
 /// HashToPoint into `c`: from a key's prefix, the fields `(3, salt)`,
 /// `(4, context)` and `(5, msg)`, then each lane `x` of the squeeze stream
-/// below [`T`] the next four coefficients, `⌊x / q^j⌋ mod q` for `j < 4`, the
-/// others skipped, until 512.
-fn hash_to_point(prefix: &Sponge, salt: &[u8; 40], context: &[u8], msg: &[u8], c: &mut Poly) {
+/// below [`T`] the next of `c`'s 128 lanes, the others skipped, every eight
+/// rewritten in place by the `FALCON512_SAMPLE` call as their four base-`q`
+/// digits `⌊x / q^j⌋ mod q`, `j < 4`: the point's 512 coefficients, as `u16`.
+fn hash_to_point(
+    prefix: &Sponge,
+    salt: &[u8],
+    context: &[u8],
+    msg: &[u8],
+    c: &mut MaybeUninit<[u64; N / 4]>,
+) {
     let mut sponge = prefix.clone();
     sponge.field(3, salt);
     sponge.field(4, context);
     sponge.field(5, msg);
-    let mut fours = c.0.as_chunks_mut::<4>().0.iter_mut();
+    let c = c.as_mut_ptr().cast::<u64>();
+    let mut n = 0;
     loop {
         poseidon2_permute(&mut sponge.state);
         for &x in &sponge.state[..8] {
+            // The rejection is this compare, proven as the guest's: the call
+            // sees only lanes below `T`, and would refuse another.
             if x < T {
-                let Some(four) = fours.next() else {
-                    return;
-                };
-                digits(x, four);
+                // SAFETY: `n` is below 128, as the point is whole, and the
+                // loop over, at 128.
+                unsafe { c.add(n).write(x) };
+                n += 1;
+                if n.is_multiple_of(8) {
+                    // SAFETY: the eight lanes before `n`, each below `T`,
+                    // 8-aligned on the stack.
+                    unsafe { sample_at(c.add(n - 8)) };
+                    // No permutation once the point is whole.
+                    if n == N / 4 {
+                        return;
+                    }
+                }
             }
-        }
-        // No permutation once the point is whole.
-        if fours.len() == 0 {
-            return;
         }
     }
 }
@@ -341,19 +383,6 @@ fn hash_to_point(prefix: &Sponge, salt: &[u8; 40], context: &[u8], msg: &[u8], c
 #[inline(always)]
 fn lane(bytes: &[u8]) -> u64 {
     bytes.iter().rev().fold(0, |x, &b| x << 8 | b as u64)
-}
-
-/// `x`'s four least significant base-`q` digits into `four`, `⌊x / q^j⌋ mod q`
-/// for `j < 4`: `x_j − q·x_(j+1)` where `x_j = ⌊x / q^j⌋`, and `x_3 mod q`
-/// last. No subtraction wraps; `wrapping_sub` drops only the checks.
-#[inline(always)]
-fn digits(x: u64, four: &mut [u16; 4]) {
-    const Q: u64 = falcon::Q;
-    let (x1, x2, x3) = (x / Q, x / (Q * Q), x / (Q * Q * Q));
-    four[0] = x.wrapping_sub(Q * x1) as u16;
-    four[1] = x1.wrapping_sub(Q * x2) as u16;
-    four[2] = x2.wrapping_sub(Q * x3) as u16;
-    four[3] = (x3 % Q) as u16;
 }
 
 /// `‖s1‖²` by the precompile, `s1 = (c − s2·h) mod (q, x^512 + 1)` with each
@@ -403,5 +432,15 @@ pub fn sample(lanes: &mut [u64; 8]) {
         "falcon512::sample: eight lanes below 808·q^4"
     );
     // SAFETY: a `[u64; 8]` is 16 words, 8-aligned, and the whole frame.
-    unsafe { super::delegate(&super::FALCON512_SAMPLE, lanes.as_mut_ptr().cast()) }
+    unsafe { sample_at(lanes.as_mut_ptr()) }
+}
+
+/// [`sample`] over the eight lanes at `lanes`, unchecked: the caller has
+/// compared each with `808·q^4`, as the call refuses one at or above it.
+///
+/// # Safety
+/// `lanes` is 8-aligned, below the advice region, and valid for reads and
+/// writes of 8 `u64`.
+unsafe fn sample_at(lanes: *mut u64) {
+    super::delegate(&super::FALCON512_SAMPLE, lanes.cast())
 }

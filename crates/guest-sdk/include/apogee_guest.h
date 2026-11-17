@@ -10,7 +10,7 @@
  * An Apogee guest has no files and no streams. Its public input, advice and
  * journal are memory the proof binds — or, for advice, does not — and these
  * four calls are the whole of reaching them (docs/guest-program-manual.md §11,
- * docs/spec/public-values.md). The last four calls are precompiles, each
+ * docs/spec/public-values.md). The last six calls are precompiles, each
  * a circuit of its own (docs/spec/precompiles.md).
  *
  * The library also provides `memcpy`, `memmove`, `memset` and `memcmp`, the
@@ -85,6 +85,22 @@ uint64_t apogee_falcon512_s1_norm(const uint16_t h[512], const uint16_t s2[512],
  * region. A lane at or above 808*q^4, the largest multiple of q^4 below p,
  * exits 101, a panic. */
 void apogee_falcon512_sample(uint64_t lanes[8]);
+
+/* Falcon-512's decoder by the precompile: in `mode` 0 the public key at
+ * `src`, its header 0x09 then 512 fields of 14 bits, each below q; in `mode`
+ * 1 a signature's compressed s2 at `src`, its byte 41, 512 coefficients, none
+ * -0, none above 2047 in size, within 5,000 bits. The coefficients are
+ * written to `dst`, s2's each s mod q. Returns ||s2||^2, 0 for a key, and
+ * stores the stream's end through `end` where not null: the bit after the
+ * last coefficient, counted from `src`'s first, its bytes MSB first, a key's
+ * 7176. A signature's bits from there to 5,000 are the caller's to check
+ * zero. `src` and `dst` are 4-aligned and apart; `src` is read a word at a
+ * time, the word holding the stream's last bit whole (a key's 3 bytes after
+ * it), and may be anywhere a load reaches, the advice included. Anything
+ * else, and any stream that is not an encoding, the call refuses: the
+ * execution fails. */
+uint32_t apogee_falcon512_decode(uint32_t mode, const uint8_t *src, uint16_t dst[512],
+                                 uint32_t *end);
 
 /* The guest's entry, which the library's startup calls. Declared here with C
  * linkage because a freestanding C++ compiler does not give `main` any: a

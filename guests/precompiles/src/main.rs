@@ -55,9 +55,10 @@
 //!                                   T − 1, ⌊T/3⌋, T − q^4 and
 //!                                   0x0123456789abcdef, T = ⌊p/q^4⌋·q^4, each
 //!                                   its four base-q digits, u16 LE
-//!   PublicKey::verify               a byte a case: 1 the signature verifies
-//!                                   under the context, 0 it does not, 2 the
-//!                                   key does not decode
+//!   PublicKey::verify               a byte a case, 1: the key decodes and the
+//!                                   signature verifies under the context; any
+//!                                   other case ends the execution, a panic or
+//!                                   the decode call's refusal
 //! ```
 //!
 //! With 126 runs the depth-20 path is levels 4,080 to 4,099: it straddles
@@ -220,10 +221,8 @@ fn main() {
             &input[read - len..read]
         };
         let (key, message, context, signature) = (field(), field(), field(), field());
-        put(&[match PublicKey::decode(key) {
-            Some(key) => key.verify(message, signature, context) as u8,
-            None => 2,
-        }]);
+        PublicKey::decode(key).verify(message, signature, context);
+        put(&[1]);
     }
     guest_sdk::commit(&out[..at]);
 }

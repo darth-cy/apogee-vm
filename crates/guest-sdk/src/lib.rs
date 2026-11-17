@@ -17,8 +17,8 @@
 //! `docs/spec/public-values.md` specifies all three.
 //!
 //! The ecall ABI is [`exit`] and the delegation calls, each a shim over one
-//! frame: [`poseidon2_permute`], [`merkle_root`], [`falcon512::s1_norm`],
-//! and [`U256`]'s divisions. An ecall carries its number in `a7` and its
+//! frame: [`poseidon2_permute`], [`merkle_root`], [`falcon512`]'s decoder,
+//! sampler and [`falcon512::s1_norm`], and [`U256`]'s divisions. An ecall carries its number in `a7` and its
 //! argument in `a0`; `docs/spec/ecall-abi.md` is the table, every number
 //! [`constants::ecall`]'s.
 //!
@@ -457,6 +457,9 @@ static FALCON512: u32 = ecall::FALCON512;
 #[link_section = ".apogee.delegations.falcon512_sample"]
 static FALCON512_SAMPLE: u32 = ecall::FALCON512_SAMPLE;
 
+#[link_section = ".apogee.delegations.falcon512_decode"]
+static FALCON512_DECODE: u32 = ecall::FALCON512_DECODE;
+
 /// One delegation call over the frame at `frame`, its ecall number read back
 /// out of `declared`. Through `black_box`: folded to an immediate, the read
 /// would leave the record unreferenced and the declaration out of the image.
@@ -716,6 +719,28 @@ pub unsafe extern "C" fn apogee_falcon512_s1_norm(
 #[no_mangle]
 pub unsafe extern "C" fn apogee_falcon512_sample(lanes: *mut u64) {
     falcon512::sample(&mut *lanes.cast::<[u64; 8]>())
+}
+
+/// The `FALCON512_DECODE` call in `mode` over the encoding at `src` into the
+/// 512 coefficients at `dst`: returns `‖s2‖²`, 0 for a key, and stores the
+/// stream's end through `end` where not null. The call refuses everything
+/// else, ending the execution.
+///
+/// # Safety
+/// `src` and `dst` are 4-aligned; `src` is readable through the word holding
+/// the stream's last bit, and `dst` writable for 512 `uint16_t`, apart.
+#[no_mangle]
+pub unsafe extern "C" fn apogee_falcon512_decode(
+    mode: u32,
+    src: *const u8,
+    dst: *mut u16,
+    end: *mut u32,
+) -> u32 {
+    let (norm, at) = falcon512::decode_at(mode, src, dst);
+    if !end.is_null() {
+        *end = at;
+    }
+    norm
 }
 
 /// `U256::mul_div_rem()`: `q = floor(a·b/d)` and `r = a·b mod d`, four
