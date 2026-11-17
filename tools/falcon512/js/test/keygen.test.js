@@ -5,8 +5,8 @@ import { readFileSync } from 'node:fs';
 import { SEED_BYTES, keygen, _shake256 } from '../keygen.js';
 import { publicKeyFromSecretKey, sign, verify } from '../falcon512.js';
 
-// Keys made by the Falcon round-3 reference C; fixtures/wallet.json's "how" says how each was made.
-const fixture = JSON.parse(readFileSync(new URL('./fixtures/wallet.json', import.meta.url), 'utf8'));
+// Keys made by the Falcon round-3 reference C; fixtures/recovery.json's "how" says how each was made.
+const fixture = JSON.parse(readFileSync(new URL('./fixtures/recovery.json', import.meta.url), 'utf8'));
 const hex = (data) => Buffer.from(data).toString('hex');
 const unhex = (text) => Uint8Array.from(Buffer.from(text, 'hex'));
 
@@ -26,11 +26,11 @@ test('keygen gives the reference implementation\'s keys for KAT seeds', () => {
   }
 });
 
-test('keygen gives the reference implementation\'s keys for wallet account seeds', () => {
-  for (const account of fixture.accounts) {
-    const { publicKey, secretKey } = keygen(unhex(account.accountSeed));
-    assert.equal(hex(publicKey), account.publicKey, `index ${account.index}`);
-    assert.equal(hex(secretKey), account.secretKey, `index ${account.index}`);
+test('keygen gives the reference implementation\'s keys for user address seeds', () => {
+  for (const user of fixture.addresses) {
+    const { publicKey, secretKey } = keygen(unhex(user.addressSeed));
+    assert.equal(hex(publicKey), user.publicKey, `index ${user.index}`);
+    assert.equal(hex(secretKey), user.secretKey, `index ${user.index}`);
   }
 });
 

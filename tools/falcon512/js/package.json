@@ -13,9 +13,9 @@
       "types": "./keygen.d.ts",
       "default": "./keygen.js"
     },
-    "./wallet.js": {
-      "types": "./wallet.d.ts",
-      "default": "./wallet.js"
+    "./recovery.js": {
+      "types": "./recovery.d.ts",
+      "default": "./recovery.js"
     }
   },
   "types": "./falcon512.d.ts",

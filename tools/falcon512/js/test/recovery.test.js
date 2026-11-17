@@ -4,13 +4,13 @@ import { createHash, createHmac, getRandomValues } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { WORDLIST } from '../bip39-english.js';
 import {
-  generateMnemonic, validateMnemonic, mnemonicToSeed, accountSeed, deriveAccount, _entropyToMnemonic,
-} from '../wallet.js';
+  generateMnemonic, validateMnemonic, mnemonicToSeed, addressSeed, deriveUserAddress, _entropyToMnemonic,
+} from '../recovery.js';
 import { address, formatAddress } from '../falcon512.js';
 
 // The official BIP39 vectors and keys made by the Falcon round-3 reference C; "how" in the file says
 // how each part was made.
-const fixture = JSON.parse(readFileSync(new URL('./fixtures/wallet.json', import.meta.url), 'utf8'));
+const fixture = JSON.parse(readFileSync(new URL('./fixtures/recovery.json', import.meta.url), 'utf8'));
 const hex = (data) => Buffer.from(data).toString('hex');
 const unhex = (text) => Uint8Array.from(Buffer.from(text, 'hex'));
 const MNEMONIC = fixture.bip39[3].mnemonic;
@@ -68,7 +68,7 @@ test('mnemonicToSeed normalizes the passphrase (NFKD)', async () => {
   assert.equal(hex(await mnemonicToSeed(MNEMONIC, fullwidth)), fixture.bip39[3].seed);
 });
 
-test('accountSeed is HKDF-SHA512 (an HMAC computation with node:crypto agrees)', async () => {
+test('addressSeed is HKDF-SHA512 (an HMAC computation with node:crypto agrees)', async () => {
   // RFC 5869 with an empty salt (HMAC pads the key, as it pads HashLen zeros).
   const hkdf = (ikm, info, length) => {
     const prk = createHmac('sha512', Buffer.alloc(0)).update(ikm).digest();
@@ -79,46 +79,46 @@ test('accountSeed is HKDF-SHA512 (an HMAC computation with node:crypto agrees)',
     }
     return out.subarray(0, length);
   };
-  const scheme = Buffer.from('apogee/wallet/falcon512/v1');
+  const scheme = Buffer.from('apogee/user-address/falcon512/v1');
   for (const index of [0, 1, 2 ** 31, 2 ** 32 - 1]) {
     const root = getRandomValues(new Uint8Array(64)), u32 = Buffer.alloc(4);
     u32.writeUInt32BE(index);
     const info = Buffer.concat([Buffer.of(scheme.length), scheme, u32]);
-    assert.equal(hex(await accountSeed(root, index)), hkdf(root, info, 48).toString('hex'), `index ${index}`);
+    assert.equal(hex(await addressSeed(root, index)), hkdf(root, info, 48).toString('hex'), `index ${index}`);
   }
-  for (const account of fixture.accounts) {
-    const root = fixture.bip39.find((v) => v.mnemonic === account.mnemonic).seed;
-    assert.equal(hex(await accountSeed(unhex(root), account.index)), account.accountSeed);
+  for (const user of fixture.addresses) {
+    const root = fixture.bip39.find((v) => v.mnemonic === user.mnemonic).seed;
+    assert.equal(hex(await addressSeed(unhex(root), user.index)), user.addressSeed);
   }
   const root = new Uint8Array(64);
-  for (const index of [-1, 2 ** 32, 1.5, '1']) await assert.rejects(accountSeed(root, index), RangeError);
-  await assert.rejects(accountSeed(new Uint8Array(48), 0), TypeError);
+  for (const index of [-1, 2 ** 32, 1.5, '1']) await assert.rejects(addressSeed(root, index), RangeError);
+  await assert.rejects(addressSeed(new Uint8Array(48), 0), TypeError);
 });
 
-test('deriveAccount gives the reference implementation\'s keys and their address', async () => {
-  for (const account of fixture.accounts) {
-    const derived = await deriveAccount(account.mnemonic, { passphrase: account.passphrase, index: account.index });
-    assert.equal(hex(derived.publicKey), account.publicKey, `index ${account.index}`);
-    assert.equal(hex(derived.secretKey), account.secretKey, `index ${account.index}`);
+test('deriveUserAddress gives the reference implementation\'s keys and their address', async () => {
+  for (const user of fixture.addresses) {
+    const derived = await deriveUserAddress(user.mnemonic, { passphrase: user.passphrase, index: user.index });
+    assert.equal(hex(derived.publicKey), user.publicKey, `index ${user.index}`);
+    assert.equal(hex(derived.secretKey), user.secretKey, `index ${user.index}`);
     assert.deepEqual(derived.address, address(derived.publicKey));
     assert.equal(derived.addressText, formatAddress(derived.address));
   }
 });
 
-test('recovery: the same mnemonic (any case or spacing), passphrase and index give the same account', async () => {
-  const account = fixture.accounts[1];
-  const typed = `  ${account.mnemonic.toUpperCase().split(' ').join('  ')}\n`;
-  const recovered = await deriveAccount(typed, { passphrase: account.passphrase, index: account.index });
-  assert.equal(hex(recovered.publicKey), account.publicKey);
-  assert.equal(hex(recovered.secretKey), account.secretKey);
-  const other = await deriveAccount(account.mnemonic, { index: account.index });
-  assert.notEqual(hex(other.publicKey), account.publicKey); // a different passphrase, another wallet
+test('recovery: the same mnemonic (any case or spacing), passphrase and index give the same user address', async () => {
+  const user = fixture.addresses[1];
+  const typed = `  ${user.mnemonic.toUpperCase().split(' ').join('  ')}\n`;
+  const recovered = await deriveUserAddress(typed, { passphrase: user.passphrase, index: user.index });
+  assert.equal(hex(recovered.publicKey), user.publicKey);
+  assert.equal(hex(recovered.secretKey), user.secretKey);
+  const other = await deriveUserAddress(user.mnemonic, { index: user.index });
+  assert.notEqual(hex(other.publicKey), user.publicKey); // a different passphrase, another user address
 });
 
-test('deriveAccount takes only a generated mnemonic', async () => {
-  await assert.rejects(deriveAccount(TWELVE), /24 words/);
-  await assert.rejects(deriveAccount(badChecksum()), /checksum/);
-  await assert.rejects(deriveAccount(MNEMONIC, { index: -1 }), RangeError);
+test('deriveUserAddress takes only a generated mnemonic', async () => {
+  await assert.rejects(deriveUserAddress(TWELVE), /24 words/);
+  await assert.rejects(deriveUserAddress(badChecksum()), /checksum/);
+  await assert.rejects(deriveUserAddress(MNEMONIC, { index: -1 }), RangeError);
 });
 
 test('generateMnemonic: 24 listed words with a valid checksum, new each time', async () => {
@@ -126,6 +126,6 @@ test('generateMnemonic: 24 listed words with a valid checksum, new each time', a
   assert.equal(a.split(' ').length, 24);
   assert.equal(validateMnemonic(a), a);
   assert.notEqual(a, b);
-  const account = await deriveAccount(a);
-  assert.equal(account.addressText.length, 74);
+  const user = await deriveUserAddress(a);
+  assert.equal(user.addressText.length, 74);
 });

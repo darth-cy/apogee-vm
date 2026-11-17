@@ -3,7 +3,7 @@
 // goes into SHAKE256 (initialized, the seed injected, flipped), that SHAKE256 is the random source
 // of keygen.c's Zf(keygen) at logn = 9, and the keys are encoded as nist.c's crypto_sign_keypair
 // encodes them. The same seed gives the same keys as the reference C, byte for byte, on every
-// platform: this is what lets a wallet recover a key from its seed.
+// platform: this is what lets recovery.js recover a key from its seed.
 //
 // What is ported, and how:
 //  - SHAKE256 (shake.c): our own Keccak-f[1600] on 32-bit halves; browsers have none.

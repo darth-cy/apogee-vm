@@ -659,8 +659,8 @@ export function publicKeyFromSecretKey(secretKey) {
 
 /**
  * A fresh key pair, { secretKey: 1281 bytes, publicKey: 897 bytes }: the reference keygen (keygen.js)
- * of 48 random bytes. A wallet derives its keys from a mnemonic instead (wallet.js), so that the same
- * words recover them.
+ * of 48 random bytes. A user address's keys come from a recovery phrase instead (recovery.js), so
+ * that the same words recover them.
  */
 export function generateKeyPair() {
   return keygen(globalThis.crypto.getRandomValues(new Uint8Array(SEED_BYTES)));

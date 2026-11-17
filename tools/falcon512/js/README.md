@@ -33,7 +33,7 @@ bytes, empty by default. A signature verifies only under the context it was made
 that signs for several purposes keeps a signature for one from passing as another's. `sign` throws
 on a longer context; `verify` returns false.
 
-**The address** names an account: the first 32 bytes of K, the key digest, a sponge over the domain
+**The address** names a user: the first 32 bytes of K, the key digest, a sponge over the domain
 `apogee/key/v1`, the scheme `falcon512-poseidon2/v1` and the 897-byte public key. Its text is `0x`,
 the address in 64 lowercase hex digits, then 8 hex digits of a checksum (a sponge over the address),
 74 characters. `parseAddress` reads hex digits of either case after exactly `0x`, and refuses any
@@ -65,34 +65,37 @@ console.log(formatAddress(address(publicKey))); // 0x… (74 characters)
 </script>
 ```
 
-## Wallet
+## User addresses
 
-`wallet.js` makes accounts from a 24-word BIP39 mnemonic; `keygen.js` is the key generation it uses.
+`recovery.js` derives user addresses from a 24-word recovery phrase (a BIP39 mnemonic); `keygen.js`
+is the key generation it uses. The app's own frontend generates the phrase, derives the keys and
+signs with them, so an Apogee app needs no separate signing app.
 
 ```js
-generateMnemonic()                                // string: 24 words for 32 random bytes
-validateMnemonic(text)                            // string: the canonical sentence; throws unless valid
-mnemonicToSeed(mnemonic, passphrase?)             // Promise<Uint8Array(64)>: BIP39's seed
-accountSeed(rootSeed, index)                      // Promise<Uint8Array(48)>: account index's seed
-deriveAccount(mnemonic, { passphrase?, index? })  // Promise<{ secretKey, publicKey, address, addressText }>
-keygen(seed)                                      // keygen.js: { secretKey, publicKey } of a 48-byte seed
+generateMnemonic()                                    // string: a recovery phrase, 24 words for 32 random bytes
+validateMnemonic(text)                                // string: the canonical sentence; throws unless valid
+mnemonicToSeed(mnemonic, passphrase?)                 // Promise<Uint8Array(64)>: BIP39's seed
+addressSeed(rootSeed, index)                          // Promise<Uint8Array(48)>: user address index's seed
+deriveUserAddress(mnemonic, { passphrase?, index? })  // Promise<{ secretKey, publicKey, address, addressText }>
+keygen(seed)                                          // keygen.js: { secretKey, publicKey } of a 48-byte seed
 ```
 
 1. **Generate.** `generateMnemonic()` draws 32 bytes from `crypto.getRandomValues` and writes them
-   as 24 words of the BIP39 English list, the last word carrying an 8-bit SHA-256 checksum.
-2. **Back up the 24 words** (and the passphrase, if one is used). They are the wallet: whoever has
-   them has every account, and nothing else recovers it.
-3. **Derive account i.** `deriveAccount(mnemonic, { passphrase, index: i })` takes BIP39's seed
-   (PBKDF2-HMAC-SHA512, 2048 rounds, salt `"mnemonic"` ‖ passphrase), then HKDF-SHA512 with info
-   `u8(26) ‖ "apogee/wallet/falcon512/v1" ‖ u32_be(i)` for the account's 48-byte seed, then
+   as 24 words of the BIP39 English list, the last word carrying an 8-bit SHA-256 checksum: the
+   recovery phrase. The frontend generates it; the user never invents one.
+2. **Back up the 24 words** (and the passphrase, if one is used). Whoever has them has every user
+   address they derive, and nothing else recovers one.
+3. **Derive user address i.** `deriveUserAddress(mnemonic, { passphrase, index: i })` takes BIP39's
+   seed (PBKDF2-HMAC-SHA512, 2048 rounds, salt `"mnemonic"` ‖ passphrase), then HKDF-SHA512 with info
+   `u8(32) ‖ "apogee/user-address/falcon512/v1" ‖ u32_be(i)` for the address's 48-byte seed, then
    `keygen` for its key pair; the address is `address(publicKey)`. Indices run from 0 to 2^32 − 1.
-4. **Recover.** The same words, passphrase and index give the same keys and the same address, on
-   any device. Case, spacing and Unicode compatibility forms of the words do not matter (they are
+4. **Recover.** The same words, passphrase and index give the same keys and the same user address,
+   on any device. Case, spacing and Unicode compatibility forms of the words do not matter (they are
    read as NFKD, lower case, single spaces); the passphrase is taken as typed (NFKD).
 
-**Keys come only from generated mnemonics.** `deriveAccount` refuses anything but 24 words of the
+**Keys come only from generated phrases.** `deriveUserAddress` refuses anything but 24 words of the
 English list with a valid checksum, a 12-word BIP39 mnemonic included: a mistyped word is caught
-instead of opening an empty wallet, and no key comes from words a person picked.
+instead of deriving another, empty user address, and no key comes from words a person picked.
 
 **Key generation is the reference's.** `keygen(seed)` is a bit-exact port of the Falcon round-3
 reference implementation's key generation (`Zf(keygen)` at logn = 9 with SHAKE256 of the seed as
@@ -101,12 +104,12 @@ same keys as the reference C, on every platform, which is what makes recovery wo
 deterministic and synchronous, about 10 ms in Node 24.
 
 ```js
-import { generateMnemonic, deriveAccount } from 'apogee-falcon512/wallet.js';
+import { generateMnemonic, deriveUserAddress } from 'apogee-falcon512/recovery.js';
 
-const mnemonic = generateMnemonic(); // shown once, for the user to write down
-const { addressText, secretKey } = await deriveAccount(mnemonic, { index: 0 });
-// Later, on any device, the words typed back in recover the same account:
-const again = await deriveAccount(typedWords, { index: 0 }); // again.addressText === addressText
+const phrase = generateMnemonic(); // shown once, for the user to write down
+const { addressText, secretKey } = await deriveUserAddress(phrase, { index: 0 });
+// Later, on any device, the words typed back in recover the same user address:
+const again = await deriveUserAddress(typedWords, { index: 0 }); // again.addressText === addressText
 ```
 
 In browsers, `crypto.subtle` (PBKDF2, HKDF) needs a secure context (HTTPS or localhost).
@@ -123,7 +126,7 @@ time the signer. Verification uses only public data.
 key digest and address properties; `test/vectors.test.js` reads the vectors shared with the Rust and
 Python implementations, `../vectors.json`, the official Falcon-512 KAT among them (through the verify
 core, with standard HashToPoint computed by the test). `test/keygen.test.js` holds `keygen` to keys
-the reference C made (KAT seeds and wallet account seeds) and SHAKE256 to node:crypto's;
-`test/wallet.test.js` checks the official BIP39 vectors, HKDF against an HMAC computation, and
-derived accounts against the reference's keys. `test/fixtures/wallet.json` says how each value in
-it was made.
+the reference C made (KAT seeds and user address seeds) and SHAKE256 to node:crypto's;
+`test/recovery.test.js` checks the official BIP39 vectors, HKDF against an HMAC computation, and
+derived user addresses against the reference's keys. `test/fixtures/recovery.json` says how each
+value in it was made.

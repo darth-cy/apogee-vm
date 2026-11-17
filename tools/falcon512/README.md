@@ -14,25 +14,31 @@ to their own repositories.
 | Directory | Implementation | Suite |
 |---|---|---|
 | `rust/` | crate `apogee-falcon512`: keys from a seed, signing, the verifier the guest SDK's is held to | `cargo test -p apogee-falcon512` |
-| `js/` | ES modules, no dependencies, Node.js ≥ 20 and browsers; also the wallet (below) | `node --test` in `js/` |
+| `js/` | ES modules, no dependencies, Node.js ≥ 20 and browsers; also user addresses (below) | `node --test` in `js/` |
 | `python/` | package `apogee_falcon512`, standard library only, Python ≥ 3.9 | `python3 -m unittest discover -s tests` in `python/` |
 
-## The wallet (JavaScript only)
+## User addresses (JavaScript only)
 
-A user's keys come from 24 generated BIP39 words, never from a sentence the user invents:
+A user is known by a user address, and a user's address comes from a 24-word recovery phrase that
+the app's frontend generates (BIP39 words for 256 random bits), never from a sentence the user
+invents. The app's own frontend derives the keys from the phrase and signs with them, so an Apogee
+app needs no separate signing app. The same phrase, passphrase and index recover the same user
+address:
 
 ```
-root_seed    = BIP39(words, passphrase)                       PBKDF2-HMAC-SHA512, 2048 rounds, 64 bytes
-account_seed = HKDF-SHA512(root_seed, salt empty,
-                           info = u8(26) ‖ "apogee/wallet/falcon512/v1" ‖ u32_be(index), 48 bytes)
-(sk, pk)     = the Falcon round-3 reference keygen of account_seed (SHAKE256 of the seed as its RNG)
+root_seed    = BIP39(phrase, passphrase)                      PBKDF2-HMAC-SHA512, 2048 rounds, 64 bytes
+address_seed = HKDF-SHA512(root_seed, salt empty,
+                           info = u8(32) ‖ "apogee/user-address/falcon512/v1" ‖ u32_be(index), 48 bytes)
+(sk, pk)     = the Falcon round-3 reference keygen of address_seed (SHAKE256 of the seed as its RNG)
 address      = K(pk)[0..32]
 ```
 
-The keygen is the reference implementation's, bit for bit, so the same words, passphrase and index
-recover the same keys and address everywhere. `js/README.md` has the API, and
-`js/test/fixtures/wallet.json` holds its vectors: the official BIP39 vectors, account seeds, and keys
-from the compiled reference C. The Rust and Python packages sign and verify, but have no wallet.
+`deriveUserAddress(phrase, { passphrase, index })` in `js/recovery.js` computes these four lines
+and returns the keys, the address and its text. The keygen is the reference implementation's, bit
+for bit, so the same phrase, passphrase and index recover the same keys and address everywhere.
+`js/README.md` has the API, and `js/test/fixtures/recovery.json` holds its vectors: the official
+BIP39 vectors, address seeds, and keys from the compiled reference C. The Rust and Python packages
+sign and verify, but derive no user addresses.
 
 ## `vectors.json`
 

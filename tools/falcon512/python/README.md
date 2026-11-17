@@ -35,7 +35,7 @@ bytes, empty by default. A signature verifies only under the context it was made
 that signs for several purposes keeps a signature for one from passing as another's. `sign` raises
 `ValueError` on a longer context; `verify` returns `False`.
 
-**The address** names an account: the first 32 bytes of K, the key digest, a sponge over the domain
+**The address** names a user: the first 32 bytes of K, the key digest, a sponge over the domain
 `apogee/key/v1`, the scheme `falcon512-poseidon2/v1` and the 897-byte public key (K is defined for
 any bytes). Its text is `0x`, the address in 64 lowercase hex digits, then 8 hex digits of a checksum
 (a sponge over the address), 74 characters. `parse_address` reads hex digits of either case after
@@ -71,27 +71,27 @@ from django.views.decorators.http import require_POST
 
 import apogee_falcon512 as falcon
 
-from .models import Account  # public_key = models.BinaryField(max_length=897)
+from .models import User  # public_key = models.BinaryField(max_length=897)
 
 CONTEXT = b"example.com/submit/v1"  # the client signs under the same context
 
 
 @csrf_exempt
 @require_POST
-def submit(request, account_id):
-    account = get_object_or_404(Account, pk=account_id)
+def submit(request, user_id):
+    user = get_object_or_404(User, pk=user_id)
     try:
         signature = base64.b64decode(request.headers["X-Signature"], validate=True)
     except (KeyError, ValueError):
         return HttpResponseForbidden("missing or malformed signature")
-    if not falcon.verify(account.public_key, request.body, signature, CONTEXT):
+    if not falcon.verify(user.public_key, request.body, signature, CONTEXT):
         return HttpResponseForbidden("bad signature")
     return JsonResponse({"accepted": True})
 ```
 
 A signature covers exactly the bytes signed and its context: put a nonce or timestamp in the body
-if a replayed request must be refused. An account's address, `falcon.address(public_key)`, can key
-the table; `falcon.parse_address` reads it from a URL or a form.
+if a replayed request must be refused. A user's address, `falcon.address(public_key)`, can key the
+table; `falcon.parse_address` reads it from a URL or a form.
 
 ## Caveat
 
