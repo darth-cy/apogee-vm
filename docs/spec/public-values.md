@@ -129,9 +129,9 @@ guest's, and says nothing about advice.
 Advice is memory whose initial values the prover chose: `ADVICE_WINDOWS` initializes
 `[ADVICE_ORIGIN, ADVICE_ORIGIN + 4hk)` from an `M[2]` that nothing binds, not identity, not the
 statement, not a gate. A guest reads it with ordinary loads, each bounding the word it reads, and
-no precompile frame lies there ([precompiles.md](precompiles.md) §1). A Merkle path's siblings
-and a Falcon call's arrays may: their call holds each of their words to a word as a load does, and
-writes it back unchanged ([precompiles.md](precompiles.md) §6, §7).
+no precompile frame lies there ([precompiles.md](precompiles.md) §1). A Merkle path's siblings,
+a Falcon call's arrays and a decode call's source may: their call holds each of their words to a
+word as a load does, and writes it back unchanged ([precompiles.md](precompiles.md) §6–§8).
 
 - **Layout.** §3's framing over `1 + ⌈len/4⌉` words (`trace::advice_region_words`), spelled once
   by `trace::advice_word` for the executor and the prover; `guest_sdk::advice` reads it back.

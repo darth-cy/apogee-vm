@@ -28,11 +28,12 @@ count is the instruction count.
 | 6 | `MERKLE` | a call's cycle, its lane pair `s` at boundary `B` the timestamp `16B + s`, a level's control `16B + 8` | nothing: a path's state between its rows |
 | 7 | retired | | |
 | 8 | `FALCON` | a call's cycle, a chain's control at its stamp; `64·cycle + 17P + j`, split row `(P, j)`'s residue pair `r` at the timestamp `r` | nothing: a lattice check's chains and residues between its rows |
+| 9 | `FALCON_DECODE` | a call's cycle, row `r`'s state tuple `j` at the timestamp `4r + j`, the end state's at `512 + j` | nothing: a decode call's state between its rows |
 
 The tags are nonzero so that no real tuple is all zeros, as `x0`'s initial write would be; 7 is
-retired, never to be reassigned, and 9 is the tag the next space takes. Spaces 4 to 6 and 8 are
+retired, never to be reassigned, and 10 is the tag the next space takes. Spaces 4 to 6, 8 and 9 are
 the precompile circuits' alone and no event is logged in them ([precompiles.md](precompiles.md)
-§2, §3, §6, §7). RAM is 32-bit words: a byte or halfword access queries its word, a doubleword
+§2, §3, §6, §7, §8). RAM is 32-bit words: a byte or halfword access queries its word, a doubleword
 access its two words, and `trace::InitialMemory` is what RAM starts from. A query's value is a
 `u64`: a register's 64 bits, a RAM word's 32.
 
@@ -91,7 +92,7 @@ the number ([ecall-abi.md](ecall-abi.md)):
 | `a7` | Δ = 2 | `a0` written at Δ = 3 | `next_pc` | Besides |
 | --- | --- | --- | --- | --- |
 | `EXIT` | `a0`, the status | the status | `HALT_PC` | the execution stops |
-| a delegation | `a0`, the frame base | none | fall-through | each frame word read and written at slot 0, the frame family's, and a Merkle path's siblings or a Falcon call's arrays read there after it; the call, each level of the path, or the arrays, recorded in each of its families' buffers ([precompiles.md](precompiles.md) §1) |
+| a delegation | `a0`, the frame base | none | fall-through | each frame word read and written at slot 0, the frame family's, and a Merkle path's siblings, a Falcon call's arrays, or a decode call's polynomial and source words accessed there after it; the call, each level of the path, the arrays, or the decode call with its words, recorded in each of its families' buffers ([precompiles.md](precompiles.md) §1) |
 | any other | none | `-ENOSYS` | fall-through | no proof admits the row ([ecall-abi.md](ecall-abi.md) §4) |
 
 ## 7. The order of the log
@@ -172,7 +173,8 @@ the rest.
   `write_value`; no padding, no polynomial. A row stores everything its queries carry but a write
   timestamp, `4c + Δ`, and the pc query's read timestamp, `4(c − 1)`. A delegation family's is a
   `DelegationTrace`: per entry, its requesting cycle, its base, each of its words' query and its
-  carry.
+  carry. A decode call's entry has a fixed width, its source slots past the words it read
+  `Query::ABSENT`, which no event records ([precompiles.md](precompiles.md) §8.4).
 - **`RowSlice`.** One shard's rows, `[i·h, min((i + 1)·h, len))`, borrowed: what the memory column
   builders read, never the log ([memory.md](memory.md) §2). A delegation shard's is a `FrameSlice`
   of its entries, `h` over the family's rows an entry of them.

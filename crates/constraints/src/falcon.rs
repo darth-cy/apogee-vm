@@ -105,7 +105,7 @@
 //! ## The sampler
 //!
 //! `FALCON_SAMPLE`, one row a `FALCON512_SAMPLE` call
-//! (`docs/spec/precompiles.md` §7.7): the frame's eight lanes, lane `l` the
+//! (`docs/spec/precompiles.md` §9): the frame's eight lanes, lane `l` the
 //! integer `x = lo + 2^32·hi` of its words `2l` and `2l + 1`, each rewritten
 //! as two of `x`'s base-`q` digits `d_j`, `j < 4`, and `e` the rest of `x`
 //! past them. The frame lies below the advice (`room`), where every value is a

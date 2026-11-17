@@ -1,5 +1,7 @@
-//! The five precompiles over a real execution, `guests/precompiles` built
-//! from source, in ordinary CI and without a proof (`docs/spec/precompiles.md`):
+//! Five of the six precompiles over a real execution, `guests/precompiles`
+//! built from source, in ordinary CI and without a proof
+//! (`docs/spec/precompiles.md`); its input verifies no signature, so
+//! `FALCON512_DECODE` is `crates/checker/tests/falcon_decode.rs`':
 //!
 //! - **the journal is the host's**: the Poseidon2 permutation of the
 //!   generator's own input and of lanes at `2^64 − 1`, read mod `p`, a Merkle

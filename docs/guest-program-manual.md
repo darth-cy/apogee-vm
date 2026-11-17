@@ -12,7 +12,7 @@ directory below the root.
 
 A guest is an Apogee-SDK program, not a Linux one: no file descriptors, streams, clock, entropy or
 diagnostic output. Its public input, its journal and the prover's advice are memory, read and
-written with ordinary loads and stores, and its only ecalls are `EXIT` and the four precompiles the
+written with ordinary loads and stores, and its only ecalls are `EXIT` and the six precompiles the
 SDK calls (§3.1). Any other number answers `-ENOSYS` and leaves the run unprovable
 ([ecall-abi.md](spec/ecall-abi.md) §4).
 
@@ -114,15 +114,26 @@ fn main() {
   committed, so a verifier reads the exit status.
 - Checking the advice is the guest's job: committing a function of unchecked advice publishes what
   the prover chose ([public-values.md](spec/public-values.md) §6).
+- **Every failure ends the run.** Whatever makes the input or the advice malformed, a record that
+  does not open, a signature that does not verify, an advice byte too many, ends the execution, a
+  panic or a precompile's refusal, and is never a validity flag the guest carries on with: nothing
+  malformed has a proof of a run that exits 0, and no outcome turns on the prover's choice of
+  advice. The SDK's Falcon-512 calls answer so ([precompiles.md](spec/precompiles.md) §5).
+- **The advice is as compact as soundness allows.** It holds only what the state transition uses:
+  business data, signed or opened against the state, and what attests it, a key, a signature, a
+  Merkle path; no byte that is format alone, a constant header, padding or trailing zeros. Every
+  byte it carries is consumed, so one missing or extra throws every read after it into a refusal,
+  and a byte past the last read is a panic (`guests/amazon`, §3.3).
 
 `digest` is a collision-resistant hash: a Merkle root of `guest_sdk::poseidon2_compress`, say
 (§3.1). [ecall-abi.md](spec/ecall-abi.md) §6 lists the SDK.
 
 ### 3.1 Precompiles and `U256`
 
-Four operations are not RV64IMAC code but a circuit each, which a guest reaches through the SDK
+Six operations are not RV64IMAC code but a circuit each, which a guest reaches through the SDK
 ([precompiles.md](spec/precompiles.md)): the Poseidon2-A64-C5 permutation, the 256-bit `mul_div`
-that a token balance's arithmetic is built on, a Merkle path's root and Falcon-512's lattice check.
+that a token balance's arithmetic is built on, a Merkle path's root, and three steps of Falcon-512
+verification, decoding a key or a signature, HashToPoint's sampling and the lattice check.
 
 ```rust
 use guest_sdk::{falcon512::PublicKey, merkle_root, poseidon2_compress, Digest, U256};
@@ -130,8 +141,8 @@ use guest_sdk::{falcon512::PublicKey, merkle_root, poseidon2_compress, Digest, U
 let leaf = poseidon2_compress(&left, &right); // a node over two Digests, each lane below p
 let root = merkle_root(slot, &leaf, &advice[at..at + 64 * 20]); // a 20-level path, read in place
 let share = U256::from(amount).mul_div(U256::from(total), U256::from(reserve)); // Option<U256>
-let key = PublicKey::decode(key_bytes).expect("a key"); // Falcon-512's 897 bytes, v1.2
-let signed = key.verify(&request, sig); // a 666-byte signature of the request's bytes
+let key = PublicKey::decode(&advice[k..k + 896]); // a Falcon-512 key's h, or the run ends
+let len = key.verify(&request, &advice[s..], b"app/v1"); // a signature of request, or the run ends
 ```
 
 - `U256` is four `u64` limbs, least significant first, with `from_be_bytes` for an EVM word. Its
@@ -146,21 +157,26 @@ let signed = key.verify(&request, sig); // a 666-byte signature of the request's
   where the slot's bit is 0, and each sibling lane is read mod `p`, so a path needs no decoding. It
   costs a level row and sixteen round rows a level and no guest cycles; `Digest::bytes(&path)`
   passes a path the guest holds itself.
-- `falcon512::PublicKey::decode(bytes)` reads a Falcon-512 public key, v1.2 of the specification,
-  and `key.verify(msg, sig, context)` is whether `sig` signs `msg` under it and the application's
-  `context`, at most 255 bytes, a malformed signature `false`: the lattice check is the Falcon-512
-  call, and HashToPoint, a Poseidon2 sponge of the key digest K, the salt, the context and the
-  message ([precompiles.md](spec/precompiles.md) §7.7), is Poseidon2 calls. A standard Falcon-512
-  signature does not verify; `tools/falcon512` signs under this HashToPoint. Decoding computes K
-  from the key's bytes and HashToPoint's per-key prefix from K, once, ≈10.7K cycles; verifying a
-  signature of a 92-byte message under a 25-byte context continues from there, ≈17.7K.
+- `falcon512::PublicKey::decode(h)` reads a Falcon-512 public key from its advised form, `h`'s 896
+  bytes, and `key.verify(msg, sig, context)` checks that `sig` begins with a signature of `msg`
+  under it and the application's `context`, at most 255 bytes, and returns the signature's length,
+  so a guest reading signatures in turn steps past each. The advised forms are
+  [precompiles.md](spec/precompiles.md) §5's, which `tools/falcon512`'s `key_advice` and
+  `signature_advice` make from v1.2's 897- and 666-byte encodings. Neither call answers a verdict:
+  a malformed key or signature, or one that does not verify, ends the run. Decoding is the
+  `FALCON512_DECODE` call, the lattice check the `FALCON512` call, and HashToPoint, a Poseidon2
+  sponge of the key digest K, the salt, the context and the message
+  ([precompiles.md](spec/precompiles.md) §7.7), is Poseidon2 calls and `FALCON512_SAMPLE` ones. A
+  standard Falcon-512 signature does not verify; `tools/falcon512` signs under this HashToPoint.
+  Decoding computes K and HashToPoint's per-key prefix from K, once, ≈2.0K cycles; verifying a
+  signature of a 92-byte message under a 25-byte context continues from there, ≈2.1K.
   `key.key_digest()` is K and `key.address()` the key's address, K's first 32 bytes, which names
-  an account; `falcon512::key_digest(bytes)` and `falcon512::address(bytes)` are any bytes', and
-  `falcon512::s1_norm` the lattice check alone, for a guest with encodings of its own.
+  an account; `falcon512::s1_norm` is the lattice check alone and `falcon512::sample` the sampler,
+  for a guest with encodings of its own.
 - A precompile's frame is the guest's own memory below the advice region, which the SDK's calls
   always are: advice is copied in before `poseidon2_permute` hashes it, and a frame reaching the
-  advice is the fatal `OutOfBounds`. A path's siblings and `s1_norm`'s arrays are not a frame:
-  `merkle_root` and `s1_norm` read an advised path or array where it lies.
+  advice is the fatal `OutOfBounds`. A path's siblings, `s1_norm`'s arrays, a key and a signature
+  are not a frame: `merkle_root`, `s1_norm` and `PublicKey` read an advised one where it lies.
 - A guest that links a precompile pays one shard of each family it declares, at `2^16` rows: worth
   it once the call replaces more instructions than that ([circuits.md](spec/circuits.md) §1).
 - `guests/marketplace` is the worked example of a table a proof follows by its root: a listings
@@ -230,9 +246,11 @@ the requests and drops a request whose signature does not verify, as a rollup's 
 does. The advice holds every record the batch reads and no other, each once, the users ascending by
 address, each with its slot; after the batch each is verified once and, where it changed, written
 back once, its path under its table's root as the writes before it left it, and no record is
-opened per purchase. Until the users table is keyed by address it is assumed to hold each address
-at most once, and a request from an address the advice does not hold is a malformed batch, as
-nothing proves an address absent.
+opened per purchase. Keys and signatures follow the records in the SDK's compact forms, a key only
+at its user's first signature and a signature only for a request that reaches its check, each a
+whole number of words read in place, and a byte after the last path is a panic. Until the users
+table is keyed by address it is assumed to hold each address at most once, and a request from an
+address the advice does not hold is a malformed batch, as nothing proves an address absent.
 
 ## 4. Build it
 

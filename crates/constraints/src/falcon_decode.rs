@@ -1,4 +1,4 @@
-//! The `FALCON512_DECODE` precompile (`docs/spec/precompiles.md` §7): the
+//! The `FALCON512_DECODE` precompile (`docs/spec/precompiles.md` §8): the
 //! Falcon-512 encoding at the frame's source decoded into 512 coefficients
 //! mod `q` at its destination, a public key's `h` or a signature's `s2`, as
 //! one circuit on `crate::delegation`'s builder, `FALCON_DECODE`: [`ROWS`]

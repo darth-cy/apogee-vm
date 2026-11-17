@@ -5,7 +5,7 @@
 //! is a sponge over the key's v1.2 encoding, and the key's address K's first
 //! 32 bytes.
 //!
-//! Precompiles do the work (`constants::delegation`, §7): `FALCON512_DECODE`
+//! Precompiles do the work (`constants::delegation`, §7–§9): `FALCON512_DECODE`
 //! decodes a public key's `h` and a signature's `s2`, refusing every stream
 //! that is not one; `FALCON512_SAMPLE` turns HashToPoint's accepted lanes
 //! into coefficients; `FALCON512` is the lattice check, [`s1_norm`]; and the

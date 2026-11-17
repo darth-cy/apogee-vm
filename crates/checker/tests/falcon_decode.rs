@@ -1,5 +1,5 @@
 //! `FALCON512_DECODE` over a real execution, without a proof
-//! (`docs/spec/precompiles.md` §7, `constraints::falcon_decode`): a
+//! (`docs/spec/precompiles.md` §8, `constraints::falcon_decode`): a
 //! hand-assembled guest decoding a public key's `h` and a signature's `s2`,
 //! both compact and fresh from `apogee-falcon512`'s randomized signer, its
 //! `FALCON_DECODE` shard filled from the run:
