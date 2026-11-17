@@ -12,7 +12,7 @@ directory below the root.
 
 A guest is an Apogee-SDK program, not a Linux one: no file descriptors, streams, clock, entropy or
 diagnostic output. Its public input, its journal and the prover's advice are memory, read and
-written with ordinary loads and stores, and its only ecalls are `EXIT` and the five precompiles the
+written with ordinary loads and stores, and its only ecalls are `EXIT` and the four precompiles the
 SDK calls (§3.1). Any other number answers `-ENOSYS` and leaves the run unprovable
 ([ecall-abi.md](spec/ecall-abi.md) §4).
 
@@ -120,10 +120,9 @@ fn main() {
 
 ### 3.1 Precompiles and `U256`
 
-Five operations are not RV64IMAC code but a circuit each, which a guest reaches through the SDK
+Four operations are not RV64IMAC code but a circuit each, which a guest reaches through the SDK
 ([precompiles.md](spec/precompiles.md)): the Poseidon2-A64-C5 permutation, the 256-bit `mul_div`
-that a token balance's arithmetic is built on, a Merkle path's root, the Keccak-f[1600] permutation
-and Falcon-512's lattice check.
+that a token balance's arithmetic is built on, a Merkle path's root and Falcon-512's lattice check.
 
 ```rust
 use guest_sdk::{falcon512::PublicKey, merkle_root, poseidon2_compress, Digest, U256};
@@ -147,18 +146,15 @@ let signed = key.verify(&request, sig); // a 666-byte signature of the request's
   where the slot's bit is 0, and each sibling lane is read mod `p`, so a path needs no decoding. It
   costs a level row and sixteen round rows a level and no guest cycles; `Digest::bytes(&path)`
   passes a path the guest holds itself.
-- `keccak_f1600(&mut state)` is FIPS 202's Keccak-f[1600] of 25 `u64` lanes, in place, the
-  permutation under every SHA-3 and SHAKE hash; `Shake256` is SHAKE256 over it: `absorb` bytes,
-  `finalize`, then `squeeze` any number.
 - `falcon512::PublicKey::decode(bytes)` reads a Falcon-512 public key, v1.2 of the specification,
   and `key.verify(msg, sig)` is whether `sig` signs `msg` under it, a malformed signature `false`:
-  the lattice check is the Falcon-512 call, and HashToPoint, not v1.2's SHAKE256 but a Poseidon2
-  sponge of the key, the salt and the message ([precompiles.md](spec/precompiles.md) §8.7), is
-  Poseidon2 calls. A standard Falcon-512 signature does not verify; `tools/falcon512` signs under
-  this HashToPoint. Decoding absorbs the key, once, ≈9.9K cycles; verifying a signature of a
-  64-byte message continues from there, ≈17.5K, and `key.digest()`, the key's KeyDigest, is one
-  permutation from there. `falcon512::key_digest(bytes)` is the KeyDigest of any bytes, and
-  `falcon512::s1_norm` the lattice check alone, for a guest with encodings of its own.
+  the lattice check is the Falcon-512 call, and HashToPoint, a Poseidon2 sponge of the key, the
+  salt and the message ([precompiles.md](spec/precompiles.md) §7.7), is Poseidon2 calls. A
+  standard Falcon-512 signature does not verify; `tools/falcon512` signs under this HashToPoint.
+  Decoding absorbs the key, once, ≈9.9K cycles; verifying a signature of a 64-byte message
+  continues from there, ≈17.5K, and `key.digest()`, the key's KeyDigest, is one permutation from
+  there. `falcon512::key_digest(bytes)` is the KeyDigest of any bytes, and `falcon512::s1_norm`
+  the lattice check alone, for a guest with encodings of its own.
 - A precompile's frame is the guest's own memory below the advice region, which the SDK's calls
   always are: advice is copied in before `poseidon2_permute` hashes it, and a frame reaching the
   advice is the fatal `OutOfBounds`. A path's siblings and `s1_norm`'s arrays are not a frame:

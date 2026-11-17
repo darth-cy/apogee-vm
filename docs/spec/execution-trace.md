@@ -26,14 +26,15 @@ count is the instruction count.
 | 4 | `DELEGATION` | a delegation call's frame base | nothing: a request's anchor, read by its invocation |
 | 5 | `POSEIDON2` | a call's cycle, its lane pair `j` at boundary `b` the timestamp `8b + j` | nothing: the state between its rows |
 | 6 | `MERKLE` | a call's cycle, its lane pair `s` at boundary `B` the timestamp `16B + s`, a level's control `16B + 8` | nothing: a path's state between its rows |
-| 7 | `KECCAK` | a call's cycle, two bytes of its group `g` the timestamp `32g` plus their pair | nothing: a permutation's bytes between its rows |
+| 7 | retired | | |
 | 8 | `FALCON` | a call's cycle, a chain's control at its stamp; `64·cycle + 17P + j`, split row `(P, j)`'s residue pair `r` at the timestamp `r` | nothing: a lattice check's chains and residues between its rows |
 
-The tags are nonzero so that no real tuple is all zeros, as `x0`'s initial write would be; 9 is the
-tag the next space takes. Spaces 4 to 8 are the precompile circuits' alone and no event is logged
-in them ([precompiles.md](precompiles.md) §2, §3, §6, §7, §8). RAM is 32-bit words: a byte or
-halfword access queries its word, a doubleword access its two words, and `trace::InitialMemory` is
-what RAM starts from. A query's value is a `u64`: a register's 64 bits, a RAM word's 32.
+The tags are nonzero so that no real tuple is all zeros, as `x0`'s initial write would be; 7 is
+retired, never to be reassigned, and 9 is the tag the next space takes. Spaces 4 to 6 and 8 are
+the precompile circuits' alone and no event is logged in them ([precompiles.md](precompiles.md)
+§2, §3, §6, §7). RAM is 32-bit words: a byte or halfword access queries its word, a doubleword
+access its two words, and `trace::InitialMemory` is what RAM starts from. A query's value is a
+`u64`: a register's 64 bits, a RAM word's 32.
 
 ## 3. A query
 

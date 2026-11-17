@@ -16,57 +16,56 @@ Families 0–6 (`constants::family`) are the **execution** families, one execute
 row ([add-sub.md](add-sub.md), [jump-branch-slt.md](jump-branch-slt.md),
 [bitwise.md](bitwise.md), [mul-div.md](mul-div.md), [memory-ops.md](memory-ops.md) §3,
 §4, §6); 7–11 the **window** families, one memory word a row ([memory.md](memory.md) §3,
-[public-values.md](public-values.md) §4); 12–23 the **delegation** families, a block of 1 to 128
-rows an entry of a precompile call: the call, a path's level or the call's arrays
-([precompiles.md](precompiles.md) §1).
+[public-values.md](public-values.md) §4); 12–17 and 21–23 the **delegation** families, a block of
+1 to 64 rows an entry of a precompile call: the call, a path's level or the call's arrays
+([precompiles.md](precompiles.md) §1); 18–20 are retired, never to be reassigned.
 
 Shapes at the default height `2^n` (`constants::family::DEFAULT_HEIGHTS`): committed columns,
-enforcing gates, obligations per channel (`TIMESTAMP/RANGE16/GENERIC/DECODER/XOR8`), row-wise gate
+enforcing gates, obligations per channel (`TIMESTAMP/RANGE16/GENERIC/DECODER`), row-wise gate
 lists (the halving ones are `n`), inner columns, artifact bytes, and a shard proof's bytes,
 [proof.md](proof.md) §9's layout over the shape:
 
 | id | family | `n` | `M` | `W` | `S` | gates | lookups | row-wise | inner | bytes | proof |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | `ADD_SUB_LUI_AUIPC` | 22 | 28 | 37 | 11 | 59 | 8/5/1/1/0 | 5 | 356 | 43,534 | 32,520 |
-| 1 | `JUMP_BRANCH_SLT` | 22 | 27 | 51 | 11 | 55 | 8/11/2/1/0 | 5 | 392 | 47,372 | 33,304 |
-| 2 | `BITWISE` | 22 | 27 | 48 | 11 | 39 | 8/0/8/1/0 | 5 | 330 | 41,384 | 31,560 |
-| 3 | `MUL_DIV` | 20 | 27 | 98 | 11 | 87 | 13/26/6/1/0 | 6 | 458 | 68,761 | 32,800 |
-| 4 | `MEM_WORD` | 22 | 37 | 34 | 11 | 48 | 12/6/1/1/0 | 5 | 370 | 43,175 | 32,840 |
-| 5 | `MEM_SUBWORD` | 22 | 37 | 59 | 11 | 64 | 12/21/1/1/0 | 6 | 472 | 58,121 | 36,288 |
-| 6 | `ATOMICS` | 20 | 37 | 93 | 10 | 81 | 12/15/12/1/0 | 5 | 430 | 66,122 | 31,128 |
+| 0 | `ADD_SUB_LUI_AUIPC` | 22 | 28 | 37 | 11 | 59 | 8/5/1/1 | 5 | 356 | 43,534 | 32,520 |
+| 1 | `JUMP_BRANCH_SLT` | 22 | 27 | 51 | 11 | 55 | 8/11/2/1 | 5 | 392 | 47,372 | 33,304 |
+| 2 | `BITWISE` | 22 | 27 | 48 | 11 | 39 | 8/0/8/1 | 5 | 330 | 41,384 | 31,560 |
+| 3 | `MUL_DIV` | 20 | 27 | 98 | 11 | 87 | 13/26/6/1 | 6 | 458 | 68,761 | 32,800 |
+| 4 | `MEM_WORD` | 22 | 37 | 34 | 11 | 48 | 12/6/1/1 | 5 | 370 | 43,175 | 32,840 |
+| 5 | `MEM_SUBWORD` | 22 | 37 | 59 | 11 | 64 | 12/21/1/1 | 6 | 472 | 58,121 | 36,288 |
+| 6 | `ATOMICS` | 20 | 37 | 93 | 10 | 81 | 12/15/12/1 | 5 | 430 | 66,122 | 31,128 |
 | 7 | `INIT_TEARDOWN` | 22 | 2 | 0 | 1 | 0 | — | 1 | 46 | 3,019 | 17,912 |
 | 8 | `ZERO_WINDOWS` | 22 | 2 | 0 | 0 | 0 | — | 1 | 46 | 2,794 | 17,896 |
 | 9 | `PUBLIC_INPUT` | 12 | 3 | 0 | 0 | 0 | — | 1 | 26 | 1,759 | 5,992 |
 | 10 | `PUBLIC_OUTPUT` | 12 | 2 | 0 | 0 | 0 | — | 1 | 26 | 1,714 | 5,976 |
 | 11 | `ADVICE_WINDOWS` | 22 | 3 | 0 | 0 | 0 | — | 1 | 46 | 2,839 | 17,912 |
-| 12 | `POSEIDON2` | 16 | 164 | 130 | 0 | 98 | 0/210/0/0/0 | 9 | 1,344 | 208,518 | 44,376 |
+| 12 | `POSEIDON2` | 16 | 164 | 130 | 0 | 98 | 0/210/0/0 | 9 | 1,344 | 208,518 | 44,376 |
 | 13 | `POSEIDON2_ROUNDS` | 16 | 35 | 65 | 0 | 84 | — | 4 | 62 | 58,609 | 15,088 |
-| 14 | `MUL_DIV_U256` | 16 | 91 | 135 | 0 | 48 | 0/239/0/0/0 | 9 | 1,218 | 180,932 | 41,272 |
-| 15 | `MERKLE_ROOT` | 16 | 94 | 72 | 0 | 54 | 0/120/0/0/0 | 8 | 704 | 103,449 | 31,056 |
-| 16 | `MERKLE_LEVELS` | 16 | 63 | 50 | 0 | 20 | 0/97/0/0/0 | 8 | 704 | 138,302 | 30,208 |
-| 17 | `MERKLE_ROUNDS` | 16 | 36 | 66 | 0 | 85 | 0/1/0/0/0 | 4 | 104 | 64,028 | 16,304 |
-| 18 | `KECCAK` | 16 | 246 | 63 | 0 | 77 | 0/42/0/0/120 | 8 | 1,372 | 230,125 | 44,544 |
-| 19 | `KECCAK_RHO` | 16 | 131 | 110 | 0 | 82 | 0/0/0/0/80 | 8 | 830 | 173,954 | 34,272 |
-| 20 | `KECCAK_CHI` | 16 | 209 | 114 | 0 | 86 | 0/0/0/0/204 | 9 | 1,344 | 237,262 | 44,840 |
-| 21 | `FALCON` | 16 | 27 | 13 | 0 | 10 | 0/25/0/0/0 | 6 | 254 | 30,823 | 19,776 |
-| 22 | `FALCON_SPLIT` | 16 | 86 | 145 | 0 | 50 | 0/225/0/0/0 | 9 | 1,344 | 212,715 | 43,368 |
-| 23 | `FALCON_PRODUCT` | 16 | 101 | 144 | 0 | 84 | 0/192/0/0/0 | 9 | 1,344 | 222,800 | 43,592 |
+| 14 | `MUL_DIV_U256` | 16 | 91 | 135 | 0 | 48 | 0/239/0/0 | 9 | 1,218 | 180,932 | 41,272 |
+| 15 | `MERKLE_ROOT` | 16 | 94 | 72 | 0 | 54 | 0/120/0/0 | 8 | 704 | 103,449 | 31,056 |
+| 16 | `MERKLE_LEVELS` | 16 | 63 | 50 | 0 | 20 | 0/97/0/0 | 8 | 704 | 138,302 | 30,208 |
+| 17 | `MERKLE_ROUNDS` | 16 | 36 | 66 | 0 | 85 | 0/1/0/0 | 4 | 104 | 64,028 | 16,304 |
+| 18 | retired | | | | | | | | | | |
+| 19 | retired | | | | | | | | | | |
+| 20 | retired | | | | | | | | | | |
+| 21 | `FALCON` | 16 | 27 | 13 | 0 | 10 | 0/25/0/0 | 6 | 254 | 30,823 | 19,776 |
+| 22 | `FALCON_SPLIT` | 16 | 86 | 145 | 0 | 50 | 0/225/0/0 | 9 | 1,344 | 212,715 | 43,368 |
+| 23 | `FALCON_PRODUCT` | 16 | 101 | 144 | 0 | 84 | 0/192/0/0 | 9 | 1,344 | 222,800 | 43,592 |
 
 The bytes are the GKR pass and outputs; the witness commitment and the opening come on top
 ([proof.md](proof.md) §9, [pcs.md](pcs.md) §7).
 
 **Heights.** The registry returns `None` above `MAX_TRACE_VARS` = 30, and below the floor
 [lookup.md](lookup.md) §3 derives from the family's channels: 19 with `TIMESTAMP`, else 16 with
-`RANGE16` or `XOR8`, else 0. A height changes `trace_vars`, each list's variable count and the
-number of halving lists, one per variable and as wide as the outputs, and no gate below them: at
-`2^20` `ADD_SUB_LUI_AUIPC` has 336 inner columns, 42,162 bytes and a 28,584-byte proof.
+`RANGE16`, else 0. A height changes `trace_vars`, each list's variable count and the number of
+halving lists, one per variable and as wide as the outputs, and no gate below them: at `2^20`
+`ADD_SUB_LUI_AUIPC` has 336 inner columns, 42,162 bytes and a 28,584-byte proof.
 
 **Shared circuits.** `PUBLIC_OUTPUT`'s circuit is `ZERO_WINDOWS`' and `ADVICE_WINDOWS`' is
 `PUBLIC_INPUT`'s, byte for byte at one height, all `constraints::memory` constructors
 ([memory.md](memory.md) §3). Every other family's is its own module's `artifact`, the delegation
 families' on `constraints::delegation`'s builder: `poseidon2::{artifact, rounds_artifact}`,
-`mul_div_u256::artifact`, `merkle::{artifact, levels_artifact, rounds_artifact}`,
-`keccak::{artifact, rho_artifact, chi_artifact}` and
+`mul_div_u256::artifact`, `merkle::{artifact, levels_artifact, rounds_artifact}` and
 `falcon::{artifact, split_artifact, product_artifact}`, the two rounds families on one builder,
 `poseidon2::rounds`, keyed for a call or a level.
 
@@ -102,10 +101,9 @@ constructor panics on a refusal, so every circuit that exists has passed them. I
   request, [precompiles.md](precompiles.md) §2);
 - the window constructors ([memory.md](memory.md) §3);
 - `delegation::Builder`, the delegation families: `M[0] live`, each leaf masked by it or by an `M`
-  column held boolean, zero where `live` is (`leaf_under`), each obligation selected by it or by a
-  committed column held boolean (`range16_under`, `xor8_under`), columns named once, leaves padded
-  to one power of two a side, the channels `RANGE16` and `XOR8` in that order, each where an
-  obligation uses it, and `lookup::check_copowers` over its scaled chunks
+  column held boolean, zero where `live` is (`leaf_under`), each obligation selected by it, columns
+  named once, leaves padded to one power of two a side, the one channel `RANGE16` where there is
+  an obligation, and `lookup::check_copowers` over its scaled chunks
   ([precompiles.md](precompiles.md) §1).
 
 Beyond the frame, each execution family has `m_pc` as the row's liveness and every other mask
