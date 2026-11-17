@@ -10,7 +10,8 @@
 //! levels straddle a shard; Falcon-512's lattice check of the three arrays the
 //! public input carries, once and then their rotations in turn; HashToPoint's
 //! sampler over lanes at its edges; and Falcon-512 verification of the keys,
-//! messages, contexts and signatures it carries.
+//! signatures, messages and contexts it carries, the keys and the signatures
+//! in the SDK's advised forms.
 //!
 //! # The public input
 //!
@@ -25,10 +26,17 @@
 //!           s2       512 u16 LE      read mod q
 //!           c        512 u16 LE
 //!           more     u32 LE          s1_norm calls after the first
-//!   then    cases    u32 LE          Falcon-512 verifications, each a key, a
-//!                                    message, a context and a signature, each
-//!                                    a u32 LE length and its bytes
+//!   then    cases    u32 LE          Falcon-512 verifications
+//!           keys     per case        its key, 896 bytes, then its signature, a
+//!                                    u32 LE length and its bytes, a whole
+//!                                    number of words
+//!           strings  per case        its message, then its context, each a
+//!                                    u32 LE length and its bytes
 //! ```
+//!
+//! Every key and signature starts on a word, as the SDK reads them in place,
+//! and no byte of the input is padding: the messages and contexts, of any
+//! length, follow every case's key and signature.
 //!
 //! # The journal
 //!
@@ -55,8 +63,9 @@
 //!                                   T − 1, ⌊T/3⌋, T − q^4 and
 //!                                   0x0123456789abcdef, T = ⌊p/q^4⌋·q^4, each
 //!                                   its four base-q digits, u16 LE
-//!   PublicKey::verify               a byte a case, 1: the key decodes and the
-//!                                   signature verifies under the context; any
+//!   PublicKey::verify               a byte a case, 1: the key decodes, the
+//!                                   signature verifies under the context, and
+//!                                   its length is the one the input gives; any
 //!                                   other case ends the execution, a panic or
 //!                                   the decode call's refusal
 //! ```
@@ -67,7 +76,7 @@
 //! 1,024 a `FALCON_SPLIT` shard holds, so a streaming run hands one over
 //! mid-execution.
 
-use guest_sdk::falcon512::{self, Poly, PublicKey};
+use guest_sdk::falcon512::{self, Poly, PublicKey, KEY_BYTES};
 use guest_sdk::{merkle_root, poseidon2_compress, poseidon2_permute, Digest, U256};
 
 guest_sdk::entry!(main);
@@ -213,15 +222,25 @@ fn main() {
     lanes.iter().for_each(|l| put(&l.to_le_bytes()));
 
     let at_cases = at_falcon + 3 * 1024 + 4;
-    let mut read = at_cases + 4;
-    for _ in 0..word(at_cases) {
-        let mut field = || {
-            let len = word(read) as usize;
-            read += 4 + len;
-            &input[read - len..read]
+    let cases = word(at_cases);
+    let mut signed = at_cases + 4;
+    let next = |at: usize| at + KEY_BYTES + 4 + word(at + KEY_BYTES) as usize;
+    let mut said = (0..cases).fold(signed, |at, _| next(at));
+    for _ in 0..cases {
+        let key = &input[signed..signed + KEY_BYTES];
+        let signature = &input[signed + KEY_BYTES + 4..next(signed)];
+        signed = next(signed);
+        let mut string = || {
+            let len = word(said) as usize;
+            said += 4 + len;
+            &input[said - len..said]
         };
-        let (key, message, context, signature) = (field(), field(), field(), field());
-        PublicKey::decode(key).verify(message, signature, context);
+        let (message, context) = (string(), string());
+        let length = PublicKey::decode(key).verify(message, signature, context);
+        assert!(
+            length == signature.len(),
+            "precompiles: verify's length is not the signature's"
+        );
         put(&[1]);
     }
     guest_sdk::commit(&out[..at]);

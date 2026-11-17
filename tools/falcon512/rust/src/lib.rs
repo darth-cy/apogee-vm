@@ -8,10 +8,11 @@
 //! address is K's first 32 bytes ([`address`]), its text form checksummed
 //! ([`format_address`], [`parse_address`]).
 //!
-//! The host's half, for the test suites: keys from a seed, signatures, and the
-//! verifier the guest SDK's is held to. **The signer is not constant time** and
-//! draws on the thread RNG: it is test infrastructure, never a signer of
-//! anything that matters.
+//! The host's half, for the test suites: keys from a seed, signatures, the
+//! verifier the guest SDK's is held to, and a key's and a signature's forms as
+//! a guest is advised them ([`key_advice`], [`signature_advice`]). **The signer
+//! is not constant time** and draws on the thread RNG: it is test
+//! infrastructure, never a signer of anything that matters.
 
 use std::iter;
 
@@ -101,6 +102,44 @@ pub fn verify_point(pk: &[u8], c: &[u16; N], sig: &[u8]) -> bool {
     let s1 = c.iter().zip(mul(&s2, &h));
     let s1 = s1.map(|(&c, x)| center((c as i64 - x).rem_euclid(Q)));
     s1.chain(s2.iter().copied()).map(|x| x * x).sum::<i64>() <= SQBETA
+}
+
+/// The guest SDK's form of the public key `pk`, the advice a guest decodes:
+/// `h`'s 896 bytes, `pk` without its header `0x09`, which the guest hashes as
+/// K's constant first byte. Refuses `pk` unless it is [`PUBLIC_KEY_BYTES`]
+/// beginning `0x09`; the coefficients are the guest's to check.
+pub fn key_advice(pk: &[u8]) -> Result<[u8; PUBLIC_KEY_BYTES - 1], &'static str> {
+    if pk.len() != PUBLIC_KEY_BYTES {
+        return Err("a public key is 897 bytes");
+    }
+    if pk[0] != 0x09 {
+        return Err("a public key's header is 0x09");
+    }
+    Ok(pk[1..].try_into().expect("896 bytes"))
+}
+
+/// The guest SDK's form of the signature `sig`, the advice a guest verifies:
+/// the salt, then `s2` compressed through its last nonzero byte, and zeros to
+/// a whole word, `40 + 4·⌈end/32⌉` bytes for a stream ending at bit `end`, at
+/// most 668: `sig` without its header `0x39` or the zeros it ends in. Refuses
+/// `sig` unless it is [`SIGNATURE_BYTES`] beginning `0x39`; the stream is the
+/// guest's to check, which refuses a one after `end` in its last word, and
+/// reads a word holding one past it as more advice than the signature.
+pub fn signature_advice(sig: &[u8]) -> Result<Vec<u8>, &'static str> {
+    if sig.len() != SIGNATURE_BYTES {
+        return Err("a signature is 666 bytes");
+    }
+    if sig[0] != 0x39 {
+        return Err("a signature's header is 0x39");
+    }
+    let compressed = &sig[1 + SALT_BYTES..];
+    let used = compressed
+        .iter()
+        .rposition(|&b| b != 0)
+        .map_or(0, |i| i + 1);
+    let mut advice = sig[1..1 + SALT_BYTES + used].to_vec();
+    advice.resize(SALT_BYTES + used.next_multiple_of(4), 0);
+    Ok(advice)
 }
 
 /// HashToPoint: `c` from the encoded public key `pk`, the salt, `msg` and the

@@ -1211,8 +1211,6 @@ pub mod delegation {
         /// A signature's `s2`: 512 compressed coefficients, the bits after
         /// the last in its word zeros.
         pub const SIGNATURE: u32 = 1;
-        /// A public key's header byte, which a key's source does not hold.
-        pub const HEADER: u32 = 0x09;
         /// A key's end: 512 fields of 14 bits, on a word.
         pub const KEY_END: u32 = 14 * super::falcon::N as u32;
         /// The most bits a signature's compressed `s2` takes: 625 bytes.

@@ -2,26 +2,36 @@
 //! NIST round-3 submission) in all but HashToPoint, the map to the point `c`,
 //! which is a Poseidon2-A64-C5 sponge over the key digest K, the salt, the
 //! application's context and the message (`docs/spec/precompiles.md` §7.7). K
-//! is a sponge over the key's bytes, and the key's address K's first 32 bytes.
+//! is a sponge over the key's v1.2 encoding, and the key's address K's first
+//! 32 bytes.
 //!
 //! Precompiles do the work (`constants::delegation`, §7): `FALCON512_DECODE`
-//! decodes a public key's `h` and a signature's `s2`, refusing every encoding
+//! decodes a public key's `h` and a signature's `s2`, refusing every stream
 //! that is not one; `FALCON512_SAMPLE` turns HashToPoint's accepted lanes
 //! into coefficients; `FALCON512` is the lattice check, [`s1_norm`]; and the
-//! sponges' permutations are [`poseidon2_permute`]'s. Here are the lengths
-//! and the headers, the signature's padding, K's and HashToPoint's sponges,
-//! and HashToPoint's rejection, a lane compared with the sampler's bound.
+//! sponges' permutations are [`poseidon2_permute`]'s. Here are the advised
+//! forms' lengths, K's and HashToPoint's sponges, and HashToPoint's
+//! rejection, a lane compared with the sampler's bound.
 //!
-//! **Every failure panics.** A key or a signature that is not an encoding,
-//! and a signature that does not verify, end the execution: a panic here, or
-//! the decode call's refusal. Nothing answers a verdict a caller could pass
-//! over, so a guest past [`PublicKey::decode`] holds a valid key, and past
-//! [`PublicKey::verify`] a valid signature.
+//! **The advised forms are compact**: each a whole number of words, read in
+//! place a word at a time, and nothing a verification does not read. A key
+//! is `h`'s 896 bytes, its v1.2 encoding without the header `0x09`, which K
+//! hashes as the constant it is; a signature is its 40-byte salt, then `s2`
+//! compressed through the word holding its last bit, its v1.2 encoding
+//! without the header `0x39` and the padding. A host converts v1.2's 897 and
+//! 666 bytes to them (`tools/falcon512`, `key_advice` and
+//! `signature_advice`).
+//!
+//! **Every failure panics.** A key or a signature that is not one of these
+//! forms, and a signature that does not verify, end the execution: a panic
+//! here, or the decode call's refusal. Nothing answers a verdict a caller
+//! could pass over, so a guest past [`PublicKey::decode`] holds a valid key,
+//! and past [`PublicKey::verify`] a valid signature.
 
 use core::mem::MaybeUninit;
 
 use constants::delegation::falcon::{self, C, FRAME, H, N, NORM_HI, NORM_LO, S2};
-use constants::delegation::falcon_decode;
+use constants::delegation::falcon_decode::{self, KEY_END, SIGNATURE_BITS};
 
 use crate::{poseidon2_permute, Digest};
 
@@ -31,23 +41,20 @@ pub const Q: u16 = falcon::Q as u16;
 /// `⌊β²⌋`: a signature verifies when `‖s1‖² + ‖s2‖²` is at most this.
 pub const SQBETA: u64 = 34_034_726;
 
-/// A public key's bytes: the header `0x09`, then `h`'s 512 coefficients, 14
-/// bits each, packed big-endian.
-pub const PUBLIC_KEY_BYTES: usize = 897;
+/// A public key's advised form: `h`'s 512 coefficients, 14 bits each, packed
+/// big-endian, 896 bytes.
+pub const KEY_BYTES: usize = KEY_END as usize / 8;
 
-/// A signature's bytes: the header `0x39`, the 40-byte salt, then `s2`
-/// compressed and padded with zeros.
-pub const SIGNATURE_BYTES: usize = 666;
+/// A signature's salt, its first bytes.
+pub const SALT_BYTES: usize = 40;
 
-/// A key's header byte, and a signature's.
-const KEY_HEADER: u8 = falcon_decode::HEADER as u8;
-const SIGNATURE_HEADER: u8 = 0x39;
+/// The longest signature: the salt, then `s2` compressed in at most 5,000
+/// bits, through the word holding the last, 668 bytes.
+pub const MAX_SIGNATURE_BYTES: usize = SALT_BYTES + 4 * SIGNATURE_BITS.div_ceil(32) as usize;
 
-/// A signature's bytes after its header and salt: 5,000 bits, `s2`
-/// compressed and the padding.
-const COMPRESSED: usize = SIGNATURE_BYTES - 41;
-
-const _: () = assert!(COMPRESSED * 8 == falcon_decode::SIGNATURE_BITS as usize);
+/// The header of a key's v1.2 encoding, before `h`: K hashes it, and as a
+/// constant it is not advised.
+const KEY_HEADER: u64 = 0x09;
 
 /// K's first fields, its use and then the key's scheme, and HashToPoint's,
 /// which names the construction.
@@ -73,8 +80,8 @@ const Q4: u64 = falcon::Q.pow(4);
 pub struct Poly(pub [u16; N]);
 
 /// A Falcon-512 public key: the polynomial `h`, each coefficient below `q`;
-/// K, the key digest of the bytes `h` was decoded from; and HashToPoint's
-/// sponge after the two fields every signature under the key begins with,
+/// K, the key digest of its v1.2 encoding; and HashToPoint's sponge after
+/// the two fields every signature under the key begins with,
 /// `(1, SIGNATURE_DOMAIN)` and `(2, K)`, its 64 bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicKey {
@@ -84,47 +91,34 @@ pub struct PublicKey {
 }
 
 impl PublicKey {
-    /// The key `bytes` encode, or a panic: exactly [`PUBLIC_KEY_BYTES`], the
-    /// header `0x09`, then `h`'s coefficients in order, 14 bits each, packed
-    /// big-endian, each below `q`, so a key has one encoding. The length and
-    /// the header are checked here; the `FALCON512_DECODE` call writes `h`
-    /// into the key and refuses a coefficient at or above `q`, ending the
-    /// execution. Then K from the same bytes, 18 permutations, and
-    /// HashToPoint's per-key prefix from K, 2: once a key.
-    ///
-    /// Word-aligned `bytes` are read in place, a word at a time, the word
-    /// holding the last byte whole: the 3 bytes after the key must be
-    /// readable, in RAM or in the advice, or the execution fails. Other
-    /// `bytes` are copied to a word-aligned buffer first.
+    /// The key whose advised form is `h`, or a panic: exactly [`KEY_BYTES`],
+    /// word-aligned, `h`'s coefficients in order, 14 bits each, packed
+    /// big-endian, each below `q`, so a key has one form. The length and the
+    /// alignment are checked here; the `FALCON512_DECODE` call reads `h` in
+    /// place, a word at a time and no further, and writes the coefficients
+    /// into the key, refusing one at or above `q`, which ends the execution.
+    /// Then K from the key's v1.2 encoding, the header `0x09` and then `h`,
+    /// 18 permutations, and HashToPoint's per-key prefix from K: once a key.
     // Inline: the key is then built in the caller's frame, not copied there.
     #[inline]
-    pub fn decode(bytes: &[u8]) -> PublicKey {
+    pub fn decode(h: &[u8]) -> PublicKey {
         assert!(
-            bytes.len() == PUBLIC_KEY_BYTES,
-            "falcon512::PublicKey::decode: a key is 897 bytes"
+            h.len() == KEY_BYTES,
+            "falcon512::PublicKey::decode: a key is 896 bytes"
         );
         assert!(
-            bytes[0] == KEY_HEADER,
-            "falcon512::PublicKey::decode: a key's header is 0x09"
+            h.as_ptr().addr().is_multiple_of(4),
+            "falcon512::PublicKey::decode: a key is word-aligned"
         );
-        let mut copy = MaybeUninit::uninit();
-        let bytes = word_aligned::<{ falcon_decode::SOURCE }>(bytes, &mut copy);
         let mut key = MaybeUninit::<PublicKey>::uninit();
         let at = key.as_mut_ptr();
-        // SAFETY: the source is word-aligned and readable through the word
-        // holding its byte 896, the caller's or the copy's; `h` is 256 words
-        // of the key, word-aligned, which the call writes whole.
-        unsafe {
-            decode_at(
-                falcon_decode::KEY,
-                bytes.as_ptr(),
-                (&raw mut (*at).h).cast(),
-            )
-        };
+        // SAFETY: `h` is 224 words, word-aligned, a key's whole stream; the
+        // key's `h` is 256 words, word-aligned, which the call writes whole.
+        unsafe { decode_at(falcon_decode::KEY, h.as_ptr(), (&raw mut (*at).h).cast()) };
         let mut sponge = Sponge::ZERO;
         sponge.field(1, KEY_DOMAIN);
         sponge.field(2, SCHEME_ID);
-        sponge.field(3, bytes);
+        sponge.encoded_key(h);
         poseidon2_permute(&mut sponge.state);
         let k = Digest(core::array::from_fn(|i| sponge.state[i]));
         let mut prefix = Sponge::ZERO;
@@ -138,7 +132,7 @@ impl PublicKey {
         }
     }
 
-    /// K, the key digest of the key's bytes.
+    /// K, the key digest of the key's v1.2 encoding.
     pub fn key_digest(&self) -> &Digest {
         &self.k
     }
@@ -148,61 +142,55 @@ impl PublicKey {
         le_bytes(&self.k)
     }
 
-    /// Returns when `sig` is a signature of `msg` under this key and
-    /// `context`, and otherwise ends the execution: `context` at most 255
-    /// bytes; `sig` exactly [`SIGNATURE_BYTES`], the header `0x39`, the salt,
-    /// then `s2` compressed, each coefficient `s` its sign bit, the low 7 bits
-    /// of `|s|`, then `|s| >> 7` zeros and a one, none `−0` and none above
-    /// 2047 in size, and zeros to the end; and `‖s1‖² + ‖s2‖²` at most
-    /// [`SQBETA`], where `s1 = c − s2·h` and `c` is HashToPoint of K, the
-    /// salt, `context` and `msg`. The `FALCON512_DECODE` call decodes `s2`,
-    /// refusing every encoding that is not one; the zeros after it are
-    /// checked here, a panic, as are the rest; and the lattice check is
+    /// The length in bytes of the signature `sig` begins with, where it is a
+    /// signature of `msg` under this key and `context`; otherwise the
+    /// execution ends. `context` is at most 255 bytes. `sig` is word-aligned
+    /// and begins with a signature's advised form: the salt, then `s2`
+    /// compressed, each coefficient `s` its sign bit, the low 7 bits of
+    /// `|s|`, then `|s| >> 7` zeros and a one, none `−0` and none above 2047
+    /// in size, within 5,000 bits, and zeros to the end of the word holding
+    /// the last bit: `40 + 4·⌈end/32⌉` bytes, `end` the bit after the last
+    /// coefficient, at most [`MAX_SIGNATURE_BYTES`], which `sig` holds and may
+    /// follow with anything. And `‖s1‖² + ‖s2‖²` is at most [`SQBETA`], where
+    /// `s1 = c − s2·h` and `c` is HashToPoint of K, the salt, `context` and
+    /// `msg`. The `FALCON512_DECODE` call decodes `s2`, refusing every stream
+    /// that is not one, a bit set after `end` in its last word among them;
+    /// the rest are checked here, a panic; and the lattice check is
     /// [`s1_norm`]'s.
     ///
-    /// Where `s2`'s bytes, 41 into `sig`, are word-aligned they are read in
-    /// place, a word at a time through the word holding the stream's last
-    /// bit, which can be the 3 bytes after `sig`: those must be readable, in
-    /// RAM or in the advice, or the execution fails. Otherwise they are copied
-    /// to a word-aligned buffer first.
-    pub fn verify(&self, msg: &[u8], sig: &[u8], context: &[u8]) {
+    /// The call reads the stream in place, a word at a time, through the
+    /// word holding its last bit: where that is past `sig`, the words after
+    /// `sig` must be readable, in RAM or in the advice, or the execution
+    /// fails, and otherwise the length is a panic.
+    pub fn verify(&self, msg: &[u8], sig: &[u8], context: &[u8]) -> usize {
         assert!(
             context.len() <= MAX_CONTEXT_BYTES,
             "falcon512::PublicKey::verify: a context is at most 255 bytes"
         );
         assert!(
-            sig.len() == SIGNATURE_BYTES,
-            "falcon512::PublicKey::verify: a signature is 666 bytes"
+            sig.as_ptr().addr().is_multiple_of(4),
+            "falcon512::PublicKey::verify: a signature is word-aligned"
         );
-        assert!(
-            sig[0] == SIGNATURE_HEADER,
-            "falcon512::PublicKey::verify: a signature's header is 0x39"
-        );
-        let (salt, compressed) = sig[1..].split_at(40);
-        let mut copy = MaybeUninit::uninit();
-        let compressed = word_aligned::<{ COMPRESSED.div_ceil(4) }>(compressed, &mut copy);
         // Written whole by the calls, so neither is zeroed first.
         let mut s2 = MaybeUninit::<Poly>::uninit();
         let mut c = MaybeUninit::<[u64; N / 4]>::uninit();
-        // SAFETY: the source is word-aligned and readable through the word
-        // holding the stream's last bit, the caller's or the copy's; `s2` is
-        // 256 words on the stack, word-aligned, which the call writes whole.
+        // SAFETY: the stream, 40 bytes into `sig`, is word-aligned and read
+        // through the word holding its last bit, which the length below finds
+        // within `sig`, or panics; `s2` is 256 words on the stack,
+        // word-aligned, which the call writes whole.
         let (s2_norm, end) = unsafe {
             decode_at(
                 falcon_decode::SIGNATURE,
-                compressed.as_ptr(),
+                sig.as_ptr().wrapping_add(SALT_BYTES),
                 s2.as_mut_ptr().cast(),
             )
         };
-        // The stream's bits from its end to the 5,000th are zero: the call
-        // reads up to the word holding its last bit, and checks none after it.
-        let (byte, bit) = (end as usize / 8, end % 8);
-        let mut padding = compressed[byte..].iter();
+        let length = SALT_BYTES + 4 * end.div_ceil(32) as usize;
         assert!(
-            padding.next().is_none_or(|&b| b & (0xff >> bit) == 0) && padding.all(|&b| b == 0),
-            "falcon512::PublicKey::verify: a signature's padding is zeros"
+            length <= sig.len(),
+            "falcon512::PublicKey::verify: a signature runs past its bytes"
         );
-        hash_to_point(&self.prefix, salt, context, msg, &mut c);
+        hash_to_point(&self.prefix, &sig[..SALT_BYTES], context, msg, &mut c);
         // SAFETY: `h`, `s2` and `c` are 512 coefficients each, word-aligned,
         // `s2` and `c` written whole by the calls.
         let s1_norm =
@@ -211,6 +199,7 @@ impl PublicKey {
             s1_norm + s2_norm as u64 <= SQBETA,
             "falcon512::PublicKey::verify: the signature does not verify"
         );
+        length
     }
 }
 
@@ -224,37 +213,18 @@ fn le_bytes<const B: usize>(k: &Digest) -> [u8; B] {
     bytes
 }
 
-/// `bytes` where they are word-aligned, and otherwise a copy of them at the
-/// start of `copy`, its other bytes zero: the same bytes, word-aligned, which
-/// a decode call reads in place and [`Sponge::field`] a word at a time.
-/// Panics unless `W` words hold them.
-fn word_aligned<'a, const W: usize>(
-    bytes: &'a [u8],
-    copy: &'a mut MaybeUninit<[u32; W]>,
-) -> &'a [u8] {
-    if bytes.as_ptr().addr().is_multiple_of(4) {
-        return bytes;
-    }
-    let words = copy.write([0; W]);
-    // SAFETY: `W` words are `4·W` bytes.
-    let copy = unsafe { core::slice::from_raw_parts_mut(words.as_mut_ptr().cast::<u8>(), 4 * W) };
-    let copy = &mut copy[..bytes.len()];
-    copy.copy_from_slice(bytes);
-    copy
-}
-
-/// The `FALCON512_DECODE` call: the encoding at `src` decoded in `mode`,
+/// The `FALCON512_DECODE` call: the stream at `src` decoded in `mode`,
 /// `falcon_decode::KEY` or `SIGNATURE`, into the 512 coefficients at `dst`,
 /// each below `q`, a signature's `s` as `s mod q`; `(‖s2‖², end)`, the norm 0
 /// for a key, `end` the bit after the last coefficient, counted from `src`'s
-/// first, its bytes MSB first. The call refuses every stream that is not an
-/// encoding, a key's header and a field at or above `q`, a signature's `−0`,
-/// more than 15 zeros and more than 5,000 bits, and anything misplaced,
-/// ending the execution; it checks no bit after `end`.
+/// first, its bytes MSB first. The call refuses every stream that is not one,
+/// a key's field at or above `q`, a signature's `−0`, more than 15 zeros,
+/// more than 5,000 bits and a bit set after `end` in its last word, and
+/// anything misplaced, ending the execution.
 ///
 /// # Safety
 /// `src` and `dst` are word-aligned; `src` is readable through the word
-/// holding the stream's last bit, a key's 225 words and a signature's at most
+/// holding the stream's last bit, a key's 224 words and a signature's at most
 /// 157, and `dst` is writable for 512 `u16`, apart from them.
 pub(crate) unsafe fn decode_at(mode: u32, src: *const u8, dst: *mut u16) -> (u32, u32) {
     let mut frame = [0u32; falcon_decode::FRAME];
@@ -320,6 +290,31 @@ impl Sponge {
         if !rest.is_empty() {
             self.absorb(&mut at, lane(rest));
         }
+        self.at = at;
+    }
+
+    /// K's last field, `(3, 0x09 ‖ h)`: the key's v1.2 encoding, 897 bytes,
+    /// the header then `h`'s 896, word-aligned, in the lanes [`Sponge::field`]
+    /// packs them in. Four lanes from seven word loads, as a word-aligned
+    /// field's, but a byte behind: each four begins with the byte before its
+    /// 28, the header or the last of the 28 before, and `h`'s last byte is a
+    /// lane of its own.
+    #[inline(always)]
+    fn encoded_key(&mut self, h: &[u8]) {
+        let mut at = self.at;
+        self.absorb(&mut at, 3);
+        self.absorb(&mut at, 1 + KEY_BYTES as u64);
+        let mut last = KEY_HEADER;
+        for four in h.as_chunks::<28>().0 {
+            // SAFETY: 28 bytes, word-aligned, as `h` is: seven words.
+            let w = |i: usize| unsafe { four.as_ptr().cast::<u32>().add(i).read() } as u64;
+            self.absorb(&mut at, last | w(0) << 8 | (w(1) & 0xffff) << 40);
+            self.absorb(&mut at, w(1) >> 16 | w(2) << 16 | (w(3) & 0xff) << 48);
+            self.absorb(&mut at, w(3) >> 8 | w(4) << 24);
+            self.absorb(&mut at, w(5) | (w(6) & 0xff_ffff) << 32);
+            last = w(6) >> 24;
+        }
+        self.absorb(&mut at, last);
         self.at = at;
     }
 

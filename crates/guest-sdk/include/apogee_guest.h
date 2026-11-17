@@ -86,19 +86,19 @@ uint64_t apogee_falcon512_s1_norm(const uint16_t h[512], const uint16_t s2[512],
  * exits 101, a panic. */
 void apogee_falcon512_sample(uint64_t lanes[8]);
 
-/* Falcon-512's decoder by the precompile: in `mode` 0 the public key at
- * `src`, its header 0x09 then 512 fields of 14 bits, each below q; in `mode`
- * 1 a signature's compressed s2 at `src`, its byte 41, 512 coefficients, none
- * -0, none above 2047 in size, within 5,000 bits. The coefficients are
- * written to `dst`, s2's each s mod q. Returns ||s2||^2, 0 for a key, and
- * stores the stream's end through `end` where not null: the bit after the
- * last coefficient, counted from `src`'s first, its bytes MSB first, a key's
- * 7176. A signature's bits from there to 5,000 are the caller's to check
- * zero. `src` and `dst` are 4-aligned and apart; `src` is read a word at a
- * time, the word holding the stream's last bit whole (a key's 3 bytes after
- * it), and may be anywhere a load reaches, the advice included. Anything
- * else, and any stream that is not an encoding, the call refuses: the
- * execution fails. */
+/* Falcon-512's decoder by the precompile: in `mode` 0 a public key's h at
+ * `src`, its 896 bytes, 512 fields of 14 bits, each below q (the key's v1.2
+ * encoding without its header 0x09); in `mode` 1 a signature's compressed s2
+ * at `src`, 40 bytes into its advised form, after the salt: 512
+ * coefficients, none -0, none above 2047 in size, within 5,000 bits, and the
+ * bits after the last in its word zeros. The coefficients are written to
+ * `dst`, s2's each s mod q. Returns ||s2||^2, 0 for a key, and stores the
+ * stream's end through `end` where not null: the bit after the last
+ * coefficient, counted from `src`'s first, its bytes MSB first, a key's 7168.
+ * `src` and `dst` are 4-aligned and apart; `src` is read a word at a time
+ * through the word holding the stream's last bit, and may be anywhere a load
+ * reaches, the advice included. Anything else, and any stream that is not
+ * one of these, the call refuses: the execution fails. */
 uint32_t apogee_falcon512_decode(uint32_t mode, const uint8_t *src, uint16_t dst[512],
                                  uint32_t *end);
 

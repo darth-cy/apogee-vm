@@ -39,15 +39,14 @@
 //! buyer's address, its nonce and the store's market id inside it, so a
 //! request spends its nonce at most once, and in one store. A user's key is
 //! advised where the user first signs, ahead of that request's signature, and
-//! read there: decoded, K computed from the same bytes, and K's address
-//! checked against the buyer's, by which the request found the record; then
-//! kept for the user's later requests, each verified under that K. A key that
-//! does not decode, or is not its buyer's, ends the execution, as does a
-//! signature that does not verify: [`PublicKey::decode`] and
-//! [`PublicKey::verify`] are the SDK's, which panic, or whose decode call
-//! refuses an encoding, rather than answer a verdict. Their decoding and
-//! lattice check are the Falcon-512 precompiles, and K's and HashToPoint's
-//! permutations Poseidon2's.
+//! read there: decoded, K computed from it, and K's address checked against
+//! the buyer's, by which the request found the record; then kept for the
+//! user's later requests, each verified under that K. A key that does not
+//! decode, or is not its buyer's, ends the execution, as does a signature that
+//! does not verify: [`PublicKey::decode`] and [`PublicKey::verify`] are the
+//! SDK's, which panic, or whose decode call refuses an encoding, rather than
+//! answer a verdict. Their decoding and lattice check are the Falcon-512
+//! precompiles, and K's and HashToPoint's permutations Poseidon2's.
 //!
 //! **A signature decides no outcome.** The requests are the public input's,
 //! but their signatures are advice, which the prover chooses, so an outcome
@@ -138,9 +137,9 @@
 //! listings        u32 count, then for each listing the batch reads, in ascending slot
 //!                         order: its slot u32, its record
 //! signing         for each request that reaches its signature check, in the batch's
-//!                         order: at its buyer's first, the buyer's public key, 897
-//!                         bytes, then 3 zero bytes; then 3 zero bytes, the request's
-//!                         signature, 666 bytes, 3 zero bytes
+//!                         order: at its buyer's first, the buyer's public key, h's
+//!                         896 bytes; then the request's signature, its 40-byte salt
+//!                         and s2 compressed through the word holding its last bit
 //! paths           for each user above in its order, then each listing: DEPTH siblings from
 //!                 the leaf up, 64 bytes each, under its table's root as the records
 //!                 before it left it
@@ -149,24 +148,26 @@
 //! The advice is these entries and nothing more: a byte after the last path
 //! is a panic.
 //!
-//! Every entry is a whole number of words, a key's 900 bytes and a
-//! signature's 672 among them, so each key starts on a word, as do each
-//! signature's salt and compressed `s2`, 4 and 44 bytes into its 672, and the
-//! paths: the decode call and the precompile read them in place, a word at a
-//! time, and K and HashToPoint absorb them a word at a time. The decode call
-//! reads a key's last word whole, its 3 zero bytes included, and a signature's
-//! up to the word holding its last coded bit. A pad byte that is not zero is a
-//! panic.
+//! Every entry is a whole number of words, so each key, each signature and
+//! its compressed `s2`, 40 bytes in, and the paths start on a word: the decode
+//! call and the precompile read them in place, a word at a time, and K and
+//! HashToPoint absorb them a word at a time. A key and a signature are the
+//! SDK's advised forms, v1.2's encodings without their headers and the
+//! signature's padding: a key is 896 bytes, and a signature `40 + 4·⌈end/32⌉`,
+//! `end` the bit after its last coefficient, which the decode call finds, the
+//! bits after it in its last word zeros, which the call checks. The cursor
+//! moves past a signature by the length [`PublicKey::verify`] returns. No byte
+//! of the advice is padding.
 //!
 //! Addresses ascend as 32-byte strings compared from their first byte,
 //! strictly, so no user is advised twice; nor is a slot, as a leaf holds its
 //! record's address and two records at one slot cannot both open it. The
 //! records are the snapshot's, before the batch, and one the batch does not
 //! read is a panic. The signing stream is read as the batch reaches each
-//! signature check, so it holds a key for each user that signs and a
-//! signature for each request checked, and nothing for a user that does not
-//! sign or a request rejected: a key or a signature missing, or one more,
-//! shifts every read after it, which a key's header or address, a pad byte, a
+//! signature check, so it holds a key for each user that signs and a signature
+//! for each request checked, and nothing for a user that does not sign or a
+//! request rejected: a key or a signature missing, or one more, shifts every
+//! read after it, which a key's decoding or address, a signature's decoding or
 //! verification, a path or the advice's end refuses. A path is read in place
 //! by the precompile, a word at a time, each sibling's lanes mod `p`: a
 //! sibling's encoding is the prover's, and no root depends on it.
@@ -209,12 +210,12 @@
 //!          140..172  volume    U256 LE: the applied purchases' cost
 //! ```
 //!
-//! A malformed batch, advice that is not exactly what the batch reads, a pad
-//! byte that is not zero, a key that does not decode or is not its buyer's, a
-//! signature that does not verify, a digest or an advised record's address
-//! with a lane at or above `p`, and a record or a path that does not open its
-//! table, end the execution: a panic, or for a key or a signature that is not
-//! an encoding, the decode call's refusal.
+//! A malformed batch, advice that is not exactly what the batch reads, a key
+//! that does not decode or is not its buyer's, a signature that does not
+//! decode or verify, a digest or an advised record's address with a lane at
+//! or above `p`, and a record or a path that does not open its table, end the
+//! execution: a panic, or for a key or a signature that is not one, the
+//! decode call's refusal.
 
 extern crate alloc;
 
@@ -222,7 +223,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use constants::guest_memory;
-use guest_sdk::falcon512::{PublicKey, PUBLIC_KEY_BYTES, SIGNATURE_BYTES};
+use guest_sdk::falcon512::{PublicKey, KEY_BYTES};
 use guest_sdk::{merkle_root, poseidon2_compress, Digest, U256};
 
 guest_sdk::entry!(main);
@@ -232,21 +233,14 @@ const DEPTH: usize = 20;
 const PATH: usize = 64 * DEPTH;
 const USER: usize = 72;
 const LISTING: usize = 80;
-/// An advised key and its 3 zero bytes; a signature between 3 zero bytes
-/// each side.
-const KEY_SLOT: usize = PUBLIC_KEY_BYTES + 3;
-const SIGNATURE_SLOT: usize = 3 + SIGNATURE_BYTES + 3;
 const HEADER: usize = 76;
 const REQUEST: usize = 92;
 const JOURNAL: usize = 172;
 
-// Every advised entry is a whole number of words, so each key starts on a
-// word, as do each signature's salt and compressed `s2`, and the paths.
+// Every advised entry is a whole number of words, a signature's by the SDK's
+// form, so each key starts on a word, as do each signature and the paths.
 const _: () = assert!(
-    (4 + USER).is_multiple_of(4)
-        && KEY_SLOT.is_multiple_of(4)
-        && (4 + LISTING).is_multiple_of(4)
-        && SIGNATURE_SLOT.is_multiple_of(4)
+    (4 + USER).is_multiple_of(4) && KEY_BYTES.is_multiple_of(4) && (4 + LISTING).is_multiple_of(4)
 );
 const PAYLOAD: usize = guest_memory::PUBLIC_PAYLOAD_BYTES as usize;
 /// As many requests as fit the public input beside its header.
@@ -435,8 +429,8 @@ impl Store {
     /// The request `message` settled against the working set: the records it
     /// changes changed there. Where it gets past every rejection, the signing
     /// stream's next entries from `at`, its buyer's key at the buyer's first
-    /// check and then its signature, are the buyer's, or a panic, or the
-    /// decode call's refusal.
+    /// check and then its signature, are the buyer's, `at` moved past them, or
+    /// a panic, or the decode call's refusal.
     fn settle(&mut self, message: &[u8], market: u64, advice: &[u8], at: &mut usize) -> Outcome {
         let r = Request::decode(message);
         assert!(
@@ -458,22 +452,14 @@ impl Store {
         // read at the buyer's first check, decoded and checked against the
         // buyer's address, and kept.
         let key = self.keys[b].get_or_insert_with(|| {
-            let (bytes, pad) = take(advice, at, KEY_SLOT).split_at(PUBLIC_KEY_BYTES);
-            assert!(pad == [0; 3], "amazon: a key's pad byte is not zero");
-            let key = PublicKey::decode(bytes);
+            let key = PublicKey::decode(take(advice, at, KEY_BYTES));
             assert!(
                 key.address() == r.buyer,
                 "amazon: an advised key is not its buyer's"
             );
             Box::new(key)
         });
-        let (pad, rest) = take(advice, at, SIGNATURE_SLOT).split_at(3);
-        let (signature, after) = rest.split_at(SIGNATURE_BYTES);
-        assert!(
-            pad == [0; 3] && after == [0; 3],
-            "amazon: a signature's pad byte is not zero"
-        );
-        key.verify(message, signature, CONTEXT);
+        *at += key.verify(message, &advice[*at..], CONTEXT);
         self.users[b].now.nonce = next;
 
         let l = find(&mut self.listings, &r.listing, |h| &h.slot);

@@ -721,10 +721,12 @@ pub unsafe extern "C" fn apogee_falcon512_sample(lanes: *mut u64) {
     falcon512::sample(&mut *lanes.cast::<[u64; 8]>())
 }
 
-/// The `FALCON512_DECODE` call in `mode` over the encoding at `src` into the
-/// 512 coefficients at `dst`: returns `‖s2‖²`, 0 for a key, and stores the
-/// stream's end through `end` where not null. The call refuses everything
-/// else, ending the execution.
+/// The `FALCON512_DECODE` call in `mode` over the stream at `src` into the
+/// 512 coefficients at `dst`: a key's `h`, its 896 bytes, or a signature's
+/// `s2` compressed, 40 bytes into its advised form, the bits after its end in
+/// their word zeros. Returns `‖s2‖²`, 0 for a key, and stores the stream's end
+/// through `end` where not null. The call refuses every other stream, ending
+/// the execution.
 ///
 /// # Safety
 /// `src` and `dst` are 4-aligned; `src` is readable through the word holding
