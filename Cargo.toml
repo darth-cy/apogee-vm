@@ -85,10 +85,8 @@ ark-poly = "0.6"
 # Test only. Exercises the `Fp` serde impls over a real wire format.
 postcard = { version = "1", default-features = false }
 
-# Test only. FIPS 202's permutation and SHAKE256 from RustCrypto, the
-# independent references the Keccak-f[1600] precompile's tests hold its answers
-# to. Never linked by the prover, the verifier or a guest.
-keccak = "0.1.6"
+# Test only. Standard Falcon's HashToPoint, under which `tools/falcon512/rust`'s
+# KAT was signed. Never linked by the prover, the verifier or a guest.
 sha3 = "0.10"
 
 # Test only. Falcon-512 with Poseidon2's HashToPoint, the host's half: keys,

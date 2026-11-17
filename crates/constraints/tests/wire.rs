@@ -360,11 +360,10 @@ fn a_nonzero_unused_address_field_is_refused() {
     );
 }
 
-/// Virtual kinds are 0 (`V[row]`), 1 (`V[ram_live]`), 2 (`V[range19]`),
-/// 3 (`V[range16]`), and 4, 5 and 6, the `XOR8` table's three columns; a tag
-/// is never reassigned, and a kind is printed by its short name. A tag no kind
-/// has is refused. `crates/verifier-core/src/types.rs` carries the **same**
-/// tags for a `ChannelSpec`'s table addresses.
+/// Virtual kinds are 0 (`V[row]`), 1 (`V[ram_live]`), 2 (`V[range19]`) and
+/// 3 (`V[range16]`); a tag is never reassigned, and a kind is printed by its
+/// short name. A tag no kind has is refused. `crates/verifier-core/src/types.rs`
+/// carries the **same** tags for a `ChannelSpec`'s table addresses.
 #[test]
 fn virtual_kind_tags_are_append_only() {
     let kinds = [
@@ -372,9 +371,6 @@ fn virtual_kind_tags_are_append_only() {
         (VirtualKind::RamLive, 1, "V[ram_live]"),
         (VirtualKind::Range19, 2, "V[range19]"),
         (VirtualKind::Range16, 3, "V[range16]"),
-        (VirtualKind::Xor8A, 4, "V[xor8_a]"),
-        (VirtualKind::Xor8B, 5, "V[xor8_b]"),
-        (VirtualKind::Xor8Out, 6, "V[xor8_out]"),
     ];
     for (kind, tag, name) in kinds {
         assert_eq!(encode(&kind), [tag], "{kind:?}");

@@ -29,7 +29,6 @@ pub mod falcon;
 pub mod family;
 pub mod gadgets;
 pub mod jump_branch_slt;
-pub mod keccak;
 mod laws;
 pub mod lookup;
 pub mod mem_subword;
@@ -140,9 +139,6 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
             f::MERKLE_ROOT => (merkle::artifact, merkle::channels()),
             f::MERKLE_LEVELS => (merkle::levels_artifact, merkle::levels_channels()),
             f::MERKLE_ROUNDS => (merkle::rounds_artifact, merkle::rounds_channels()),
-            f::KECCAK => (keccak::artifact, keccak::channels()),
-            f::KECCAK_RHO => (keccak::rho_artifact, keccak::rho_channels()),
-            f::KECCAK_CHI => (keccak::chi_artifact, keccak::chi_channels()),
             f::FALCON => (falcon::artifact, falcon::channels()),
             f::FALCON_SPLIT => (falcon::split_artifact, falcon::split_channels()),
             f::FALCON_PRODUCT => (falcon::product_artifact, falcon::product_channels()),
@@ -196,15 +192,6 @@ pub enum VirtualKind {
     /// `V[range16]`: the 16-bit range channel's table, the low 16 bits of the
     /// row index. `docs/spec/lookup.md` §3.
     Range16,
-    /// `V[xor8_a]`: column 0 of the `XOR8` table, the low byte of the row
-    /// index.
-    Xor8A,
-    /// `V[xor8_b]`: column 1 of the `XOR8` table, the row index's next byte.
-    Xor8B,
-    /// `V[xor8_out]`: column 2 of the `XOR8` table, the XOR of the other two.
-    /// Its multilinear extension is `Σ_{j < 8} 2^j·(y_j + y_{j+8} − 2·y_j·y_{j+8})`,
-    /// because `y ^ z = y + z − 2yz` is multilinear in each of `y` and `z`.
-    Xor8Out,
 }
 
 /// The one way any polynomial is named. `docs/spec/gkr.md` §2 says which
@@ -239,9 +226,6 @@ impl fmt::Display for PolyAddress {
             PolyAddress::Virtual(VirtualKind::RamLive) => write!(f, "V[ram_live]"),
             PolyAddress::Virtual(VirtualKind::Range19) => write!(f, "V[range19]"),
             PolyAddress::Virtual(VirtualKind::Range16) => write!(f, "V[range16]"),
-            PolyAddress::Virtual(VirtualKind::Xor8A) => write!(f, "V[xor8_a]"),
-            PolyAddress::Virtual(VirtualKind::Xor8B) => write!(f, "V[xor8_b]"),
-            PolyAddress::Virtual(VirtualKind::Xor8Out) => write!(f, "V[xor8_out]"),
             PolyAddress::Inner { layer, offset } => write!(f, "L{{{layer}}}[{offset}]"),
             PolyAddress::Scratch(i) => write!(f, "scratch[{i}]"),
             PolyAddress::Cached { layer, offset } => write!(f, "C{{{layer}}}[{offset}]"),

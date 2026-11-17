@@ -794,10 +794,9 @@ type Case = (Vec<u8>, Vec<u8>, Vec<u8>);
 
 /// What `guests/precompiles` journals for each of `cases` — 1 the signature
 /// verifies, 0 it does not, 2 the key does not decode — run after its other
-/// calls at their fewest: a zero leaf up sixteen zero siblings, no runs, the
-/// zero state once, SHAKE256 of nothing squeezed to nothing, and the zero
-/// arrays' norm once. Seven cases of short messages fill the public input
-/// window.
+/// calls at their fewest: a zero leaf up sixteen zero siblings, no runs, and
+/// the zero arrays' norm once. Seven cases of short messages fill the public
+/// input window.
 fn falcon_verdicts(cases: &[Case]) -> Vec<u8> {
     let mut input = [
         1u32.to_le_bytes().as_slice(),
@@ -805,10 +804,6 @@ fn falcon_verdicts(cases: &[Case]) -> Vec<u8> {
         &0u32.to_le_bytes(),
         &16u32.to_le_bytes(),
         &[0u8; 64 * 16],
-        &0u32.to_le_bytes(),
-        &[0u8; 200],
-        &0u32.to_le_bytes(),
-        &0u32.to_le_bytes(),
         &0u32.to_le_bytes(),
         &[0u8; 3 * 1024],
         &0u32.to_le_bytes(),

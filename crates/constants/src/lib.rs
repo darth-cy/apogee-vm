@@ -321,7 +321,7 @@ pub mod challenge_slot {
 }
 
 /// The lookup channels a lookup expression names. A channel number is never
-/// reassigned.
+/// reassigned: **4**, a byte-XOR table's, is retired.
 ///
 /// A `LookupExpr`'s `channel` is one of these numbers. A channel is either a
 /// **range** channel, whose one expression holds on a row when its canonical
@@ -345,19 +345,13 @@ pub mod lookup_channel {
     /// `lookup_tuple(family)` columns in their fixed order.
     pub const DECODER: u32 = 3;
 
-    /// Table. The byte table `(a, b, a ^ b)`, all 65,536 triples. The one
-    /// table channel whose table is **virtual**: its three columns are closed
-    /// forms of the row index, so it costs no setup column. A delegation
-    /// family reads it through `constraints::delegation::Builder`.
-    pub const XOR8: u32 = 4;
-
     /// How many channels this table defines.
-    pub const COUNT: u32 = 5;
+    pub const COUNT: u32 = 4;
 
     /// Whether channel `i` is a range channel, indexed by channel. A range
     /// channel's table is the closed form of `docs/spec/lookup.md` §3; a table
-    /// channel's is setup columns, or for [`XOR8`] a closed form of its own.
-    pub const IS_RANGE: [bool; COUNT as usize] = [true, true, false, false, false];
+    /// channel's is setup columns.
+    pub const IS_RANGE: [bool; COUNT as usize] = [true, true, false, false];
 
     /// A range channel's bound, as a bit width, indexed by channel; 0 where
     /// [`IS_RANGE`] is false, which is not a bound of `[0, 1)` but the absence
@@ -366,11 +360,10 @@ pub mod lookup_channel {
     /// This is a **bound**, not a table size: what decides the fewest
     /// variables a circuit declaring a channel may be built at is
     /// `constraints::lookup::table_vars`, which reads this for a range channel.
-    pub const BITS: [u32; COUNT as usize] = [19, 16, 0, 0, 0];
+    pub const BITS: [u32; COUNT as usize] = [19, 16, 0, 0];
 
     /// Every channel's display name, indexed by channel.
-    pub const NAMES: [&str; COUNT as usize] =
-        ["timestamp", "range16", "generic", "decoder", "xor8"];
+    pub const NAMES: [&str; COUNT as usize] = ["timestamp", "range16", "generic", "decoder"];
 
     /// The widest lookup tuple any channel carries: `beta` powers exist for
     /// positions `0 .. MAX_TUPLE`, and `challenge_slot::LOOKUP_BETA_POWERS`
@@ -421,8 +414,9 @@ pub mod generic_table {
 /// The number is what everything else cites: canonical ordering is ascending
 /// `FamilyId`, the program-identity digest absorbs families in that order, and
 /// shard transcripts are seeded with it. Ids 0–6 are the execution families,
-/// 7–11 the window families and 12–23 the delegation families
-/// ([`crate::delegation`], `docs/spec/circuits.md` §1).
+/// 7–11 the window families and 12–17 and 21–23 the delegation families
+/// ([`crate::delegation`], `docs/spec/circuits.md` §1); 18–20 are
+/// [`family::RETIRED`].
 ///
 /// Which mnemonic each instruction family claims is `crates/program`'s
 /// `row_kind`, and `docs/spec/program.md` §4 is the table.
@@ -504,18 +498,6 @@ pub mod family {
     /// A level's permutation, 16 rows: [`POSEIDON2_ROUNDS`]' rows keyed by the
     /// level, the last round writing the node alone. Touches no RAM.
     pub const MERKLE_ROUNDS: u32 = 17;
-    /// The Keccak-f[1600] permutation's **frame** rows, eight a call, rows
-    /// 0–4 live: plane `y` of the 50-word frame read and written in place,
-    /// its column parity, `D` for round 0, and the planes sent to
-    /// [`KECCAK_RHO`] and received from [`KECCAK_CHI`] in
-    /// `address_space::KECCAK` (`constraints::keccak`).
-    pub const KECCAK: u32 = 18;
-    /// theta's `D` applied, rho and pi: 128 rows a call, row `5t + y` the
-    /// source plane `y` of round `t`, rows 120–127 dead. Touches no RAM.
-    pub const KECCAK_RHO: u32 = 19;
-    /// chi, iota and the next round's `D`: 128 rows a call, row `5t + y` the
-    /// plane `y` round `t` writes, rows 120–127 dead. Touches no RAM.
-    pub const KECCAK_CHI: u32 = 20;
     /// The Falcon-512 lattice check's **frame** row, one a call: the frame's
     /// five words, its three chains started and ended in
     /// `address_space::FALCON`, and `‖s1‖²` written (`constraints::falcon`).
@@ -528,8 +510,16 @@ pub mod family {
     /// `h`'s residues mod `x^32 − β_r` held to `c − s1`'s. Touches no RAM.
     pub const FALCON_PRODUCT: u32 = 23;
 
-    /// How many families this table defines.
+    /// How many family numbers this table defines, [`RETIRED`] ones among
+    /// them.
     pub const COUNT: u32 = 24;
+
+    /// The **retired** family numbers, a Keccak-f[1600] permutation's three:
+    /// struck out and never reassigned. A table indexed by `FamilyId` keeps an
+    /// inert entry at each, and whatever enumerates families or reads one
+    /// from bytes skips or refuses a retired number as it does one at or
+    /// above [`COUNT`].
+    pub const RETIRED: [u32; 3] = [18, 19, 20];
 
     /// The pinned height of [`PUBLIC_INPUT`] and [`PUBLIC_OUTPUT`].
     ///
@@ -590,9 +580,9 @@ pub mod family {
         false, // MERKLE_ROOT
         false, // MERKLE_LEVELS
         false, // MERKLE_ROUNDS
-        false, // KECCAK
-        false, // KECCAK_RHO
-        false, // KECCAK_CHI
+        false, // 18, retired
+        false, // 19, retired
+        false, // 20, retired
         false, // FALCON
         false, // FALCON_SPLIT
         false, // FALCON_PRODUCT
@@ -603,9 +593,9 @@ pub mod family {
     ///
     /// What closes a height to a family is a channel whose **table needs more
     /// variables**, not carrying a channel at all: `constraints::lookup::
-    /// table_vars` is 19 for `TIMESTAMP` and 16 for `RANGE16` and `XOR8`, while
-    /// `GENERIC` and `DECODER` report **0** — their tables are setup columns
-    /// rather than closed forms, so they raise the floor by nothing.
+    /// table_vars` is 19 for `TIMESTAMP` and 16 for `RANGE16`, while `GENERIC`
+    /// and `DECODER` report **0** — their tables are setup columns rather than
+    /// closed forms, so they raise the floor by nothing.
     /// `constraints::family_circuit` returns `None` below the widest table its
     /// channels declare, and nothing rests on the two zeros: every family
     /// reading `GENERIC` also carries `TIMESTAMP`, whose 19 puts it at `2^20`
@@ -643,9 +633,9 @@ pub mod family {
         1 << 16, // MERKLE_ROOT, likewise
         1 << 16, // MERKLE_LEVELS, likewise
         1 << 16, // MERKLE_ROUNDS, likewise: its level's bound
-        1 << 16, // KECCAK, the floor of its RANGE16 and XOR8 channels
-        1 << 16, // KECCAK_RHO, its XOR8 channel's
-        1 << 16, // KECCAK_CHI, likewise
+        0,       // 18, retired
+        0,       // 19, retired
+        0,       // 20, retired
         1 << 16, // FALCON, the floor of its RANGE16 channel
         1 << 16, // FALCON_SPLIT, likewise
         1 << 16, // FALCON_PRODUCT, likewise
@@ -898,9 +888,9 @@ pub mod guest_memory {
 /// redefining a number does not fail loudly — it quietly makes an old program
 /// compute something else — so numbers here are never reused, exactly like
 /// `transcript_tags`. A *retired* number is struck out and never reassigned:
-/// **63 and 64**, POSIX `read` and `write`, and **0x0507 and 0x0508**, a
-/// keccak-f round and four SHA-256 rounds, are retired
-/// (`docs/spec/ecall-abi.md` §3).
+/// **63 and 64**, POSIX `read` and `write`, **0x0507 and 0x0508**, a
+/// keccak-f round and four SHA-256 rounds, and **0x0513**, a Keccak-f[1600]
+/// permutation, are retired (`docs/spec/ecall-abi.md` §3).
 ///
 /// An ecall carries its number in `a7`, its arguments in `a0`-`a5` and its
 /// result in `a0`, with errors as a negated errno. **An Apogee guest is an
@@ -938,12 +928,6 @@ pub mod ecall {
     /// refuses any other. `a0` is preserved.
     pub const MERKLE_ROOT: u32 = 0x0512;
 
-    /// A delegation call: Keccak-f[1600] (FIPS 202, 24 rounds) on the state at
-    /// `a0`, in place: 50 words, lane `i = x + 5y` words `2i` (low) and
-    /// `2i + 1` (high), little-endian (`delegation::keccak`). The frame lies
-    /// below `guest_memory::ADVICE_ORIGIN`. `a0` is preserved.
-    pub const KECCAK_F1600: u32 = 0x0513;
-
     /// A delegation call: the Falcon-512 lattice check on the five-word frame
     /// at `a0` (`delegation::falcon`). Words 0–2 are the addresses of `h`,
     /// `s2` and `c`, 512 `u16` coefficients each, every one read mod `q`;
@@ -967,7 +951,8 @@ pub mod ecall {
 /// compressed tuple `gamma_M + AS + alpha_addr*ADDR + ...`. The tags are
 /// nonzero on purpose: `(REG, x0, ts 0, value 0)` is a real initial tuple, and
 /// with `REG = 0` it would be the all-zero tuple — the same reason the decoded
-/// tables pad with `MINUS_ONE` rather than 0. A tag is never reassigned.
+/// tables pad with `MINUS_ONE` rather than 0. A tag is never reassigned: **7**,
+/// a Keccak-f[1600] call's, is retired.
 pub mod address_space {
     /// The 32 registers. A query's address is the register index, `0..32`,
     /// and its value a 64-bit register as two words: the one space whose tuples
@@ -993,11 +978,6 @@ pub mod address_space {
     /// 2s + 1)`, and a level's control `(MERKLE, cycle, 16b + 8, rest, ptr)`
     /// (`docs/spec/precompiles.md` §6).
     pub const MERKLE: u8 = 6;
-    /// A Keccak-f[1600] call's state between rows, in bytes: two bytes of the
-    /// call at `cycle` are the tuple `(KECCAK, cycle, stamp, byte, byte)`, the
-    /// stamp naming what they are of which round and plane
-    /// (`constraints::keccak`).
-    pub const KECCAK: u8 = 7;
     /// A Falcon-512 call's state between rows: a chain's control at stamp
     /// `σ` is the tuple `(FALCON, cycle, σ, ptr, acc)`, and a split row's
     /// residue pair `r` is `(FALCON, 64·cycle + 17P + j, r, rr_0, rr_1)`
@@ -1131,80 +1111,6 @@ pub mod delegation {
         pub const MAX_DEPTH: u32 = 32;
     }
 
-    /// [`ecall::KECCAK_F1600`]'s frame and the permutation's constants (FIPS
-    /// 202 §3.2).
-    pub mod keccak {
-        /// Lanes in the state: 5 by 5, lane `A[x][y]` at `x + 5y`.
-        pub const LANES: usize = 25;
-        /// Rounds of the permutation.
-        pub const ROUNDS: usize = 24;
-        /// The frame: lane `i` is words `2i` (low) and `2i + 1` (high).
-        pub const FRAME: usize = 2 * LANES;
-
-        /// The byte positions of a lane that iota can change. Every round
-        /// constant sets bits `2^j − 1` alone, so iota is four byte XORs
-        /// rather than eight; [`IOTA_BYTES_ARE_THE_ONLY_ONES`] holds the table
-        /// to it.
-        pub const IOTA_BYTES: [usize; 4] = [0, 1, 3, 7];
-
-        /// Every byte [`IOTA_BYTES`] omits is zero in every round constant,
-        /// checked at compile time because the circuit's shape rests on it.
-        pub const IOTA_BYTES_ARE_THE_ONLY_ONES: () = {
-            let mut mask = 0u64;
-            let mut i = 0;
-            while i < IOTA_BYTES.len() {
-                mask |= 0xffu64 << (8 * IOTA_BYTES[i]);
-                i += 1;
-            }
-            let mut r = 0;
-            while r < ROUNDS {
-                assert!(
-                    ROUND_CONSTANTS[r] & !mask == 0,
-                    "a round constant sets a bit outside IOTA_BYTES"
-                );
-                r += 1;
-            }
-        };
-
-        /// The rho rotation offsets, `ROTATIONS[y][x]` for lane `A[x][y]`, a
-        /// rotate-left on the 64-bit lane.
-        pub const ROTATIONS: [[u32; 5]; 5] = [
-            [0, 1, 62, 28, 27],
-            [36, 44, 6, 55, 20],
-            [3, 10, 43, 25, 39],
-            [41, 45, 15, 21, 8],
-            [18, 2, 61, 56, 14],
-        ];
-
-        /// The iota round constants, one per round.
-        pub const ROUND_CONSTANTS: [u64; ROUNDS] = [
-            0x0000_0000_0000_0001,
-            0x0000_0000_0000_8082,
-            0x8000_0000_0000_808a,
-            0x8000_0000_8000_8000,
-            0x0000_0000_0000_808b,
-            0x0000_0000_8000_0001,
-            0x8000_0000_8000_8081,
-            0x8000_0000_0000_8009,
-            0x0000_0000_0000_008a,
-            0x0000_0000_0000_0088,
-            0x0000_0000_8000_8009,
-            0x0000_0000_8000_000a,
-            0x0000_0000_8000_808b,
-            0x8000_0000_0000_008b,
-            0x8000_0000_0000_8089,
-            0x8000_0000_0000_8003,
-            0x8000_0000_0000_8002,
-            0x8000_0000_0000_0080,
-            0x0000_0000_0000_800a,
-            0x8000_0000_8000_000a,
-            0x8000_0000_8000_8081,
-            0x8000_0000_0000_8080,
-            0x0000_0000_8000_0001,
-            0x8000_0000_8000_8008,
-        ];
-    }
-
     /// [`ecall::FALCON512`]'s frame, by word, and its arrays: the lattice
     /// check of Falcon-512 verification over `Z_q[x]/(x^N + 1)`.
     pub mod falcon {
@@ -1245,7 +1151,7 @@ pub mod delegation {
     /// through; for a level, `MERKLE_LEVELS`; for arrays, `FALCON_SPLIT`. A
     /// later one only expands the entry into rows of its own, reading its words
     /// from its buffer and no memory but its own address space.
-    pub const TYPES: [(u32, u32, usize, u32, Per); 12] = [
+    pub const TYPES: [(u32, u32, usize, u32, Per); 9] = [
         (family::POSEIDON2, ecall::POSEIDON2, 32, 1, Per::Call),
         (
             family::POSEIDON2_ROUNDS,
@@ -1275,27 +1181,6 @@ pub mod delegation {
             merkle::SIBLING,
             16,
             Per::Level,
-        ),
-        (
-            family::KECCAK,
-            ecall::KECCAK_F1600,
-            keccak::FRAME,
-            8,
-            Per::Call,
-        ),
-        (
-            family::KECCAK_RHO,
-            ecall::KECCAK_F1600,
-            keccak::FRAME,
-            128,
-            Per::Call,
-        ),
-        (
-            family::KECCAK_CHI,
-            ecall::KECCAK_F1600,
-            keccak::FRAME,
-            128,
-            Per::Call,
         ),
         (
             family::FALCON,

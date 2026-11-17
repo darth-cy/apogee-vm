@@ -10,7 +10,7 @@
  * An Apogee guest has no files and no streams. Its public input, advice and
  * journal are memory the proof binds — or, for advice, does not — and these
  * four calls are the whole of reaching them (docs/guest-program-manual.md §11,
- * docs/spec/public-values.md). The last five calls are precompiles, each
+ * docs/spec/public-values.md). The last four calls are precompiles, each
  * a circuit of its own (docs/spec/precompiles.md).
  *
  * The library also provides `memcpy`, `memmove`, `memset` and `memcmp`, the
@@ -67,11 +67,6 @@ int32_t apogee_mul_div_u256(const uint64_t a[4], const uint64_t b[4], const uint
  * p, or `siblings` is not 4-aligned. */
 int32_t apogee_merkle_root(uint32_t slot, uint32_t depth, const uint64_t leaf[8],
                            const uint8_t *siblings, uint64_t root[8]);
-
-/* Keccak-f[1600] (FIPS 202, 24 rounds) of the 25 lanes at `state`, in place,
- * by the precompile: lane A[x][y] at state[x + 5y], its byte k bits 8k to
- * 8k + 7. `state` is 8-aligned and below the advice region. */
-void apogee_keccak_f1600(uint64_t state[25]);
 
 /* ||s1||^2 by the precompile, s1 = (c - s2*h) mod (q, x^512 + 1), q = 12289,
  * each coefficient centered to [-6144, 6144] and every coefficient of h, s2

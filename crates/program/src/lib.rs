@@ -43,8 +43,9 @@ pub type FamilyId = u32;
 // Families, row kinds and row fields
 // ---------------------------------------------------------------------------
 
-/// Every family, ascending: the canonical order.
-pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
+/// Every family, ascending: the canonical order. It skips the numbers
+/// `constants::family::RETIRED` names.
+pub const FAMILIES: [FamilyId; family::COUNT as usize - family::RETIRED.len()] = [
     family::ADD_SUB_LUI_AUIPC,
     family::JUMP_BRANCH_SLT,
     family::BITWISE,
@@ -63,9 +64,6 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::MERKLE_ROOT,
     family::MERKLE_LEVELS,
     family::MERKLE_ROUNDS,
-    family::KECCAK,
-    family::KECCAK_RHO,
-    family::KECCAK_CHI,
     family::FALCON,
     family::FALCON_SPLIT,
     family::FALCON_PRODUCT,
@@ -167,9 +165,6 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::MERKLE_ROOT => "MERKLE_ROOT",
         family::MERKLE_LEVELS => "MERKLE_LEVELS",
         family::MERKLE_ROUNDS => "MERKLE_ROUNDS",
-        family::KECCAK => "KECCAK",
-        family::KECCAK_RHO => "KECCAK_RHO",
-        family::KECCAK_CHI => "KECCAK_CHI",
         family::FALCON => "FALCON",
         family::FALCON_SPLIT => "FALCON_SPLIT",
         family::FALCON_PRODUCT => "FALCON_PRODUCT",
@@ -334,9 +329,6 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::MERKLE_ROOT
         | family::MERKLE_LEVELS
         | family::MERKLE_ROUNDS
-        | family::KECCAK
-        | family::KECCAK_RHO
-        | family::KECCAK_CHI
         | family::FALCON
         | family::FALCON_SPLIT
         | family::FALCON_PRODUCT => &[],

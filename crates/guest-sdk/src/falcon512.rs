@@ -1,8 +1,8 @@
 //! Falcon-512 with Poseidon2's HashToPoint: v1.2 of its specification (the
 //! NIST round-3 submission) in all but HashToPoint, the map from the public
 //! key, the salt and the message to the point `c`, which is a Poseidon2-A64-C5
-//! sponge (`docs/spec/precompiles.md` §8.7). The lattice check is the
-//! precompile's (`constants::delegation::falcon`, §8), the sponge's
+//! sponge (`docs/spec/precompiles.md` §7.7). The lattice check is the
+//! precompile's (`constants::delegation::falcon`, §7), the sponge's
 //! permutations [`poseidon2_permute`]'s, and the rest is here, in software:
 //! the public key's and the signature's encodings, HashToPoint's sponge and
 //! sampler, and KeyDigest.
@@ -105,7 +105,7 @@ impl PublicKey {
 }
 
 /// KeyDigest of `bytes`, an account's fingerprint (`docs/spec/precompiles.md`
-/// §8.7): defined for any bytes, a key that does not decode included. A
+/// §7.7): defined for any bytes, a key that does not decode included. A
 /// decoded key's is [`PublicKey::digest`], which does not absorb it again.
 pub fn key_digest(bytes: &[u8]) -> Digest {
     let mut sponge = Sponge::ZERO;

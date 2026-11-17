@@ -238,10 +238,10 @@ const _: () = {
     // padded to a power of two, and a row a residue.
     let t = &constants::delegation::TYPES;
     let columns = (CHAINS.len() * COLUMNS).next_power_of_two() as u32;
-    assert!(t[9].0 == family::FALCON && t[9].2 == FRAME && t[9].3 == 1);
-    assert!(t[10].0 == family::FALCON_SPLIT && t[10].2 == ARRAYS && t[10].3 == columns);
-    assert!(t[11].0 == family::FALCON_PRODUCT && t[11].2 == ARRAYS);
-    assert!(t[11].3 == RESIDUES as u32);
+    assert!(t[6].0 == family::FALCON && t[6].2 == FRAME && t[6].3 == 1);
+    assert!(t[7].0 == family::FALCON_SPLIT && t[7].2 == ARRAYS && t[7].3 == columns);
+    assert!(t[8].0 == family::FALCON_PRODUCT && t[8].2 == ARRAYS);
+    assert!(t[8].3 == RESIDUES as u32);
 };
 
 /// The chain of `c`, whose `acc` is `‖s1‖²`.

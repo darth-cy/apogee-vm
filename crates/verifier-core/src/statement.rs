@@ -67,11 +67,12 @@ impl VmConfig {
     }
 
     /// Decode, refusing anything [`VmConfig::to_bytes`] could not have written
-    /// from a derived config: a wrong length, an unknown or out-of-order family,
-    /// a height off the menu, or a config [`window_height`] refuses — one
-    /// without `INIT_TEARDOWN`, `ZERO_WINDOWS`, `ADVICE_WINDOWS` or the two
-    /// public families, which derivation puts in every config, or with them at
-    /// the wrong heights. `None` rather than a panic.
+    /// from a derived config: a wrong length, an unknown, retired or
+    /// out-of-order family, a height off the menu, or a config
+    /// [`window_height`] refuses — one without `INIT_TEARDOWN`,
+    /// `ZERO_WINDOWS`, `ADVICE_WINDOWS` or the two public families, which
+    /// derivation puts in every config, or with them at the wrong heights.
+    /// `None` rather than a panic.
     pub fn from_bytes(bytes: &[u8]) -> Option<VmConfig> {
         let word = |i: usize| -> Option<u32> {
             Some(u32::from_le_bytes(
@@ -85,7 +86,10 @@ impl VmConfig {
         let mut families = Vec::with_capacity(k);
         for j in 0..k {
             let (f, h) = (word(1 + 2 * j)?, word(2 + 2 * j)?);
-            if f >= family::COUNT || !family::HEIGHT_MENU.contains(&h) {
+            if f >= family::COUNT
+                || family::RETIRED.contains(&f)
+                || !family::HEIGHT_MENU.contains(&h)
+            {
                 return None;
             }
             if families.last().is_some_and(|(prev, _)| *prev >= f) {

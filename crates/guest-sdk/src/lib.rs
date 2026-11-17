@@ -17,10 +17,10 @@
 //! `docs/spec/public-values.md` specifies all three.
 //!
 //! The ecall ABI is [`exit`] and the delegation calls, each a shim over one
-//! frame: [`poseidon2_permute`], [`merkle_root`], [`keccak_f1600`],
-//! [`falcon512::s1_norm`], and [`U256`]'s divisions. An ecall carries its
-//! number in `a7` and its argument in `a0`; `docs/spec/ecall-abi.md` is the
-//! table, every number [`constants::ecall`]'s.
+//! frame: [`poseidon2_permute`], [`merkle_root`], [`falcon512::s1_norm`],
+//! and [`U256`]'s divisions. An ecall carries its number in `a7` and its
+//! argument in `a0`; `docs/spec/ecall-abi.md` is the table, every number
+//! [`constants::ecall`]'s.
 //!
 //! # `unsafe`, and global state
 //!
@@ -451,9 +451,6 @@ static MUL_DIV_U256: u32 = ecall::MUL_DIV_U256;
 #[link_section = ".apogee.delegations.merkle_root"]
 static MERKLE_ROOT: u32 = ecall::MERKLE_ROOT;
 
-#[link_section = ".apogee.delegations.keccak_f1600"]
-static KECCAK_F1600: u32 = ecall::KECCAK_F1600;
-
 #[link_section = ".apogee.delegations.falcon512"]
 static FALCON512: u32 = ecall::FALCON512;
 
@@ -593,123 +590,6 @@ fn mul_div_u256(a: U256, b: U256, d: U256) -> (U256, U256) {
     (U256(frame[0]), U256(frame[1]))
 }
 
-/// Keccak-f[1600] of `state`, in place, by the precompile: FIPS 202's
-/// permutation, 24 rounds, lane `A[x][y]` at `state[x + 5y]` and its byte `k`
-/// bits `8k..8k + 8` (`constants::delegation::keccak`). Any 25 lanes are a
-/// state.
-pub fn keccak_f1600(state: &mut [u64; 25]) {
-    // SAFETY: a `[u64; 25]` is 50 words, 8-aligned, and is the whole frame.
-    unsafe { delegate(&KECCAK_F1600, state.as_mut_ptr().cast()) }
-}
-
-/// SHAKE256 (FIPS 202 §6.2), the sponge over [`keccak_f1600`]: absorb any
-/// bytes, finalize, then squeeze any number of bytes. The rate is
-/// [`Shake256::RATE`] bytes, and finalizing XORs the domain bits and the
-/// padding's first 1 as `0x1F` after the message and its last 1 as `0x80`
-/// into the rate's last byte.
-#[derive(Clone, Debug)]
-pub struct Shake256 {
-    state: [u64; 25],
-    /// The rate's next byte to absorb into or squeeze from.
-    at: usize,
-    /// Whether the sponge is finalized, and squeezing.
-    squeezing: bool,
-}
-
-impl Default for Shake256 {
-    fn default() -> Shake256 {
-        Shake256::new()
-    }
-}
-
-impl Shake256 {
-    /// The rate in bytes: 1,600 bits less a capacity of 512.
-    pub const RATE: usize = 136;
-
-    /// An empty sponge, absorbing.
-    pub const fn new() -> Shake256 {
-        Shake256 {
-            state: [0; 25],
-            at: 0,
-            squeezing: false,
-        }
-    }
-
-    /// Absorb `bytes`, the permutation run at each full rate. Panics once
-    /// finalized.
-    pub fn absorb(&mut self, mut bytes: &[u8]) {
-        assert!(!self.squeezing, "Shake256: absorbing after finalize");
-        while !bytes.is_empty() {
-            let n = (Self::RATE - self.at).min(bytes.len());
-            let at = self.at;
-            for (s, b) in self.rate()[at..at + n].iter_mut().zip(&bytes[..n]) {
-                *s ^= b;
-            }
-            bytes = &bytes[n..];
-            self.at += n;
-            if self.at == Self::RATE {
-                keccak_f1600(&mut self.state);
-                self.at = 0;
-            }
-        }
-    }
-
-    /// Pad what was absorbed and permute: the sponge squeezes from here.
-    /// Panics if already finalized.
-    pub fn finalize(&mut self) {
-        assert!(!self.squeezing, "Shake256: finalized twice");
-        let at = self.at;
-        let rate = self.rate();
-        rate[at] ^= 0x1f;
-        rate[Self::RATE - 1] ^= 0x80;
-        keccak_f1600(&mut self.state);
-        self.at = 0;
-        self.squeezing = true;
-    }
-
-    /// The next `out.len()` bytes of the output, the permutation run at each
-    /// full rate. Panics unless finalized.
-    pub fn squeeze(&mut self, mut out: &mut [u8]) {
-        assert!(self.squeezing, "Shake256: squeezing before finalize");
-        while !out.is_empty() {
-            if self.at == Self::RATE {
-                keccak_f1600(&mut self.state);
-                self.at = 0;
-            }
-            let n = (Self::RATE - self.at).min(out.len());
-            let at = self.at;
-            out[..n].copy_from_slice(&self.rate()[at..at + n]);
-            out = &mut out[n..];
-            self.at += n;
-        }
-    }
-
-    /// The output's next [`Shake256::RATE`] bytes in place, as the rate's 17
-    /// lanes, output byte `8i + k` lane `i`'s byte `k`: a rate at a time, with
-    /// no copy. Panics unless finalized and squeezed whole rates only.
-    pub(crate) fn squeeze_lanes(&mut self) -> &[u64; Self::RATE / 8] {
-        assert!(
-            self.squeezing && self.at.is_multiple_of(Self::RATE),
-            "Shake256: squeezing a rate from within one"
-        );
-        if self.at == Self::RATE {
-            keccak_f1600(&mut self.state);
-        }
-        self.at = Self::RATE;
-        self.state
-            .first_chunk()
-            .expect("the rate is within the state")
-    }
-
-    /// The state's first [`Shake256::RATE`] bytes, lane `i`'s byte `k` at
-    /// `8i + k`: the target is little-endian.
-    fn rate(&mut self) -> &mut [u8; Self::RATE] {
-        // SAFETY: `[u64; 25]` is 200 bytes with no padding, and a byte has no
-        // alignment; the borrow is the state's.
-        unsafe { &mut *self.state.as_mut_ptr().cast::<[u8; Self::RATE]>() }
-    }
-}
-
 mod u256;
 pub use u256::U256;
 
@@ -809,15 +689,6 @@ pub unsafe extern "C" fn apogee_merkle_root(
         }
         _ => 1,
     }
-}
-
-/// `keccak_f1600()` over the 25 lanes at `state`.
-///
-/// # Safety
-/// `state` is 8-aligned and valid for reads and writes of 25 `uint64_t`.
-#[no_mangle]
-pub unsafe extern "C" fn apogee_keccak_f1600(state: *mut u64) {
-    keccak_f1600(&mut *state.cast::<[u64; 25]>())
 }
 
 /// `falcon512::s1_norm()` over the 512 coefficients at each of `h`, `s2` and

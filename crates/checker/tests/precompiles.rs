@@ -1,14 +1,12 @@
-//! The five precompiles over a real execution, `guests/precompiles` built
+//! The four precompiles over a real execution, `guests/precompiles` built
 //! from source, in ordinary CI and without a proof (`docs/spec/precompiles.md`):
 //!
 //! - **the journal is the host's**: the Poseidon2 permutation of the
 //!   generator's own input and of lanes at `2^64 − 1`, read mod `p`, a Merkle
 //!   root, and three `merkle_root` paths, the last after a run of 126, each by
 //!   `transcript`; `mul_div` at edges whose answers are hand-derived or a
-//!   `u128`'s; Keccak-f[1600] of a state, then of a chain, and SHAKE256 of
-//!   a message of three rates, each by RustCrypto's `keccak` and `sha3`; and
-//!   Falcon-512's `‖s1‖²` of three arrays and of their rotations, each by the
-//!   host's own negacyclic product;
+//!   `u128`'s; and Falcon-512's `‖s1‖²` of three arrays and of their
+//!   rotations, each by the host's own negacyclic product;
 //! - **every precompile circuit keeps every rule**, by `constraints` and, with
 //!   no shared code, by this crate;
 //! - **the fill holds**: every live row and the padding after it satisfy every
@@ -17,13 +15,12 @@
 //!   every row-local gate and lookup refuse, and each written word one off is
 //!   refused by its row alone;
 //! - **the statement reconciles**: every shard forwarded, and the roots of all
-//!   of them and the boundary multiply out, the anchors and the Poseidon2 and
-//!   Merkle, Keccak and Falcon state included. A round row moved to another
-//!   call's cycle keeps every row-local relation and does not, nor does a
-//!   level taking the other order, nor a path's continuation one off where it
-//!   crosses a round shard, nor a chi row claiming the next round, nor a
-//!   Falcon product row claiming another residue, nor a split row another
-//!   column;
+//!   of them and the boundary multiply out, the anchors and the Poseidon2,
+//!   Merkle and Falcon state included. A round row moved to another call's
+//!   cycle keeps every row-local relation and does not, nor does a level
+//!   taking the other order, nor a path's continuation one off where it
+//!   crosses a round shard, nor a Falcon product row claiming another
+//!   residue, nor a split row another column;
 //! - **a path crosses a shard**: the round shard a path continues into fills
 //!   from its streamed chunk exactly as from the archive;
 //! - **a sibling word is a word**: one no load could read is refused by its
@@ -46,19 +43,15 @@ use gkr::{
 };
 use poly::{MultilinearPoly, PolyBacking};
 use prover::{Program, ShardRows, ShardSource};
-use sha3::digest::{ExtendableOutput, Update, XofReader};
 use trace::{IoStreams, PhaseTiming, TraceArchive};
 
-const DELEGATIONS: [u32; 12] = [
+const DELEGATIONS: [u32; 9] = [
     family::POSEIDON2,
     family::POSEIDON2_ROUNDS,
     family::MUL_DIV_U256,
     family::MERKLE_ROOT,
     family::MERKLE_LEVELS,
     family::MERKLE_ROUNDS,
-    family::KECCAK,
-    family::KECCAK_RHO,
-    family::KECCAK_CHI,
     family::FALCON,
     family::FALCON_SPLIT,
     family::FALCON_PRODUCT,
@@ -97,30 +90,6 @@ fn sibling(l: usize, j: usize) -> u64 {
     }
 }
 
-/// Lane `i` of the Keccak-f[1600] case's state: arbitrary, and the last at
-/// `2^64 − 1`.
-fn keccak_lane(i: usize) -> u64 {
-    match i {
-        24 => u64::MAX,
-        _ => (i as u64 + 1).wrapping_mul(0xa076_1d64_78bd_642f) ^ (i as u64) << 3,
-    }
-}
-
-/// The state's permutations after the first.
-const CHAIN: u32 = 2;
-
-/// SHAKE256's message, three rates: absorbed in halves, the first crosses a
-/// rate and the second ends on one, so finalizing pads a rate of its own.
-const MESSAGE: usize = 3 * 136;
-
-/// The bytes SHAKE256 squeezes, in halves of 548, each crossing rates.
-const SQUEEZE: usize = 1096;
-
-/// Byte `i` of SHAKE256's message: arbitrary.
-fn message(i: usize) -> u8 {
-    (i as u8).wrapping_mul(0x3b) ^ 0x5c
-}
-
 /// Coefficient `t` of the Falcon case's array `a`, `h`, `s2` and `c` in
 /// turn: arbitrary halfwords, most of them at or above `q`, the first the
 /// largest.
@@ -149,13 +118,6 @@ fn input() -> Vec<u8> {
         }
     }
     out.extend(RUNS.to_le_bytes());
-    for i in 0..25 {
-        out.extend(keccak_lane(i).to_le_bytes());
-    }
-    out.extend(CHAIN.to_le_bytes());
-    out.extend((MESSAGE as u32).to_le_bytes());
-    out.extend((0..MESSAGE).map(message));
-    out.extend((SQUEEZE as u32).to_le_bytes());
     for a in 0..3 {
         out.extend((0..512).flat_map(|t| falcon_coefficient(a, t).to_le_bytes()));
     }
@@ -347,18 +309,6 @@ fn the_journal_is_the_hosts() {
     want.extend(lanes(&fold(u32::MAX, leaves[0], &ram)));
     let run = (0..RUNS).fold(leaves[0], |node, i| fold(i, node, &ram));
     want.extend(lanes(&fold(0x5a5a5, run, &ram[..20])));
-    let mut state: [u64; 25] = std::array::from_fn(keccak_lane);
-    keccak::f1600(&mut state);
-    want.extend(lanes(&state));
-    for _ in 0..CHAIN {
-        keccak::f1600(&mut state);
-    }
-    want.extend(lanes(&state));
-    let mut shake = sha3::Shake256::default();
-    shake.update(&(0..MESSAGE).map(message).collect::<Vec<u8>>());
-    let mut squeezed = vec![0u8; SQUEEZE];
-    shake.finalize_xof().read(&mut squeezed);
-    want.extend(squeezed);
     let arrays: [[u16; 512]; 3] =
         std::array::from_fn(|a| std::array::from_fn(|t| falcon_coefficient(a, t)));
     let norm = |k: usize| {
@@ -389,8 +339,7 @@ fn every_precompile_circuit_keeps_every_rule() {
         assert_eq!(check_padding_identity(a), Ok(()));
         assert_eq!(check_lookup_discharge(a, &c.channels), Ok(()));
         assert!(a.padding.zero_row_valid);
-        // RANGE16's and XOR8's tables need 2^16 rows; POSEIDON2's rounds read
-        // no lookup.
+        // RANGE16's table needs 2^16 rows; POSEIDON2's rounds read no lookup.
         let below = family_circuit(fam, 12);
         assert_eq!(
             below.is_some(),
@@ -485,17 +434,13 @@ impl Shard {
         let rows = 1usize << a.trace_vars;
         let circuit = family_circuit(fam, a.trace_vars).expect("its circuit");
         let mut tables = BTreeMap::new();
-        // A table column is committed, or for XOR8 a closed form of the row.
         for spec in circuit
             .channels
             .iter()
             .filter(|s| !lookup_channel::IS_RANGE[s.channel as usize])
         {
-            let value = |x: &PolyAddress, r: usize| match x {
-                PolyAddress::Virtual(k) => virtual_at_row(*k, r).to_u64(),
-                x => columns[index[x]].get_base(r).to_u64(),
-            };
-            let set = (0..rows).map(|r| spec.table.iter().map(|x| value(x, r)).collect());
+            let at: Vec<&MultilinearPoly> = spec.table.iter().map(|x| &columns[index[x]]).collect();
+            let set = (0..rows).map(|r| at.iter().map(|c| c.get_base(r).to_u64()).collect());
             tables.insert(spec.channel, set.collect::<HashSet<Vec<u64>>>());
         }
         let mut ch = memory_slots();
@@ -626,14 +571,10 @@ fn every_row_holds_and_every_constraint_bites() {
             assert!(broken.is_empty(), "{label} row {r} breaks {broken:?}");
         }
         // Each kind of row once — a frame row, a round row of each kind and
-        // the idle one, a Keccak row of planes 0 and 4, the two a selector
-        // names, or a Falcon split row of chains `s2` and `c`, whose `s` is 0
-        // and is not — and the first padding row, where there is one.
+        // the idle one, or a Falcon split row of chains `s2` and `c`, whose
+        // `s` is 0 and is not — and the first padding row, where there is one.
         let samples: Vec<usize> = match fam {
             family::POSEIDON2_ROUNDS | family::MERKLE_ROUNDS => (0..16).chain(padding).collect(),
-            family::KECCAK | family::KECCAK_RHO | family::KECCAK_CHI => {
-                [0, 4].into_iter().chain(padding).collect()
-            }
             family::FALCON_SPLIT => [0, 32].into_iter().chain(padding).collect(),
             _ => [0].into_iter().chain(padding).collect(),
         };
@@ -913,55 +854,6 @@ fn the_statement_reconciles_and_a_round_moved_to_another_call_does_not() {
             for (x, c) in columns.iter_mut() {
                 *c = forged[x].clone();
             }
-        }
-    };
-    assert!(!balances(
-        &program,
-        &archive,
-        &roots(&program, &archive, &edit)
-    ));
-
-    // A chi row claiming the next round: call 0's B-plane 2 of round 1, its
-    // round one-hot moved to round 2 and its stamps recomputed. Every
-    // row-local relation holds — a round is nothing to a row but its stamps
-    // and, at planes 0 and 4, iota and the next round's D — and the planes it
-    // reads and writes are round 2's, which round 2's own row reads and writes
-    // too, while round 1's B-plane 2 is written and never read.
-    let s = Shard::new(&program, &archive, family::KECCAK_CHI);
-    let row = 5 + 2;
-    let honest = s.row(row);
-    assert!(
-        honest[s.at("r1")] == Fp::ONE && honest[s.at("y2")] == Fp::ONE,
-        "row 7 is round 1's B-plane 2"
-    );
-    let mut relabeled = honest.clone();
-    relabeled[s.at("r1")] = Fp::ZERO;
-    relabeled[s.at("r2")] = Fp::ONE;
-    let stamps = ["st_b", "st_pin", "st_pout", "st_a"];
-    for (name, stamp) in stamps.iter().zip(constraints::keccak::chi_stamps(2, 2)) {
-        relabeled[s.at(name)] = f(stamp);
-    }
-    assert!(
-        s.refused(&relabeled, row).is_empty(),
-        "the relabeled row is a valid chi row"
-    );
-    let committed = s.a.committed();
-    let edit = |fam: u32, index: u32, columns: &mut [(PolyAddress, MultilinearPoly)]| {
-        if (fam, index) != (family::KECCAK_CHI, 0) {
-            return;
-        }
-        for (i, v) in relabeled
-            .iter()
-            .enumerate()
-            .filter(|(i, v)| **v != honest[*i])
-        {
-            let (_, c) = columns
-                .iter_mut()
-                .find(|(x, _)| *x == committed[i])
-                .expect("a committed column");
-            let mut values: Vec<Fp> = (0..c.len()).map(|r| c.get_base(r)).collect();
-            values[row] = *v;
-            *c = MultilinearPoly::new(PolyBacking::Fp(values));
         }
     };
     assert!(!balances(

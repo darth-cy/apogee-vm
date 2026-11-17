@@ -69,7 +69,7 @@
 //! is paid. An empty slot holds the all-zero record: a user with no account, a
 //! listing with no stock.
 //!
-//! A key's digest is its KeyDigest (`docs/spec/precompiles.md` §8.7): the
+//! A key's digest is its KeyDigest (`docs/spec/precompiles.md` §7.7): the
 //! first eight lanes HashToPoint's sponge squeezes after the context, the
 //! key's bytes and an empty field tagged 5. It is defined for any bytes: an
 //! advised key that does not decode is checked against its record all the

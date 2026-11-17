@@ -114,12 +114,9 @@ pub fn input_of(name: &str) -> Vec<u8> {
         "addsub" | "control" | "alu" | "mem" | "shards" => Vec::new(),
         // One leaf of zeros, a Merkle root over one leaf being the leaf, a
         // path of the fewest siblings, zeros, from slot 0, and 126 runs: the
-        // last path straddles a round shard. Then the zero state and a chain
-        // of 520 permutations, more calls than a Keccak expansion's shard
-        // holds at `2^16`, SHAKE256 of 104 zero bytes squeezed to 1,096,
-        // Falcon-512's three arrays of zeros and 1,024 more calls, more than
-        // a `FALCON_SPLIT` shard holds at `2^16`, and no verification
-        // (`guests/precompiles`).
+        // last path straddles a round shard. Then Falcon-512's three arrays
+        // of zeros and 1,024 more calls, more than a `FALCON_SPLIT` shard
+        // holds at `2^16`, and no verification (`guests/precompiles`).
         "precompiles" => [
             1u32.to_le_bytes().as_slice(),
             &[0u8; 64],
@@ -127,11 +124,6 @@ pub fn input_of(name: &str) -> Vec<u8> {
             &16u32.to_le_bytes(),
             &[0u8; 64 * 16],
             &126u32.to_le_bytes(),
-            &[0u8; 200],
-            &520u32.to_le_bytes(),
-            &104u32.to_le_bytes(),
-            &[0u8; 104],
-            &1096u32.to_le_bytes(),
             &[0u8; 3 * 1024],
             &1024u32.to_le_bytes(),
             &0u32.to_le_bytes(),

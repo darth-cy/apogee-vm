@@ -341,36 +341,6 @@ fn each_range_tables_closed_form_is_its_multilinear_extension() {
     }
 }
 
-/// `XOR8`'s three columns likewise: at `2^16` rows the table is the 65,536
-/// triples `(a, b, a ^ b)`, row `a + 2^8·b`, and above it each again once per
-/// `2^16` rows, the closed forms reading no variable past the sixteenth.
-#[test]
-fn each_xor8_columns_closed_form_is_its_multilinear_extension() {
-    let mut rng = Rng::new(0x5115_000c);
-    let kinds = [VirtualKind::Xor8A, VirtualKind::Xor8B, VirtualKind::Xor8Out];
-    for n in [16u32, 17] {
-        let rows = 1usize << n;
-        for (column, kind) in kinds.into_iter().enumerate() {
-            let table: Vec<Fp> = (0..rows).map(|y| virtual_at_row(kind, y)).collect();
-            let poly = MultilinearPoly::new(PolyBacking::Fp(table.clone()));
-            for _ in 0..4 {
-                let point: Vec<Fp2> = (0..n).map(|_| fr2(&mut rng)).collect();
-                assert_eq!(
-                    virtual_at_point(kind, &point),
-                    poly.evaluate(&point),
-                    "{kind:?} at {n} variables"
-                );
-            }
-            // On the cube row `y` is the triple of `y mod 2^16 = a + 2^8·b`.
-            for y in [0usize, 1, 0x1234, 0xffff, rows / 2 + 0x1234, rows - 1] {
-                let (a, b) = (y as u64 & 0xff, (y as u64 >> 8) & 0xff);
-                let want = [a, b, a ^ b][column];
-                assert_eq!(table[y], Fp::from_u64(want), "{kind:?} row {y}");
-            }
-        }
-    }
-}
-
 /// The negative control: a closed form perturbed in one bit's weight is no
 /// longer the table's extension, and the comparison above catches it.
 #[test]
