@@ -48,7 +48,7 @@ fn main() {
 and append it to the list in `guests/Cargo.toml`:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "public-io", "precompiles", "marketplace", "amazon", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "public-io", "precompiles", "amazon", "hello"]
 ```
 
 - `#![no_std]`: the target is bare metal. `extern crate alloc;` adds `Vec`, `Box` and `String`
@@ -65,7 +65,7 @@ The guests in the tree are worked examples:
 | `fib` | the smallest SDK guest: a `u32` in, a `u32` out |
 | `echo`, `heap` | the allocator: advice copied through heap buffers, `Vec` and `Box` churn |
 | `amm`, `orderbook` | 128- and 256-bit integers with no heap; `BTreeMap`, sorting, a sorted order from advice checked |
-| `marketplace`, `amazon` | a database a proof follows by digest, one table and two (§3.3); requests signed with Falcon-512 (§3.1) |
+| `amazon` | a database of two tables a proof follows by digest (§3.3); requests signed with Falcon-512 (§3.1) |
 | `atomics`, `opcodes`, `rvc-dense` | the A extension from `core::sync::atomic`; every RV64IMAC instruction; RVC expansion |
 | `addsub`, `control`, `alu`, `mem`, `shards` | assembly with its own `_start` and no SDK, exiting with its result; `shards` fills two `2^20` shards |
 | `cpp-primes` | a C++ guest, built by CMake against the C/C++ SDK (§11) |
@@ -121,25 +121,26 @@ fn main() {
   SDK's Falcon-512 calls answer so ([precompiles.md](spec/precompiles.md) §5).
 - **The advice is as compact as soundness allows.** It holds only what the state transition uses:
   business data, signed or opened against the state, and what attests it, a key, a signature, a
-  Merkle path; no byte that is format alone, a constant header, padding or trailing zeros. Every
+  table's proof; no byte that is format alone, a constant header, padding or trailing zeros. Every
   byte it carries is consumed, so one missing or extra throws every read after it into a refusal,
   and a byte past the last read is a panic (`guests/amazon`, §3.3).
 
-`digest` is a collision-resistant hash: a Merkle root of `guest_sdk::poseidon2_compress`, say
-(§3.1). [ecall-abi.md](spec/ecall-abi.md) §6 lists the SDK.
+`digest` is a collision-resistant hash: a sponge of `guest_sdk::poseidon2_permute`, say (§3.1).
+[ecall-abi.md](spec/ecall-abi.md) §6 lists the SDK.
 
 ### 3.1 Precompiles and `U256`
 
 Six operations are not RV64IMAC code but a circuit each, which a guest reaches through the SDK
 ([precompiles.md](spec/precompiles.md)): the Poseidon2-A64-C5 permutation, the 256-bit `mul_div`
-that a token balance's arithmetic is built on, a Merkle path's root, and three steps of Falcon-512
-verification, decoding a key or a signature, HashToPoint's sampling and the lattice check.
+that a token balance's arithmetic is built on, a crit-bit trie's root, and three steps of
+Falcon-512 verification, decoding a key or a signature, HashToPoint's sampling and the lattice
+check.
 
 ```rust
-use guest_sdk::{falcon512::PublicKey, merkle_root, poseidon2_compress, Digest, U256};
+use guest_sdk::{falcon512::PublicKey, mpt, poseidon2_compress, Digest, U256};
 
-let leaf = poseidon2_compress(&left, &right); // a node over two Digests, each lane below p
-let root = merkle_root(slot, &leaf, &advice[at..at + 64 * 20]); // a 20-level path, read in place
+let node = poseidon2_compress(&left, &right); // two Digests compressed, each lane below p
+let leaf = mpt::leaf(&id, &record); // a table's leaf: its key and its value (§3.3)
 let share = U256::from(amount).mul_div(U256::from(total), U256::from(reserve)); // Option<U256>
 let key = PublicKey::decode(&advice[k..k + 896]); // a Falcon-512 key's h, or the run ends
 let len = key.verify(&request, &advice[s..], b"app/v1"); // a signature of request, or the run ends
@@ -151,12 +152,14 @@ let len = key.verify(&request, &advice[s..], b"app/v1"); // a signature of reque
   a few instructions a limb. `mul_div` is `None` for a zero divisor or a quotient past `2^256`.
 - A `Digest`'s lanes are each below `p`: `Digest::new` refuses any other, as a lane `x + p` would be
   a second encoding of the node `x` opens. Decode every digest the guest compares or publishes from
-  advice or input through it; a node `poseidon2_compress` or `merkle_root` returns is one already.
-- `merkle_root(slot, &leaf, siblings)` is the fold of `poseidon2_compress` up a path of 16 to 32
-  siblings, 64 bytes each, in one call: the depth is `siblings.len() / 64`, the node goes on the left
-  where the slot's bit is 0, and each sibling lane is read mod `p`, so a path needs no decoding. It
-  costs a level row and sixteen round rows a level and no guest cycles; `Digest::bytes(&path)`
-  passes a path the guest holds itself.
+  advice or input through it; a digest `poseidon2_compress`, `mpt::leaf` or `Trie::root` returns
+  is one already.
+- `mpt::Trie` is a table's trie on the guest's side (§3.3): opened from a batch's advised proof and
+  edited, each root it takes one `MPT_ROOT` call, which reads the proof's lanes mod `p` where they
+  lie, so a proof needs no decoding. The call costs an `MPT_NODES` row an op and sixteen `MPT_ROUNDS`
+  rows a hash op, over an opened trie of `m` keys and `s` siblings `2m + s − 1` ops, `m + s − 1` of
+  them hash ops; opening the proof and emitting the program are guest code. `mpt_eval(&ops)` is
+  the raw call over a program the guest writes itself ([precompiles.md](spec/precompiles.md) §6.3).
 - `falcon512::PublicKey::decode(h)` reads a Falcon-512 public key from its advised form, `h`'s 896
   bytes, and `key.verify(msg, sig, context)` checks that `sig` begins with a signature of `msg`
   under it and the application's `context`, at most 255 bytes, and returns the signature's length,
@@ -175,16 +178,10 @@ let len = key.verify(&request, &advice[s..], b"app/v1"); // a signature of reque
   for a guest with encodings of its own.
 - A precompile's frame is the guest's own memory below the advice region, which the SDK's calls
   always are: advice is copied in before `poseidon2_permute` hashes it, and a frame reaching the
-  advice is the fatal `OutOfBounds`. A path's siblings, `s1_norm`'s arrays, a key and a signature
-  are not a frame: `merkle_root`, `s1_norm` and `PublicKey` read an advised one where it lies.
+  advice is the fatal `OutOfBounds`. A table's proof, `s1_norm`'s arrays, a key and a signature
+  are not a frame: `Trie::root`, `s1_norm` and `PublicKey` read an advised one where it lies.
 - A guest that links a precompile pays one shard of each family it declares, at `2^16` rows: worth
   it once the call replaces more instructions than that ([circuits.md](spec/circuits.md) §1).
-- `guests/marketplace` is the worked example of a table a proof follows by its root: a listings
-  table of `2^20` slots as a Poseidon2 Merkle tree, the root before a batch in the public input, a
-  Merkle proof in the advice for each run of operations on one listing, checked by `merkle_root`
-  where it lies before it is used, and the root after the batch in the journal. Each listing's price is in its own currency, an
-  ERC-20 contract's address or zero for the native one, and the journal tallies each currency's
-  volume and fees apart.
 
 ### 3.2 Fewer cycles
 
@@ -193,31 +190,27 @@ Cutting a guest's cycles has more than one strategy, and two are in use:
 - **A precompile module.** The VM proves a hot operation in a circuit of its own, which the guest
   calls instead of running it (§3.1).
 - **The input's format.** Whoever builds the input, a sequencer say, can shape it so the guest does
-  less, and the guest presumes that shape rather than making it. `guests/marketplace` opens one
-  Merkle proof for each run of consecutive operations on one listing and writes one root back,
-  however long the run, so a batch with each listing's operations gathered is one proof a listing.
-  The order is the sequencer's policy and becomes part of the batch: the guest proves the order it
-  is given and never sorts. Any order is valid input, at a proof a run, and another order can be
-  another result. `guests/amazon`'s advice holds each record its batch reads once, its users by
-  address and its listings by slot, each ascending, so its batch runs in memory and a record costs
-  one opening and at most one write-back however its requests interleave: there the order costs
-  nothing (§3.3).
+  less, and the guest presumes that shape rather than making it: it asserts the shape and never
+  sorts. `guests/amazon`'s advice holds each record its batch reads once, ascending by key, so its
+  batch runs in memory and each table costs one validation and one finalization however its
+  requests interleave (§3.3). The requests' order is the sequencer's policy and becomes part of the
+  batch: the guest proves the order it is given, and another order can be another result.
 
 ### 3.3 A database's state
 
 A business guest keeps a database the proof follows by digest, and every Apogee guest program
-keeps it the same way from here on. This is the common convention for an on-chain database.
+keeps it the same way. This is the common convention for an on-chain database.
 
 - **Two kinds of record.** A *state* record is a current value that persists from batch to batch:
-  an account's balance, a listing, an open position. An *action* record is an event that changes
-  state: a purchase, a transfer, a new listing.
-- **Each state table is a tree.** Each persistent table of state records is a fixed-depth Merkle
-  tree of its own, 16 to 32 levels: a record's slot is its key, its leaf a digest of the record's
-  encoding, an empty slot the empty record's, and every node `poseidon2_compress` of its children,
-  so `merkle_root` opens a record by its path from the advice and writes it back along the same
-  path (§3.1).
-- **The state is one digest.** The global state hash, the snapshot, is the hash of the tables' roots
-  concatenated in the schema's fixed order, absorbed one root at a time:
+  a user's balance, a listing, an open position. An *action* record is an event that changes
+  state: a purchase, a transfer, a new listing. Tables hold state records alone.
+- **Each table is a crit-bit trie** of its own ([precompiles.md](spec/precompiles.md) §6.1): a
+  record is its key and its value, and its leaf `mpt::leaf(key, value)`. A table's keys are one
+  fixed width, up to 64 bytes, which may pass 256 bits: a balance per user and token is keyed by
+  the user address and the token, 64 bytes. Its values are one fixed width too, as a leaf binds
+  neither length, and a key and its value are at most 112 bytes together.
+- **The state is one digest.** The snapshot is Poseidon2 over the tables' roots concatenated in the
+  schema's fixed order, absorbed one root at a time:
   `compress(… compress(compress(root_1, root_2), root_3) …, root_k)`; a guest with one table
   publishes its root. A statement carries the snapshot before its batch in the public input and the
   snapshot after it in the journal.
@@ -225,34 +218,59 @@ keeps it the same way from here on. This is the common convention for an on-chai
   are the batch itself, the input a sequencer orders (§3.2), and once proved they are kept in an
   ordinary database for data availability: whoever holds them and the snapshot before a batch can
   rebuild the state after it.
+- **One validation and one finalization a table.** A batch's advice holds the records it touches,
+  each once and ascending by key, then each table's batched proof
+  ([precompiles.md](spec/precompiles.md) §6.2). The guest opens each table, `Trie::open`, and holds
+  the opened tables' `root()`s to the snapshot: one validation a table, however many records it
+  opens. It settles the batch in memory, then edits each table, `set`, `insert` or `remove` a
+  record at a time, and takes its `root()` again: one finalization a table, however many records
+  changed. A batch that inserts and removes inserts first: an insert's walk must reach a leaf the
+  proof opened, and a remove can lift a node the proof did not open into that walk.
+- **The proof is the prover's.** Its node data comes from the prover's own data-availability store
+  of the tables, as advice, never from a request or its caller. A request carries no tree
+  information: it names a record by its key alone.
+- **The sequencer orders; the guest presumes it and asserts it.** The records are ascending by key,
+  which `Trie::open` asserts, and the requests come in the sequencer's order, which the guest
+  settles as given and never sorts (§3.2).
 
-`guests/marketplace` is the one-table case: its listings are state records under one root, which is
-its snapshot, and its operations are actions; its journal's tallies summarize the actions it
-proved, which no snapshot holds.
+```rust
+use guest_sdk::{mpt::{self, Trie}, poseidon2_compress};
 
-`guests/amazon` is the two-table case, its users and its listings two tables of `2^20` slots and
-its snapshot `compress(users_root, listings_root)`, and it opens each record once: its actions are
-purchases, each a 92-byte request its buyer signed with Falcon-512 (§3.1) under the context
-`apogee/amazon/purchase/v1`, settled against a working set in memory, so a seller may spend later
-in a batch what it earned earlier in it. A user is named by its key's address: its record holds
-the address, a request names its buyer by it and a listing its seller, and the key advised at its
-first signature must have that address, computed from the same bytes the user's signatures are
-verified under. The requests and their signatures are advice the prover chooses (§3), and the
-public input is the snapshot and the market alone: the statement is that signed requests, each its
-buyer's at that buyer's nonce, take the snapshot to the next. So a proof does not say which requests
-a batch settled, only that each was signed and valid for this store and snapshot. Every request in
-a batch applies: one for another market, from the zero address or not at its buyer's nonce, one
-whose signature does not verify under its buyer's key, or one its listing or the balances cannot
-settle is a malformed batch, a panic. The sequencer checks the requests and their signatures and
-drops each one that cannot apply before it batches them, as a rollup's block
+// After the records, each table's proof: its touched keys and their leaves, ascending.
+let mut users = Trie::open(32, user_leaves, advice, &mut at);
+let mut listings = Trie::open(4, listing_leaves, advice, &mut at);
+assert!(poseidon2_compress(&users.root(), &listings.root()) == snapshot); // the validation
+// … the batch, settled in memory …
+users.set(&address, mpt::leaf(&address, &user_value)); // each changed record, once
+let after = poseidon2_compress(&users.root(), &listings.root()); // the finalization
+```
+
+`guest_sdk::mpt` is [precompiles.md](spec/precompiles.md) §5's. In C, `apogee_mpt_leaf` is a leaf
+and `apogee_mpt_root` a table's validation, its sorted keys, their leaves and its proof to its
+root; a batch's edits are Rust's alone ([ecall-abi.md](spec/ecall-abi.md) §7).
+
+`guests/amazon` is the two-table case. Its users are keyed by address, 32 bytes, each value the
+user's balance and nonce, 40 bytes; its listings by `id.to_be_bytes()`, 4 bytes, each value the
+listing's seller, item, price and stock, 80 bytes; and its snapshot is
+`compress(users_root, listings_root)`. Its actions are purchases, each a 92-byte request its buyer
+signed with Falcon-512 (§3.1) under the context `apogee/amazon/purchase/v1`, settled against a
+working set in memory, so a seller may spend later in a batch what it earned earlier in it. A user
+is named by its key's address: a request names its buyer by it and a listing its seller, and the
+key advised at its first signature must have that address, computed from the same bytes the user's
+signatures are verified under. A request names its listing by id, and carries no tree information.
+The requests and their signatures are advice the prover chooses (§3), and the public input is the
+snapshot and the market alone: the statement is that signed requests, each its buyer's at that
+buyer's nonce, take the snapshot to the next. So a proof does not say which requests a batch
+settled, only that each was signed and valid for this store and snapshot. Every request in a batch
+applies: one for another market or not at its buyer's nonce, one whose signature does not verify
+under its buyer's key, one whose buyer or listing the advice does not hold, or one its listing or
+the balances cannot settle is a malformed batch, a panic. The sequencer checks the requests and
+their signatures and drops each one that cannot apply before it batches them, as a rollup's block
 producer does. The advice holds every record the batch reads and no other, each once, the users
-ascending by address, each with its slot; after the batch each is verified once and, where it
-changed, written back once, its path under its table's root as the writes before it left it, and no
-record is opened per purchase. After the records come the requests, each followed by its user's
-key, only at the user's first, and its signature, in the SDK's compact forms, each a whole number
-of words read in place, and a byte after the last path is a panic. Until the users
-table is keyed by address it is assumed to hold each address at most once, and a request from an
-address the advice does not hold is a malformed batch, as nothing proves an address absent.
+ascending by address and the listings by id; then the users' proof and the listings' proof; then
+the requests, each followed by its user's key, only at the user's first, and its signature, in the
+SDK's compact forms, each a whole number of words read in place. A byte past the last one read is a
+panic.
 
 ## 4. Build it
 

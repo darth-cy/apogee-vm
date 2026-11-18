@@ -28,10 +28,10 @@ Every number this VM implements.
 | 93 | `EXIT` | deterministic | end the execution with status `a0`'s low word, read as an `i32`: the statement's exit status; nonzero is a failed execution, still provable |
 | `0x0510` | `POSEIDON2` | deterministic | the Poseidon2-A64-C5 permutation of the 16 lanes at `a0`, two little-endian words each, in place; a lane read mod `p`, written canonical |
 | `0x0511` | `MUL_DIV_U256` | deterministic | `a`, `b`, `d` at `a0`, eight little-endian words each, become `⌊a·b/d⌋`, `a·b mod d`, `d`; the caller owes `d ≠ 0` and a quotient below `2^256`, which the emulator refuses as `DelegationFrame` |
-| `0x0512` | `MERKLE_ROOT` | deterministic | the 19 words at `a0`, a leaf's 8 lanes, its slot, the depth and the siblings' address, get the path's root over the lanes; the caller owes a depth in `16..=32`, a slot below `2^depth` and word-aligned siblings clear of the frame, which the emulator refuses as `DelegationFrame` ([precompiles.md](precompiles.md) §6) |
 | `0x0514` | `FALCON512` | deterministic | the Falcon-512 lattice check over the 5 words at `a0`: the addresses of `h`, `s2` and `c`, 512 `u16` coefficients each, every one read mod `q = 12289`, then `‖s1‖²`'s low and high words, written, `s1 = (c − s2·h) mod (q, x^512 + 1)` centered; the caller owes word-aligned arrays disjoint from each other and the frame, which the emulator refuses as `DelegationFrame` ([precompiles.md](precompiles.md) §7) |
 | `0x0515` | `FALCON512_SAMPLE` | deterministic | the 8 lanes at `a0`, two little-endian words each, each below `808·q^4`, become their four base-`q` digits in place, two `u16` a word; a lane at or above the bound is refused as `DelegationFrame` ([precompiles.md](precompiles.md) §9) |
 | `0x0516` | `FALCON512_DECODE` | deterministic | the 4 words at `a0`, a source's and a polynomial's addresses, the mode (0 a key's `h`, 1 a signature's compressed `s2`) and a word written: the encoding at the source decoded into 512 coefficients below `q`, a `u16` each, at the polynomial, `‖s2‖²` and the stream's end written over the last two words; a malformed encoding, and misaligned or overlapping addresses, are refused as `DelegationFrame` ([precompiles.md](precompiles.md) §8) |
+| `0x0517` | `MPT_ROOT` | deterministic | the 18 words at `a0`, an op program's address and its count `n`, get the program's value over words 2–17, a crit-bit trie's root as 8 lanes, two little-endian words each, canonical; the caller owes `1 ≤ n ≤ 2^20` word-aligned ops whose info words decode, word-aligned blocks, each park taken by exactly one later JOIN and no word read twice, and the emulator refuses any other program as `DelegationFrame` ([precompiles.md](precompiles.md) §6.4) |
 
 A class says who chooses the result. **deterministic**: a function of the guest's own state, which
 a circuit proves. **advice**: chosen by the prover; no number has it. A proof admits these seven:
@@ -39,8 +39,8 @@ a circuit proves. **advice**: chosen by the prover; no number has it. A proof ad
 the family of its number reads ([precompiles.md](precompiles.md) §2). A delegation call preserves
 `a0`, as every register; its frame is a word-aligned span a store could write, each word checked as
 one, below `ADVICE_ORIGIN` (§5): a frame reaching the advice is the fatal `OutOfBounds`
-([precompiles.md](precompiles.md) §1). `MERKLE_ROOT`'s siblings, `FALCON512`'s arrays and
-`FALCON512_DECODE`'s source are not their frames: each call reads them, each word checked and
+([precompiles.md](precompiles.md) §1). `FALCON512`'s arrays, `FALCON512_DECODE`'s source and
+`MPT_ROOT`'s ops and blocks are not their frames: each call reads them, each word checked and
 bounded as a load's, and they may lie anywhere a load reaches, the advice included.
 
 ## 3. Retired numbers
@@ -51,6 +51,7 @@ bounded as a load's, and they may lie anywhere a load reaches, the advice includ
 | 64 | none | POSIX `write(fd, buf, len)` |
 | 0x0507 | none | a delegation call: one keccak-f[1600] round over a frame at `a0` |
 | 0x0508 | none | a delegation call: four SHA-256 compression rounds over a frame at `a0` |
+| 0x0512 | none | a delegation call: the root of a fixed-depth Merkle path over a frame at `a0` |
 | 0x0513 | none | a delegation call: Keccak-f[1600] of the 25 lanes at `a0`, in place |
 
 A number is assigned once. A retired one is never reassigned and answers `-ENOSYS` (§4): given a
@@ -150,9 +151,10 @@ the rest is loads and stores.
 | `exit(code)` | `EXIT`; publishes nothing beyond what was committed |
 | allocator | bumps up from `__heap_start`, never frees; exits 71 when a block would end above `__stack_top − STACK_RESERVE` or the live `sp` |
 | panic handler | exits 101 and writes nothing: a panicking guest is provable, having published what it committed |
-| `poseidon2_permute(state)`, `Digest`, `poseidon2_compress(l, r)` | `POSEIDON2` over a `[u64; 16]`; 8 lanes, each below `p`; and a Merkle node over two `Digest`s ([precompiles.md](precompiles.md) §5) |
+| `poseidon2_permute(state)`, `Digest`, `poseidon2_compress(l, r)` | `POSEIDON2` over a `[u64; 16]`; 8 lanes, each below `p`; and the first 8 lanes of the permutation of two `Digest`s ([precompiles.md](precompiles.md) §5) |
 | `U256` | a 256-bit integer; its division and `mul_div` are `MUL_DIV_U256` |
-| `merkle_root(slot, leaf, siblings)`, `Digest::bytes(path)` | `MERKLE_ROOT` over a path of `siblings.len() / 64` siblings, which may be advice read in place; a `Digest` path as those bytes ([precompiles.md](precompiles.md) §5) |
+| `mpt_eval(ops)` | `MPT_ROOT` over an op program of `ops.len() / 2` ops, whose blocks may be advice read in place ([precompiles.md](precompiles.md) §5, §6.3) |
+| `mpt::leaf(key, value)`, `mpt::Trie::{open, root, set, insert, remove}` | a table's crit-bit trie: a leaf, `POSEIDON2`; a batch's touched keys opened from an advised proof and edited, each root one `mpt_eval` ([precompiles.md](precompiles.md) §5, §6.1–§6.3) |
 | `falcon512::s1_norm(h, s2, c)`, `falcon512::Poly` | `FALCON512` over three word-aligned `[u16; 512]`, which may be advice read in place: `‖s1‖²` ([precompiles.md](precompiles.md) §5) |
 | `falcon512::sample(lanes)` | `FALCON512_SAMPLE` over a `[u64; 8]`, each lane below `808·q^4`, as its four base-`q` digits ([precompiles.md](precompiles.md) §5) |
 | `falcon512::PublicKey::{decode, key_digest, address, verify}` | a Falcon-512 key from its advised form, its key digest K and address, and a signature's verification under it and a context, any failure ending the execution: its decoding `FALCON512_DECODE`, its lattice check `FALCON512`, K and HashToPoint `POSEIDON2` and `FALCON512_SAMPLE` ([precompiles.md](precompiles.md) §5, §7.7) |
@@ -171,10 +173,12 @@ calling it.
 | `void apogee_exit(int32_t code)` | `exit`, never returning |
 | `void apogee_poseidon2_permute(uint64_t state[16])` | `poseidon2_permute` |
 | `int32_t apogee_mul_div_u256(a, b, d, q, r)` | `U256::mul_div_rem` over four-limb arrays: 0, or 1 and nothing written where it is `None` |
-| `int32_t apogee_merkle_root(slot, depth, leaf, siblings, root)` | `merkle_root` over `depth` siblings: 0, or 1 and nothing written where its precondition or the leaf's `Digest::new` fails |
 | `uint64_t apogee_falcon512_s1_norm(h, s2, c)` | `falcon512::s1_norm` over three `uint16_t[512]`, each 4-aligned, the three apart: a panic, exit 101, otherwise |
 | `void apogee_falcon512_sample(uint64_t lanes[8])` | `falcon512::sample` over 8 lanes, 8-aligned and below the advice region: a panic, exit 101, where a lane is at or above `808·q^4` |
 | `uint32_t apogee_falcon512_decode(mode, src, dst, end)` | the `FALCON512_DECODE` call in `mode` from `src` into `uint16_t dst[512]`, both 4-aligned and apart: `‖s2‖²`, 0 for a key, and the stream's end stored where `end` is not null; a malformed stream is the call's refusal |
+| `int32_t apogee_mpt_eval(ops, n, root)` | `mpt_eval` over the `n` ops at `ops`: 0, or 1 and nothing written where `n` is outside `1..=2^20` or `ops` is not 4-aligned |
+| `int32_t apogee_mpt_leaf(key, key_len, value, value_len, leaf)` | `mpt::leaf`: 0, or 1 and nothing written past 112 bytes |
+| `int32_t apogee_mpt_root(key_len, m, keys, leaves, proof, root)` | `mpt::Trie::open` over `m` sorted keys of `key_len` bytes, their leaves and the proof at `proof`, then `root()`: 0, or 1 and nothing written where `key_len` is outside `1..=64`, a leaf lane is not below `p` or `proof` is not 4-aligned; keys not strictly ascending, and a proof that does not open them, a panic, exit 101. A batch's inserts and removes are Rust's alone |
 
 The library's `_start` is crt0's (§5): it runs the guest's static initializers and calls its own
 `int main(void)`, exiting with what it returns; the header declares `main` with C linkage, which a
