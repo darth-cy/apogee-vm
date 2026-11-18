@@ -138,17 +138,19 @@ pub fn input_of(name: &str) -> Vec<u8> {
 /// hash ops an `MPT_ROUNDS` one at `2^16`, and none for any other guest.
 pub fn advice_of(name: &str) -> Vec<u8> {
     match name {
-        "precompiles" => precompiles_advice(4_100),
+        // No trie scenario: `tests/guests.rs` runs them.
+        "precompiles" => precompiles_advice(4_100, &[]),
         _ => Vec::new(),
     }
 }
 
-/// `guests/precompiles`' advice for a long program of `steps` hash ops: its
-/// blocks 0 and 1 arbitrary, block 0's top lane `2^64 − 1` and block 1's lane
-/// 3 `p`, each read mod `p`, then each block the last 8 lanes of the duplex's
-/// step before its own: the permutation, and `d + 1` added to lane 0 at step
-/// `s`, `d = s mod 512`.
-pub fn precompiles_advice(steps: u32) -> Vec<u8> {
+/// `guests/precompiles`' advice for a long program of `steps` hash ops and
+/// the trie scenarios `tries`: its blocks 0 and 1 arbitrary, block 0's top
+/// lane `2^64 − 1` and block 1's lane 3 `p`, each read mod `p`, then each
+/// block the last 8 lanes of the duplex's step before its own: the
+/// permutation, and `d + 1` added to lane 0 at step `s`, `d = s mod 512`; then
+/// the scenarios' count and each one's bytes.
+pub fn precompiles_advice(steps: u32, tries: &[Vec<u8>]) -> Vec<u8> {
     let start: [u64; 16] = std::array::from_fn(|k| match k {
         7 => u64::MAX,
         11 => field::A64_C5,
@@ -162,6 +164,8 @@ pub fn precompiles_advice(steps: u32) -> Vec<u8> {
         state[0] += field::Fp::from_u64(s as u64 % 512 + 1);
         out.extend(state[8..].iter().flat_map(|x| x.to_u64().to_le_bytes()));
     }
+    out.extend((tries.len() as u32).to_le_bytes());
+    tries.iter().for_each(|t| out.extend(t));
     out
 }
 

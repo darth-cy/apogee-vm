@@ -18,6 +18,8 @@ trace.workspace = true
 # Falcon-512 keys, signatures and addresses under Poseidon2's HashToPoint,
 # which the SDK's verifier and `guests/amazon` are held to.
 apogee-falcon512.workspace = true
+# The trie's tables, roots and proofs, which the SDK's trie is held to.
+apogee-mpt.workspace = true
 # `tests/guests.rs` reads `tools/falcon512/vectors.json`, the other
 # implementations' signatures.
 serde_json.workspace = true

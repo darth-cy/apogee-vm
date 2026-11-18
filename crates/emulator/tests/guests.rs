@@ -8,12 +8,12 @@
 
 mod common;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use common::{image, instr_at, io, preprocess, traced, TRACED};
 use emulator::{run, trace_run, EmuError};
 use loader::Slot;
-use test_support::to_hex;
+use test_support::{to_hex, Rng};
 
 /// `fib` reads its `n` out of the public input window and leaves its term in
 /// the journal, so the committed record is both of its public values and a
@@ -809,12 +809,12 @@ fn stream_end(stream: &[u8]) -> usize {
     8 * i + 8 - stream[i].trailing_zeros() as usize
 }
 
-/// `guests/precompiles` over `cases`, after its other calls at their fewest:
-/// a zero leaf up sixteen zero siblings, no runs, the zero arrays' norm once,
-/// and a long trie program of one step. Each case's key and signature, then
-/// each one's message and context. Seven cases of short messages and contexts
-/// fill the public input window.
-fn falcon_run(cases: &[Case]) -> Result<emulator::Execution, EmuError> {
+/// `guests/precompiles` over `cases` and the trie scenarios `tries`, after its
+/// other calls at their fewest: a zero leaf up sixteen zero siblings, no runs,
+/// the zero arrays' norm once, and a long trie program of one step. Each
+/// case's key and signature, then each one's message and context. Seven cases
+/// of short messages and contexts fill the public input window.
+fn precompiles_run(cases: &[Case], tries: &[Vec<u8>]) -> Result<emulator::Execution, EmuError> {
     let mut input = [
         1u32.to_le_bytes().as_slice(),
         &[0u8; 64],
@@ -838,13 +838,13 @@ fn falcon_run(cases: &[Case]) -> Result<emulator::Execution, EmuError> {
             input.extend(field);
         }
     }
-    let advice = common::precompiles_advice(1);
+    let advice = common::precompiles_advice(1, tries);
     run(&image("precompiles"), &common::with_advice(&input, &advice))
 }
 
 /// Every one of `cases` verifies: the guest exits 0, a 1 journaled a case.
 fn falcon_verifies(cases: &[Case]) {
-    let execution = falcon_run(cases).unwrap();
+    let execution = precompiles_run(cases, &[]).unwrap();
     assert_eq!(execution.exit_code, 0);
     let journal = execution.io.output;
     assert_eq!(journal[journal.len() - cases.len()..], vec![1; cases.len()]);
@@ -860,7 +860,7 @@ enum Failure {
 
 /// How `case`, run alone, ends the execution; a panic if it does not.
 fn falcon_failure(case: Case) -> Failure {
-    match falcon_run(&[case]) {
+    match precompiles_run(&[case], &[]) {
         Ok(e) if e.exit_code == 101 => Failure::Panic,
         Err(EmuError::DelegationFrame { detail, .. }) if detail.starts_with("falcon512_decode") => {
             Failure::Refused
@@ -1028,6 +1028,188 @@ fn falcon512_agrees_with_every_implementation() {
             _ => Failure::Panic,
         };
         assert_eq!(falcon_failure(case(v).unwrap()), want, "{name}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The SDK's trie, executed
+// ---------------------------------------------------------------------------
+
+/// A table of `k`-byte keys and `v`-byte values, and a batch over it.
+struct Batch {
+    k: usize,
+    v: usize,
+    table: Vec<(Vec<u8>, Vec<u8>)>,
+    inserts: Vec<(Vec<u8>, Vec<u8>)>,
+    sets: Vec<(Vec<u8>, Vec<u8>)>,
+    removes: Vec<Vec<u8>>,
+}
+
+impl Batch {
+    /// `table` of `k`-byte keys, each with a value of `v` random bytes, and a
+    /// batch inserting `inserts`, setting the next `sets` keys of `table` to
+    /// new values and removing the `removes` after them.
+    fn new(
+        rng: &mut Rng,
+        (k, v): (usize, usize),
+        table: &[Vec<u8>],
+        inserts: &[Vec<u8>],
+        (sets, removes): (usize, usize),
+    ) -> Batch {
+        let mut valued = |keys: &[Vec<u8>]| -> Vec<(Vec<u8>, Vec<u8>)> {
+            keys.iter()
+                .map(|key| (key.clone(), rng.next_bytes(v)))
+                .collect()
+        };
+        Batch {
+            k,
+            v,
+            table: valued(table),
+            inserts: valued(inserts),
+            sets: valued(&table[..sets]),
+            removes: table[sets..sets + removes].to_vec(),
+        }
+    }
+
+    /// The batch as `guests/precompiles` reads a trie scenario, where its
+    /// proof begins, and the root `tools/mpt` gives the table after it. The
+    /// guest opens every key the batch sets or removes and each insert's
+    /// witness, all on the table before the batch.
+    fn scenario(&self) -> (Vec<u8>, usize, apogee_mpt::Digest) {
+        let mut trie = apogee_mpt::Trie::new(self.k);
+        for (key, value) in &self.table {
+            trie.insert(key, apogee_mpt::leaf(key, value));
+        }
+        let mut opened: BTreeSet<Vec<u8>> = self.removes.iter().cloned().collect();
+        opened.extend(self.sets.iter().map(|(key, _)| key.clone()));
+        if !trie.is_empty() {
+            opened.extend(self.inserts.iter().map(|(key, _)| trie.witness(key)));
+        }
+        let opened: Vec<Vec<u8>> = opened.into_iter().collect();
+        let values: BTreeMap<&Vec<u8>, &Vec<u8>> =
+            self.table.iter().map(|(key, value)| (key, value)).collect();
+        let word = |n: usize| (n as u32).to_le_bytes();
+        let mut out = [word(self.k), word(self.v), word(opened.len())].concat();
+        for key in &opened {
+            out.extend(key);
+            out.extend(values[key]);
+        }
+        let proof = out.len();
+        out.extend(trie.proof(&opened));
+        out.extend(trie.root().iter().flat_map(|lane| lane.to_le_bytes()));
+        for edits in [&self.inserts, &self.sets] {
+            out.extend(word(edits.len()));
+            for (key, value) in edits {
+                out.extend(key);
+                out.extend(value);
+                trie.insert(key, apogee_mpt::leaf(key, value));
+            }
+        }
+        out.extend(word(self.removes.len()));
+        for key in &self.removes {
+            out.extend(key);
+            trie.remove(key);
+        }
+        (out, proof, trie.root())
+    }
+}
+
+/// `n` distinct keys by `draw`.
+fn keys(rng: &mut Rng, n: usize, draw: impl Fn(&mut Rng) -> Vec<u8>) -> Vec<Vec<u8>> {
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    while out.len() < n {
+        let key = draw(rng);
+        if seen.insert(key.clone()) {
+            out.push(key);
+        }
+    }
+    out
+}
+
+/// A table of 40 four-byte keys, 36 with the top bit set and `0x10` to
+/// `0x13`, and a batch inserting four keys, setting five and removing three
+/// and then `0x10`: the one key it touches under the branch over `0x10` to
+/// `0x13`, which the remove leaves with two opaque children.
+fn four_byte_batch(rng: &mut Rng) -> Batch {
+    let drawn = keys(rng, 40, |rng| {
+        let mut key = rng.next_bytes(4);
+        key[0] |= 0x80;
+        key
+    });
+    let mut table = drawn[..36].to_vec();
+    table.splice(8..8, (0x10..0x14).map(|b| vec![0, 0, 0, b]));
+    Batch::new(rng, (4, 8), &table, &drawn[36..], (5, 4))
+}
+
+/// Each trie scenario's root in `guests/precompiles`' journal is the root
+/// `tools/mpt` gives its table after its batch: an empty table taking
+/// inserts; a table the batch does not touch, its proof the root alone; four-
+/// and forty-byte keys, the longer ones sharing their first 32 bytes in three
+/// groups so their crit bits pass 256, each table a few dozen keys under
+/// inserts, sets and removes; every key of a table removed, its proof no
+/// sibling; and one key of two removed, the other an opaque root.
+#[test]
+fn the_sdk_trie_opens_and_edits_tables_as_tools_mpt_does() {
+    let mut rng = Rng::new(0x0517);
+    let prefixes: Vec<Vec<u8>> = (0..3).map(|_| rng.next_bytes(32)).collect();
+    let forty = keys(&mut rng, 34, |rng| {
+        let prefix = &prefixes[rng.next_u64() as usize % 3];
+        [prefix.as_slice(), &rng.next_bytes(8)].concat()
+    });
+    let small = keys(&mut rng, 10, |rng| rng.next_bytes(4));
+    let batches = [
+        Batch::new(&mut rng, (4, 8), &[], &small[..5], (0, 0)),
+        Batch::new(&mut rng, (4, 4), &small[..6], &[], (0, 0)),
+        four_byte_batch(&mut rng),
+        Batch::new(&mut rng, (40, 24), &forty[..30], &forty[30..], (4, 4)),
+        Batch::new(&mut rng, (4, 4), &small[..6], &[], (0, 6)),
+        Batch::new(&mut rng, (4, 8), &small[6..8], &[], (0, 1)),
+    ];
+    let (tries, roots): (Vec<Vec<u8>>, Vec<apogee_mpt::Digest>) = batches
+        .iter()
+        .map(|batch| {
+            let (bytes, _, root) = batch.scenario();
+            (bytes, root)
+        })
+        .unzip();
+    let e = precompiles_run(&[], &tries).unwrap();
+    assert_eq!(e.exit_code, 0);
+    let journaled = &e.io.output[e.io.output.len() - 64 * roots.len()..];
+    for (i, root) in roots.iter().enumerate() {
+        let want: Vec<u8> = root.iter().flat_map(|lane| lane.to_le_bytes()).collect();
+        assert_eq!(
+            to_hex(&journaled[64 * i..64 * i + 64]),
+            to_hex(&want),
+            "scenario {i}"
+        );
+    }
+}
+
+/// A proof altered is refused, the guest panicking where the proof as made
+/// opens: a sibling's digest a bit off opens to another root, and the first
+/// sibling's word owned past the last key is never taken.
+#[test]
+fn a_trie_proof_altered_does_not_open() {
+    let mut rng = Rng::new(0x0517);
+    let batch = four_byte_batch(&mut rng);
+    let (bytes, proof, _) = batch.scenario();
+    let s = u32::from_le_bytes(bytes[proof..proof + 4].try_into().unwrap()) as usize;
+    let m = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+    assert!(s > 1, "the batch has siblings");
+    let mut digest = bytes.clone();
+    digest[proof + 4 + 4 * s + 64 + 9] ^= 0x10;
+    let mut word = bytes.clone();
+    let at = proof + 4;
+    let w = u32::from_le_bytes(word[at..at + 4].try_into().unwrap());
+    word[at..at + 4].copy_from_slice(&(w % 512 + 512 * m).to_le_bytes());
+    for (scenario, exit, what) in [
+        (bytes, 0, "the proof as made"),
+        (digest, 101, "a sibling's digest"),
+        (word, 101, "a sibling's word"),
+    ] {
+        let e = precompiles_run(&[], &[scenario]).unwrap();
+        assert_eq!(e.exit_code, exit, "{what}");
     }
 }
 

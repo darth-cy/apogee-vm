@@ -12,9 +12,11 @@
 //! sampler over lanes at its edges; trie roots by `mpt_eval` over op programs
 //! written by hand, each checked against the trie's hashes by
 //! `poseidon2_compress`, some of the blocks advised, then a program long
-//! enough that its ops straddle a shard, checked against the permutation; and
-//! Falcon-512 verification of the keys, signatures, messages and contexts it
-//! carries, the keys and the signatures in the SDK's advised forms.
+//! enough that its ops straddle a shard, checked against the permutation;
+//! tables by the SDK's trie, each opened from the proof the advice carries,
+//! held to its root, edited by a batch and its root journaled; and Falcon-512
+//! verification of the keys, signatures, messages and contexts it carries,
+//! the keys and the signatures in the SDK's advised forms.
 //!
 //! # The public input
 //!
@@ -48,7 +50,21 @@
 //!                                    least 1
 //!           4..      steps + 1       blocks, 64 bytes each: 16 u32 LE words,
 //!                                    8 lanes, each read mod p
+//!   then    count    u32 LE          trie scenarios
+//!           per one  K, V            u32 LE each: its keys' bytes and its
+//!                                    values', each a multiple of 4
+//!                    m, then m       u32 LE, then the keys the batch opens,
+//!                    entries         ascending, each its key and its value
+//!                    proof           the batch's proof, opening them
+//!                    root            8 u64 LE, each below p: the table's
+//!                                    before the batch
+//!                    a, then a       u32 LE, then (key, value)s to insert
+//!                    b, then b       u32 LE, then (key, value)s to set
+//!                    c, then c       u32 LE, then keys to remove
 //! ```
+//!
+//! With K and V multiples of 4 every proof starts on a word, as the SDK reads
+//! it in place.
 //!
 //! The long program loads block 0, then at step `s` from 1 hashes the value
 //! with block `s` on its right at depth `d = s mod 512`: by a SIB at an odd
@@ -93,6 +109,9 @@
 //!                                   branch(c, l, r) is poseidon2_compress(l, r)
 //!                                   with c + 1 added to lane 0 mod p
 //!   mpt_eval                        8 u64: the long program's value
+//!   Trie::root                      8 u64 a scenario: its table's after the
+//!                                   batch, the inserts first, then the sets
+//!                                   and the removes, each leaf by mpt::leaf
 //!   PublicKey::verify               a byte a case, 1: the key decodes, the
 //!                                   signature verifies under the context, and
 //!                                   its length is the one the input gives; any
@@ -115,7 +134,7 @@ extern crate alloc;
 use alloc::vec;
 
 use guest_sdk::falcon512::{self, Poly, PublicKey, KEY_BYTES};
-use guest_sdk::{merkle_root, mpt_eval, poseidon2_compress, poseidon2_permute, Digest, U256};
+use guest_sdk::{merkle_root, mpt, mpt_eval, poseidon2_compress, poseidon2_permute, Digest, U256};
 
 guest_sdk::entry!(main);
 
@@ -371,6 +390,36 @@ fn main() {
     );
     root.lanes().iter().for_each(|l| put(&l.to_le_bytes()));
 
+    // The SDK's trie over each scenario after the long program's blocks: the
+    // table opened and held to its root before, then the batch.
+    let mut scan = 4 + 64 * (steps as usize + 1);
+    for _ in 0..number(advice, &mut scan) {
+        let (k, v) = (number(advice, &mut scan), number(advice, &mut scan));
+        let m = number(advice, &mut scan);
+        let entries = take(advice, &mut scan, m * (k + v))
+            .chunks_exact(k + v)
+            .map(|e| (&e[..k], mpt::leaf(&e[..k], &e[k..])));
+        let mut trie = mpt::Trie::open(k, entries, advice, &mut scan);
+        let before = digest(take(advice, &mut scan, 64));
+        assert!(
+            trie.root() == before,
+            "precompiles: the trie opens to another root"
+        );
+        for _ in 0..number(advice, &mut scan) {
+            let (key, value) = (take(advice, &mut scan, k), take(advice, &mut scan, v));
+            trie.insert(key, mpt::leaf(key, value));
+        }
+        for _ in 0..number(advice, &mut scan) {
+            let (key, value) = (take(advice, &mut scan, k), take(advice, &mut scan, v));
+            trie.set(key, mpt::leaf(key, value));
+        }
+        for _ in 0..number(advice, &mut scan) {
+            trie.remove(take(advice, &mut scan, k));
+        }
+        let after = trie.root();
+        after.lanes().iter().for_each(|l| put(&l.to_le_bytes()));
+    }
+
     let at_cases = at_falcon + 3 * 1024 + 4;
     let cases = word(at_cases);
     let mut signed = at_cases + 4;
@@ -394,6 +443,17 @@ fn main() {
         put(&[1]);
     }
     guest_sdk::commit(&out[..at]);
+}
+
+/// The `len` bytes of `bytes` at `at`, which moves past them.
+fn take<'a>(bytes: &'a [u8], at: &mut usize, len: usize) -> &'a [u8] {
+    *at += len;
+    &bytes[*at - len..*at]
+}
+
+/// The u32 LE of `bytes` at `at`, which moves past it.
+fn number(bytes: &[u8], at: &mut usize) -> usize {
+    u32::from_le_bytes(take(bytes, at, 4).try_into().expect("a word")) as usize
 }
 
 /// The digest at the start of `b`, 8 lanes of u64 LE, each below `p`.

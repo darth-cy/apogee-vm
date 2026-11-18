@@ -119,7 +119,13 @@ fn a2_a_statement_with_precompile_calls_streams_and_verifies() {
             &0u32.to_le_bytes(),
         ]
         .concat(),
-        advice: [1u32.to_le_bytes().as_slice(), &[0u8; 128]].concat(),
+        // No trie scenario: `crates/emulator/tests/guests.rs` runs them.
+        advice: [
+            1u32.to_le_bytes().as_slice(),
+            &[0u8; 128],
+            &0u32.to_le_bytes(),
+        ]
+        .concat(),
     };
     let (block, _) =
         prove_block_streaming(&setup, &io, prover::DEFAULT_MAX_IN_FLIGHT).expect("it proves");

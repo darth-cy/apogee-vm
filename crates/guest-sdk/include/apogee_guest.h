@@ -10,7 +10,7 @@
  * An Apogee guest has no files and no streams. Its public input, advice and
  * journal are memory the proof binds — or, for advice, does not — and these
  * four calls are the whole of reaching them (docs/guest-program-manual.md §11,
- * docs/spec/public-values.md). The last seven calls are precompiles, each
+ * docs/spec/public-values.md). The last nine calls are precompiles, each
  * a circuit of its own (docs/spec/precompiles.md).
  *
  * The library also provides `memcpy`, `memmove`, `memset` and `memcmp`, the
@@ -118,6 +118,27 @@ uint32_t apogee_falcon512_decode(uint32_t mode, const uint8_t *src, uint16_t dst
  * not 4-aligned, a JOIN of no earlier park, a park taken by no JOIN or by two,
  * a word read twice across the ops and the blocks -- and the execution fails. */
 int32_t apogee_mpt_eval(const uint32_t *ops, uint32_t n, uint64_t root[8]);
+
+/* A crit-bit trie's leaf, by the precompile: apogee_poseidon2_permute of the
+ * `key_len` bytes at `key` and then the `value_len` at `value`, packed seven
+ * to a lane, little-endian, and zero-extended to 16 lanes, truncated to its
+ * first 8 and written to `leaf`. Neither length is bound, so a table's keys
+ * are one length and its values one width. Returns 0, or 1 and writes nothing
+ * when the two are over 112 bytes. */
+int32_t apogee_mpt_leaf(const uint8_t *key, size_t key_len, const uint8_t *value,
+                        size_t value_len, uint64_t leaf[8]);
+
+/* A table's root by apogee_mpt_eval, written to `root`: the table whose batch
+ * touches the `m` keys at `keys`, `key_len` bytes each, strictly ascending,
+ * with their leaves, 8 lanes each, at `leaves`, opened by the batch's proof
+ * at `proof`, its 4 + 68*s bytes, s its first word (docs/spec/precompiles.md);
+ * the zero digest for an empty table. The proof's digests are read in place,
+ * the advice included. Returns 0, or 1 and writes nothing when key_len is
+ * outside 1..64, a leaf lane is not below p, or `proof` is not 4-aligned. Keys
+ * not strictly ascending, and a proof that does not open them, exit 101, a
+ * panic. */
+int32_t apogee_mpt_root(size_t key_len, size_t m, const uint8_t *keys, const uint64_t *leaves,
+                        const uint8_t *proof, uint64_t root[8]);
 
 /* The guest's entry, which the library's startup calls. Declared here with C
  * linkage because a freestanding C++ compiler does not give `main` any: a

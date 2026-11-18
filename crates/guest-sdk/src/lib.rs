@@ -658,6 +658,11 @@ pub use u256::U256;
 
 pub mod falcon512;
 
+// The trie's arena and its op program are on the heap.
+extern crate alloc;
+
+pub mod mpt;
+
 // ---------------------------------------------------------------------------
 // The C ABI
 // ---------------------------------------------------------------------------
@@ -819,6 +824,82 @@ pub unsafe extern "C" fn apogee_mpt_eval(ops: *const u32, n: u32, root: *mut u64
             0
         }
         false => 1,
+    }
+}
+
+/// `mpt::leaf()` of the `key_len` bytes at `key` and the `value_len` at
+/// `value`, written to `leaf`. Returns 0, or 1 and writes nothing when the two
+/// are over 112 bytes.
+///
+/// # Safety
+/// `key` and `value` are each valid for reads of its length, or the length is
+/// 0, and `leaf` for writes of 8 `uint64_t`.
+#[no_mangle]
+pub unsafe extern "C" fn apogee_mpt_leaf(
+    key: *const u8,
+    key_len: usize,
+    value: *const u8,
+    value_len: usize,
+    leaf: *mut u64,
+) -> i32 {
+    match key_len.checked_add(value_len) {
+        Some(len) if len <= constants::delegation::mpt::MAX_LEAF => {
+            *leaf.cast::<[u64; 8]>() = mpt::leaf(bytes(key, key_len), bytes(value, value_len)).0;
+            0
+        }
+        _ => 1,
+    }
+}
+
+/// `mpt::Trie::open()` and then `root()`: the root of the table whose batch
+/// touches the `m` keys at `keys`, `key_len` bytes each, strictly ascending,
+/// their leaves the `m` digests at `leaves`, and whose proof is at `proof`,
+/// written to `root`. Returns 0, or 1 and writes nothing when `key_len` is
+/// outside `1..=64`, a leaf lane is not below `p`, or `proof` is not
+/// 4-aligned. Keys not strictly ascending, and a proof that does not open
+/// them, panic.
+///
+/// # Safety
+/// `keys` is valid for reads of `m·key_len` bytes and `leaves` of `8m`
+/// `uint64_t`, or `m` is 0; `proof` for reads of its `4 + 68s` bytes, `s` its
+/// first word; and `root` for writes of 8 `uint64_t`.
+#[no_mangle]
+pub unsafe extern "C" fn apogee_mpt_root(
+    key_len: usize,
+    m: usize,
+    keys: *const u8,
+    leaves: *const u64,
+    proof: *const u8,
+    root: *mut u64,
+) -> i32 {
+    let leaves: &[[u64; 8]] = match m {
+        0 => &[],
+        _ => core::slice::from_raw_parts(leaves.cast(), m),
+    };
+    let shaped = (1..=constants::delegation::mpt::MAX_KEY).contains(&key_len)
+        && proof.addr().is_multiple_of(4)
+        && leaves.iter().all(|lanes| Digest::new(*lanes).is_some());
+    if !shaped {
+        return 1;
+    }
+    let s = *proof.cast::<u32>() as usize;
+    let entries = bytes(keys, m * key_len)
+        .chunks_exact(key_len)
+        .zip(leaves)
+        .map(|(key, lanes)| (key, Digest(*lanes)));
+    let trie = mpt::Trie::open(key_len, entries, bytes(proof, 4 + 68 * s), &mut 0);
+    *root.cast::<[u64; 8]>() = trie.root().0;
+    0
+}
+
+/// The `len` bytes at `at`: none where `len` is 0, `at` then unread.
+///
+/// # Safety
+/// `at` is valid for reads of `len` bytes, or `len` is 0.
+unsafe fn bytes<'a>(at: *const u8, len: usize) -> &'a [u8] {
+    match len {
+        0 => &[],
+        _ => core::slice::from_raw_parts(at, len),
     }
 }
 

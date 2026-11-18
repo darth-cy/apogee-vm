@@ -163,6 +163,8 @@ fn duplex() -> (Vec<u8>, [u64; 8]) {
             advice.extend(state[8..].iter().flat_map(|x| x.to_u64().to_le_bytes()));
         }
     }
+    // No trie scenario: `crates/emulator/tests/guests.rs` runs them.
+    advice.extend(0u32.to_le_bytes());
     (advice, std::array::from_fn(|k| state[k].to_u64()))
 }
 
