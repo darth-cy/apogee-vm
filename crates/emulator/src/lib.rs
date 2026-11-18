@@ -452,6 +452,10 @@ struct Op {
     carry: [u64; delegation::mpt::CARRY],
 }
 
+/// What an `MPT_ROOT` call answers: its frame's words after it, its ops, and
+/// the last op's `pending`, which its entry carries.
+type MptAnswer = (Vec<u32>, Vec<Op>, Vec<u64>);
+
 impl Cycle {
     fn new() -> Cycle {
         Cycle {
@@ -1128,7 +1132,7 @@ impl<'a> Machine<'a> {
             }
             constants::family::MPT => {
                 let (new, program, pending) = self.mpt_root(pc, base, &old)?;
-                (ops, carry) = (program, vec![pending]);
+                (ops, carry) = (program, pending);
                 new
             }
             _ => frame_function(family)(pc, &old)?,
@@ -1297,25 +1301,21 @@ impl<'a> Machine<'a> {
     /// words and carry, and the last op's `pending`, which the call's entry
     /// carries (`constants::delegation::mpt`).
     ///
-    /// The value `cur` is its raw lanes with `pending` added to lane 0, zero
-    /// to start. Op `i` parks the `cur` entering it where its park bit is
-    /// set. A LOAD makes the raw lanes its block's and `pending` 0; a SIB or
-    /// a JOIN makes them `guest_sdk::poseidon2_compress` of `cur` and the
-    /// other child, the other on the left where the left bit is set, and
-    /// `pending` `d + 1`. A SIB's other child is its block, a JOIN's the value
-    /// the op its arg names parked. A block's lanes are read mod `p`, so a
-    /// block may be anywhere a load reaches, advice included; each of its
-    /// words and each op's is checked as a load's. The caller owes 1 to `2^20`
-    /// word-aligned ops whose info words decode, word-aligned blocks, each
-    /// park taken by exactly one later JOIN, and no word read twice across the
-    /// frame, the ops and the blocks, which the call reads at one timestamp;
-    /// any other program is refused.
-    fn mpt_root(
-        &self,
-        pc: u32,
-        base: u32,
-        frame: &[u32],
-    ) -> Result<(Vec<u32>, Vec<Op>, u64), EmuError> {
+    /// The value `cur` is its raw lanes with `pending` added, 8 lanes each,
+    /// zero to start. Op `i` parks the `cur` entering it where its park bit
+    /// is set. A LOAD makes the raw lanes its block's and `pending` zero; a
+    /// SIB or a JOIN makes them `guest_sdk::poseidon2_compress` of `cur` and
+    /// the other child, the other on the left where the left bit is set, and
+    /// `pending` the left child with `d + 1` added to lane 0: a branch is
+    /// `F(l ‖ r) + l` in domain `d + 1`. A SIB's other child is its block, a
+    /// JOIN's the value the op its arg names parked. A block's lanes are read
+    /// mod `p`, so a block may be anywhere a load reaches, advice included;
+    /// each of its words and each op's is checked as a load's. The caller owes
+    /// 1 to `2^20` word-aligned ops whose info words decode, word-aligned
+    /// blocks, each park taken by exactly one later JOIN, and no word read
+    /// twice across the frame, the ops and the blocks, which the call reads at
+    /// one timestamp; any other program is refused.
+    fn mpt_root(&self, pc: u32, base: u32, frame: &[u32]) -> Result<MptAnswer, EmuError> {
         use delegation::mpt::{
             BLOCK, CARRY, COUNT, DEPTH_BOUND, DEPTH_SHIFT, JOIN, LEFT, LOAD, MAX_OPS, OPS, PARK,
             ROOT,
@@ -1340,7 +1340,7 @@ impl<'a> Machine<'a> {
         };
         // The parks by op, each `None` once a JOIN has taken it.
         let mut parked: HashMap<u32, Option<[Fp; 8]>> = HashMap::new();
-        let (mut raw, mut pending) = ([Fp::ZERO; 8], 0u64);
+        let (mut raw, mut pending) = ([Fp::ZERO; 8], [Fp::ZERO; 8]);
         let mut program = Vec::new();
         for i in 0..n {
             let at = ops as u64 + 8 * i as u64;
@@ -1349,14 +1349,12 @@ impl<'a> Machine<'a> {
             if kind > JOIN || info >= DEPTH_BOUND << DEPTH_SHIFT {
                 return Err(refuse("mpt_root's info word does not decode"));
             }
-            let mut cur = raw;
-            cur[0] += Fp::from_u64(pending);
+            let cur: [Fp; 8] = std::array::from_fn(|k| raw[k] + pending[k]);
             let mut carry = [0u64; CARRY];
-            for (c, x) in carry.iter_mut().zip(raw) {
+            for (c, x) in carry.iter_mut().zip(raw.iter().chain(&pending)) {
                 *c = x.to_u64();
             }
-            carry[8] = pending;
-            carry[9] = i as u64;
+            carry[16] = i as u64;
             let (other, block) = match kind {
                 JOIN => {
                     let value = match parked.get_mut(&arg).map(Option::take) {
@@ -1364,7 +1362,7 @@ impl<'a> Machine<'a> {
                         Some(None) => return Err(refuse("mpt_root's JOIN takes a park twice")),
                         None => return Err(refuse("mpt_root's JOIN names no earlier park")),
                     };
-                    for (c, x) in carry[10..].iter_mut().zip(value) {
+                    for (c, x) in carry[17..].iter_mut().zip(value) {
                         *c = x.to_u64();
                     }
                     (value, None)
@@ -1385,7 +1383,7 @@ impl<'a> Machine<'a> {
                 parked.insert(i, Some(cur));
             }
             (raw, pending) = match kind {
-                LOAD => (other, 0),
+                LOAD => (other, [Fp::ZERO; 8]),
                 _ => {
                     let (l, r) = match info & LEFT {
                         0 => (cur, other),
@@ -1394,8 +1392,9 @@ impl<'a> Machine<'a> {
                     let mut state: [Fp; 16] =
                         std::array::from_fn(|k| if k < 8 { l[k] } else { r[k - 8] });
                     transcript::poseidon2_permute(&mut state);
-                    let d = (info >> DEPTH_SHIFT) as u64;
-                    (std::array::from_fn(|k| state[k]), d + 1)
+                    let mut next = l;
+                    next[0] += Fp::from_u64((info >> DEPTH_SHIFT) as u64 + 1);
+                    (std::array::from_fn(|k| state[k]), next)
                 }
             };
             program.push(Op {
@@ -1410,12 +1409,11 @@ impl<'a> Machine<'a> {
             return Err(refuse("mpt_root leaves a park no JOIN takes"));
         }
         let mut new = frame.to_vec();
-        raw[0] += Fp::from_u64(pending);
-        for (k, x) in raw.iter().enumerate() {
+        for (k, x) in raw.iter().zip(&pending).map(|(x, y)| *x + *y).enumerate() {
             new[ROOT + 2 * k] = x.to_u64() as u32;
             new[ROOT + 2 * k + 1] = (x.to_u64() >> 32) as u32;
         }
-        Ok((new, program, pending))
+        Ok((new, program, pending.iter().map(|x| x.to_u64()).collect()))
     }
 }
 
@@ -2146,11 +2144,18 @@ mod tests {
         std::array::from_fn(|k| s[k])
     }
 
-    /// A trie's branch at crit bit `c`: `F(l ‖ r)`, `c + 1` added to lane 0.
-    fn branch(c: u32, l: [Fp; 8], r: [Fp; 8]) -> [Fp; 8] {
-        let mut out = compress(l, r);
+    /// `l` with `c + 1` added to lane 0: a branch's feed-forward and domain.
+    fn domain(c: u32, l: [Fp; 8]) -> [Fp; 8] {
+        let mut out = l;
         out[0] += Fp::from_u64(c as u64 + 1);
         out
+    }
+
+    /// A trie's branch at crit bit `c`: `F(l ‖ r) + l`, `c + 1` added to lane
+    /// 0.
+    fn branch(c: u32, l: [Fp; 8], r: [Fp; 8]) -> [Fp; 8] {
+        let (out, added) = (compress(l, r), domain(c, l));
+        std::array::from_fn(|k| out[k] + added[k])
     }
 
     /// The frame at `MPT_FRAME` naming `n` ops at `at`, `ops` written there,
@@ -2160,7 +2165,7 @@ mod tests {
         at: u32,
         ops: &[(u32, u32)],
         n: u32,
-    ) -> Result<(Vec<u32>, Vec<Op>, u64), EmuError> {
+    ) -> Result<MptAnswer, EmuError> {
         for (i, &(info, arg)) in (0..).zip(ops) {
             machine.set_word(at + 8 * i, info);
             machine.set_word(at + 8 * i + 4, arg);
@@ -2243,8 +2248,8 @@ mod tests {
         // A block whose top lane is at or above `p`.
         let high = [(LOAD, block(4)), (info(SIB, 0, 0), block(5))];
         answers(&mut machine, &high, branch(0, d[4], d[5]));
-        // Two branches joined: the parked value is a branch, its `pending` in
-        // lane 0.
+        // Two branches joined: the parked value is a branch, its `pending`
+        // added.
         let nested = [
             leaf,
             (info(SIB, 0, 9), block(1)),
@@ -2254,13 +2259,30 @@ mod tests {
         ];
         let (l, r) = (branch(9, d[0], d[1]), branch(3, d[3], d[2]));
         let (program, pending) = answers(&mut machine, &nested, branch(1, l, r));
-        assert_eq!(pending, 2, "the last op's d + 1");
+        assert_eq!(
+            pending,
+            domain(1, l).map(Fp::to_u64),
+            "the last op's: the parked branch, d + 1 added"
+        );
+        // What each op enters with: nothing after a LOAD, and after a SIB its
+        // left child, `cur` and then the block, its `d + 1` added.
+        let entering = [
+            None,
+            None,
+            Some(domain(9, d[0])),
+            None,
+            Some(domain(3, d[3])),
+        ];
         for (i, op) in (0..).zip(&program) {
             assert_eq!(
                 (op.at, op.info, op.arg),
                 (ops_at + 8 * i, nested[i as usize].0, nested[i as usize].1)
             );
-            assert_eq!(op.carry[8..10], [[0, 0, 10, 0, 4][i as usize], i as u64]);
+            let added = entering[i as usize].unwrap_or([Fp::ZERO; 8]);
+            assert_eq!(
+                op.carry[8..17],
+                [&added.map(Fp::to_u64)[..], &[i as u64]].concat()
+            );
             match op.info & 3 {
                 JOIN => assert_eq!(op.block, None),
                 _ => {
@@ -2276,7 +2298,7 @@ mod tests {
             "the JOIN enters with the SIB's raw lanes"
         );
         assert_eq!(
-            program[4].carry[10..],
+            program[4].carry[17..],
             l.map(Fp::to_u64),
             "and the branch parked"
         );

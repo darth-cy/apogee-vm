@@ -1111,7 +1111,7 @@ pub mod delegation {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Per {
         /// One call: its frame's words, and for an [`ecall::MPT_ROOT`] call
-        /// the [`mpt::CALL_CARRY`] value beside them.
+        /// the [`mpt::CALL_CARRY`] values beside them.
         Call,
         /// One [`ecall::FALCON512`] call's three arrays, [`falcon::ARRAYS`]
         /// words in [`falcon::CHAINS`] order: chain `P`'s word `i` is entry
@@ -1224,10 +1224,10 @@ pub mod delegation {
     /// [`ecall::MPT_ROOT`]'s frame, by word, and its op program: `n` ops of
     /// [`OP`] words, `(info, arg)`, evaluated in order over a value `cur`, 8
     /// lanes, from zero. A LOAD makes `cur` a block's lanes; a SIB or a JOIN
-    /// makes it `F(l ‖ r)` with `d + 1` added to lane 0, `(l, r)` the value
-    /// and the other child in the order `left` names, the other a block for a
-    /// SIB and for a JOIN the value an earlier op parked, each park consumed
-    /// once. The root is the last `cur`.
+    /// makes it `F(l ‖ r) + l` with `d + 1` added to lane 0, `(l, r)` the
+    /// value and the other child in the order `left` names, the other a block
+    /// for a SIB and for a JOIN the value an earlier op parked, each park
+    /// consumed once. The root is the last `cur`.
     pub mod mpt {
         /// The address of op 0, word-aligned: op `i` is at `OPS + 8i`.
         pub const OPS: usize = 0;
@@ -1272,15 +1272,15 @@ pub mod delegation {
         pub const DEPTH_BOUND: u32 = 512;
         /// The values an op entry carries: what its row starts from that none
         /// of its words gives, so that a shard may begin mid-call. Values
-        /// `0..8` are the raw lanes of the `cur` entering the op, 8 its
-        /// `pending`, what lane 0 adds to them, 9 the op's index, and `10..18`
-        /// a JOIN's parked lanes as its park wrote them, lane 0 with its
+        /// `0..8` are the raw lanes of the `cur` entering the op, `8..16` its
+        /// `pending`, what each lane adds to them, 16 the op's index, and
+        /// `17..25` a JOIN's parked lanes as its park wrote them, with their
         /// `pending` added, zeros for any other op.
-        pub const CARRY: usize = 18;
-        /// The value a call entry carries: the last op's `pending`, which the
-        /// frame row receives beside op `n`'s raw lanes and adds to the root's
-        /// lane 0, and which no frame word gives apart from that lane.
-        pub const CALL_CARRY: usize = 1;
+        pub const CARRY: usize = 25;
+        /// The values a call entry carries: the last op's `pending`, which the
+        /// frame row receives beside op `n`'s raw lanes and adds to the root's,
+        /// and which no frame word gives apart from those lanes.
+        pub const CALL_CARRY: usize = 8;
     }
 
     /// Every delegation family as `(family, ecall number, words an entry, rows

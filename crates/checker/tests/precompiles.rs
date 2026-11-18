@@ -126,15 +126,20 @@ fn start(k: usize) -> u64 {
 }
 
 /// The guest's advice and the long program's value, by the duplex
-/// `guests/precompiles` defines: from [`start`]'s 16 lanes, step `s` permutes
-/// and adds `s mod 512 + 1` to lane 0; each block past 1 is the last 8 lanes
-/// of the step before its own, and the value the first 8 after the last.
+/// `guests/precompiles` defines: from [`start`]'s 16 lanes, step `s` permutes,
+/// adds back the first 8 lanes it took and adds `s mod 512 + 1` to lane 0;
+/// each block past 1 is the last 8 lanes of the step before its own, and the
+/// value the first 8 after the last.
 fn duplex() -> (Vec<u8>, [u64; 8]) {
     let mut advice = STEPS.to_le_bytes().to_vec();
     advice.extend((0..16).flat_map(|k| start(k).to_le_bytes()));
     let mut state: [Fp; 16] = std::array::from_fn(|k| f(start(k)));
     for s in 1..=STEPS {
+        let x: [Fp; 8] = std::array::from_fn(|k| state[k]);
         transcript::poseidon2_permute(&mut state);
+        for (lane, x) in state.iter_mut().zip(x) {
+            *lane += x;
+        }
         state[0] += f(s as u64 % 512 + 1);
         if s < STEPS {
             advice.extend(state[8..].iter().flat_map(|x| x.to_u64().to_le_bytes()));
@@ -348,15 +353,16 @@ fn the_journal_is_the_hosts() {
         want.extend((0..4).flat_map(|j| ((x / 12289u64.pow(j) % 12289) as u16).to_le_bytes()));
     }
     // The trie programs: a branch at crit bit `c` is the first eight lanes of
-    // the permutation of `l ‖ r` with `c + 1` added to lane 0, over leaves 0
-    // to 3 and the advice's blocks 0 and 1 read mod `p`; then the duplex.
+    // the permutation of `l ‖ r` plus `l`, with `c + 1` added to lane 0, over
+    // leaves 0 to 3 and the advice's blocks 0 and 1 read mod `p`; then the
+    // duplex.
     let branch = |c: u64, l: [u64; 8], r: [u64; 8]| -> [u64; 8] {
         let mut s = [0u64; 16];
         s[..8].copy_from_slice(&l);
         s[8..].copy_from_slice(&r);
-        let mut out: [u64; 8] = std::array::from_fn(|j| permute(s)[j]);
-        out[0] = (f(out[0]) + f(c + 1)).to_u64();
-        out
+        let out = permute(s);
+        let tweak = |j: usize| if j == 0 { c + 1 } else { 0 };
+        std::array::from_fn(|j| (f(out[j]) + f(l[j]) + f(tweak(j))).to_u64())
     };
     let block = |b: usize| -> [u64; 8] { std::array::from_fn(|k| f(start(8 * b + k)).to_u64()) };
     let [a, b, c, d] = [0, 1, 2, 3].map(|i| leaves[i]);
@@ -676,32 +682,44 @@ fn every_row_holds_and_every_constraint_bites() {
     }
 }
 
-/// What an `MPT_NODES` row's `u` is over its own cells: `M_E` of the value it
-/// enters with, its raw lanes with `pending` added to lane 0, and its other
-/// child, the other on the left where `left` is 1.
-fn node_u(s: &Shard, row: &[Fp]) -> [Fp; 16] {
+/// An `MPT_NODES` row's children over its own cells: the value it enters
+/// with, its raw lanes with its `pending` added, and its other child, the
+/// other on the left where `left` is 1.
+fn node_children(s: &Shard, row: &[Fp]) -> [Fp; 16] {
     let cur: Vec<Fp> = (0..8)
-        .map(|k| match k {
-            0 => row[s.at("o0")] + row[s.at("pending")],
-            _ => row[s.at(&format!("o{k}"))],
-        })
+        .map(|k| row[s.at(&format!("o{k}"))] + row[s.at(&format!("pending{k}"))])
         .collect();
     let other: Vec<Fp> = (0..8).map(|k| row[s.at(&format!("other{k}"))]).collect();
     let (left, right) = match row[s.at("left")] == Fp::ONE {
         true => (&other, &cur),
         false => (&cur, &other),
     };
-    let mut x: [Fp; 16] = std::array::from_fn(|i| if i < 8 { left[i] } else { right[i - 8] });
+    std::array::from_fn(|i| if i < 8 { left[i] } else { right[i - 8] })
+}
+
+/// What an `MPT_NODES` row's `u` is over its own cells: `M_E` of its
+/// children.
+fn node_u(s: &Shard, row: &[Fp]) -> [Fp; 16] {
+    let mut x = node_children(s, row);
     transcript::external(&mut x);
     x
+}
+
+/// What an `MPT_NODES` row's `pending_next` is over its own cells: a hash
+/// op's left child with `d + 1` added to lane 0, a LOAD's zero.
+fn node_pending_next(s: &Shard, row: &[Fp]) -> [Fp; 8] {
+    let (hash, x) = (row[s.at("is_hash")], node_children(s, row));
+    let domain = row[s.at("d")] + Fp::ONE;
+    std::array::from_fn(|k| hash * (x[k] + if k == 0 { domain } else { Fp::ZERO }))
 }
 
 /// The advice's malicious block word, in the row of the SIB whose block is
 /// the advice's block 1, the first programs' op 15: a word pair whose low
 /// word is 0 and whose high word is `2^−32`, so the hash would take the lane
-/// 1 while a load of the low word sees 0. With the row's other child and `u`
-/// recomputed over that lane every other row-local relation holds; the high
-/// word's own bound refuses it, whatever halfword stands beside it.
+/// 1 while a load of the low word sees 0. With the row's other child, `u`
+/// and `pending_next`, the block on the left, recomputed over that lane every
+/// other row-local relation holds; the high word's own bound refuses it,
+/// whatever halfword stands beside it.
 #[test]
 fn a_block_word_no_load_could_read_is_refused() {
     let (program, archive) = traced();
@@ -724,6 +742,9 @@ fn a_block_word_no_load_could_read_is_refused() {
     }
     for (j, v) in node_u(&s, &row).iter().enumerate() {
         row[s.at(&format!("u{j}"))] = *v;
+    }
+    for (k, v) in node_pending_next(&s, &row).iter().enumerate() {
+        row[s.at(&format!("pending_next{k}"))] = *v;
     }
     for h in [0, 1, 0xffff, (high.to_u64() >> 16) & 0xffff] {
         row[s.at("w1_h16")] = f(h);
@@ -904,14 +925,15 @@ fn the_statement_reconciles_and_a_round_moved_to_another_call_does_not() {
         archive,
         family::MPT_ROUNDS,
         CONTINUED,
-        10
+        17
     ));
 
     // The first JOIN, the first programs' op 7, taking a value no op parked:
-    // its other child's lane 0 one off and its `u` recomputed. Every row-local
-    // relation holds — a JOIN reads no block, so nothing on its row holds the
-    // value to one — and the park it receives is one no op sent, while its
-    // op's park is sent and never received.
+    // its other child's lane 0 one off and its `u` and `pending_next`, the
+    // other on the left, recomputed. Every row-local relation holds — a JOIN
+    // reads no block, so nothing on its row holds the value to one — and the
+    // park it receives is one no op sent, while its op's park is sent and
+    // never received.
     let fam = family::MPT_NODES;
     let s = Shard::new(program, archive, fam);
     let row = 7;
@@ -921,6 +943,9 @@ fn the_statement_reconciles_and_a_round_moved_to_another_call_does_not() {
     taken[s.at("other0")] += Fp::ONE;
     for (j, v) in node_u(&s, &taken).iter().enumerate() {
         taken[s.at(&format!("u{j}"))] = *v;
+    }
+    for (k, v) in node_pending_next(&s, &taken).iter().enumerate() {
+        taken[s.at(&format!("pending_next{k}"))] = *v;
     }
     assert!(
         s.refused(&taken, row).is_empty(),
@@ -1064,7 +1089,7 @@ fn continued(program: &Program, fam: u32, first: u64) -> trace::DelegationTrace 
         .and_then(|c| c.calls)
         .expect("a second round shard");
     assert_eq!(
-        chunk.carry[9].first(),
+        chunk.carry[16].first(),
         Some(&first),
         "family {fam}'s shard 1 opens at its call's op {first}"
     );

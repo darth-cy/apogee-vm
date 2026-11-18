@@ -143,8 +143,9 @@ pub fn advice_of(name: &str) -> Vec<u8> {
 /// the trie scenarios `tries`: its blocks 0 and 1 arbitrary, block 0's top
 /// lane `2^64 − 1` and block 1's lane 3 `p`, each read mod `p`, then each
 /// block the last 8 lanes of the duplex's step before its own: the
-/// permutation, and `d + 1` added to lane 0 at step `s`, `d = s mod 512`; then
-/// the scenarios' count and each one's bytes.
+/// permutation, the first 8 lanes it took added back to its first 8, and
+/// `d + 1` added to lane 0 at step `s`, `d = s mod 512`, a branch at `d`;
+/// then the scenarios' count and each one's bytes.
 pub fn precompiles_advice(steps: u32, tries: &[Vec<u8>]) -> Vec<u8> {
     let start: [u64; 16] = std::array::from_fn(|k| match k {
         7 => u64::MAX,
@@ -155,7 +156,11 @@ pub fn precompiles_advice(steps: u32, tries: &[Vec<u8>]) -> Vec<u8> {
     out.extend(start.iter().flat_map(|l| l.to_le_bytes()));
     let mut state = start.map(field::Fp::from_u64);
     for s in 1..steps {
+        let x: [field::Fp; 8] = std::array::from_fn(|k| state[k]);
         transcript::poseidon2_permute(&mut state);
+        for (lane, x) in state.iter_mut().zip(x) {
+            *lane += x;
+        }
         state[0] += field::Fp::from_u64(s as u64 % 512 + 1);
         out.extend(state[8..].iter().flat_map(|x| x.to_u64().to_le_bytes()));
     }

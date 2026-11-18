@@ -230,13 +230,13 @@ fn the_chunks_are_the_planned_shards_row_for_row() {
                 for (got, want) in calls.carry.iter().zip(&buffer.carry) {
                     assert_eq!(got[..], want[start..start + calls.len()], "{name}: a carry");
                 }
-                // Carry value 9 is an op's index (`delegation::mpt::CARRY`). A
+                // Carry value 16 is an op's index (`delegation::mpt::CARRY`). A
                 // chunk begins inside a call where its first entry's is past 0,
                 // or for a hash op's, which a LOAD before it has none of, where
                 // the chunk before ended in the same call. It then continues
                 // that one: the next op, or a later hash op.
                 let kind = program::delegation_per(chunk.family);
-                let index = |e: usize| calls.carry[9][e];
+                let index = |e: usize| calls.carry[16][e];
                 let before = last.get(&chunk.family).copied();
                 let mid = match kind {
                     Per::Op => index(0) > 0,

@@ -511,11 +511,12 @@ impl Digest {
     }
 }
 
-/// Two nodes compressed to one: the first 8 lanes of the permutation of
+/// Two digests compressed to one: the first 8 lanes of the permutation of
 /// `left ‖ right`, truncated with no feed-forward. The permutation's inverse
-/// finds inputs for any output, so it binds only digests the guest opens in
-/// turn, a tree's nodes; a record goes through `mpt::leaf`
-/// (`docs/spec/precompiles.md` §6.1).
+/// finds inputs for any output, so it binds only digests a guest holds at
+/// fixed places, such as a snapshot of its tables' roots; a trie's leaves and
+/// branches feed forward in a domain of their own, `mpt::leaf`'s and the trie
+/// call's (`docs/spec/precompiles.md` §6.1).
 pub fn poseidon2_compress(left: &Digest, right: &Digest) -> Digest {
     let mut state = [0u64; 16];
     state[..8].copy_from_slice(&left.0);

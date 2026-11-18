@@ -1,9 +1,10 @@
 //! The trie against `docs/spec/precompiles.md`'s MPT section by hand: a leaf is
 //! `F` of its key and value packed seven bytes to a lane plus the first 8 of
-//! those lanes, a branch is `F` of its children with its crit bit plus one
-//! added to lane 0, and the root is the trie the definition gives the key set,
-//! whatever order the table was built in. The walk an insert is witnessed by,
-//! and what the tool refuses.
+//! those lanes, a branch is `F` of its children plus its left child with its
+//! crit bit plus one added to lane 0, so that no leaf is a branch over its own
+//! lanes, and the root is the trie the definition gives the key set, whatever
+//! order the table was built in. The walk an insert is witnessed by, and what
+//! the tool refuses.
 
 use std::array;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -30,13 +31,13 @@ fn hand_leaf(key: &[u8], value: &[u8]) -> Digest {
     array::from_fn(|j| (Fp::from_u64(out[j]) + state[j]).to_u64())
 }
 
-/// A branch by hand: `F(l ‖ r)`, then lane 0 plus `c + 1` mod `p`.
+/// A branch by hand: `F(l ‖ r)` plus `l`, and lane 0 plus `c + 1`, mod `p`.
 fn hand_branch(c: usize, l: &Digest, r: &Digest) -> Digest {
-    let mut out = f(array::from_fn(|i| {
+    let out = f(array::from_fn(|i| {
         Fp::from_u64(if i < 8 { l[i] } else { r[i - 8] })
     }));
-    out[0] = ((out[0] as u128 + c as u128 + 1) % A64_C5 as u128) as u64;
-    out
+    let tweak = |i: usize| if i == 0 { c as u128 + 1 } else { 0 };
+    array::from_fn(|i| ((out[i] as u128 + l[i] as u128 + tweak(i)) % A64_C5 as u128) as u64)
 }
 
 /// Bit `d` of `key`, as the spec writes it.
@@ -101,6 +102,39 @@ fn a_leaf_is_its_bytes_seven_to_a_lane() {
             hand_leaf(&key, &value),
             "{key_len} + {value_len}"
         );
+    }
+}
+
+/// A record whose first 56 bytes pack to a branch's domain, `(c + 1, 0, …,
+/// 0)`, is no branch at `c` over its own two halves: on one input a leaf and a
+/// branch differ by `c + 1` in lane 0, and two branches by their crit bits'
+/// difference. Were the branch `F(l ‖ r)` with `c + 1` added, its own leaf
+/// would be that branch, and a proof could open it as one.
+#[test]
+fn no_leaf_is_a_branch_over_its_own_lanes() {
+    let mut rng = Rng::new(0xd0a1);
+    let lanes = |bytes: &[u8]| -> Digest {
+        array::from_fn(|k| {
+            let seven = &bytes[7 * k..7 * k + 7];
+            seven.iter().rev().fold(0, |x, &b| (x << 8) | b as u64)
+        })
+    };
+    let minus = |a: &Digest, b: &Digest| -> Digest {
+        array::from_fn(|i| (Fp::from_u64(a[i]) - Fp::from_u64(b[i])).to_u64())
+    };
+    for c in [0, 100, 511] {
+        let mut record = rng.next_bytes(112);
+        record[..56].fill(0);
+        record[..2].copy_from_slice(&(c as u16 + 1).to_le_bytes());
+        let (t, r) = (lanes(&record[..56]), lanes(&record[56..]));
+        assert_eq!(t, [c as u64 + 1, 0, 0, 0, 0, 0, 0, 0], "the domain's lanes");
+        let (key, value) = record.split_at(32);
+        let own = leaf(key, value);
+        assert_eq!(own, hand_leaf(key, value));
+        for d in [c, (c + 1) % 512] {
+            let domain = [d as u64 + 1, 0, 0, 0, 0, 0, 0, 0];
+            assert_eq!(minus(&branch(d, &t, &r), &own), domain, "crit bit {d}");
+        }
     }
 }
 

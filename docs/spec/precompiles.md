@@ -204,7 +204,7 @@ conditions that single out the quotient. 226 committed columns, 239 obligations 
 | --- | --- |
 | `poseidon2_permute(&mut [u64; 16])` | the call over the array itself, in place, each lane read mod `p` |
 | `Digest` | 8 lanes, each below `p`: `Digest::new` refuses any other, so a node has one encoding; what the call writes is one already |
-| `poseidon2_compress(&Digest, &Digest) -> Digest` | `F(left ‖ right) = P(left ‖ right)[0..8]`, truncated: a trie branch before its tweak, and the fold of a snapshot (§6.1) |
+| `poseidon2_compress(&Digest, &Digest) -> Digest` | `F(left ‖ right) = P(left ‖ right)[0..8]`, truncated, with no feed-forward: the fold of a snapshot, never a trie node (§6.1) |
 | `U256` | four `u64` limbs; `+ − * / %` panic on overflow and a zero divisor, `checked_*`, `overflowing_*`, `wrapping_*` do not; `<< >> & \| ^ !`, `Ord`, bytes in either order |
 | `U256::mul_div_rem`, `mul_div`, `div_rem` | the call; `None` where the caller's precondition fails, checked first: `d = 0`, or the high half of `a·b`, skipped when both are below `2^128`, at or above `d` |
 | `mpt_eval(ops: &[u32]) -> Digest` | the `MPT_ROOT` call over the program of `ops.len() / 2` ops where they lie, its frame on the caller's stack: the program's value (§6.3); panics first unless the ops are 1 to `2^20` whole ones |
@@ -255,30 +255,32 @@ where they differ. The trie of a key set `S` is its key's leaf where `|S| = 1`, 
 its right the trie of those whose bit `c` is 1: **canonical**, a function of `S`.
 
 ```text
-F(x)              the first 8 lanes of transcript::poseidon2_permute(x): poseidon2_compress
-leaf(key, value)  F(x) + x[0..8] lane by lane mod p, x = pack7(key ‖ value), |key| + |value| ≤ 112
-branch(c, L, R)   F(L ‖ R) with c + 1 added to lane 0, mod p
+F(z)              the first 8 lanes of transcript::poseidon2_permute(z): poseidon2_compress
+H_t(z)            F(z) + z[0..8] + (t, 0, …, 0) lane by lane mod p: a node in domain t
+leaf(key, value)  H_0(pack7(key ‖ value)), |key| + |value| ≤ 112
+branch(c, L, R)   H_{c+1}(L ‖ R), c < 512
 the empty table   the zero digest, 8 zero lanes; a table of one key has its leaf as its root
 ```
 
 `pack7` packs the bytes seven to a lane, little-endian, each lane below `2^56`, and zero-extends to
 16 lanes. It binds neither length: a table's keys are one length, and its values must be one width.
-The tweak binds the crit bit.
 
-**Why a leaf feeds forward and a branch does not.** `F` truncates a public permutation, which
-inverts: any 8 lanes are `F` of the 16 its inverse gives them beside 8 of one's choosing. Over
-records, `F(pack7(·))` would cost an inversion only the lanes' restriction, the top byte of each
-lane a record fills and all of each it leaves zero: 128 bits at 112 bytes, so `2^128` inversions
-and `2^64` Grover iterations, against the 128-bit quantum target of
-[transcript.md](transcript.md) §5.1. The feed-forward puts the output out of an inversion's
-reach, since `x` is the inverse's output too, so a leaf costs the digest's generic bounds: `2^512`
-calls for a preimage and `2^256` for a collision, `2^256` and `2^170` quantumly. A branch's
-children are digests the guest opens in turn. It hashes each touched key's leaf from the record it
-reads and never opens a sibling, and the proof's words, not a digest, say which node is a leaf. So
-a forged opening must reach, from a root through branches inverted at will, the leaf of a record
-the guest reads. That is a claw between what inversions reach and what `leaf` reaches, at the
-collision bounds, which is why `F` serves for a branch and for `poseidon2_compress` over the
-tables' roots, though not over records.
+**Why every node is one compression in a domain.** `F` truncates a public permutation, which
+inverts: any 8 lanes are `F` of the 16 its inverse gives them beside 8 of one's choosing. Alone it
+binds nothing a prover chooses: an inversion finds a record for a digest at the cost of the lanes'
+restriction alone, 128 bits at 112 bytes (`2^64` Grover iterations), and makes any digest a branch
+at any crit bit. The feed-forward `z[0..8]` puts a digest out of an inversion's reach, since `z` is
+the inverse's output too. The domain tells node types and crit bits apart in the hash, not in the
+proof's words, which the prover writes: on one `z`, `H_t(z) − H_u(z) = (t − u, 0, …, 0)`, never
+zero. With a branch `F(L ‖ R)` plus its domain and no feed-forward, a record whose first 56 bytes
+pack to `(c + 1, 0, …, 0)` would hash to the branch at `c` over those 8 lanes and its last 8, so a
+proof could open the leaf as that branch, over children of the record's choosing. Across inputs,
+two nodes agree only by a collision of `F(z) + z[0..8]` up to one of the 1,025 differences between
+the 513 domains: about `2^251` calls and `2^167` quantumly, against a lone digest's `2^256` and
+`2^170` ([transcript.md](transcript.md) §5.1), and a preimage in any domain about `2^503`, `2^251`
+quantumly, all above the 128-bit quantum target. So a root binds each node's type, crit bit and
+children. `poseidon2_compress` stays `F` over the tables' roots: a snapshot folds two roots at
+fixed places and is never a node, and its inverse reaches only roots no table opens to.
 
 **What a root proves.** A walk goes from the root on a key's bits, taking at a branch at `c` the
 child its bit `c` names. A batch's proof opens each key the batch touches at the leaf its walk
@@ -344,15 +346,16 @@ arg    a block's word-aligned address (LOAD, SIB): 16 words, a digest's 8 lanes,
        an earlier op's index (JOIN): the op whose park it takes
 ```
 
-The machine's value is `cur`, 8 raw lanes, with `pending` added to lane 0, both zero to start. Op
-`i`:
+The machine's value is `cur`, 8 raw lanes with `pending`, 8 more, added lane by lane, both zero to
+start. Op `i`:
 
 - parks the value entering it where `park` is set; any op may, and the SDK's LOADs alone do;
-- a LOAD makes the lanes its block's, lane `k` `w_2k + 2^32·w_2k+1` mod `p`, and `pending` 0, its
-  `left` and `d` free;
+- a LOAD makes the lanes its block's, lane `k` `w_2k + 2^32·w_2k+1` mod `p`, and `pending` zero,
+  its `left` and `d` free;
 - a SIB or a JOIN takes the other child, its block or the value op `arg` parked, each park taken
   exactly once, and with `(l, r)` the value and the other child, the other on the left where
-  `left` is set, makes the lanes `F(l ‖ r)` and `pending` `d + 1`: a branch at `d`.
+  `left` is set, makes the lanes `F(l ‖ r)` and `pending` `l` with `d + 1` added to lane 0: the
+  value is `H_{d+1}(l ‖ r)`, a branch at `d`.
 
 The root is the value after the last op. The SDK emits the pruned trie post-order, from
 `emit(root, park = 0)`:
@@ -404,8 +407,9 @@ slots, boundary `b` from `256i + 16b`, and its boundary 16 is op `i + 1`'s 0:
 
 ```text
 boundary 0         slots 0..4     the raw lane pairs entering op i
-                   slot 8         its control (op_ptr, pending)
-                   slots 12..16   its park: the value entering it, lane 0 with pending added
+                   slots 4..8     its pending's lane pairs
+                   slot 8         its control (op_ptr, 0)
+                   slots 12..16   its park: the value entering it, the raw lanes with pending added
 boundary 1         slots 0..8     u = M_E(l ‖ r), a hash op's, MPT_NODES' to MPT_ROUNDS
 boundaries 2..15   slots 0..8     the round states
 boundary 16        slots 0..4     the output: a hash op's first 8 lanes, or a LOAD's block
@@ -423,12 +427,13 @@ slot.
 frame       18 words (§1), ROOT written
 count       count − live ∈ [0, 2^20)                     1 ≤ n ≤ 2^20
 last_rule   last − 256·count                             end_rule   end − ops − 8·count
-root{l}     o_l + [l = 0]·pending written canonical, as §3.1's o{l}
-send     (MPT, cycle, s, 0, 0), s < 4                    (MPT, cycle, 8, ops, 0)
-receive  (MPT, cycle, last + s, o_2s, o_2s+1)            (MPT, cycle, last + 8, end, pending)
+root{l}     o_l + pending_l written canonical, as §3.1's o{l}
+send     (MPT, cycle, s, 0, 0), s < 8                    (MPT, cycle, 8, ops, 0)
+receive  (MPT, cycle, last + s, o_2s, o_2s+1), (MPT, cycle, last + 4 + s, pending_2s, pending_2s+1),
+         s < 4                                           (MPT, cycle, last + 8, end, 0)
 ```
 
-155 committed columns, 117 obligations (the `RANGE16` tree at 128 leaves, 10 free), 24 and 23
+162 committed columns, 117 obligations (the `RANGE16` tree at 128 leaves, 10 free), 28 and 27
 leaves. `MPT_NODES` is one row an op `i`, its stamp `256i`, each tuple `(MPT, cycle, …)`:
 
 ```text
@@ -436,29 +441,35 @@ masks          is_hash is_join park is_load block: boolean M columns, zero off a
 is_load_rule   is_load − live + is_hash             block_rule   block − live + is_join
 join_rule      is_join − is_join·is_hash            left a bit, d ∈ [0, 2^9)
 info_rule      info − (is_hash − is_join) − 2·is_join − 4·park − 8·left − 16·d
-pending_rule   pending_next − is_hash·(d + 1)
+hash_left_rule hash_left − is_hash·left
 other{k}_rule  block·(other_k − w_2k − 2^32·w_2k+1)                         k < 8
 u{j}_rule      u_j − Σ_k M_E[j][k]·L_k − M_E[j][8 + k]·R_k                  j < 16
-               cur_k = o_k + [k = 0]·pending, (L, R) = (cur, other), swapped where left is 1
+               cur_k = o_k + pending_k, (L, R) = (cur, other), swapped where left is 1
+pending_next{k}_rule
+               pending_next_k − is_hash·cur_k − hash_left·(other_k − cur_k) − [k = 0]·is_hash·(d + 1)
 op             stamp/256 ∈ [0, 2^20)     park_at_rule   park_at − 256·is_join·arg
 join           (stamp − park_at)/256 − is_join ∈ [0, 2^20): i − 1 − arg on a JOIN, i elsewhere
 info, arg      read at op_ptr and op_ptr + 4, written back at 4·cycle + FRAME_DELTA
 w{j}           the block's word j at arg + 4j likewise under block, and a word
-receive   (stamp + s, o_2s, o_2s+1), s < 4      (stamp + 8, op_ptr, pending)
+receive   (stamp + s, o_2s, o_2s+1), (stamp + 4 + s, pending_2s, pending_2s+1), s < 4
+          (stamp + 8, op_ptr, 0)
           under is_join (park_at + 12 + s, other_2s, other_2s+1)
-send      (stamp + 264, op_ptr + 8, pending_next)
+send      (stamp + 264, op_ptr + 8, 0), (stamp + 260 + s, pending_next_2s, pending_next_2s+1)
           under is_load (stamp + 256 + s, other_2s, other_2s+1)
           under is_hash (stamp + 16 + s, u_2s, u_2s+1), s < 8
           under park    (stamp + 12 + s, cur_2s, cur_2s+1)
 ```
 
 The kind is `is_hash + is_join`, so no info word of kind 3 or at or above `2^13` decodes, and `u`
-is `M_E` of the children in `left`'s order at degree 2, with no column for either order. A JOIN's
+is `M_E` of the children in `left`'s order at degree 2, with no column for either order. A hash
+op's `pending_next` is its left child `L` with `d + 1` added to lane 0, and a LOAD's zero: the
+rounds write `F(L ‖ R)`, and op `i + 1` adds the feed-forward and the domain back, so its value is
+`H_{d+1}(L ‖ R)` (§6.1); `hash_left` keeps the rule at degree 2. A JOIN's
 `arg` is the index of an op before it, as the executor holds it. Without `join`, a JOIN could take
 its own park or a later op's, and an `arg` the bound leaves within `2^20` of `p` reads a stamp no
 op sends. A LOAD's or a SIB's `arg` is an address, which its block's accesses hold to one. A
 masked-off access still owes its gap on a live row (§1's `access_under`), where the fill writes the
-chunks of `4·cycle`. 137 committed columns, 112 obligations (128 leaves, 15 free), 27 and 35
+chunks of `4·cycle`. 152 committed columns, 112 obligations (128 leaves, 15 free), 31 and 39
 leaves.
 
 `MPT_ROUNDS` is §3.2's rows from `constraints::poseidon2::rounds`, keyed for a hash op: row `k`
@@ -469,27 +480,28 @@ circuit's, so no row reads the lanes a hash op drops. 103 committed columns, 3 o
 
 ### 6.6 Why the rows are the program
 
-The controls, slot 8 of an op's boundary 0, are written only by the frame row (op 0's) and by node
-rows (op `i + 1`'s), and read only by node rows (op `i`'s) and the frame row (op `n`'s). The frame
-row is its anchor's, one a cycle (§2), so by induction there is exactly one node row an op `i < n`,
-its `op_ptr` `OPS + 8i`, reading op `i`'s words at the call's timestamp, the last writing the
-control the frame row reads. Op 0's lanes are the frame row's zeros, and op `i + 1`'s are op `i`'s
-output: a LOAD's block, sent by its node row, or a hash op's permutation, whose boundaries 1 to 16
-only its node row and its round rows reach, a round row's boundary pinned by its kind and its op by
-its bound. A park, slots 12 to 15, is written only by its op's row and read only by a JOIN whose
+The controls and the `pending`s, slots 4 to 8 of an op's boundary 0, are written only by the frame
+row (op 0's) and by node rows (op `i + 1`'s), and read only by node rows (op `i`'s) and the frame
+row (op `n`'s). The frame row is its anchor's, one a cycle (§2), so by induction there is exactly
+one node row an op `i < n`, its `op_ptr` `OPS + 8i`, reading op `i`'s words at the call's
+timestamp, the last writing the control the frame row reads. Op 0's lanes and `pending` are the
+frame row's zeros, and op `i + 1`'s are op `i`'s: the `pending` its node row sends, and its output,
+a LOAD's block, sent by its node row, or a hash op's permutation, whose boundaries 1 to 16 only its
+node row and its round rows reach, a round row's boundary pinned by its kind and its op by its
+bound. A park, slots 12 to 15, is written only by its op's row and read only by a JOIN whose
 `arg` names that op, so each is taken exactly once. So the frame row receives the value after the
 last op, its raw lanes and `pending`, and writes the root. No row of the space exists without its
 call's frame row: the least control any of them reads was written by none.
 
 ### 6.7 The trace
 
-A call is one `MPT` entry, its frame, carrying the last op's `pending` (`mpt::CALL_CARRY = 1`),
-which the frame fill splits off the root's lane 0; one `MPT_NODES` entry an op
+A call is one `MPT` entry, its frame, carrying the last op's `pending` (`mpt::CALL_CARRY = 8`),
+which the frame fill splits off the root's lanes; one `MPT_NODES` entry an op
 (`constants::delegation::Per::Op`), `mpt::OP_WORDS = 18` words, its info and arg at `op_ptr` and
 then its block's 16 at `arg`, or for a JOIN, which reads no block, `Query::ABSENT`, each accessed at
 the call's timestamp after the frame's and written back unchanged, its base the op's address; and
 one `MPT_ROUNDS` entry a hash op (`Per::Hash`), its `Per::Op` entry, words and carry alike, from
-which the rounds fill recomputes `u`. An op's carry, `mpt::CARRY = 18`, is the raw lanes entering
+which the rounds fill recomputes `u`. An op's carry, `mpt::CARRY = 25`, is the raw lanes entering
 it, its `pending`, its index, and a JOIN's parked lanes as its park wrote them, zeros for any other
 op: what its row starts from that no word of its entry gives, so a program may straddle shards
 ([streaming.md](streaming.md) §4). `trace::TraceArchive` checks an op's words against the log as it

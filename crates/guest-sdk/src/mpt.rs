@@ -59,8 +59,9 @@ const fn rows(family: u32) -> u32 {
 
 /// A leaf: `x`, `key ‖ value` packed seven bytes to a lane, little-endian, and
 /// zero-extended to 16 lanes, its permutation's first 8 lanes plus its own,
-/// mod `p`, one [`poseidon2_permute`] call. The feed-forward keeps the
-/// permutation's inverse from finding a record for a digest
+/// mod `p`, one [`poseidon2_permute`] call: the trie's one compression in
+/// domain 0, where a branch's is its crit bit plus one. The feed-forward
+/// keeps the permutation's inverse from finding a record for a digest
 /// (`docs/spec/precompiles.md` §6.1). Panics if the two are over 112 bytes.
 ///
 /// The bytes are copied into zeroed words, little-endian, so that every load

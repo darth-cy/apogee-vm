@@ -14,7 +14,10 @@
 //!   root one off they are not;
 //! - **a JOIN takes an earlier park**: the JOIN's row naming its own park or
 //!   a later op's is refused by its `join` bound alone, though its own park
-//!   would answer the one it takes.
+//!   would answer the one it takes;
+//! - **a branch feeds its left child forward**: the JOIN's row sending op 3
+//!   its domain alone as `pending`, without its left child, is refused by the
+//!   `pending_next` rules alone.
 
 use std::collections::BTreeMap;
 
@@ -56,11 +59,17 @@ fn join(l: [Fp; 8], r: [Fp; 8]) -> [Fp; 16] {
     std::array::from_fn(|i| if i < 8 { l[i] } else { r[i - 8] })
 }
 
-/// A branch at crit bit `c`: `F(l ‖ r)` with `c + 1` added to lane 0.
-fn branch(c: u32, l: [Fp; 8], r: [Fp; 8]) -> [Fp; 8] {
-    let mut out = compress(join(l, r));
+/// `l` with `c + 1` added to lane 0: what a branch at `c` adds to `F`.
+fn domain(c: u32, l: [Fp; 8]) -> [Fp; 8] {
+    let mut out = l;
     out[0] += f(c as u64 + 1);
     out
+}
+
+/// A branch at crit bit `c`: `F(l ‖ r) + l` with `c + 1` added to lane 0.
+fn branch(c: u32, l: [Fp; 8], r: [Fp; 8]) -> [Fp; 8] {
+    let (out, added) = (compress(join(l, r)), domain(c, l));
+    std::array::from_fn(|k| out[k] + added[k])
 }
 
 /// Block `b`'s 16 words: arbitrary, and in `S`'s top lane all ones, a lane at
@@ -108,17 +117,16 @@ fn entries(skew: u64) -> [DelegationTrace; 3] {
     let mut rounds = DelegationTrace::new(family::MPT_ROUNDS, HEIGHT, OP_WORDS);
     // The machine of `delegation::mpt`, op by op: the raw lanes, `pending`
     // and the parks.
-    let (mut raw, mut pending) = ([Fp::ZERO; 8], 0u64);
+    let (mut raw, mut pending) = ([Fp::ZERO; 8], [Fp::ZERO; 8]);
     let mut parked: BTreeMap<u32, [Fp; 8]> = BTreeMap::new();
     for (i, &(info, arg)) in ops.iter().enumerate() {
         let i = i as u32;
         let at = OPS_AT + 8 * i;
-        let mut cur = raw;
-        cur[0] += f(pending);
+        let cur: [Fp; 8] = std::array::from_fn(|k| raw[k] + pending[k]);
         let kind = info & 3;
         let mut entry = vec![read(at, info, 0), read(at + 4, arg, 1)];
-        let mut carry: Vec<u64> = raw.iter().map(|x| x.to_u64()).collect();
-        carry.extend([pending, i as u64]);
+        let mut carry: Vec<u64> = raw.iter().chain(&pending).map(|x| x.to_u64()).collect();
+        carry.push(i as u64);
         let other = match kind {
             JOIN => {
                 let value = parked.remove(&arg).expect("an earlier park");
@@ -141,21 +149,20 @@ fn entries(skew: u64) -> [DelegationTrace; 3] {
         }
         nodes.push(CYCLE, at, &entry, &carry);
         (raw, pending) = match kind {
-            LOAD => (other, 0),
+            LOAD => (other, [Fp::ZERO; 8]),
             _ => {
                 rounds.push(CYCLE, at, &entry, &carry);
                 let (l, r) = match info & LEFT {
                     0 => (cur, other),
                     _ => (other, cur),
                 };
-                (compress(join(l, r)), (info >> DEPTH_SHIFT) as u64 + 1)
+                (compress(join(l, r)), domain(info >> DEPTH_SHIFT, l))
             }
         };
     }
     assert!(parked.is_empty(), "every park is consumed");
-    let mut lane0 = raw;
-    lane0[0] += f(pending);
-    assert_eq!(lane0, root, "the machine computes the trie's root");
+    let value: [Fp; 8] = std::array::from_fn(|k| raw[k] + pending[k]);
+    assert_eq!(value, root, "the machine computes the trie's root");
 
     let mut words: Vec<Query> = Vec::with_capacity(FRAME);
     let old = |j: usize| (j as u32).wrapping_mul(0x85eb_ca6b);
@@ -170,7 +177,7 @@ fn entries(skew: u64) -> [DelegationTrace; 3] {
             words.push(q);
         }
     }
-    frame.push(CYCLE, FRAME_AT, &words, &[pending]);
+    frame.push(CYCLE, FRAME_AT, &words, &pending.map(|x| x.to_u64()));
     [frame, nodes, rounds]
 }
 
@@ -455,20 +462,30 @@ fn node_u(s: &Shard, row: &[Fp]) -> [Fp; 16] {
     x
 }
 
-/// An `MPT_NODES` row's `cur`: its raw lanes, `pending` added to lane 0.
+/// An `MPT_NODES` row's `pending_next`: a hash op's left child with `d + 1`
+/// added to lane 0, a LOAD's zero.
+fn node_pending_next(s: &Shard, row: &[Fp]) -> [Fp; 8] {
+    let (cur, hash) = (node_cur(s, row), row[s.at("is_hash")]);
+    let left = match row[s.at("left")] == Fp::ONE {
+        true => std::array::from_fn(|k| row[s.at(&format!("other{k}"))]),
+        false => cur,
+    };
+    let domain = domain(row[s.at("d")].to_u64() as u32, left);
+    std::array::from_fn(|k| hash * domain[k])
+}
+
+/// An `MPT_NODES` row's `cur`: its raw lanes, its `pending` added.
 fn node_cur(s: &Shard, row: &[Fp]) -> [Fp; 8] {
-    std::array::from_fn(|k| match k {
-        0 => row[s.at("o0")] + row[s.at("pending")],
-        _ => row[s.at(&format!("o{k}"))],
-    })
+    std::array::from_fn(|k| row[s.at(&format!("o{k}"))] + row[s.at(&format!("pending{k}"))])
 }
 
 /// The JOIN, op 2, naming its own park or op 3's instead of op 1's, its arg
 /// and `park_at` moved. Naming its own, its park bit is set, its other child
-/// is the `cur` it parks and `u` is recomputed, so the park it sends is the
-/// park it receives and no other op owes it one. Every other row-local
-/// relation holds, and `join` alone refuses the row, whatever chunk stands
-/// beside it, as the executor refuses a JOIN no earlier park answers.
+/// is the `cur` it parks and `u` and `pending_next` are recomputed, so the
+/// park it sends is the park it receives and no other op owes it one. Every
+/// other row-local relation holds, and `join` alone refuses the row, whatever
+/// chunk stands beside it, as the executor refuses a JOIN no earlier park
+/// answers.
 #[test]
 fn a_join_of_its_own_park_or_a_later_ones_is_refused() {
     let program = program();
@@ -491,6 +508,9 @@ fn a_join_of_its_own_park_or_a_later_ones_is_refused() {
             }
             for (j, v) in node_u(&s, &row).iter().enumerate() {
                 row[s.at(&format!("u{j}"))] = *v;
+            }
+            for (k, v) in node_pending_next(&s, &row).iter().enumerate() {
+                row[s.at(&format!("pending_next{k}"))] = *v;
             }
             let slots = 256 * target + 12..256 * target + 16;
             let (mut sent, mut taken) = (Vec::new(), Vec::new());
@@ -518,4 +538,34 @@ fn a_join_of_its_own_park_or_a_later_ones_is_refused() {
             );
         }
     }
+}
+
+/// The JOIN, op 2, its park `A` on the left at depth 511, sending op 3 the
+/// raw branch's offset, its domain `(512, 0, …, 0)` alone, as `pending`, not
+/// `A` with the domain added. Op 3 would then enter with `F(A ‖ B)` plus the
+/// domain, which on one input a leaf whose first 8 lanes are the domain
+/// equals. The `pending_next` rules alone refuse the row, one a lane, every
+/// lane of `A` being nonzero.
+#[test]
+fn a_branch_feeds_its_left_child_forward() {
+    let program = program();
+    let s = Shard::new(&program, &entries(0)[1]);
+    let r = 2;
+    let mut row = s.row(r);
+    assert!(
+        row[s.at("is_join")] == Fp::ONE && row[s.at("left")] == Fp::ONE,
+        "op 2 is the JOIN, its park on the left"
+    );
+    let a = lanes(&block_words(0));
+    let raw = domain(D_JOIN, [Fp::ZERO; 8]);
+    for k in 0..8 {
+        let next = s.at(&format!("pending_next{k}"));
+        assert_eq!(row[next], a[k] + raw[k], "lane {k}: A, the domain added");
+        assert_ne!(a[k], Fp::ZERO, "lane {k} of A");
+        row[next] = raw[k];
+    }
+    let mut broken = s.refused(&row, r);
+    broken.sort();
+    let want: Vec<String> = (0..8).map(|k| format!("pending_next{k}_rule")).collect();
+    assert_eq!(broken, want, "refused by the pending_next rules alone");
 }

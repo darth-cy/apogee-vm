@@ -405,10 +405,10 @@ fn rounds(src: &ShardSource, fam: FamilyId) -> Result<Vec<(PolyAddress, Multilin
             }
             _ => std::array::from_fn(|i| lane(&calls, i, c, false)),
         };
-        // A hash op's index, carried at 9.
+        // A hash op's index, carried at 16.
         let at = |k: usize| match fam {
             family::MPT_ROUNDS => {
-                constraints::mpt::SPAN * calls.carry(9)[c]
+                constraints::mpt::SPAN * calls.carry(16)[c]
                     + constraints::mpt::STRIDE * (k as u64 + 1)
             }
             _ => stamp(k as u64),
@@ -433,7 +433,7 @@ fn rounds(src: &ShardSource, fam: FamilyId) -> Result<Vec<(PolyAddress, Multilin
                 w.put(keep, r, (k < ROWS - 2) as u64);
             }
             if let Some(op_c0) = op_c0 {
-                w.put(op_c0, r, calls.carry(9)[c] >> 16);
+                w.put(op_c0, r, calls.carry(16)[c] >> 16);
             }
             for (i, col) in s.iter().enumerate() {
                 w.put_fp(*col, r, state[i]);
@@ -468,8 +468,8 @@ fn rounds(src: &ShardSource, fam: FamilyId) -> Result<Vec<(PolyAddress, Multilin
 }
 
 /// An `MPT_ROOT` op entry decoded (`delegation::Per::Op`): its info's
-/// fields, the value entering it, its raw lanes with `pending` added to lane
-/// 0, and its other child, a block's lanes or a JOIN's parked ones.
+/// fields, the value entering it, its raw lanes with its `pending` added, and
+/// its other child, a block's lanes or a JOIN's parked ones.
 struct MptOp {
     kind: u32,
     park: u64,
@@ -481,8 +481,8 @@ struct MptOp {
 
 impl MptOp {
     /// Entry `r`, from its words and its carry (`delegation::mpt::CARRY`):
-    /// the raw lanes at 0..8, `pending` at 8, the op's index at 9 and a
-    /// JOIN's parked lanes at 10..18. Refuses an info word that does not
+    /// the raw lanes at 0..8, `pending` at 8..16, the op's index at 16 and a
+    /// JOIN's parked lanes at 17..25. Refuses an info word that does not
     /// decode.
     fn of(calls: &FrameSlice, r: usize) -> Result<MptOp, String> {
         use constants::delegation::mpt::{DEPTH_BOUND, DEPTH_SHIFT, JOIN};
@@ -497,10 +497,10 @@ impl MptOp {
         let lanes = |at: usize| -> [Fp; 8] {
             std::array::from_fn(|k| Fp::from_u64(calls.carry(at + k)[r]))
         };
-        let mut cur = lanes(0);
-        cur[0] += Fp::from_u64(calls.carry(8)[r]);
+        let (raw, pending) = (lanes(0), lanes(8));
+        let cur = std::array::from_fn(|k| raw[k] + pending[k]);
         let other = match kind {
-            JOIN => lanes(10),
+            JOIN => lanes(17),
             _ => std::array::from_fn(|k| lane(calls, 1 + k, r, false)),
         };
         Ok(MptOp {
@@ -532,8 +532,9 @@ fn mpt_root(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
     use constraints::mpt::SPAN;
     let fam = family::MPT;
     let (calls, mut w) = frame_fill(src, fam)?;
-    let [count_c0, last, end, pending] = ["count_c0", "last", "end", "pending"].map(|c| w.col(c));
+    let [count_c0, last, end] = ["count_c0", "last", "end"].map(|c| w.col(c));
     let o: Vec<usize> = (0..8).map(|l| w.fcol(&format!("o{l}"))).collect();
+    let pending: Vec<usize> = (0..8).map(|l| w.fcol(&format!("pending{l}"))).collect();
     let halves: Vec<[usize; 4]> = (0..8)
         .map(|l| canonical_columns(&mut w, &format!("root{l}")))
         .collect();
@@ -546,14 +547,12 @@ fn mpt_root(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
             let cycle = calls.cycles()[r];
             return Err(format!("cycle {cycle}: an MPT_ROOT call of {count} ops"));
         }
-        let tweak = calls.carry(0)[r];
         w.row(
             r,
             &[
                 (count_c0, (count - 1) >> 16),
                 (last, SPAN * count),
                 (end, ops + 4 * OP as u64 * count),
-                (pending, tweak),
             ],
         );
         for l in 0..8 {
@@ -561,12 +560,9 @@ fn mpt_root(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
                 frame_word(&calls, ROOT + 2 * l, r, true),
                 frame_word(&calls, ROOT + 2 * l + 1, r, true),
             );
-            let lane = Fp::from_u64(lo_w | hi_w << 32);
-            let raw = match l {
-                0 => lane - Fp::from_u64(tweak),
-                _ => lane,
-            };
-            w.put_fp(o[l], r, raw);
+            let added = Fp::from_u64(calls.carry(l)[r]);
+            w.put_fp(pending[l], r, added);
+            w.put_fp(o[l], r, Fp::from_u64(lo_w | hi_w << 32) - added);
             canonical(&mut w, halves[l], r, lo_w, hi_w);
         }
     }
@@ -574,8 +570,9 @@ fn mpt_root(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
 }
 
 /// `MPT_NODES`, `constraints::mpt`: one row an op, from its entry's carry and
-/// its words, its info decoded into the masks, `left` and `d`, its arg, and
-/// its block's words, each with its high halfword. A JOIN's row, whose op
+/// its words, its info decoded into the masks, `left` and `d`, its arg, its
+/// block's words, each with its high halfword, and the `pending` op `i + 1`
+/// enters with, a hash op's left child and domain. A JOIN's row, whose op
 /// reads no block, holds zeros in its block words and in their gap chunks
 /// those of `4·cycle`. Refuses a JOIN whose arg is not an earlier op's index.
 fn mpt_nodes(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
@@ -584,19 +581,15 @@ fn mpt_nodes(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, S
     let fam = family::MPT_NODES;
     let calls = *src.invocations(fam)?;
     let mut w = Witness::new(fam, calls.len());
-    let [live, cycle, stamp, op_ptr, pending, pending_next] = [
-        "live",
-        "cycle",
-        "stamp",
-        "op_ptr",
-        "pending",
-        "pending_next",
-    ]
-    .map(|c| w.col(c));
+    let [live, cycle, stamp, op_ptr] = ["live", "cycle", "stamp", "op_ptr"].map(|c| w.col(c));
+    let pending: Vec<usize> = (0..8).map(|k| w.fcol(&format!("pending{k}"))).collect();
+    let pending_next: Vec<usize> = (0..8)
+        .map(|k| w.fcol(&format!("pending_next{k}")))
+        .collect();
     let [is_hash, is_join, park, is_load, block] =
         ["is_hash", "is_join", "park", "is_load", "block"].map(|c| w.col(c));
-    let [left, d, park_at, op_c0, join_c0] =
-        ["left", "d", "park_at", "op_c0", "join_c0"].map(|c| w.col(c));
+    let [left, d, hash_left, park_at, op_c0, join_c0] =
+        ["left", "d", "hash_left", "park_at", "op_c0", "join_c0"].map(|c| w.col(c));
     let port = |w: &mut Witness, name: &str| {
         let cols = ["read_ts", "read_value"].map(|c| w.col(&format!("{name}_{c}")));
         (cols, [0, 1].map(|c| w.col(&format!("{name}_gap_c{c}"))))
@@ -613,7 +606,7 @@ fn mpt_nodes(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, S
     let u: Vec<usize> = (0..16).map(|j| w.fcol(&format!("u{j}"))).collect();
     for r in 0..calls.len() {
         let op = MptOp::of(&calls, r)?;
-        let (index, at) = (calls.carry(9)[r], calls.cycles()[r]);
+        let (index, at) = (calls.carry(16)[r], calls.cycles()[r]);
         let (hash, join) = ((op.kind != LOAD) as u64, (op.kind == JOIN) as u64);
         let target = join * calls.word(1).read_value[r];
         // `join`'s value: `i − 1 − arg` for a JOIN, and for any other op `i`.
@@ -629,8 +622,6 @@ fn mpt_nodes(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, S
                 (cycle, at),
                 (stamp, SPAN * index),
                 (op_ptr, calls.word(0).addr[r] as u64),
-                (pending, calls.carry(8)[r]),
-                (pending_next, hash * (op.d + 1)),
                 (is_hash, hash),
                 (is_join, join),
                 (park, op.park),
@@ -638,6 +629,7 @@ fn mpt_nodes(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, S
                 (block, 1 - join),
                 (left, op.left),
                 (d, op.d),
+                (hash_left, hash * op.left),
                 (park_at, SPAN * target),
                 (op_c0, index >> 16),
                 (join_c0, back >> 16),
@@ -654,11 +646,16 @@ fn mpt_nodes(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, S
                 }
             }
         }
+        // A hash op's left child, its domain `d + 1` in lane 0: what op `i +
+        // 1`'s raw lanes add.
+        let mut x = op.children();
+        let domain = |k: usize| Fp::from_u64(if k == 0 { op.d + 1 } else { 0 });
         for k in 0..8 {
             w.put_fp(o[k], r, Fp::from_u64(calls.carry(k)[r]));
+            w.put_fp(pending[k], r, Fp::from_u64(calls.carry(8 + k)[r]));
             w.put_fp(other[k], r, op.other[k]);
+            w.put_fp(pending_next[k], r, Fp::from_u64(hash) * (x[k] + domain(k)));
         }
-        let mut x = op.children();
         transcript::external(&mut x);
         for (j, c) in u.iter().enumerate() {
             w.put_fp(*c, r, x[j]);

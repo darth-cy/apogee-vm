@@ -64,10 +64,11 @@
 //! with block `s` on its right at depth `d = s mod 512`: by a SIB at an odd
 //! step, at an even one by a LOAD of the block parking the value and a JOIN
 //! of that park on the left. Its value is a duplex of the permutation: from
-//! the 16 lanes of blocks 0 and 1, each step permutes and adds `d + 1` to lane
-//! 0. So each block past 1 is the last 8 lanes of the step before its own,
-//! and the guest reads none of them: one that is not is a root that is not
-//! the duplex's.
+//! the 16 lanes of blocks 0 and 1, each step permutes, adds back the first 8
+//! lanes it took to its first 8 and adds `d + 1` to lane 0, a branch at `d`.
+//! So each block past 1 is the last 8 lanes of the step before its own, and
+//! the guest reads none of them: one that is not is a root that is not the
+//! duplex's.
 //!
 //! # The journal
 //!
@@ -93,7 +94,7 @@
 //!                                   branch(7, block 1 mod p, a), where a to d
 //!                                   are the leaves 0 to 3 mod n and
 //!                                   branch(c, l, r) is poseidon2_compress(l, r)
-//!                                   with c + 1 added to lane 0 mod p
+//!                                   plus l, with c + 1 added to lane 0 mod p
 //!   mpt_eval                        8 u64: the long program's value
 //!   Trie::root                      8 u64 a scenario: its table's after the
 //!                                   batch, the inserts first, then the sets
@@ -315,8 +316,9 @@ fn main() {
     }
 
     // The long program, its value a duplex of the permutation: from blocks 0
-    // and 1, each step permutes and adds `d + 1` to lane 0. Its words are
-    // written in a `while`: a debug build pays for every iterator call.
+    // and 1, each step permutes, adds back the first 8 lanes it took, read mod
+    // `p`, and adds `d + 1` to lane 0. Its words are written in a `while`: a
+    // debug build pays for every iterator call.
     let mut ops = vec![0u32; 2 * (1 + steps + steps / 2) as usize];
     let words = ops.as_mut_slice();
     words[1] = block(0);
@@ -334,7 +336,11 @@ fn main() {
             words[w + 3] = w as u32 / 2;
             w += 4;
         }
+        let x: [u64; 8] = core::array::from_fn(|k| state[k] % P);
         poseidon2_permute(&mut state);
+        for (lane, x) in state.iter_mut().zip(x) {
+            *lane = plus(*lane, x);
+        }
         state[0] = plus(state[0], d as u64 + 1);
         (s, addr) = (s + 1, addr + 64);
     }
@@ -424,7 +430,7 @@ fn op(kind: u32, bits: u32, d: u32) -> u32 {
     kind | bits | d << 4
 }
 
-/// `x + t` mod `p`, `x` below it and `t` small.
+/// `x + t` mod `p`, each below it.
 fn plus(x: u64, t: u64) -> u64 {
     match x.overflowing_add(t) {
         (s, false) if s < P => s,
@@ -432,10 +438,13 @@ fn plus(x: u64, t: u64) -> u64 {
     }
 }
 
-/// A trie's branch at crit bit `d`: [`poseidon2_compress`] of `l` and `r`,
-/// `d + 1` added to lane 0 mod `p`.
+/// A trie's branch at crit bit `d`: [`poseidon2_compress`] of `l` and `r`
+/// plus `l`, `d + 1` added to lane 0 mod `p`.
 fn branch(d: u32, l: &Digest, r: &Digest) -> Digest {
     let mut lanes = *poseidon2_compress(l, r).lanes();
+    for (lane, x) in lanes.iter_mut().zip(l.lanes()) {
+        *lane = plus(*lane, *x);
+    }
     lanes[0] = plus(lanes[0], d as u64 + 1);
     Digest::new(lanes).expect("precompiles: a lane is not below p")
 }

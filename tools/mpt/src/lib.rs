@@ -13,7 +13,8 @@
 //! bit `c` clear and whose right is the trie of those with it set: a function
 //! of the key set, whatever order the table was built in. A leaf is [`leaf`] of
 //! its key and value, a branch is [`branch`] of its crit bit and children, and
-//! the empty table's root is the zero digest.
+//! the empty table's root is the zero digest. Both are [`node`]'s one
+//! compression in a domain, 0 for a leaf and `c + 1` for a branch at `c`.
 
 use std::array;
 use std::collections::BTreeMap;
@@ -32,9 +33,9 @@ const MAX_KEY: usize = 64;
 /// A leaf's most bytes, its key's and its value's: 16 lanes of seven.
 const MAX_LEAF: usize = 112;
 
-/// A leaf: `F(x) + x[0..8]` lane by lane mod `p`, `x` being `key ‖ value`
-/// packed seven bytes to a lane, little-endian, each lane below `2^56`, and
-/// zero-extended to 16 lanes. Panics if the two are more than 112 bytes.
+/// A leaf: [`node`] of `x` in domain 0, `x` being `key ‖ value` packed seven
+/// bytes to a lane, little-endian, each lane below `2^56`, and zero-extended
+/// to 16 lanes. Panics if the two are more than 112 bytes.
 pub fn leaf(key: &[u8], value: &[u8]) -> Digest {
     let bytes = [key, value].concat();
     assert!(
@@ -45,30 +46,29 @@ pub fn leaf(key: &[u8], value: &[u8]) -> Digest {
     for (lane, seven) in lanes.iter_mut().zip(bytes.chunks(7)) {
         *lane = seven.iter().rev().fold(0, |x, &b| (x << 8) | b as u64);
     }
-    let out = f(lanes);
-    array::from_fn(|i| (Fp::from_u64(out[i]) + Fp::from_u64(lanes[i])).to_u64())
+    node(lanes, 0)
 }
 
-/// A branch at crit bit `c` over `left` and `right`: `F(left ‖ right)` with
-/// `c + 1` added to lane 0 mod `p`, binding the crit bit. Panics unless `c` is
-/// below 512.
+/// A branch at crit bit `c` over `left` and `right`: [`node`] of `left ‖
+/// right` in domain `c + 1`. Panics unless `c` is below 512.
 pub fn branch(c: usize, left: &Digest, right: &Digest) -> Digest {
     assert!(c < 8 * MAX_KEY, "branch: a crit bit is below 512");
     let mut lanes = [0; 16];
     lanes[..8].copy_from_slice(left);
     lanes[8..].copy_from_slice(right);
-    let mut out = f(lanes);
-    out[0] = (Fp::from_u64(out[0]) + Fp::from_u64(c as u64 + 1)).to_u64();
-    out
+    node(lanes, c as u64 + 1)
 }
 
-/// `F`, the SDK's `poseidon2_compress`: the first 8 lanes of the
-/// Poseidon2-A64-C5 permutation of `lanes`, each read mod `p`. A branch takes
-/// it as it is, and a leaf feeds its lanes forward.
-fn f(lanes: [u64; 16]) -> Digest {
-    let mut state = lanes.map(Fp::from_u64);
+/// Every node's hash, `F(z) + z[0..8]` lane by lane mod `p` with the domain
+/// `t` added to lane 0: `F` is the SDK's `poseidon2_compress`, the first 8
+/// lanes of the Poseidon2-A64-C5 permutation of `z`, each read mod `p`, and
+/// the feed-forward keeps its inverse from opening a digest. On one `z` two
+/// domains differ by their difference in lane 0.
+fn node(z: [u64; 16], t: u64) -> Digest {
+    let mut state = z.map(Fp::from_u64);
     poseidon2_permute(&mut state);
-    array::from_fn(|i| state[i].to_u64())
+    state[0] += Fp::from_u64(t);
+    array::from_fn(|i| (state[i] + Fp::from_u64(z[i])).to_u64())
 }
 
 /// A table: its key length and its leaves by key. The trie is never held but

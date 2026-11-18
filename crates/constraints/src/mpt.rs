@@ -3,14 +3,16 @@
 //! circuits on `crate::delegation`'s builder.
 //!
 //! - `MPT`, one row a call: the frame's 18 words, op 0's state sent, `cur`
-//!   zero and the control `(OPS, 0)`, op `n`'s received, its raw lanes and the
-//!   control `(OPS + 8n, pending)`, and the root written canonical, lane 0
-//!   with `pending` added.
+//!   zero and the control `(OPS, 0)`, op `n`'s received, its raw lanes, its
+//!   `pending` and the control `(OPS + 8n, 0)`, and the root written
+//!   canonical, the raw lanes with `pending` added.
 //! - `MPT_NODES`, one row an op: its state and its control received, its info
 //!   and arg read from RAM and its info decoded, its block read where it has
 //!   one, a JOIN's parked value received and a park sent, and op `i + 1`'s
-//!   control sent: for a LOAD the block's lanes as op `i + 1`'s state, for a
-//!   hash op its two children in order through `M_E` as boundary 1.
+//!   control and `pending` sent: for a LOAD the block's lanes as op `i + 1`'s
+//!   state, for a hash op its two children in order through `M_E` as boundary
+//!   1, and its left child with `d + 1` added to lane 0 as op `i + 1`'s
+//!   `pending`, the branch's feed-forward and its domain.
 //! - `MPT_ROUNDS`, sixteen rows a hash op: `POSEIDON2_ROUNDS`' rows
 //!   (`crate::poseidon2::rounds`) from boundary 1 to 16, the last writing
 //!   only the first eight lanes, op `i + 1`'s raw state.
@@ -18,10 +20,11 @@
 //! The call at `cycle` keeps its state in `address_space::MPT`: op `i` owns
 //! the timestamps `256i + 16b + slot`, its boundary 16 op `i + 1`'s boundary
 //! 0, and a tuple is `(MPT, cycle, ts, x, y)`. At boundary 0 lane pair `s` of
-//! the raw value entering the op is slot `s`, the control `(op_ptr, pending)`
-//! slot 8 and a park's pair `s` slot `12 + s`; at boundaries 1 to 16 pair `s`
-//! of a permutation state is slot `s`. Every row's stamp is bounded below
-//! `2^20` ops, so a timestamp is one op and one slot.
+//! the raw value entering the op is slot `s`, pair `s` of its `pending`, what
+//! the raw lanes add, slot `4 + s`, the control `(op_ptr, 0)` slot 8 and a
+//! park's pair `s` slot `12 + s`; at boundaries 1 to 16 pair `s` of a
+//! permutation state is slot `s`. Every row's stamp is bounded below `2^20`
+//! ops, so a timestamp is one op and one slot.
 
 use alloc::format;
 use alloc::vec::Vec;
@@ -39,9 +42,11 @@ use crate::lookup::ChannelSpec;
 use crate::poseidon2::{canonical, external_entry, rounds, Keyed, ROWS};
 use crate::{CircuitArtifact, PolyAddress};
 
-/// Timestamps a boundary takes: its eight lane pairs, the control at
-/// [`CONTROL`] and a park at [`PARKED`].
+/// Timestamps a boundary takes: its eight lane pairs, a `pending` at
+/// [`PENDING`], the control at [`CONTROL`] and a park at [`PARKED`].
 pub const STRIDE: u64 = 16;
+/// A `pending`'s first slot in an op's boundary 0, after the raw lane pairs.
+pub const PENDING: u64 = 4;
 /// The control's slot in an op's boundary 0.
 pub const CONTROL: u64 = 8;
 /// A park's first slot in an op's boundary 0.
@@ -58,8 +63,10 @@ pub const DEPTH_BITS: u32 = DEPTH_BOUND.trailing_zeros();
 
 const _: () = {
     assert!(MAX_OPS == 1 << OP_BITS && DEPTH_BOUND == 1 << DEPTH_BITS);
-    // A park's pairs and the control fit boundary 0 beside the lane pairs.
-    assert!(NODE_PAIRS as u64 <= CONTROL && CONTROL < PARKED);
+    // A `pending`'s pairs, the control and a park's pairs fit boundary 0
+    // beside the lane pairs.
+    assert!(NODE_PAIRS as u64 == PENDING && PENDING + NODE_PAIRS as u64 == CONTROL);
+    assert!(CONTROL < PARKED);
     assert!(PARKED + NODE_PAIRS as u64 <= STRIDE && 2 * NODE_PAIRS as u64 <= STRIDE);
     // The info word: a kind below 4, then park, left and the depth.
     assert!(delegation::mpt::JOIN < PARK && 2 * PARK == LEFT && 2 * LEFT == 1 << DEPTH_SHIFT);
@@ -100,9 +107,10 @@ fn mask(b: &mut Builder, name: &str) -> PolyAddress {
 /// count       count − live < 2^20               1 ≤ n ≤ 2^20
 /// last_rule   last − 256·count                  op n's stamp
 /// end_rule    end − ops − 8·count               op n's op pointer
-/// root{l}     canonical(o_l + [l = 0]·pending; write_{2 + 2l}, write_{3 + 2l})
-/// send     (cycle, s, 0, 0), s < 4              (cycle, 8, ops, 0)
-/// receive  (cycle, last + s, o_2s, o_2s+1)      (cycle, last + 8, end, pending)
+/// root{l}     canonical(o_l + pending_l; write_{2 + 2l}, write_{3 + 2l})
+/// send     (cycle, s, 0, 0), s < 8              (cycle, 8, ops, 0)
+/// receive  (cycle, last + s, o_2s, o_2s+1), (cycle, last + 4 + s, pending_2s, pending_2s+1), s < 4
+///          (cycle, last + 8, end, 0)
 /// ```
 fn frame_row() -> Builder {
     let mut b = Builder::new(family::MPT);
@@ -118,32 +126,30 @@ fn frame_row() -> Builder {
         end - ops - count * (4 * delegation::mpt::OP as u64),
     );
     let o: Vec<PolyAddress> = (0..8).map(|l| b.mcol(&format!("o{l}"))).collect();
-    let pending = b.mcol("pending");
-    for (l, ol) in o.iter().enumerate() {
-        let lane = match l {
-            0 => *ol + pending,
-            _ => Expr::from(*ol),
-        };
+    let pending: Vec<PolyAddress> = (0..8).map(|l| b.mcol(&format!("pending{l}"))).collect();
+    for l in 0..8 {
         let (lo, hi) = (f.words[ROOT + 2 * l].write, f.words[ROOT + 2 * l + 1].write);
-        canonical(&mut b, &format!("root{l}"), lane, lo, hi);
+        canonical(&mut b, &format!("root{l}"), o[l] + pending[l], lo, hi);
     }
     let space = address_space::MPT;
+    let pair = |v: &[PolyAddress], s: usize| (Part::of(v[2 * s]), Part::of(v[2 * s + 1]));
     for s in 0..NODE_PAIRS {
         let at = s as u64;
-        let zero = tuple(
-            f.cycle,
-            Part::constant(at),
-            Part::default(),
-            Part::default(),
-        );
-        b.leaf(true, &format!("send_cur{s}"), space, zero);
-        let root = tuple(
-            f.cycle,
-            Part::plus(last, at),
-            Part::of(o[2 * s]),
-            Part::of(o[2 * s + 1]),
-        );
+        for (name, slot) in [("cur", at), ("pending", PENDING + at)] {
+            let zero = tuple(
+                f.cycle,
+                Part::constant(slot),
+                Part::default(),
+                Part::default(),
+            );
+            b.leaf(true, &format!("send_{name}{s}"), space, zero);
+        }
+        let (x, y) = pair(&o, s);
+        let root = tuple(f.cycle, Part::plus(last, at), x, y);
         b.leaf(false, &format!("receive_o{s}"), space, root);
+        let (x, y) = pair(&pending, s);
+        let added = tuple(f.cycle, Part::plus(last, PENDING + at), x, y);
+        b.leaf(false, &format!("receive_pending{s}"), space, added);
     }
     let start = tuple(
         f.cycle,
@@ -156,7 +162,7 @@ fn frame_row() -> Builder {
         f.cycle,
         Part::plus(last, CONTROL),
         Part::of(end),
-        Part::of(pending),
+        Part::default(),
     );
     b.leaf(false, "receive_control", space, spent);
     b
@@ -170,11 +176,13 @@ fn frame_row() -> Builder {
 /// join_rule     is_join − is_join·is_hash       park_rule    park − park·live
 /// info_rule     info − (is_hash − is_join) − 2·is_join − 4·park − 8·left − 16·d
 ///               left a bit, d < 2^9
-/// pending_rule  pending_next − is_hash·(d + 1)
+/// hash_left_rule        hash_left − is_hash·left
 /// other{k}_rule block·(other_k − w_2k − 2^32·w_2k+1)              k < 8
 /// u{j}_rule     u_j − Σ_k M_E[j][k]·L_k − M_E[j][8 + k]·R_k        j < 16
-///               cur_k = o_k + [k = 0]·pending, L_k = cur_k + left·(other_k − cur_k),
+///               cur_k = o_k + pending_k, L_k = cur_k + left·(other_k − cur_k),
 ///               R_k = other_k + left·(cur_k − other_k)
+/// pending_next{k}_rule  pending_next_k − is_hash·cur_k − hash_left·(other_k − cur_k)
+///                       − [k = 0]·is_hash·(d + 1): is_hash·(L_k + [k = 0]·(d + 1))
 /// op            stamp/256 < 2^20
 /// park_at_rule  park_at − 256·is_join·arg
 /// join          (stamp − park_at)/256 − is_join < 2^20: i − 1 − arg on a JOIN, i elsewhere
@@ -182,9 +190,11 @@ fn frame_row() -> Builder {
 ///               4·cycle + FRAME_DELTA, their gaps in [0, 2^38)
 /// w{j}          the block's word j at arg + 4j likewise under block, and a word:
 ///               its two RANGE16 halfwords
-/// receive  (cycle, stamp + s, o_2s, o_2s+1), s < 4    (cycle, stamp + 8, op_ptr, pending)
+/// receive  (cycle, stamp + s, o_2s, o_2s+1), (cycle, stamp + 4 + s, pending_2s, pending_2s+1), s < 4
+///          (cycle, stamp + 8, op_ptr, 0)
 ///          under is_join (cycle, park_at + 12 + s, other_2s, other_2s+1)
-/// send     (cycle, stamp + 264, op_ptr + 8, pending_next)
+/// send     (cycle, stamp + 264, op_ptr + 8, 0)
+///          (cycle, stamp + 260 + s, pending_next_2s, pending_next_2s+1)
 ///          under is_load (cycle, stamp + 256 + s, other_2s, other_2s+1)
 ///          under is_hash (cycle, stamp + 16 + s, u_2s, u_2s+1), s < 8
 ///          under park    (cycle, stamp + 12 + s, cur_2s, cur_2s+1)
@@ -195,7 +205,12 @@ fn frame_row() -> Builder {
 /// `w_2k + 2^32·w_2k+1`, read mod `p`; each word is bounded as a load bounds
 /// the word it reads, as an advised block's words are otherwise unbounded.
 /// `u` is `M_E(cur ‖ other)` where `left` is 0 and `M_E(other ‖ cur)` where it
-/// is 1, degree 2. A JOIN's arg is the index of an op before it, `join`
+/// is 1, degree 2. A hash op's `pending_next` is its left child with `d + 1`
+/// added to lane 0, and a LOAD's zero: the rounds write the permutation's
+/// first eight lanes, and op `i + 1` adds the branch's feed-forward and its
+/// domain back, so a branch is `F(L ‖ R) + L + (d + 1, 0, …, 0)`, one
+/// compression with a leaf's and in a domain no leaf's is. `hash_left` keeps
+/// the rule degree 2. A JOIN's arg is the index of an op before it, `join`
 /// holding `i − 1 − arg` below `2^20`, as the executor holds it: without the
 /// bound a JOIN could take its own park, or a later op's. An arg the bound
 /// leaves within `2^20` of `p` reads a stamp no op sends. For a LOAD or a SIB
@@ -206,8 +221,10 @@ fn nodes() -> Builder {
     let cycle = b.mcol("cycle");
     let stamp = b.mcol("stamp");
     let op_ptr = b.mcol("op_ptr");
-    let pending = b.mcol("pending");
-    let pending_next = b.mcol("pending_next");
+    let pending: Vec<PolyAddress> = (0..8).map(|k| b.mcol(&format!("pending{k}"))).collect();
+    let pending_next: Vec<PolyAddress> = (0..8)
+        .map(|k| b.mcol(&format!("pending_next{k}")))
+        .collect();
     let is_hash = mask(&mut b, "is_hash");
     let is_join = mask(&mut b, "is_join");
     let park = mask(&mut b, "park");
@@ -238,24 +255,19 @@ fn nodes() -> Builder {
     let left = b.bit("left");
     let d = b.col("d");
     b.small("d", d, DEPTH_BITS);
+    let hash_left = b.col("hash_left");
     // LOAD 0, SIB 1, JOIN 2.
     let kind = (is_hash - is_join) + is_join * 2;
     b.gate(
         "info_rule",
         info - kind - park * PARK as u64 - left * LEFT as u64 - d * (1u64 << DEPTH_SHIFT),
     );
-    b.gate(
-        "pending_rule",
-        pending_next - is_hash * (d + crate::family::k(1)),
-    );
+    b.gate("hash_left_rule", hash_left - is_hash * left);
     let lane = |k: usize| read[2 * k] + read[2 * k + 1] * T32;
     for (k, x) in other.iter().enumerate() {
         b.gate(&format!("other{k}_rule"), (*x - lane(k)) * block);
     }
-    let cur = |k: usize| match k {
-        0 => o[0] + pending,
-        _ => Expr::from(o[k]),
-    };
+    let cur = |k: usize| o[k] + pending[k];
     for (j, uj) in u.iter().enumerate() {
         let mut e = Expr::from(*uj);
         for (k, x) in other.iter().enumerate() {
@@ -264,6 +276,14 @@ fn nodes() -> Builder {
             e = e - cur(k) * l - Expr::from(*x) * r - swap * (l - r);
         }
         b.gate(&format!("u{j}_rule"), e);
+    }
+    // The left child, `cur` or `other`, and the domain `d + 1` in lane 0.
+    for (k, next) in pending_next.iter().enumerate() {
+        let mut e = *next - is_hash * cur(k) - (other[k] - cur(k)) * hash_left;
+        if k == 0 {
+            e = e - is_hash * (d + crate::family::k(1));
+        }
+        b.gate(&format!("pending_next{k}_rule"), e);
     }
     b.bounded("op", Expr::from(stamp) * per_op(), OP_BITS);
     b.gate("park_at_rule", park_at - is_join * arg * SPAN);
@@ -301,12 +321,15 @@ fn nodes() -> Builder {
         let (x, y) = pair(&o, s);
         let state = tuple(cycle, Part::plus(stamp, s as u64), x, y);
         b.leaf(false, &format!("receive_o{s}"), space, state);
+        let (x, y) = pair(&pending, s);
+        let added = tuple(cycle, Part::plus(stamp, PENDING + s as u64), x, y);
+        b.leaf(false, &format!("receive_pending{s}"), space, added);
     }
     let control = tuple(
         cycle,
         Part::plus(stamp, CONTROL),
         Part::of(op_ptr),
-        Part::of(pending),
+        Part::default(),
     );
     b.leaf(false, "receive_control", space, control);
     for s in 0..NODE_PAIRS {
@@ -318,9 +341,14 @@ fn nodes() -> Builder {
         cycle,
         Part::plus(stamp, SPAN + CONTROL),
         Part::plus(op_ptr, 4 * delegation::mpt::OP as u64),
-        Part::of(pending_next),
+        Part::default(),
     );
     b.leaf(true, "send_control", space, next);
+    for s in 0..NODE_PAIRS {
+        let (x, y) = pair(&pending_next, s);
+        let added = tuple(cycle, Part::plus(stamp, SPAN + PENDING + s as u64), x, y);
+        b.leaf(true, &format!("send_pending{s}"), space, added);
+    }
     for s in 0..NODE_PAIRS {
         let (x, y) = pair(&other, s);
         let state = tuple(cycle, Part::plus(stamp, SPAN + s as u64), x, y);
@@ -331,19 +359,17 @@ fn nodes() -> Builder {
         let state = tuple(cycle, Part::plus(stamp, STRIDE + s as u64), x, y);
         b.leaf_under(is_hash, true, &format!("send_u{s}"), space, state);
     }
+    // A park is `cur`, each lane its raw lane and its `pending`.
+    let sum = |k: usize| Part {
+        columns: alloc::vec![o[k], pending[k]],
+        plus: 0,
+    };
     for s in 0..NODE_PAIRS {
-        let x = match s {
-            0 => Part {
-                columns: alloc::vec![o[0], pending],
-                plus: 0,
-            },
-            _ => Part::of(o[2 * s]),
-        };
         let parked = tuple(
             cycle,
             Part::plus(stamp, PARKED + s as u64),
-            x,
-            Part::of(o[2 * s + 1]),
+            sum(2 * s),
+            sum(2 * s + 1),
         );
         b.leaf_under(park, true, &format!("send_park{s}"), space, parked);
     }
