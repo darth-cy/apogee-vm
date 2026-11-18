@@ -10,7 +10,7 @@
  * An Apogee guest has no files and no streams. Its public input, advice and
  * journal are memory the proof binds — or, for advice, does not — and these
  * four calls are the whole of reaching them (docs/guest-program-manual.md §11,
- * docs/spec/public-values.md). The last nine calls are precompiles, each
+ * docs/spec/public-values.md). The last eight calls are precompiles, each
  * a circuit of its own (docs/spec/precompiles.md).
  *
  * The library also provides `memcpy`, `memmove`, `memset` and `memcmp`, the
@@ -56,17 +56,6 @@ void apogee_poseidon2_permute(uint64_t state[16]);
  * writes nothing when d = 0 or the quotient is not below 2^256. */
 int32_t apogee_mul_div_u256(const uint64_t a[4], const uint64_t b[4], const uint64_t d[4],
                             uint64_t q[4], uint64_t r[4]);
-
-/* The root of the Merkle path from the 8 lanes at `leaf` at `slot` up `depth`
- * siblings at `siblings`, 64 bytes each, level 0's first, by the precompile,
- * written to `root`. Level L's node is apogee_poseidon2_permute of the node
- * below and its sibling, the node below first where bit L of `slot` is 0,
- * truncated to its first 8 lanes. The siblings may be anywhere, the advice
- * included, each lane read mod p. Returns 0, or 1 and writes nothing when
- * depth is outside 16..32, slot is not below 2^depth, a leaf lane is not below
- * p, or `siblings` is not 4-aligned. */
-int32_t apogee_merkle_root(uint32_t slot, uint32_t depth, const uint64_t leaf[8],
-                           const uint8_t *siblings, uint64_t root[8]);
 
 /* ||s1||^2 by the precompile, s1 = (c - s2*h) mod (q, x^512 + 1), q = 12289,
  * each coefficient centered to [-6144, 6144] and every coefficient of h, s2

@@ -171,9 +171,6 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
         family::POSEIDON2 => Some(poseidon2),
         family::POSEIDON2_ROUNDS => Some(poseidon2_rounds),
         family::MUL_DIV_U256 => Some(mul_div_u256),
-        family::MERKLE_ROOT => Some(merkle_root),
-        family::MERKLE_LEVELS => Some(merkle_levels),
-        family::MERKLE_ROUNDS => Some(merkle_rounds),
         family::FALCON => Some(falcon),
         family::FALCON_SPLIT => Some(falcon_split),
         family::FALCON_PRODUCT => Some(falcon_product),
@@ -360,12 +357,6 @@ fn poseidon2_rounds(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPo
     rounds(src, family::POSEIDON2_ROUNDS)
 }
 
-/// `MERKLE_ROUNDS`, `docs/spec/precompiles.md` §6: a level's permutation,
-/// boundary `16L + 1` to `16(L + 1)`, its last round writing the node alone.
-fn merkle_rounds(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
-    rounds(src, family::MERKLE_ROUNDS)
-}
-
 /// `MPT_ROUNDS`, `constraints::mpt`: a hash op's permutation, boundary 1 to
 /// 16 of its op, its last round writing op `i + 1`'s raw lanes alone, from
 /// the op's entry as `MPT_NODES` holds it.
@@ -374,20 +365,17 @@ fn mpt_rounds(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, 
 }
 
 /// The rounds of one permutation an entry (`constraints::poseidon2::rounds`):
-/// a `POSEIDON2` call's frame lanes, a Merkle level's ordered pair or a trie
-/// hash op's two children, through `M_E` and then sixteen rows, row `k` at
-/// `first + stride·k`, the last idle.
+/// a `POSEIDON2` call's frame lanes or a trie hash op's two children, through
+/// `M_E` and then sixteen rows, row `k` at `first + stride·k`, the last idle.
 fn rounds(src: &ShardSource, fam: FamilyId) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
-    use constraints::merkle::{LEVEL, STRIDE};
     use constraints::poseidon2::{internal, round_constant, stamp, PARTIAL, ROWS};
     use transcript::WIDTH;
     let calls = *src.invocations(fam)?;
-    let level = fam == family::MERKLE_ROUNDS;
     let op = fam == family::MPT_ROUNDS;
     let mut w = Witness::new(fam, ROWS * calls.len());
     let [live, cycle, stamp_col, ext, int] =
         ["live", "cycle", "stamp", "ext", "int"].map(|c| w.col(c));
-    let keep = (level || op).then(|| w.col("keep"));
+    let keep = op.then(|| w.col("keep"));
     let op_c0 = op.then(|| w.col("op_c0"));
     let kinds: Vec<usize> = (0..ROWS - 1).map(|k| w.col(&format!("row{k}"))).collect();
     let lanes = |prefix: &str, w: &mut Witness| -> Vec<usize> {
@@ -407,7 +395,6 @@ fn rounds(src: &ShardSource, fam: FamilyId) -> Result<Vec<(PolyAddress, Multilin
         .collect();
     for c in 0..calls.len() {
         let input: [Fp; WIDTH] = match fam {
-            family::MERKLE_ROUNDS => level_input(&calls, c),
             family::MPT_ROUNDS => {
                 let hash = MptOp::of(&calls, c)?;
                 if hash.kind == delegation::mpt::LOAD {
@@ -418,9 +405,8 @@ fn rounds(src: &ShardSource, fam: FamilyId) -> Result<Vec<(PolyAddress, Multilin
             }
             _ => std::array::from_fn(|i| lane(&calls, i, c, false)),
         };
-        // A level's and a hash op's index, carried at 9 by both.
+        // A hash op's index, carried at 9.
         let at = |k: usize| match fam {
-            family::MERKLE_ROUNDS => LEVEL * calls.carry(9)[c] + STRIDE * (k as u64 + 1),
             family::MPT_ROUNDS => {
                 constraints::mpt::SPAN * calls.carry(9)[c]
                     + constraints::mpt::STRIDE * (k as u64 + 1)
@@ -477,115 +463,6 @@ fn rounds(src: &ShardSource, fam: FamilyId) -> Result<Vec<(PolyAddress, Multilin
         let mut out = input;
         transcript::poseidon2_permute(&mut out);
         assert_eq!(state, out, "the rounds' last state is the permutation");
-    }
-    Ok(w.finish(src.height))
-}
-
-/// Level entry `r`'s permutation input: its node and its sibling, the node
-/// on the left where the slot's bit is 0 (`constraints::merkle::levels`).
-fn level_input(calls: &FrameSlice, r: usize) -> [Fp; 16] {
-    let node: [Fp; 8] = std::array::from_fn(|i| Fp::from_u64(calls.carry(i)[r]));
-    let sibling: [Fp; 8] = std::array::from_fn(|i| lane(calls, i, r, false));
-    let (left, right) = match calls.carry(8)[r] & 1 {
-        0 => (node, sibling),
-        _ => (sibling, node),
-    };
-    std::array::from_fn(|i| if i < 8 { left[i] } else { right[i - 8] })
-}
-
-/// `MERKLE_ROOT`, `docs/spec/precompiles.md` §6: the frame, the root's
-/// boundary and the spent control's sibling address, the leaf's lanes, and
-/// the root's, canonical.
-fn merkle_root(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
-    use constants::delegation::merkle::{DEPTH, SIBLING, SIBLINGS};
-    use constraints::merkle::LEVEL;
-    let fam = family::MERKLE_ROOT;
-    let (calls, mut w) = frame_fill(src, fam)?;
-    let [last, end] = ["last", "end"].map(|c| w.col(c));
-    let n: Vec<usize> = (0..8).map(|i| w.fcol(&format!("n{i}"))).collect();
-    let o: Vec<usize> = (0..8).map(|l| w.col(&format!("o{l}"))).collect();
-    let halves: Vec<[usize; 4]> = (0..8)
-        .map(|l| canonical_columns(&mut w, &format!("o{l}")))
-        .collect();
-    for r in 0..calls.len() {
-        let depth = frame_word(&calls, DEPTH, r, false);
-        let siblings = frame_word(&calls, SIBLINGS, r, false);
-        w.put(last, r, LEVEL * depth);
-        w.put(end, r, siblings + 4 * SIBLING as u64 * depth);
-        for (i, c) in n.iter().enumerate() {
-            w.put_fp(*c, r, lane(&calls, i, r, false));
-        }
-        for l in 0..8 {
-            let (lo_w, hi_w) = (
-                frame_word(&calls, 2 * l, r, true),
-                frame_word(&calls, 2 * l + 1, r, true),
-            );
-            w.put(o[l], r, lo_w | hi_w << 32);
-            canonical(&mut w, halves[l], r, lo_w, hi_w);
-        }
-    }
-    Ok(w.finish(src.height))
-}
-
-/// `MERKLE_LEVELS`, `docs/spec/precompiles.md` §6: one row a level, from its
-/// entry's carry — the node, the slot's bits not yet taken, the level — and
-/// its sibling's words, each with its high halfword.
-fn merkle_levels(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
-    use constants::delegation::merkle::SIBLING;
-    use constraints::merkle::LEVEL;
-    let fam = family::MERKLE_LEVELS;
-    let calls = *src.invocations(fam)?;
-    let mut w = Witness::new(fam, calls.len());
-    let [live, cycle, stamp, next, rest, rest_next, ptr, bit] = [
-        "live",
-        "cycle",
-        "stamp",
-        "next",
-        "rest",
-        "rest_next",
-        "ptr",
-        "bit",
-    ]
-    .map(|c| w.col(c));
-    let words: Vec<([usize; 2], [usize; 2], usize)> = (0..SIBLING)
-        .map(|j| {
-            let cols = [
-                w.col(&format!("w{j}_read_ts")),
-                w.col(&format!("w{j}_read_value")),
-            ];
-            let chunks = [0, 1].map(|c| w.col(&format!("w{j}_gap_c{c}")));
-            (cols, chunks, w.col(&format!("w{j}_h16")))
-        })
-        .collect();
-    let n: Vec<usize> = (0..8).map(|i| w.fcol(&format!("n{i}"))).collect();
-    let u: Vec<usize> = (0..16).map(|j| w.fcol(&format!("u{j}"))).collect();
-    for r in 0..calls.len() {
-        let (left, level) = (calls.carry(8)[r], calls.carry(9)[r]);
-        w.row(
-            r,
-            &[
-                (live, 1),
-                (cycle, calls.cycles()[r]),
-                (stamp, LEVEL * level),
-                (next, LEVEL * (level + 1)),
-                (rest, left),
-                (rest_next, left >> 1),
-                (ptr, calls.bases()[r] as u64),
-                (bit, left & 1),
-            ],
-        );
-        for (j, (cols, chunks, h16)) in words.iter().enumerate() {
-            access(&mut w, *cols, *chunks, &calls, j, r);
-            w.put(*h16, r, calls.word(j).read_value[r] >> 16);
-        }
-        for (i, c) in n.iter().enumerate() {
-            w.put_fp(*c, r, Fp::from_u64(calls.carry(i)[r]));
-        }
-        let mut x = level_input(&calls, r);
-        transcript::external(&mut x);
-        for (j, c) in u.iter().enumerate() {
-            w.put_fp(*c, r, x[j]);
-        }
     }
     Ok(w.finish(src.height))
 }

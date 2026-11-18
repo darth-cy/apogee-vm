@@ -17,9 +17,10 @@
 //! `docs/spec/public-values.md` specifies all three.
 //!
 //! The ecall ABI is [`exit`] and the delegation calls, each a shim over one
-//! frame: [`poseidon2_permute`], [`merkle_root`], [`falcon512`]'s decoder,
-//! sampler and [`falcon512::s1_norm`], [`mpt_eval`], and [`U256`]'s divisions. An ecall carries its number in `a7` and its
-//! argument in `a0`; `docs/spec/ecall-abi.md` is the table, every number
+//! frame: [`poseidon2_permute`], [`falcon512`]'s decoder, sampler and
+//! [`falcon512::s1_norm`], [`mpt_eval`], which [`mpt`]'s trie computes its
+//! roots by, and [`U256`]'s divisions. An ecall carries its number in `a7` and
+//! its argument in `a0`; `docs/spec/ecall-abi.md` is the table, every number
 //! [`constants::ecall`]'s.
 //!
 //! # `unsafe`, and global state
@@ -448,9 +449,6 @@ static POSEIDON2: u32 = ecall::POSEIDON2;
 #[link_section = ".apogee.delegations.mul_div_u256"]
 static MUL_DIV_U256: u32 = ecall::MUL_DIV_U256;
 
-#[link_section = ".apogee.delegations.merkle_root"]
-static MERKLE_ROOT: u32 = ecall::MERKLE_ROOT;
-
 #[link_section = ".apogee.delegations.falcon512"]
 static FALCON512: u32 = ecall::FALCON512;
 
@@ -511,18 +509,10 @@ impl Digest {
     pub const fn lanes(&self) -> &[u64; 8] {
         &self.0
     }
-
-    /// `path` as [`merkle_root`] takes it, 64 bytes a digest: a path the guest
-    /// holds in its own memory.
-    pub fn bytes(path: &[Digest]) -> &[u8] {
-        // SAFETY: a `Digest` is `[u64; 8]`, `repr(transparent)`: 64 bytes, no
-        // padding, 8-aligned.
-        unsafe { core::slice::from_raw_parts(path.as_ptr().cast(), 64 * path.len()) }
-    }
 }
 
-/// A Merkle node: the first 8 lanes of the permutation of `left ‖ right`,
-/// truncated with no feed-forward.
+/// Two nodes compressed to one: the first 8 lanes of the permutation of
+/// `left ‖ right`, truncated with no feed-forward.
 pub fn poseidon2_compress(left: &Digest, right: &Digest) -> Digest {
     let mut state = [0u64; 16];
     state[..8].copy_from_slice(&left.0);
@@ -531,62 +521,6 @@ pub fn poseidon2_compress(left: &Digest, right: &Digest) -> Digest {
     let mut out = [0u64; 8];
     out.copy_from_slice(&state[..8]);
     Digest(out)
-}
-
-/// The root of the Merkle path from `leaf` at `slot` up `siblings`, by the
-/// precompile (`docs/spec/precompiles.md` §6): 64 bytes a sibling, level 0's
-/// first, each eight little-endian lanes read mod `p`. Level `L`'s node is
-/// [`poseidon2_compress`] of the node below and its sibling, the node below on
-/// the left where bit `L` of `slot` is 0, so this is that fold's root in one
-/// call. The depth is `siblings.len() / 64`.
-///
-/// The siblings may be anywhere a load reaches, the advice included, so a
-/// proof advised is hashed in place. Panics unless the depth is in `16..=32`,
-/// `slot` is below `2^depth` and `siblings` is word-aligned whole siblings.
-pub fn merkle_root(slot: u32, leaf: &Digest, siblings: &[u8]) -> Digest {
-    let depth = siblings.len() / 64;
-    assert!(
-        siblings.len().is_multiple_of(64) && merkle_path(slot, depth, siblings.as_ptr()),
-        "merkle_root: 16 to 32 word-aligned siblings, and a slot below 2^depth"
-    );
-    let mut frame = MerkleFrame {
-        lanes: leaf.0,
-        slot,
-        depth: depth as u32,
-        siblings: siblings.as_ptr() as u32,
-    };
-    // SAFETY: the frame is 19 words, 8-aligned, the call's whole frame, below
-    // the advice region on the stack; the siblings are a borrow apart from it,
-    // readable for `64·depth` bytes.
-    unsafe { delegate(&MERKLE_ROOT, (&mut frame as *mut MerkleFrame).cast()) };
-    Digest(frame.lanes)
-}
-
-/// `MERKLE_ROOT`'s frame, word for word `constants::delegation::merkle`'s.
-#[repr(C)]
-struct MerkleFrame {
-    lanes: [u64; 8],
-    slot: u32,
-    depth: u32,
-    siblings: u32,
-}
-
-const _: () = {
-    use constants::delegation::merkle as m;
-    assert!(core::mem::offset_of!(MerkleFrame, slot) == 4 * m::SLOT);
-    assert!(core::mem::offset_of!(MerkleFrame, depth) == 4 * m::DEPTH);
-    assert!(core::mem::offset_of!(MerkleFrame, siblings) == 4 * m::SIBLINGS);
-    assert!(m::SIBLINGS + 1 == m::FRAME && 2 * 8 == m::LANES);
-};
-
-/// Whether a path of `depth` siblings at `siblings` from `slot` is one the
-/// call answers: the depth in `16..=32`, the slot below `2^depth`, the
-/// siblings word-aligned.
-fn merkle_path(slot: u32, depth: usize, siblings: *const u8) -> bool {
-    use constants::delegation::merkle::{MAX_DEPTH, MIN_DEPTH};
-    (MIN_DEPTH as usize..=MAX_DEPTH as usize).contains(&depth)
-        && (slot as u64) >> depth == 0
-        && (siblings as usize).is_multiple_of(4)
 }
 
 /// The value of the op program `ops` by the precompile
@@ -730,33 +664,6 @@ pub extern "C" fn apogee_exit(code: i32) -> ! {
 #[no_mangle]
 pub unsafe extern "C" fn apogee_poseidon2_permute(state: *mut u64) {
     poseidon2_permute(&mut *state.cast::<[u64; 16]>())
-}
-
-/// `merkle_root()` over `depth` siblings at `siblings`, 64 bytes each, from
-/// the 8 lanes at `leaf`: the root written to `root`. Returns 0, or 1 and
-/// writes nothing when the depth is outside `16..=32`, `slot` is not below
-/// `2^depth`, a leaf lane is not below `p`, or `siblings` is not word-aligned.
-///
-/// # Safety
-/// `leaf` is valid for reads and `root` for writes of 8 `uint64_t`, and
-/// `siblings` for reads of `64·depth` bytes.
-#[no_mangle]
-pub unsafe extern "C" fn apogee_merkle_root(
-    slot: u32,
-    depth: u32,
-    leaf: *const u64,
-    siblings: *const u8,
-    root: *mut u64,
-) -> i32 {
-    let depth = depth as usize;
-    match Digest::new(*leaf.cast::<[u64; 8]>()) {
-        Some(leaf) if merkle_path(slot, depth, siblings) => {
-            let path = core::slice::from_raw_parts(siblings, 64 * depth);
-            *root.cast::<[u64; 8]>() = merkle_root(slot, &leaf, path).0;
-            0
-        }
-        _ => 1,
-    }
 }
 
 /// `falcon512::s1_norm()` over the 512 coefficients at each of `h`, `s2` and

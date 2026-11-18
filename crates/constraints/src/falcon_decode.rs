@@ -187,7 +187,7 @@ const _: () = {
     assert!(most == 2047 && (N as u64) * most * most < 1 << 31);
     assert!(SIGNATURE_BITS < 1 << 16);
     // The registry's words an entry and rows a call.
-    let t = &constants::delegation::TYPES[10];
+    let t = &constants::delegation::TYPES[7];
     assert!(t.0 == family::FALCON_DECODE && t.1 == ecall::FALCON512_DECODE);
     assert!(t.2 == WORDS && t.3 == ROWS as u32 && matches!(t.4, Per::Decode));
 };

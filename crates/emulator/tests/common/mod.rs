@@ -112,18 +112,13 @@ pub fn input_of(name: &str) -> Vec<u8> {
         // Reads nothing: its exit status is its result. `shards` is the same
         // shape — it counts its own checks — and `tests/streaming.rs` streams it.
         "addsub" | "control" | "alu" | "mem" | "shards" => Vec::new(),
-        // One leaf of zeros, a Merkle root over one leaf being the leaf, a
-        // path of the fewest siblings, zeros, from slot 0, and 126 runs: the
-        // last path straddles a round shard. Then Falcon-512's three arrays
-        // of zeros and 1,024 more calls, more than a `FALCON_SPLIT` shard
-        // holds at `2^16`, and no verification (`guests/precompiles`).
+        // One leaf of zeros, the root over one leaf being the leaf. Then
+        // Falcon-512's three arrays of zeros and 1,024 more calls, more than a
+        // `FALCON_SPLIT` shard holds at `2^16`, and no verification
+        // (`guests/precompiles`).
         "precompiles" => [
             1u32.to_le_bytes().as_slice(),
             &[0u8; 64],
-            &0u32.to_le_bytes(),
-            &16u32.to_le_bytes(),
-            &[0u8; 64 * 16],
-            &126u32.to_le_bytes(),
             &[0u8; 3 * 1024],
             &1024u32.to_le_bytes(),
             &0u32.to_le_bytes(),

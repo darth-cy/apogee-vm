@@ -135,9 +135,9 @@ fn whole(
 #[test]
 fn the_chunks_are_the_planned_shards_row_for_row() {
     let mut split_families = 0;
-    // The level and op families' chunks that begin inside a path or a
-    // program, by family: a continuation the carry alone describes.
-    let mut mid_path: BTreeMap<FamilyId, u32> = BTreeMap::new();
+    // The op families' chunks that begin inside a program, by family: a
+    // continuation the carry alone describes.
+    let mut mid_program: BTreeMap<FamilyId, u32> = BTreeMap::new();
     // Each op family's last entry handed over: its cycle and its op index.
     let mut last: BTreeMap<FamilyId, (u64, u64)> = BTreeMap::new();
     let mut total_stops = 0;
@@ -228,24 +228,21 @@ fn the_chunks_are_the_planned_shards_row_for_row() {
                 for (got, want) in calls.carry.iter().zip(&buffer.carry) {
                     assert_eq!(got[..], want[start..start + calls.len()], "{name}: a carry");
                 }
-                // Carry value 9 is a level's index and an op's
-                // (`delegation::CARRY`, `delegation::mpt::CARRY`). A chunk
-                // begins inside a call where its first entry's is past 0, or
-                // for a hash op's, which a LOAD before it has none of, where
-                // the chunk before ended in the same call. An op chunk's then
-                // continues that one: the next op, or a later hash op.
+                // Carry value 9 is an op's index (`delegation::mpt::CARRY`). A
+                // chunk begins inside a call where its first entry's is past 0,
+                // or for a hash op's, which a LOAD before it has none of, where
+                // the chunk before ended in the same call. It then continues
+                // that one: the next op, or a later hash op.
                 let kind = program::delegation_per(chunk.family);
                 let index = |e: usize| calls.carry[9][e];
                 let before = last.get(&chunk.family).copied();
                 let mid = match kind {
-                    Per::Level | Per::Op => index(0) > 0,
+                    Per::Op => index(0) > 0,
                     Per::Hash => before.is_some_and(|(cycle, _)| cycle == calls.cycle[0]),
                     _ => false,
                 };
                 if mid {
-                    *mid_path.entry(chunk.family).or_default() += 1;
-                }
-                if mid && kind != Per::Level {
+                    *mid_program.entry(chunk.family).or_default() += 1;
                     let (cycle, op) = before.expect("a chunk before");
                     assert_eq!(calls.cycle[0], cycle, "{name}: a program's ops in one call");
                     match kind {
@@ -288,19 +285,12 @@ fn the_chunks_are_the_planned_shards_row_for_row() {
     // At least one family is cut into more than one shard: a comparison over
     // single-shard families alone would never test the index arithmetic.
     assert!(split_families >= 1, "{split_families} families cut in two");
-    // And a path crosses a shard of each level family: `precompiles`'
-    // depth-20 path is levels 4,080 to 4,099, a level shard holding 4,096 and
-    // a round shard 256 at `2^12`. And a program a shard of each op family:
-    // the long one's ops are 16 to 6,166, a node shard holding 4,096 and a
-    // round shard 256 hash ops.
-    for family in [
-        constants::family::MERKLE_LEVELS,
-        constants::family::MERKLE_ROUNDS,
-        constants::family::MPT_NODES,
-        constants::family::MPT_ROUNDS,
-    ] {
+    // And a program crosses a shard of each op family: `precompiles`' long
+    // one's ops are 16 to 6,166, a node shard holding 4,096 and a round shard
+    // 256 hash ops at `2^12`.
+    for family in [constants::family::MPT_NODES, constants::family::MPT_ROUNDS] {
         assert!(
-            mid_path.get(&family) >= Some(&1),
+            mid_program.get(&family) >= Some(&1),
             "a {} shard begins inside a call",
             family_name(family)
         );

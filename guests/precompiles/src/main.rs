@@ -2,31 +2,25 @@
 #![no_main]
 //! The precompiles and the SDK's `U256`, each at the edges a test knows the
 //! answer to without them: the Poseidon2 permutation of the generator's own
-//! input and of sixteen lanes at `2^64 − 1`, a Merkle root over the leaves the
-//! public input carries, `mul_div` where its answer is hand-derived or a
-//! `u128`'s, overflowing, by zero, and at `U256::MAX`, and Merkle paths by
-//! `merkle_root`, the first two each checked against the fold
-//! `poseidon2_compress` gives, then a run of them long enough that a path's
-//! levels straddle a shard; Falcon-512's lattice check of the three arrays the
-//! public input carries, once and then their rotations in turn; HashToPoint's
-//! sampler over lanes at its edges; trie roots by `mpt_eval` over op programs
-//! written by hand, each checked against the trie's hashes by
-//! `poseidon2_compress`, some of the blocks advised, then a program long
-//! enough that its ops straddle a shard, checked against the permutation;
-//! tables by the SDK's trie, each opened from the proof the advice carries,
-//! held to its root, edited by a batch and its root journaled; and Falcon-512
-//! verification of the keys, signatures, messages and contexts it carries,
-//! the keys and the signatures in the SDK's advised forms.
+//! input and of sixteen lanes at `2^64 − 1`, the root of the leaves the public
+//! input carries, compressed pairwise, and `mul_div` where its answer is
+//! hand-derived or a `u128`'s, overflowing, by zero, and at `U256::MAX`;
+//! Falcon-512's lattice check of the three arrays the public input carries,
+//! once and then their rotations in turn; HashToPoint's sampler over lanes at
+//! its edges; trie roots by `mpt_eval` over op programs written by hand, each
+//! checked against the trie's hashes by `poseidon2_compress`, some of the
+//! blocks advised, then a program long enough that its ops straddle a shard,
+//! checked against the permutation; tables by the SDK's trie, each opened from
+//! the proof the advice carries, held to its root, edited by a batch and its
+//! root journaled; and Falcon-512 verification of the keys, signatures,
+//! messages and contexts it carries, the keys and the signatures in the SDK's
+//! advised forms.
 //!
 //! # The public input
 //!
 //! ```text
 //!           0..4     n               u32 LE, a power of two, at most 16
 //!           4..      n leaves        8 lanes of u64 LE each, each below p
-//!   then    slot     u32 LE          below 2^depth
-//!           depth    u32 LE          16..=32
-//!           path     depth siblings  64 bytes each, each lane below p
-//!   then    runs     u32 LE          depth-32 paths before the last, depth-20 one
 //!   then    h        512 u16 LE      Falcon-512's arrays, any halfwords, each
 //!           s2       512 u16 LE      read mod q
 //!           c        512 u16 LE
@@ -80,18 +74,10 @@
 //! ```text
 //!   permute [0, 1, …, 15]           16 u64
 //!   permute [2^64 − 1; 16]          16 u64, every lane read mod p
-//!   the Merkle root                 8 u64, `poseidon2_compress` pairwise
+//!   the leaves' root                8 u64, `poseidon2_compress` pairwise
 //!   a chain                         16 u64: [root, 0^8] permuted CHAIN times
 //!   for each mul_div case below     a status byte (1 answered, 0 refused),
 //!                                   then q and r, 32 bytes LE each, zero if refused
-//!   merkle_root                     8 u64: leaf 0 at slot up the input's path,
-//!                                   its siblings read in place from the input
-//!   merkle_root                     8 u64: leaf 0 at slot 2^32 − 1, depth 32, up
-//!                                   the leaves in turn, from the guest's memory
-//!   merkle_root                     8 u64: path i < runs from the root before it,
-//!                                   at slot i, up the same 32 siblings; then a
-//!                                   depth-20 one from the last, at slot 0x5a5a5,
-//!                                   up their first 20
 //!   falcon512::s1_norm              u64: ‖s1‖² of the input's h, s2 and c
 //!   falcon512::s1_norm              u64: the sum of more calls', call k's
 //!                                   arrays the input's rotated k times: (s2,
@@ -119,10 +105,8 @@
 //!                                   the decode call's refusal
 //! ```
 //!
-//! With 126 runs the depth-20 path is levels 4,080 to 4,099: it straddles
-//! level 4,096, where a `MERKLE_ROUNDS` shard ends at `2^12` rows and at
-//! `2^16`. With 1,024 more `s1_norm` calls the Falcon calls are more than the
-//! 1,024 a `FALCON_SPLIT` shard holds, so a streaming run hands one over
+//! With 1,024 more `s1_norm` calls the Falcon calls are more than the 1,024 a
+//! `FALCON_SPLIT` shard holds, so a streaming run hands one over
 //! mid-execution. The programs before the long one are 16 ops, 7 of them
 //! hashing, so with 4,100 steps the long program's 6,151 ops straddle the
 //! 4,096th, where an `MPT_NODES` shard ends at `2^12` rows, and its hash ops
@@ -134,7 +118,7 @@ extern crate alloc;
 use alloc::vec;
 
 use guest_sdk::falcon512::{self, Poly, PublicKey, KEY_BYTES};
-use guest_sdk::{merkle_root, mpt, mpt_eval, poseidon2_compress, poseidon2_permute, Digest, U256};
+use guest_sdk::{mpt, mpt_eval, poseidon2_compress, poseidon2_permute, Digest, U256};
 
 guest_sdk::entry!(main);
 
@@ -227,38 +211,8 @@ fn main() {
         }
     }
 
-    let at_path = 4 + 64 * n;
     let word = |at: usize| u32::from_le_bytes(input[at..at + 4].try_into().expect("a word"));
-    let (slot, depth) = (word(at_path), word(at_path + 4) as usize);
-    let path = &input[at_path + 8..at_path + 8 + 64 * depth];
-    let root = merkle_root(slot, &leaves[0], path);
-    let mut node = leaves[0];
-    for (level, sibling) in path.chunks(64).enumerate() {
-        node = fold(slot, level, &node, &digest(sibling));
-    }
-    assert!(root == node, "precompiles: merkle_root is not the fold");
-    root.lanes().iter().for_each(|l| put(&l.to_le_bytes()));
-
-    let ram: [Digest; 32] = core::array::from_fn(|l| leaves[l % n]);
-    let root = merkle_root(u32::MAX, &leaves[0], Digest::bytes(&ram));
-    let node = ram
-        .iter()
-        .enumerate()
-        .fold(leaves[0], |node, (level, sibling)| {
-            fold(u32::MAX, level, &node, sibling)
-        });
-    assert!(root == node, "precompiles: merkle_root is not the fold");
-    root.lanes().iter().for_each(|l| put(&l.to_le_bytes()));
-
-    let runs = word(at_path + 8 + 64 * depth);
-    let mut node = leaves[0];
-    for i in 0..runs {
-        node = merkle_root(i, &node, Digest::bytes(&ram));
-    }
-    let root = merkle_root(0x5a5a5, &node, &Digest::bytes(&ram)[..64 * 20]);
-    root.lanes().iter().for_each(|l| put(&l.to_le_bytes()));
-
-    let at_falcon = at_path + 12 + 64 * depth;
+    let at_falcon = 4 + 64 * n;
     let poly = |i: usize| {
         let at = at_falcon + 1024 * i;
         Poly(core::array::from_fn(|t| {
@@ -295,6 +249,7 @@ fn main() {
     // branch whose `pending` it carries; then the advice's block 0 loaded and
     // its block 1 a sibling.
     let address = |d: &Digest| d as *const Digest as u32;
+    let ram: [Digest; 4] = core::array::from_fn(|l| leaves[l % n]);
     let (a, b, c, d) = (&ram[0], &ram[1], &ram[2], &ram[3]);
     let advice = guest_sdk::advice();
     let advised = |at: usize| u32::from_le_bytes(advice[at..at + 4].try_into().expect("a word"));
@@ -462,14 +417,6 @@ fn digest(b: &[u8]) -> Digest {
         u64::from_le_bytes(b[8 * j..8 * j + 8].try_into().expect("a lane"))
     });
     Digest::new(lanes).expect("precompiles: a lane is not below p")
-}
-
-/// Level `level` of a path from `slot`: the node on the left where its bit is 0.
-fn fold(slot: u32, level: usize, node: &Digest, sibling: &Digest) -> Digest {
-    match slot >> level & 1 {
-        0 => poseidon2_compress(node, sibling),
-        _ => poseidon2_compress(sibling, node),
-    }
 }
 
 /// An op's info word: its kind, its park and left bits, and its depth `d`.

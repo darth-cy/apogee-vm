@@ -448,8 +448,8 @@ pub fn frame_under(
 /// `4·cycle + FRAME_DELTA`, `docs/spec/precompiles.md` §1: `<name>_gap`, the
 /// gap below it in `[0, 2^38)`, the read leaf `(RAM, addr, read_ts, read)` and
 /// the write leaf `(RAM, addr, 4·cycle + FRAME_DELTA, write)`. `cycle` is a
-/// requesting ecall's: a frame's through its anchor, a Merkle level's through
-/// its call's state (`docs/spec/memory.md` §4.2).
+/// requesting ecall's: a frame's through its anchor, a trie op's through its
+/// call's state (`docs/spec/memory.md` §4.2).
 pub fn access(
     b: &mut Builder,
     name: &str,

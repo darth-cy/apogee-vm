@@ -1,17 +1,16 @@
-//! Six of the seven precompiles over a real execution, `guests/precompiles`
+//! Five of the six precompiles over a real execution, `guests/precompiles`
 //! built from source, in ordinary CI and without a proof
 //! (`docs/spec/precompiles.md`); its input verifies no signature, so
 //! `FALCON512_DECODE` is `crates/checker/tests/falcon_decode.rs`':
 //!
 //! - **the journal is the host's**: the Poseidon2 permutation of the
-//!   generator's own input and of lanes at `2^64 − 1`, read mod `p`, a Merkle
-//!   root, and three `merkle_root` paths, the last after a run of 126, each by
-//!   `transcript`; `mul_div` at edges whose answers are hand-derived or a
-//!   `u128`'s; Falcon-512's `‖s1‖²` of three arrays and of their rotations,
-//!   each by the host's own negacyclic product; HashToPoint's sampler's
-//!   digits of lanes at its edges, each by division; and the roots of seven
-//!   trie programs, advised blocks read mod `p` among them, and of a long one
-//!   of 4,100 hash ops, each by the trie's branch formula;
+//!   generator's own input and of lanes at `2^64 − 1`, read mod `p`, and the
+//!   leaves' root, each by `transcript`; `mul_div` at edges whose answers are
+//!   hand-derived or a `u128`'s; Falcon-512's `‖s1‖²` of three arrays and of
+//!   their rotations, each by the host's own negacyclic product; HashToPoint's
+//!   sampler's digits of lanes at its edges, each by division; and the roots
+//!   of seven trie programs, advised blocks read mod `p` among them, and of a
+//!   long one of 4,100 hash ops, each by the trie's branch formula;
 //! - **every precompile circuit keeps every rule**, by `constraints` and, with
 //!   no shared code, by this crate;
 //! - **the fill holds**: every live row and the padding after it satisfy every
@@ -22,16 +21,15 @@
 //!   refused by its row alone;
 //! - **the statement reconciles**: every shard forwarded, and the roots of all
 //!   of them and the boundary multiply out, the anchors and the Poseidon2,
-//!   Merkle, Falcon and trie state included. A round row moved to another
-//!   call's cycle keeps every row-local relation and does not, nor does a
-//!   level taking the other order, nor a path's or a trie program's
-//!   continuation one off where it crosses a round shard, nor a JOIN taking a
-//!   value no op parked, nor a Falcon product row claiming another residue,
-//!   nor a split row another column;
-//! - **a call crosses a shard**: the round shard a path or a program
-//!   continues into fills from its streamed chunk exactly as from the archive;
-//! - **a sibling word and a block word are words**: one no load could read is
-//!   refused by its bound alone;
+//!   Falcon and trie state included. A round row moved to another call's
+//!   cycle keeps every row-local relation and does not, nor does a trie
+//!   program's continuation one off where it crosses a round shard, nor a JOIN
+//!   taking a value no op parked, nor a Falcon product row claiming another
+//!   residue, nor a split row another column;
+//! - **a call crosses a shard**: the round shard a program continues into
+//!   fills from its streamed chunk exactly as from the archive;
+//! - **a block word is a word**: one no load could read is refused by its
+//!   bound alone;
 //! - **a sampled lane is below `T`**: one at `T` and one at `2^64 − 1`, each
 //!   with digits that keep its identity, are refused by a bound alone.
 
@@ -55,13 +53,10 @@ use poly::{MultilinearPoly, PolyBacking};
 use prover::{Program, ShardRows, ShardSource};
 use trace::{IoStreams, PhaseTiming, TraceArchive};
 
-const DELEGATIONS: [u32; 13] = [
+const DELEGATIONS: [u32; 10] = [
     family::POSEIDON2,
     family::POSEIDON2_ROUNDS,
     family::MUL_DIV_U256,
-    family::MERKLE_ROOT,
-    family::MERKLE_LEVELS,
-    family::MERKLE_ROUNDS,
     family::FALCON,
     family::FALCON_SPLIT,
     family::FALCON_PRODUCT,
@@ -85,24 +80,6 @@ fn leaf(i: usize, j: usize) -> u64 {
 }
 
 const LEAVES: usize = 8;
-
-/// The input's path: its slot, every bit of it taken, and its depth, the
-/// least a path may have.
-const SLOT: u32 = 0xb5a3;
-const DEPTH: usize = 16;
-
-/// The depth-32 paths before the guest's depth-20 one: its levels are then
-/// 4,080 to 4,099, across level 4,096, where `MERKLE_ROUNDS`' first shard
-/// ends at `2^16`.
-const RUNS: u32 = 126;
-
-/// Lane `j` of the input path's sibling `l`, the top lane at `p − 1`.
-fn sibling(l: usize, j: usize) -> u64 {
-    match j {
-        7 => field::A64_C5 - 1,
-        _ => (l as u64 + 1).wrapping_mul(0xd1b5_4a32_d192_ed03) ^ (j as u64) << 7,
-    }
-}
 
 /// Coefficient `t` of the Falcon case's array `a`, `h`, `s2` and `c` in
 /// turn: arbitrary halfwords, most of them at or above `q`, the first the
@@ -175,14 +152,6 @@ fn input() -> Vec<u8> {
             out.extend(leaf(i, j).to_le_bytes());
         }
     }
-    out.extend(SLOT.to_le_bytes());
-    out.extend((DEPTH as u32).to_le_bytes());
-    for l in 0..DEPTH {
-        for j in 0..8 {
-            out.extend(sibling(l, j).to_le_bytes());
-        }
-    }
-    out.extend(RUNS.to_le_bytes());
     for a in 0..3 {
         out.extend((0..512).flat_map(|t| falcon_coefficient(a, t).to_le_bytes()));
     }
@@ -272,22 +241,6 @@ fn permute(lanes: [u64; 16]) -> [u64; 16] {
     let mut s = lanes.map(Fp::from_u64);
     transcript::poseidon2_permute(&mut s);
     s.map(Fp::to_u64)
-}
-
-/// The root of `leaf` at `slot` up `path`: level `L`'s node the first eight
-/// lanes of the permutation of the node below and its sibling, the node below
-/// first where bit `L` of `slot` is 0.
-fn fold(slot: u32, leaf: [u64; 8], path: &[[u64; 8]]) -> [u64; 8] {
-    path.iter().enumerate().fold(leaf, |node, (level, sib)| {
-        let (l, r) = match slot >> level & 1 {
-            0 => (node, *sib),
-            _ => (*sib, node),
-        };
-        let mut s = [0u64; 16];
-        s[..8].copy_from_slice(&l);
-        s[8..].copy_from_slice(&r);
-        std::array::from_fn(|j| permute(s)[j])
-    })
 }
 
 /// `2^k` as 32 bytes, little-endian.
@@ -382,14 +335,6 @@ fn the_journal_is_the_hosts() {
     let leaves: Vec<[u64; 8]> = (0..LEAVES)
         .map(|i| std::array::from_fn(|j| leaf(i, j)))
         .collect();
-    let path: Vec<[u64; 8]> = (0..DEPTH)
-        .map(|l| std::array::from_fn(|j| sibling(l, j)))
-        .collect();
-    want.extend(lanes(&fold(SLOT, leaves[0], &path)));
-    let ram: Vec<[u64; 8]> = (0..32).map(|l| leaves[l % LEAVES]).collect();
-    want.extend(lanes(&fold(u32::MAX, leaves[0], &ram)));
-    let run = (0..RUNS).fold(leaves[0], |node, i| fold(i, node, &ram));
-    want.extend(lanes(&fold(0x5a5a5, run, &ram[..20])));
     let arrays: [[u16; 512]; 3] =
         std::array::from_fn(|a| std::array::from_fn(|t| falcon_coefficient(a, t)));
     let norm = |k: usize| {
@@ -673,7 +618,7 @@ fn every_row_holds_and_every_constraint_bites() {
         let label = program::family_name(fam);
         let s = Shard::new(program, archive, fam);
         assert!(s.live > 0, "{label} has a row");
-        // A full shard, as `MERKLE_ROUNDS`' first is, has no padding row.
+        // A full shard, as `MPT_ROUNDS`' first is, has no padding row.
         let padding = (s.live < s.rows).then_some(s.live);
         for r in (0..(s.live + 2).min(s.rows)).chain([s.rows - 1]) {
             let broken = s.refused(&s.row(r), r);
@@ -683,9 +628,7 @@ fn every_row_holds_and_every_constraint_bites() {
         // the idle one, or a Falcon split row of chains `s2` and `c`, whose
         // `s` is 0 and is not — and the first padding row, where there is one.
         let samples: Vec<usize> = match fam {
-            family::POSEIDON2_ROUNDS | family::MERKLE_ROUNDS | family::MPT_ROUNDS => {
-                (0..16).chain(padding).collect()
-            }
+            family::POSEIDON2_ROUNDS | family::MPT_ROUNDS => (0..16).chain(padding).collect(),
             family::FALCON_SPLIT => [0, 32].into_iter().chain(padding).collect(),
             // A LOAD's row, a SIB's, a park's and a JOIN's: the first
             // programs' ops 0, 2, 6 and 7.
@@ -729,56 +672,6 @@ fn every_row_holds_and_every_constraint_bites() {
         assert!(
             dead.is_empty(),
             "{label}: no single-cell edit makes {dead:?} refuse"
-        );
-    }
-}
-
-/// What a `MERKLE_LEVELS` row's `u` is over its own cells: `M_E` of its node
-/// and the sibling its words give, in its bit's order.
-fn level_u(s: &Shard, row: &[Fp]) -> [Fp; 16] {
-    let node: Vec<Fp> = (0..8).map(|i| row[s.at(&format!("n{i}"))]).collect();
-    let word = |j: usize| row[s.at(&format!("w{j}_read_value"))];
-    let sibling: Vec<Fp> = (0..8)
-        .map(|k| word(2 * k) + word(2 * k + 1) * f(1 << 32))
-        .collect();
-    let (left, right) = match row[s.at("bit")] == Fp::ONE {
-        true => (&sibling, &node),
-        false => (&node, &sibling),
-    };
-    let mut x: [Fp; 16] = std::array::from_fn(|i| if i < 8 { left[i] } else { right[i - 8] });
-    transcript::external(&mut x);
-    x
-}
-
-/// The advice's malicious sibling: a word pair whose low word is 0 and whose
-/// high word is `2^−32`, so the hash would take the lane 1 while a load of the
-/// low word sees 0 — a lane no two words give. With the row's `u` recomputed
-/// over that lane every other row-local relation holds, as the memory
-/// argument would for a word only the advice initialized; the high word's own
-/// bound refuses it, whatever halfword stands beside it.
-#[test]
-fn a_sibling_word_no_load_could_read_is_refused() {
-    let (program, archive) = traced();
-    let s = Shard::new(program, archive, family::MERKLE_LEVELS);
-    let mut row = s.row(0);
-    let high = f(1 << 32).inverse().expect("a unit");
-    for (cell, v) in [
-        ("w0_read_value", Fp::ZERO),
-        ("w0_h16", Fp::ZERO),
-        ("w1_read_value", high),
-    ] {
-        row[s.at(cell)] = v;
-    }
-    let u = level_u(&s, &row);
-    for (j, v) in u.iter().enumerate() {
-        row[s.at(&format!("u{j}"))] = *v;
-    }
-    for h in [0, 1, 0xffff, (high.to_u64() >> 16) & 0xffff] {
-        row[s.at("w1_h16")] = f(h);
-        let broken = s.refused(&row, 0);
-        assert!(
-            !broken.is_empty() && broken.iter().all(|n| n.starts_with("w1_")),
-            "halfword {h:#x}: the forged word is refused by its bound alone, not {broken:?}"
         );
     }
 }
@@ -1003,55 +896,6 @@ fn the_statement_reconciles_and_a_round_moved_to_another_call_does_not() {
     };
     assert!(!balances(program, archive, &roots(program, archive, &edit)));
 
-    // The input path's level 1 taking the other order, its row recomputed:
-    // the bit flipped, the slot's rest halved from it, the node and the
-    // sibling swapped through M_E. Every row-local relation holds, and the
-    // state and the control it sends are not what the rows after it read.
-    let s = Shard::new(program, archive, family::MERKLE_LEVELS);
-    let row = 1;
-    let honest = s.row(row);
-    let mut swapped = honest.clone();
-    let (bit, rest, next) = (s.at("bit"), s.at("rest"), s.at("rest_next"));
-    swapped[bit] = Fp::ONE - honest[bit];
-    swapped[next] = (honest[rest] - swapped[bit]) * f(2).inverse().expect("a unit");
-    for (j, v) in level_u(&s, &swapped).iter().enumerate() {
-        swapped[s.at(&format!("u{j}"))] = *v;
-    }
-    assert!(
-        s.refused(&swapped, row).is_empty(),
-        "the swapped level is a valid level"
-    );
-    let committed = s.a.committed();
-    let edit = |fam: u32, index: u32, columns: &mut [(PolyAddress, MultilinearPoly)]| {
-        if (fam, index) != (family::MERKLE_LEVELS, 0) {
-            return;
-        }
-        for (i, v) in swapped
-            .iter()
-            .enumerate()
-            .filter(|(i, v)| **v != honest[*i])
-        {
-            let (_, c) = columns
-                .iter_mut()
-                .find(|(x, _)| *x == committed[i])
-                .expect("a committed column");
-            let mut values: Vec<Fp> = (0..c.len()).map(|r| c.get_base(r)).collect();
-            values[row] = *v;
-            *c = MultilinearPoly::new(PolyBacking::Fp(values));
-        }
-    };
-    assert!(!balances(program, archive, &roots(program, archive, &edit)));
-
-    // The depth-20 path's continuation across MERKLE_ROUNDS' shards, one off:
-    // the node its level 16 starts from, carried into shard 1.
-    assert!(!continuation_balances(
-        program,
-        archive,
-        family::MERKLE_ROUNDS,
-        16,
-        0
-    ));
-
     // The long trie program's continuation across MPT_ROUNDS' shards, one
     // off: the parked lane 0 its op 6,135, the JOIN opening shard 1, takes,
     // which a SIB's or a LOAD's carry holds none of.
@@ -1146,7 +990,7 @@ fn the_statement_reconciles_and_a_round_moved_to_another_call_does_not() {
 }
 
 // ---------------------------------------------------------------------------
-// A path across shards
+// A program across shards
 // ---------------------------------------------------------------------------
 
 /// The chunks a streaming run of the guest hands over that `keep` keeps, in
@@ -1212,7 +1056,7 @@ fn values(columns: &[(PolyAddress, MultilinearPoly)]) -> BTreeMap<PolyAddress, V
 }
 
 /// Shard 1 of round family `fam` as a streaming run hands it over: a call's
-/// last entries alone, the first at level or op `first`, their carries the
+/// last entries alone, the first at op `first`, their carries the
 /// continuation.
 fn continued(program: &Program, fam: u32, first: u64) -> trace::DelegationTrace {
     let chunk = stream(program, |c| c.family == fam && c.index == 1)
@@ -1222,7 +1066,7 @@ fn continued(program: &Program, fam: u32, first: u64) -> trace::DelegationTrace 
     assert_eq!(
         chunk.carry[9].first(),
         Some(&first),
-        "family {fam}'s shard 1 opens at its call's level or op {first}"
+        "family {fam}'s shard 1 opens at its call's op {first}"
     );
     chunk
 }
@@ -1276,21 +1120,25 @@ fn continuation_balances(
     balances(program, archive, &roots(program, archive, &edit))
 }
 
-/// The guest's depth-20 path straddles `MERKLE_ROUNDS`' two shards and its
-/// long trie program `MPT_ROUNDS`', and each second shard, streamed, holding
-/// only the call's last levels or hash ops and their carries, fills exactly
-/// as the archive's shard 1 does. The statement test forges each
+/// The guest's long trie program straddles `MPT_ROUNDS`' two shards, and the
+/// second, streamed, holding only the call's last hash ops and their carries,
+/// fills exactly as the archive's shard 1 does. The statement test forges its
 /// continuation.
 #[test]
 fn a_call_across_a_round_shard_streams_as_its_archive() {
     let (program, archive) = traced();
-    for (fam, first) in [(family::MERKLE_ROUNDS, 16), (family::MPT_ROUNDS, CONTINUED)] {
-        let streamed = filled_from(program, archive, fam, 1, &continued(program, fam, first));
-        let (_, archived) = filled(program, archive, fam, 1, 0);
-        assert_eq!(
-            values(&streamed),
-            values(&archived),
-            "family {fam}: the streamed shard is the archived one"
-        );
-    }
+    let fam = family::MPT_ROUNDS;
+    let streamed = filled_from(
+        program,
+        archive,
+        fam,
+        1,
+        &continued(program, fam, CONTINUED),
+    );
+    let (_, archived) = filled(program, archive, fam, 1, 0);
+    assert_eq!(
+        values(&streamed),
+        values(&archived),
+        "the streamed shard is the archived one"
+    );
 }

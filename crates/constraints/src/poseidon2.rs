@@ -106,13 +106,11 @@ pub fn internal_forms() -> ([Form; PARTIAL], [Form; WIDTH]) {
 }
 
 /// Whose permutation a [`rounds`] builder lays out: a `POSEIDON2` call's, in
-/// `address_space::POSEIDON2`, one level's of a Merkle path, in
-/// `address_space::MERKLE` (`crate::merkle`), or one hash op's of a trie's
-/// op program, in `address_space::MPT` (`crate::mpt`).
+/// `address_space::POSEIDON2`, or one hash op's of a trie's op program, in
+/// `address_space::MPT` (`crate::mpt`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Keyed {
     Call,
-    Level,
     Op,
 }
 
@@ -123,23 +121,19 @@ pub(crate) enum Keyed {
 /// ```text
 /// one_kind      Σ_k row_k − live                 the kind bits, one-hot on a live row
 /// stamp_rule    stamp − Σ_k 8k·row_k              a call's (POSEIDON2_ROUNDS)
-/// level_range   (stamp − Σ_k 16(k + 1)·row_k)/256 < 2^16
-///                                                 a level's (MERKLE_ROUNDS): 256L + 16(k + 1)
 /// op            (stamp − Σ_k 16(k + 1)·row_k)/256 < 2^20
 ///                                                 a hash op's (MPT_ROUNDS): 256i + 16(k + 1)
 /// ext_rule      ext − Σ_{k external} row_k        int_rule   int − live + ext
 /// y{j}_rule     y_j − ext·s_j − int·L_j(s, z) − Σ_k row_k·c_k[j]
 /// y{j}_sq_rule  y2_j − y_j²                       y{j}_cube_rule   z_j − y2_j·y_j
 /// o{l}_rule     o_l − ext·Σ_k M_E[l][k]·z_k − int·K_l(s, z)
-/// keep_rule     keep − live + row14               a level's and a hash op's: the last
-///                                                 round writes pairs 0..3 alone, the
-///                                                 node
+/// keep_rule     keep − live + row14               a hash op's: the last round writes
+///                                                 pairs 0..3 alone, the node
 /// ```
 ///
 /// `L_j` and `K_l` are [`internal_forms`], `c_k` [`round_constant`]. Every
-/// gate is degree 2, the kind riding a linear factor. A call's stride is 8, a
-/// level's [`crate::merkle::STRIDE`] and a hash op's [`crate::mpt::STRIDE`],
-/// so a control fits beside the pairs.
+/// gate is degree 2, the kind riding a linear factor. A call's stride is 8 and
+/// a hash op's [`crate::mpt::STRIDE`], so its control fits beside its pairs.
 pub(crate) fn rounds(keyed: Keyed) -> Builder {
     let (fam, space, stride, first) = match keyed {
         Keyed::Call => (
@@ -147,12 +141,6 @@ pub(crate) fn rounds(keyed: Keyed) -> Builder {
             address_space::POSEIDON2,
             PAIRS as u64,
             0,
-        ),
-        Keyed::Level => (
-            family::MERKLE_ROUNDS,
-            address_space::MERKLE,
-            crate::merkle::STRIDE,
-            1,
         ),
         Keyed::Op => (
             family::MPT_ROUNDS,
@@ -169,15 +157,13 @@ pub(crate) fn rounds(keyed: Keyed) -> Builder {
     let o: Vec<PolyAddress> = (0..WIDTH).map(|i| b.mcol(&format!("o{i}"))).collect();
     let kinds: Vec<PolyAddress> = (0..ROWS - 1).map(|k| b.bit(&format!("row{k}"))).collect();
     b.gate("one_kind", sum(&kinds) - live);
-    // Row `k` reads boundary `first + k`, a level's offset by its `256L` and
-    // a hash op's by its `256i`.
+    // Row `k` reads boundary `first + k`, a hash op's offset by its `256i`.
     let mut at = Expr::from(stamp_col);
     for (k, x) in kinds.iter().enumerate() {
         at = at - *x * (stride * (first + k as u64));
     }
     match keyed {
         Keyed::Call => b.gate("stamp_rule", at),
-        Keyed::Level => b.range16("level_range", at * crate::merkle::per_level()),
         Keyed::Op => b.bounded("op", at * crate::mpt::per_op(), crate::mpt::OP_BITS),
     }
     let ext = b.col("ext");
@@ -222,7 +208,7 @@ pub(crate) fn rounds(keyed: Keyed) -> Builder {
     }
     let keep = match keyed {
         Keyed::Call => live,
-        Keyed::Level | Keyed::Op => {
+        Keyed::Op => {
             // A leaf's mask, so an `M` column with a booleanity gate of its
             // own, which the rule already implies.
             let keep = b.mcol("keep");

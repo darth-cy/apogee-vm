@@ -164,9 +164,9 @@ pub fn public_io_program() -> Program {
     )
 }
 
-/// `guests/precompiles`, which calls the seven precompiles: its execution
-/// families at `2^20`, the rest — its fourteen delegation families among them
-/// — at `2^16`.
+/// `guests/precompiles`, which calls the six precompiles: its execution
+/// families at `2^20`, the rest — its eleven delegation families among them —
+/// at `2^16`.
 pub fn precompiles_program() -> Program {
     program_of(
         "precompiles",

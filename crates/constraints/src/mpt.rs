@@ -68,12 +68,12 @@ const _: () = {
     assert!(FRAME == ROOT + BLOCK && OPS < ROOT && COUNT < ROOT);
     // The registry's words an entry and rows an entry.
     let t = &delegation::TYPES;
-    assert!(t[11].0 == family::MPT && t[11].1 == ecall::MPT_ROOT);
-    assert!(t[11].2 == FRAME && t[11].3 == 1 && matches!(t[11].4, Per::Call));
-    assert!(t[12].0 == family::MPT_NODES && t[12].1 == ecall::MPT_ROOT);
-    assert!(t[12].2 == OP_WORDS && t[12].3 == 1 && matches!(t[12].4, Per::Op));
-    assert!(t[13].0 == family::MPT_ROUNDS && t[13].1 == ecall::MPT_ROOT);
-    assert!(t[13].2 == OP_WORDS && t[13].3 as usize == ROWS && matches!(t[13].4, Per::Hash));
+    assert!(t[8].0 == family::MPT && t[8].1 == ecall::MPT_ROOT);
+    assert!(t[8].2 == FRAME && t[8].3 == 1 && matches!(t[8].4, Per::Call));
+    assert!(t[9].0 == family::MPT_NODES && t[9].1 == ecall::MPT_ROOT);
+    assert!(t[9].2 == OP_WORDS && t[9].3 == 1 && matches!(t[9].4, Per::Op));
+    assert!(t[10].0 == family::MPT_ROUNDS && t[10].1 == ecall::MPT_ROOT);
+    assert!(t[10].2 == OP_WORDS && t[10].3 as usize == ROWS && matches!(t[10].4, Per::Hash));
 };
 
 /// `1/SPAN`: what takes a stamp's `256i` to its op, bounded.

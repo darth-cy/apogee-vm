@@ -414,8 +414,8 @@ pub mod generic_table {
 /// The number is what everything else cites: canonical ordering is ascending
 /// `FamilyId`, the program-identity digest absorbs families in that order, and
 /// shard transcripts are seeded with it. Ids 0–6 are the execution families,
-/// 7–11 the window families and 12–17 and 21–28 the delegation families
-/// ([`crate::delegation`], `docs/spec/circuits.md` §1); 18–20 are
+/// 7–11 the window families and 12–14 and 21–28 the delegation families
+/// ([`crate::delegation`], `docs/spec/circuits.md` §1); 15–20 are
 /// [`family::RETIRED`].
 ///
 /// Which mnemonic each instruction family claims is `crates/program`'s
@@ -486,18 +486,6 @@ pub mod family {
     /// `floor(a·b/d)` and `a·b mod d` over 256-bit words, one row a call
     /// (`docs/spec/precompiles.md` §4).
     pub const MUL_DIV_U256: u32 = 14;
-    /// A Merkle path's **frame** row, one a call: the anchor, the 19-word
-    /// frame, the leaf sent to and the root received from [`MERKLE_LEVELS`]'
-    /// chain in `address_space::MERKLE`, the root written canonical
-    /// (`docs/spec/precompiles.md` §6).
-    pub const MERKLE_ROOT: u32 = 15;
-    /// One row a level of a path: its sibling read from RAM, its slot bit, and
-    /// the node and the sibling in order, through the external layer, sent to
-    /// [`MERKLE_ROUNDS`].
-    pub const MERKLE_LEVELS: u32 = 16;
-    /// A level's permutation, 16 rows: [`POSEIDON2_ROUNDS`]' rows keyed by the
-    /// level, the last round writing the node alone. Touches no RAM.
-    pub const MERKLE_ROUNDS: u32 = 17;
     /// The Falcon-512 lattice check's **frame** row, one a call: the frame's
     /// five words, its three chains started and ended in
     /// `address_space::FALCON`, and `‖s1‖²` written (`constraints::falcon`).
@@ -535,12 +523,12 @@ pub mod family {
     /// them.
     pub const COUNT: u32 = 29;
 
-    /// The **retired** family numbers, a Keccak-f[1600] permutation's three:
-    /// struck out and never reassigned. A table indexed by `FamilyId` keeps an
-    /// inert entry at each, and whatever enumerates families or reads one
-    /// from bytes skips or refuses a retired number as it does one at or
-    /// above [`COUNT`].
-    pub const RETIRED: [u32; 3] = [18, 19, 20];
+    /// The **retired** family numbers, a Merkle path's three and a
+    /// Keccak-f[1600] permutation's three: struck out and never reassigned. A
+    /// table indexed by `FamilyId` keeps an inert entry at each, and whatever
+    /// enumerates families or reads one from bytes skips or refuses a retired
+    /// number as it does one at or above [`COUNT`].
+    pub const RETIRED: [u32; 6] = [15, 16, 17, 18, 19, 20];
 
     /// The pinned height of [`PUBLIC_INPUT`] and [`PUBLIC_OUTPUT`].
     ///
@@ -598,9 +586,9 @@ pub mod family {
         false, // POSEIDON2
         false, // POSEIDON2_ROUNDS
         false, // MUL_DIV_U256
-        false, // MERKLE_ROOT
-        false, // MERKLE_LEVELS
-        false, // MERKLE_ROUNDS
+        false, // 15, retired
+        false, // 16, retired
+        false, // 17, retired
         false, // 18, retired
         false, // 19, retired
         false, // 20, retired
@@ -656,9 +644,9 @@ pub mod family {
         1 << 16, // POSEIDON2, the floor of its RANGE16 channel
         1 << 16, // POSEIDON2_ROUNDS
         1 << 16, // MUL_DIV_U256, likewise
-        1 << 16, // MERKLE_ROOT, likewise
-        1 << 16, // MERKLE_LEVELS, likewise
-        1 << 16, // MERKLE_ROUNDS, likewise: its level's bound
+        0,       // 15, retired
+        0,       // 16, retired
+        0,       // 17, retired
         0,       // 18, retired
         0,       // 19, retired
         0,       // 20, retired
@@ -920,8 +908,9 @@ pub mod guest_memory {
 /// compute something else — so numbers here are never reused, exactly like
 /// `transcript_tags`. A *retired* number is struck out and never reassigned:
 /// **63 and 64**, POSIX `read` and `write`, **0x0507 and 0x0508**, a
-/// keccak-f round and four SHA-256 rounds, and **0x0513**, a Keccak-f[1600]
-/// permutation, are retired (`docs/spec/ecall-abi.md` §3).
+/// keccak-f round and four SHA-256 rounds, **0x0512**, a Merkle path's root,
+/// and **0x0513**, a Keccak-f[1600] permutation, are retired
+/// (`docs/spec/ecall-abi.md` §3).
 ///
 /// An ecall carries its number in `a7`, its arguments in `a0`-`a5` and its
 /// result in `a0`, with errors as a negated errno. **An Apogee guest is an
@@ -950,14 +939,6 @@ pub mod ecall {
     /// (`docs/spec/precompiles.md` §4). The caller owes `d ≠ 0` and a quotient
     /// below `2^256`; an executor refuses either. `a0` is preserved.
     pub const MUL_DIV_U256: u32 = 0x0511;
-
-    /// A delegation call: the root of the Merkle path the 19-word frame at
-    /// `a0` names — its 8 lanes the leaf, then the slot, the depth and the
-    /// siblings' address — written over the lanes (`docs/spec/precompiles.md`
-    /// §6). The caller owes a depth in `16..=32`, a slot below `2^depth`, and
-    /// `64·depth` word-aligned sibling bytes clear of the frame; an executor
-    /// refuses any other. `a0` is preserved.
-    pub const MERKLE_ROOT: u32 = 0x0512;
 
     /// A delegation call: the Falcon-512 lattice check on the five-word frame
     /// at `a0` (`delegation::falcon`). Words 0–2 are the addresses of `h`,
@@ -1005,8 +986,8 @@ pub mod ecall {
 /// compressed tuple `gamma_M + AS + alpha_addr*ADDR + ...`. The tags are
 /// nonzero on purpose: `(REG, x0, ts 0, value 0)` is a real initial tuple, and
 /// with `REG = 0` it would be the all-zero tuple — the same reason the decoded
-/// tables pad with `MINUS_ONE` rather than 0. A tag is never reassigned: **7**,
-/// a Keccak-f[1600] call's, is retired.
+/// tables pad with `MINUS_ONE` rather than 0. A tag is never reassigned: **6**,
+/// a Merkle path's, and **7**, a Keccak-f[1600] call's, are retired.
 pub mod address_space {
     /// The 32 registers. A query's address is the register index, `0..32`,
     /// and its value a 64-bit register as two words: the one space whose tuples
@@ -1027,11 +1008,6 @@ pub mod address_space {
     /// at boundary `b`, is the tuple `(POSEIDON2, cycle, 8b + j, lane 2j,
     /// lane 2j + 1)` (`docs/spec/precompiles.md` §3).
     pub const POSEIDON2: u8 = 5;
-    /// A Merkle path's state between rows: lane pair `s` of the call at
-    /// `cycle`, at boundary `b`, is `(MERKLE, cycle, 16b + s, lane 2s, lane
-    /// 2s + 1)`, and a level's control `(MERKLE, cycle, 16b + 8, rest, ptr)`
-    /// (`docs/spec/precompiles.md` §6).
-    pub const MERKLE: u8 = 6;
     /// A Falcon-512 call's state between rows: a chain's control at stamp
     /// `σ` is the tuple `(FALCON, cycle, σ, ptr, acc)`, and a split row's
     /// residue pair `r` is `(FALCON, 64·cycle + 17P + j, r, rr_0, rr_1)`
@@ -1115,8 +1091,9 @@ pub mod memory {
 /// in `constraints::family_circuit` (its circuit, over
 /// `constraints::delegation`'s frame), `emulator`'s `frame_function` (the
 /// function), `prover`'s `family_fill` (its witness) and a `guest_sdk` shim
-/// (the record and the call). `MERKLE_ROOT`, whose call reads a path beyond
-/// its frame, is the emulator's `merkle_root` instead of a frame function.
+/// (the record and the call). `FALCON512`, `FALCON512_DECODE` and
+/// `MPT_ROOT`, whose calls read RAM beyond their frames, are the emulator's
+/// `falcon512`, `falcon512_decode` and `mpt_root` instead of frame functions.
 pub mod delegation {
     use super::{ecall, family};
 
@@ -1136,10 +1113,6 @@ pub mod delegation {
         /// One call: its frame's words, and for an [`ecall::MPT_ROOT`] call
         /// the [`mpt::CALL_CARRY`] value beside them.
         Call,
-        /// One level of an [`ecall::MERKLE_ROOT`] path: its sibling's 16 words,
-        /// accessed at the call's timestamp like a frame's, and the [`CARRY`]
-        /// values it starts from.
-        Level,
         /// One [`ecall::FALCON512`] call's three arrays, [`falcon::ARRAYS`]
         /// words in [`falcon::CHAINS`] order: chain `P`'s word `i` is entry
         /// word `ARRAY·P + i`, at the address frame word `CHAINS[P]` holds
@@ -1164,34 +1137,6 @@ pub mod delegation {
         /// A hash op's [`Per::Op`] entry, words and carry alike: a SIB's or a
         /// JOIN's, never a LOAD's.
         Hash,
-    }
-
-    /// The values a level entry carries: what its rows start from that none of
-    /// its words gives, so that a shard may begin mid-path. The node's 8 lanes,
-    /// the slot's bits not yet taken, and the level.
-    pub const CARRY: usize = 10;
-
-    /// [`ecall::MERKLE_ROOT`]'s frame, by word, and its path's depths
-    /// (`docs/spec/precompiles.md` §6).
-    pub mod merkle {
-        /// Words `0..16`: 8 lanes, two little-endian words each, the leaf in
-        /// and the root out.
-        pub const LANES: usize = 16;
-        /// The slot, below `2^depth`: its bit `L` is 1 where level `L`'s node
-        /// is the right child.
-        pub const SLOT: usize = 16;
-        /// The depth.
-        pub const DEPTH: usize = 17;
-        /// The siblings' address: word-aligned, `64·depth` bytes, level 0's
-        /// first, clear of the frame.
-        pub const SIBLINGS: usize = 18;
-        /// The frame's words.
-        pub const FRAME: usize = 19;
-        /// A sibling's words: 8 lanes, two little-endian words each.
-        pub const SIBLING: usize = 16;
-        /// The depths a path may have.
-        pub const MIN_DEPTH: u32 = 16;
-        pub const MAX_DEPTH: u32 = 32;
     }
 
     /// [`ecall::FALCON512`]'s frame, by word, and its arrays: the lattice
@@ -1342,16 +1287,15 @@ pub mod delegation {
     /// an entry, what an entry is)`, ascending by family. A row is never
     /// reassigned.
     ///
-    /// Each family of a number records every entry of its kind: a call's, one
-    /// per level of a call's path, a call's arrays, one per op of a call's
-    /// program, or one per hash op. The first family of a number and a kind
-    /// reads the entry's words from RAM: for a call, the number's **frame
-    /// family**, whose row a call also reads the anchor through; for a level,
-    /// `MERKLE_LEVELS`; for arrays, `FALCON_SPLIT`; for an op, `MPT_NODES`.
+    /// Each family of a number records every entry of its kind: a call's, a
+    /// call's arrays, one per op of a call's program, or one per hash op. The
+    /// first family of a number and a kind reads the entry's words from RAM:
+    /// for a call, the number's **frame family**, whose row a call also reads
+    /// the anchor through; for arrays, `FALCON_SPLIT`; for an op, `MPT_NODES`.
     /// A later one, and a hash op's family, whose entries are some of its
     /// ops', only expands the entry into rows of its own, reading its words
     /// from its buffer and no memory but its own address space.
-    pub const TYPES: [(u32, u32, usize, u32, Per); 14] = [
+    pub const TYPES: [(u32, u32, usize, u32, Per); 11] = [
         (family::POSEIDON2, ecall::POSEIDON2, 32, 1, Per::Call),
         (
             family::POSEIDON2_ROUNDS,
@@ -1361,27 +1305,6 @@ pub mod delegation {
             Per::Call,
         ),
         (family::MUL_DIV_U256, ecall::MUL_DIV_U256, 24, 1, Per::Call),
-        (
-            family::MERKLE_ROOT,
-            ecall::MERKLE_ROOT,
-            merkle::FRAME,
-            1,
-            Per::Call,
-        ),
-        (
-            family::MERKLE_LEVELS,
-            ecall::MERKLE_ROOT,
-            merkle::SIBLING,
-            1,
-            Per::Level,
-        ),
-        (
-            family::MERKLE_ROUNDS,
-            ecall::MERKLE_ROOT,
-            merkle::SIBLING,
-            16,
-            Per::Level,
-        ),
         (
             family::FALCON,
             ecall::FALCON512,
