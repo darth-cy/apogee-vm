@@ -639,12 +639,13 @@ fn check_parts(
             }
         }
     }
-    // The delegation buffers: one entry per call or per level of one, whose
-    // word events ride the requesting cycle and are checked against the log
-    // at that cycle — the first family recording the kind of entry, once: a
-    // family expanding the entry holds the same entries and touches no RAM.
-    // Within a cycle the call's frame comes first, then its levels in order or
-    // its arrays, ascending family id and a stable sort keeping both.
+    // The delegation buffers: one entry per call or per level or op of one,
+    // whose word events ride the requesting cycle and are checked against the
+    // log at that cycle — the first family recording the kind of entry, once:
+    // a family expanding the entry holds the same entries and touches no RAM.
+    // Within a cycle the call's frame comes first, then its levels or its ops
+    // in order or its arrays, ascending family id and a stable sort keeping
+    // both.
     let mut invocations: Vec<(u64, &DelegationTrace, usize)> = Vec::new();
     for t in &traces.delegations {
         let n = t.cycle.len();
@@ -729,11 +730,12 @@ fn check_parts(
         // An invocation's frame events follow the pc query and precede the
         // row's roles: they are at slot `delegation::FRAME_DELTA`, which is 0.
         // A decode call's entry ends in source slots past the words it read,
-        // each `Query::ABSENT` and no access: address 0 is in no region, so
-        // no word the call touched is one (`Per::Decode`).
+        // and a JOIN's, which reads no block, in its block's slots, each
+        // `Query::ABSENT` and no access: address 0 is in no region, so no
+        // word the call touched is one (`Per::Decode`, `Per::Op`).
         let mut frame: Vec<MemoryEvent> = Vec::new();
         while let Some((_, t, r)) = pending.next_if(|(cycle, ..)| *cycle == row.cycle) {
-            let decode = program::delegation_per(t.family) == Per::Decode;
+            let sparse = matches!(program::delegation_per(t.family), Per::Decode | Per::Op);
             for q in &t.words {
                 let query = Query {
                     addr: q.addr[*r],
@@ -741,7 +743,7 @@ fn check_parts(
                     read_value: q.read_value[*r],
                     write_value: q.write_value[*r],
                 };
-                if decode && query.addr == 0 {
+                if sparse && query.addr == 0 {
                     if query != Query::ABSENT {
                         return Err(format!(
                             "family {}'s entry at cycle {} holds a query at address 0",

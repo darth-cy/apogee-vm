@@ -810,9 +810,10 @@ fn stream_end(stream: &[u8]) -> usize {
 }
 
 /// `guests/precompiles` over `cases`, after its other calls at their fewest:
-/// a zero leaf up sixteen zero siblings, no runs, and the zero arrays' norm
-/// once. Each case's key and signature, then each one's message and context.
-/// Seven cases of short messages and contexts fill the public input window.
+/// a zero leaf up sixteen zero siblings, no runs, the zero arrays' norm once,
+/// and a long trie program of one step. Each case's key and signature, then
+/// each one's message and context. Seven cases of short messages and contexts
+/// fill the public input window.
 fn falcon_run(cases: &[Case]) -> Result<emulator::Execution, EmuError> {
     let mut input = [
         1u32.to_le_bytes().as_slice(),
@@ -837,7 +838,8 @@ fn falcon_run(cases: &[Case]) -> Result<emulator::Execution, EmuError> {
             input.extend(field);
         }
     }
-    run(&image("precompiles"), &io(&input))
+    let advice = common::precompiles_advice(1);
+    run(&image("precompiles"), &common::with_advice(&input, &advice))
 }
 
 /// Every one of `cases` verifies: the guest exits 0, a 1 journaled a case.

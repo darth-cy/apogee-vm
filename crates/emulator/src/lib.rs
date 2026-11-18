@@ -29,7 +29,7 @@
 //! address at slot 2 and the one above it at slot 3
 //! (`docs/spec/execution-trace.md` §4).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use constants::delegation::Per;
@@ -417,7 +417,9 @@ struct Cycle {
 
 /// One delegation invocation: the ecall number, the frame base, one
 /// `(address, old, new)` per frame word in frame order, a path's levels, a
-/// call's arrays, and a decode call's stream.
+/// call's arrays, a decode call's stream, a program's ops, and what the
+/// call's entry carries: an `MPT_ROOT` call's last `pending`
+/// (`delegation::mpt::CALL_CARRY`), nothing for any other.
 struct Invocation {
     number: u32,
     base: u32,
@@ -425,6 +427,8 @@ struct Invocation {
     levels: Vec<Level>,
     arrays: ArrayWords,
     stream: StreamWords,
+    ops: Vec<Op>,
+    carry: Vec<u64>,
 }
 
 /// A `FALCON512` call's arrays: `(address, word)` per word, in
@@ -445,6 +449,17 @@ struct Level {
     base: u32,
     words: [u32; delegation::merkle::SIBLING],
     carry: [u64; delegation::CARRY],
+}
+
+/// One op of an `MPT_ROOT` program: its address, its info and arg words, its
+/// block's words where it reads one, which a JOIN does not, each read and
+/// left as it was, and what its entry carries (`delegation::mpt::CARRY`).
+struct Op {
+    at: u32,
+    info: u32,
+    arg: u32,
+    block: Option<[u32; delegation::mpt::BLOCK]>,
+    carry: [u64; delegation::mpt::CARRY],
 }
 
 impl Cycle {
@@ -1075,14 +1090,15 @@ impl<'a> Machine<'a> {
 
     /// Execute delegation `family`, ecall `number`, over the frame at `base`,
     /// in place, returning each frame word as `(address, old, new)`, a path's
-    /// levels, a call's arrays and a decode call's stream.
+    /// levels, a call's arrays, a decode call's stream and a program's ops.
     ///
     /// Every frame word must be one a store could write, below the advice
     /// region; anything else is a fatal guest error, as a misaligned store is.
     /// What the call computes is [`frame_function`]'s, or for the calls that
-    /// touch RAM past their frames, `MERKLE_ROOT`, `FALCON512` and
-    /// `FALCON512_DECODE`, [`Machine::merkle_root`]'s, [`Machine::falcon512`]'s
-    /// and [`Machine::falcon512_decode`]'s.
+    /// touch RAM past their frames, `MERKLE_ROOT`, `FALCON512`,
+    /// `FALCON512_DECODE` and `MPT_ROOT`, [`Machine::merkle_root`]'s,
+    /// [`Machine::falcon512`]'s, [`Machine::falcon512_decode`]'s and
+    /// [`Machine::mpt_root`]'s.
     fn delegate(
         &mut self,
         number: u32,
@@ -1109,6 +1125,7 @@ impl<'a> Machine<'a> {
         let base = base as u32;
         let old: Vec<u32> = (0..words).map(|j| self.word(base + 4 * j as u32)).collect();
         let (mut levels, mut arrays, mut stream) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut ops, mut carry) = (Vec::new(), Vec::new());
         let new = match family {
             constants::family::MERKLE_ROOT => {
                 let (new, path) = self.merkle_root(pc, base, &old)?;
@@ -1123,6 +1140,11 @@ impl<'a> Machine<'a> {
             constants::family::FALCON_DECODE => {
                 let (new, words) = self.falcon512_decode(pc, base, &old)?;
                 stream = words;
+                new
+            }
+            constants::family::MPT => {
+                let (new, program, pending) = self.mpt_root(pc, base, &old)?;
+                (ops, carry) = (program, vec![pending]);
                 new
             }
             _ => frame_function(family)(pc, &old)?,
@@ -1144,6 +1166,8 @@ impl<'a> Machine<'a> {
             levels,
             arrays,
             stream,
+            ops,
+            carry,
         })
     }
 
@@ -1355,6 +1379,132 @@ impl<'a> Machine<'a> {
             new[2 * i + 1] = (x.to_u64() >> 32) as u32;
         }
         Ok((new, levels))
+    }
+
+    /// The `MPT_ROOT` call over the frame at `base`, whose words are `frame`:
+    /// the root of the op program it names written over its lanes, each op's
+    /// words and carry, and the last op's `pending`, which the call's entry
+    /// carries (`constants::delegation::mpt`).
+    ///
+    /// The value `cur` is its raw lanes with `pending` added to lane 0, zero
+    /// to start. Op `i` parks the `cur` entering it where its park bit is
+    /// set. A LOAD makes the raw lanes its block's and `pending` 0; a SIB or
+    /// a JOIN makes them `guest_sdk::poseidon2_compress` of `cur` and the
+    /// other child, the other on the left where the left bit is set, and
+    /// `pending` `d + 1`. A SIB's other child is its block, a JOIN's the value
+    /// the op its arg names parked. A block's lanes are read mod `p`, so a
+    /// block may be anywhere a load reaches, advice included; each of its
+    /// words and each op's is checked as a load's. The caller owes 1 to `2^20`
+    /// word-aligned ops whose info words decode, word-aligned blocks, each
+    /// park taken by exactly one later JOIN, and no word read twice across the
+    /// frame, the ops and the blocks, which the call reads at one timestamp;
+    /// any other program is refused.
+    fn mpt_root(
+        &self,
+        pc: u32,
+        base: u32,
+        frame: &[u32],
+    ) -> Result<(Vec<u32>, Vec<Op>, u64), EmuError> {
+        use delegation::mpt::{
+            BLOCK, CARRY, COUNT, DEPTH_BOUND, DEPTH_SHIFT, JOIN, LEFT, LOAD, MAX_OPS, OPS, PARK,
+            ROOT,
+        };
+        let refuse = |detail| EmuError::DelegationFrame { pc, detail };
+        let (ops, n) = (frame[OPS], frame[COUNT]);
+        if !(1..=MAX_OPS).contains(&n) {
+            return Err(refuse("mpt_root's count is outside 1..=2^20"));
+        }
+        if !ops.is_multiple_of(4) {
+            return Err(refuse("mpt_root's ops are not word-aligned"));
+        }
+        // Every word the call reads, each once: the frame's, then each op's
+        // and its block's as the program reaches them.
+        let mut read: HashSet<u32> = (0..frame.len() as u32).map(|j| base + 4 * j).collect();
+        let mut load = |addr: u64| match self.data_word(pc, addr, 4)? {
+            word if read.insert(word) => Ok(self.word(word)),
+            _ => Err(refuse("mpt_root reads a word twice")),
+        };
+        let lanes = |w: &[u32]| -> [Fp; 8] {
+            std::array::from_fn(|k| Fp::from_u64(w[2 * k] as u64 | (w[2 * k + 1] as u64) << 32))
+        };
+        // The parks by op, each `None` once a JOIN has taken it.
+        let mut parked: HashMap<u32, Option<[Fp; 8]>> = HashMap::new();
+        let (mut raw, mut pending) = ([Fp::ZERO; 8], 0u64);
+        let mut program = Vec::new();
+        for i in 0..n {
+            let at = ops as u64 + 8 * i as u64;
+            let (info, arg) = (load(at)?, load(at + 4)?);
+            let kind = info & 3;
+            if kind > JOIN || info >= DEPTH_BOUND << DEPTH_SHIFT {
+                return Err(refuse("mpt_root's info word does not decode"));
+            }
+            let mut cur = raw;
+            cur[0] += Fp::from_u64(pending);
+            let mut carry = [0u64; CARRY];
+            for (c, x) in carry.iter_mut().zip(raw) {
+                *c = x.to_u64();
+            }
+            carry[8] = pending;
+            carry[9] = i as u64;
+            let (other, block) = match kind {
+                JOIN => {
+                    let value = match parked.get_mut(&arg).map(Option::take) {
+                        Some(Some(value)) => value,
+                        Some(None) => return Err(refuse("mpt_root's JOIN takes a park twice")),
+                        None => return Err(refuse("mpt_root's JOIN names no earlier park")),
+                    };
+                    for (c, x) in carry[10..].iter_mut().zip(value) {
+                        *c = x.to_u64();
+                    }
+                    (value, None)
+                }
+                _ => {
+                    if !arg.is_multiple_of(4) {
+                        return Err(refuse("mpt_root's block is not word-aligned"));
+                    }
+                    let mut words = [0u32; BLOCK];
+                    for (j, w) in words.iter_mut().enumerate() {
+                        *w = load(arg as u64 + 4 * j as u64)?;
+                    }
+                    (lanes(&words), Some(words))
+                }
+            };
+            // After the JOIN's take, which an op's own park cannot answer.
+            if info & PARK != 0 {
+                parked.insert(i, Some(cur));
+            }
+            (raw, pending) = match kind {
+                LOAD => (other, 0),
+                _ => {
+                    let (l, r) = match info & LEFT {
+                        0 => (cur, other),
+                        _ => (other, cur),
+                    };
+                    let mut state: [Fp; 16] =
+                        std::array::from_fn(|k| if k < 8 { l[k] } else { r[k - 8] });
+                    transcript::poseidon2_permute(&mut state);
+                    let d = (info >> DEPTH_SHIFT) as u64;
+                    (std::array::from_fn(|k| state[k]), d + 1)
+                }
+            };
+            program.push(Op {
+                at: at as u32,
+                info,
+                arg,
+                block,
+                carry,
+            });
+        }
+        if parked.values().any(Option::is_some) {
+            return Err(refuse("mpt_root leaves a park no JOIN takes"));
+        }
+        let mut new = frame.to_vec();
+        raw[0] += Fp::from_u64(pending);
+        for (k, x) in raw.iter().enumerate() {
+            new[ROOT + 2 * k] = x.to_u64() as u32;
+            new[ROOT + 2 * k + 1] = (x.to_u64() >> 32) as u32;
+        }
+        Ok((new, program, pending))
     }
 }
 
@@ -1724,9 +1874,10 @@ impl<'a> Recorder<'a> {
             .record(AddressSpace::Pc, 0, base, pc as u64, next_pc as u64);
         // An invocation's frame accesses ride this cycle at
         // `delegation::FRAME_DELTA`, 0: after the pc query, before the roles,
-        // its levels', its arrays' or its stream's after its frame's. Every
-        // family of the number records the call, each of its levels, its
-        // arrays, or its frame and stream.
+        // its levels', its arrays', its stream's or its ops' after its
+        // frame's. Every family of the number records the call, each of its
+        // levels, its arrays, its frame and stream, each of its ops, or each
+        // of its hash ops.
         if let Some(call) = &queries.delegation {
             let memory = &mut self.memory;
             let mut query = |addr: u32, read: u32, write: u32| {
@@ -1759,6 +1910,22 @@ impl<'a> Recorder<'a> {
                 .iter()
                 .map(|&(a, r, w)| query(a, r, w))
                 .collect();
+            // An op's info and arg, then its block's words, or for a JOIN,
+            // which reads none, slots `Query::ABSENT`, which no event records.
+            let mut ops: Vec<Vec<Query>> = Vec::with_capacity(call.ops.len());
+            for op in &call.ops {
+                let mut words = vec![query(op.at, op.info, op.info)];
+                words.push(query(op.at + 4, op.arg, op.arg));
+                match op.block {
+                    Some(block) => {
+                        for (j, w) in (0..).zip(block) {
+                            words.push(query(op.arg + 4 * j, w, w));
+                        }
+                    }
+                    None => words.resize(delegation::mpt::OP_WORDS, Query::ABSENT),
+                }
+                ops.push(words);
+            }
             for family in program::delegation_families(call.number) {
                 let at = self
                     .traces
@@ -1766,9 +1933,10 @@ impl<'a> Recorder<'a> {
                     .iter()
                     .position(|t| t.family == family)
                     .expect("a declared number declares all its families");
-                match program::delegation_per(family) {
+                let per = program::delegation_per(family);
+                match per {
                     Per::Call => {
-                        self.traces.delegations[at].push(cycle, call.base, &words, &[]);
+                        self.traces.delegations[at].push(cycle, call.base, &words, &call.carry);
                         self.calls[at] += 1;
                         self.flush_calls(at);
                     }
@@ -1790,10 +1958,18 @@ impl<'a> Recorder<'a> {
                         self.calls[at] += 1;
                         self.flush_calls(at);
                     }
-                    // No executor answers `MPT_ROOT` yet: `delegate` finds no
-                    // function for its frame family and stops before a call
-                    // could record an op.
-                    Per::Op | Per::Hash => unreachable!("an MPT_ROOT call recorded"),
+                    // One entry an op, or a hash op, its base the op's address.
+                    Per::Op | Per::Hash => {
+                        for (op, words) in call.ops.iter().zip(&ops) {
+                            if per == Per::Hash && op.info & 3 == delegation::mpt::LOAD {
+                                continue;
+                            }
+                            let buffer = &mut self.traces.delegations[at];
+                            buffer.push(cycle, op.at, words, &op.carry);
+                            self.calls[at] += 1;
+                            self.flush_calls(at);
+                        }
+                    }
                     // One entry, its base the first array's: `s2`'s.
                     Per::Arrays => {
                         let base = call.arrays.first().expect("a call's arrays").0;
@@ -2155,6 +2331,239 @@ mod tests {
                 pc: 0,
                 addr: 0x7000
             })
+        );
+    }
+
+    /// `F(l ‖ r)`: the permutation's first eight lanes, no feed-forward.
+    fn compress(l: [Fp; 8], r: [Fp; 8]) -> [Fp; 8] {
+        let mut s: [Fp; 16] = std::array::from_fn(|k| if k < 8 { l[k] } else { r[k - 8] });
+        transcript::poseidon2_permute(&mut s);
+        std::array::from_fn(|k| s[k])
+    }
+
+    /// A trie's branch at crit bit `c`: `F(l ‖ r)`, `c + 1` added to lane 0.
+    fn branch(c: u32, l: [Fp; 8], r: [Fp; 8]) -> [Fp; 8] {
+        let mut out = compress(l, r);
+        out[0] += Fp::from_u64(c as u64 + 1);
+        out
+    }
+
+    /// The frame at `MPT_FRAME` naming `n` ops at `at`, `ops` written there,
+    /// `(info, arg)` each, and the `MPT_ROOT` call over it.
+    fn mpt_call(
+        machine: &mut Machine,
+        at: u32,
+        ops: &[(u32, u32)],
+        n: u32,
+    ) -> Result<(Vec<u32>, Vec<Op>, u64), EmuError> {
+        for (i, &(info, arg)) in (0..).zip(ops) {
+            machine.set_word(at + 8 * i, info);
+            machine.set_word(at + 8 * i + 4, arg);
+        }
+        let mut frame = vec![at, n];
+        frame.extend((0..16).map(|j| 0x5a5a_0000 | j));
+        machine.mpt_root(0, MPT_FRAME, &frame)
+    }
+
+    const MPT_FRAME: u32 = guest_memory::RAM_ORIGIN + 0x2000;
+
+    /// `mpt_root` answers the trie hash of the programs the SDK emits — a
+    /// leaf, a branch with a block on either side, a branch of two subtrees
+    /// joined, and those nested, the parked one a branch — with a block's
+    /// lanes read mod `p`, and refuses by name each program its caller owes
+    /// it not to send.
+    #[test]
+    fn mpt_root_answers_its_program_and_refuses_what_its_caller_owes() {
+        use delegation::mpt::{DEPTH_SHIFT, JOIN, LEFT, LOAD, MAX_OPS, PARK, ROOT, SIB};
+        let io = GuestIo {
+            input: Vec::new(),
+            advice: Vec::new(),
+        };
+        let image = spin();
+        let mut machine = Machine::new(&image, &io);
+        let ops_at = MPT_FRAME + 0x1000;
+        // Six blocks; block 4's top lane is all ones, `2^64 − 1`, which is 58
+        // mod `p`.
+        let block = |k: u32| MPT_FRAME + 0x2000 + 64 * k;
+        let word = |k: u32, j: u32| match (k, j) {
+            (4, 14 | 15) => u32::MAX,
+            _ => (16 * k + j + 1).wrapping_mul(0x9e37_79b9),
+        };
+        for k in 0..6 {
+            for j in 0..16 {
+                machine.set_word(block(k) + 4 * j, word(k, j));
+            }
+        }
+        let lane = |k: u32, l: u32| {
+            Fp::from_u64(word(k, 2 * l) as u64 | (word(k, 2 * l + 1) as u64) << 32)
+        };
+        let d: Vec<[Fp; 8]> = (0..6)
+            .map(|k| std::array::from_fn(|l| lane(k, l as u32)))
+            .collect();
+        assert_eq!(d[4][7], Fp::from_u64(58));
+        let info = |kind: u32, flags: u32, depth: u32| kind | flags | depth << DEPTH_SHIFT;
+        let root = |new: &[u32]| -> [u64; 8] {
+            std::array::from_fn(|l| new[ROOT + 2 * l] as u64 | (new[ROOT + 2 * l + 1] as u64) << 32)
+        };
+        let answers = |machine: &mut Machine, ops: &[(u32, u32)], want: [Fp; 8]| {
+            let (new, program, pending) =
+                mpt_call(machine, ops_at, ops, ops.len() as u32).expect("a program it answers");
+            assert_eq!(
+                root(&new),
+                want.map(Fp::to_u64),
+                "{ops:x?}: the root, canonical"
+            );
+            assert_eq!(
+                new[..ROOT],
+                [ops_at, ops.len() as u32],
+                "the rest written back"
+            );
+            (program, pending)
+        };
+        // A leaf: a LOAD's left bit and depth are free.
+        answers(&mut machine, &[(info(LOAD, LEFT, 300), block(0))], d[0]);
+        // A branch with a block on the right, then on the left.
+        let leaf = (LOAD, block(0));
+        let right = [leaf, (info(SIB, 0, 5), block(1))];
+        answers(&mut machine, &right, branch(5, d[0], d[1]));
+        let left = [leaf, (info(SIB, LEFT, 5), block(1))];
+        answers(&mut machine, &left, branch(5, d[1], d[0]));
+        // Two leaves joined, the left one parked.
+        let joined = [
+            leaf,
+            (info(LOAD, PARK, 0), block(1)),
+            (info(JOIN, LEFT, 511), 1),
+        ];
+        answers(&mut machine, &joined, branch(511, d[0], d[1]));
+        // A block whose top lane is at or above `p`.
+        let high = [(LOAD, block(4)), (info(SIB, 0, 0), block(5))];
+        answers(&mut machine, &high, branch(0, d[4], d[5]));
+        // Two branches joined: the parked value is a branch, its `pending` in
+        // lane 0.
+        let nested = [
+            leaf,
+            (info(SIB, 0, 9), block(1)),
+            (info(LOAD, PARK, 0), block(2)),
+            (info(SIB, LEFT, 3), block(3)),
+            (info(JOIN, LEFT, 1), 2),
+        ];
+        let (l, r) = (branch(9, d[0], d[1]), branch(3, d[3], d[2]));
+        let (program, pending) = answers(&mut machine, &nested, branch(1, l, r));
+        assert_eq!(pending, 2, "the last op's d + 1");
+        for (i, op) in (0..).zip(&program) {
+            assert_eq!(
+                (op.at, op.info, op.arg),
+                (ops_at + 8 * i, nested[i as usize].0, nested[i as usize].1)
+            );
+            assert_eq!(op.carry[8..10], [[0, 0, 10, 0, 4][i as usize], i as u64]);
+            match op.info & 3 {
+                JOIN => assert_eq!(op.block, None),
+                _ => {
+                    let k = (op.arg - block(0)) / 64;
+                    assert_eq!(op.block, Some(std::array::from_fn(|j| word(k, j as u32))));
+                }
+            }
+        }
+        let raw = compress(d[3], d[2]).map(Fp::to_u64);
+        assert_eq!(
+            program[4].carry[..8],
+            raw,
+            "the JOIN enters with the SIB's raw lanes"
+        );
+        assert_eq!(
+            program[4].carry[10..],
+            l.map(Fp::to_u64),
+            "and the branch parked"
+        );
+
+        let frame_error = |detail| Some(EmuError::DelegationFrame { pc: 0, detail });
+        let refused = |machine: &mut Machine, ops: &[(u32, u32)]| {
+            mpt_call(machine, ops_at, ops, ops.len() as u32).err()
+        };
+        let out_of_bounds = |addr: u32| {
+            Some(EmuError::OutOfBounds {
+                pc: 0,
+                addr: addr as u64,
+            })
+        };
+        let count = "mpt_root's count is outside 1..=2^20";
+        assert_eq!(
+            mpt_call(&mut machine, ops_at, &[leaf], 0).err(),
+            frame_error(count)
+        );
+        let past = MAX_OPS + 1;
+        assert_eq!(
+            mpt_call(&mut machine, ops_at, &[leaf], past).err(),
+            frame_error(count)
+        );
+        // `2^20` ops pass the count: op 1, past the top of RAM, stops the call.
+        let top = guest_memory::ADVICE_ORIGIN - 8;
+        assert_eq!(
+            mpt_call(&mut machine, top, &[leaf], MAX_OPS).err(),
+            out_of_bounds(guest_memory::ADVICE_ORIGIN)
+        );
+        let decode = "mpt_root's info word does not decode";
+        assert_eq!(refused(&mut machine, &[(3, block(0))]), frame_error(decode));
+        assert_eq!(
+            refused(&mut machine, &[(1 << 13, block(0))]),
+            frame_error(decode)
+        );
+        // A JOIN of an op that did not park, of its own park, of a later op's.
+        let named = frame_error("mpt_root's JOIN names no earlier park");
+        assert_eq!(refused(&mut machine, &[leaf, (JOIN, 0)]), named);
+        assert_eq!(
+            refused(&mut machine, &[leaf, (info(JOIN, PARK, 0), 1)]),
+            named
+        );
+        let later = [leaf, (JOIN, 2), (info(LOAD, PARK, 0), block(1))];
+        assert_eq!(refused(&mut machine, &later), named);
+        let twice = [
+            (info(LOAD, PARK, 0), block(0)),
+            (LOAD, block(1)),
+            (JOIN, 0),
+            (JOIN, 0),
+        ];
+        assert_eq!(
+            refused(&mut machine, &twice),
+            frame_error("mpt_root's JOIN takes a park twice")
+        );
+        assert_eq!(
+            refused(&mut machine, &[(info(LOAD, PARK, 0), block(0))]),
+            frame_error("mpt_root leaves a park no JOIN takes")
+        );
+        assert_eq!(
+            mpt_call(&mut machine, ops_at + 2, &[leaf], 1).err(),
+            frame_error("mpt_root's ops are not word-aligned")
+        );
+        assert_eq!(
+            refused(&mut machine, &[(LOAD, block(0) + 2)]),
+            frame_error("mpt_root's block is not word-aligned")
+        );
+        assert_eq!(
+            mpt_call(&mut machine, 0x7000, &[leaf], 1).err(),
+            out_of_bounds(0x7000)
+        );
+        assert_eq!(
+            refused(&mut machine, &[(LOAD, 0x7000)]),
+            out_of_bounds(0x7000)
+        );
+        // The advice region, which this run was not given.
+        let advice = guest_memory::ADVICE_ORIGIN;
+        assert_eq!(
+            refused(&mut machine, &[leaf, (SIB, advice)]),
+            out_of_bounds(advice)
+        );
+        // A word read twice: one block twice, two overlapping by a word, a
+        // block on the frame's root and on the ops, and ops on the frame.
+        let again = frame_error("mpt_root reads a word twice");
+        assert_eq!(refused(&mut machine, &[leaf, (SIB, block(0))]), again);
+        assert_eq!(refused(&mut machine, &[leaf, (SIB, block(0) + 60)]), again);
+        let on_root = MPT_FRAME + 4 * ROOT as u32;
+        assert_eq!(refused(&mut machine, &[(LOAD, on_root)]), again);
+        assert_eq!(refused(&mut machine, &[leaf, (SIB, ops_at + 8)]), again);
+        assert_eq!(
+            mpt_call(&mut machine, MPT_FRAME + 64, &[leaf], 1).err(),
+            again
         );
     }
 

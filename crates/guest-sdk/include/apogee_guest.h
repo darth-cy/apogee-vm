@@ -10,7 +10,7 @@
  * An Apogee guest has no files and no streams. Its public input, advice and
  * journal are memory the proof binds — or, for advice, does not — and these
  * four calls are the whole of reaching them (docs/guest-program-manual.md §11,
- * docs/spec/public-values.md). The last six calls are precompiles, each
+ * docs/spec/public-values.md). The last seven calls are precompiles, each
  * a circuit of its own (docs/spec/precompiles.md).
  *
  * The library also provides `memcpy`, `memmove`, `memset` and `memcmp`, the
@@ -101,6 +101,23 @@ void apogee_falcon512_sample(uint64_t lanes[8]);
  * one of these, the call refuses: the execution fails. */
 uint32_t apogee_falcon512_decode(uint32_t mode, const uint8_t *src, uint16_t dst[512],
                                  uint32_t *end);
+
+/* The value of the op program of `n` ops at `ops`, by the precompile, written
+ * to `root`: op i is (info, arg) at ops[2i] and ops[2i + 1], run in order over
+ * a value of 8 lanes, zero to start, each lane written below p. An info word
+ * is kind + 4*park + 8*left + 16*d, d < 512. A LOAD (kind 0) makes the value
+ * the block at `arg`; a SIB (1) or a JOIN (2) makes it apogee_poseidon2_permute
+ * of the value and the other child, the other first where `left` is set,
+ * truncated to its first 8 lanes, with d + 1 added to lane 0 mod p: a crit-bit
+ * trie's branch at bit d. A SIB's other child is the block at `arg`; a JOIN's
+ * is the value op `arg`, an earlier op with its park bit set, started from. A
+ * block is 16 words, 8 little-endian lanes, each read mod p; the ops and the
+ * blocks may be anywhere a load reaches, the advice included. Returns 0, or 1
+ * and writes nothing when n is 0 or above 2^20 or `ops` is not 4-aligned. The
+ * call refuses any other program -- an info word that does not decode, a block
+ * not 4-aligned, a JOIN of no earlier park, a park taken by no JOIN or by two,
+ * a word read twice across the ops and the blocks -- and the execution fails. */
+int32_t apogee_mpt_eval(const uint32_t *ops, uint32_t n, uint64_t root[8]);
 
 /* The guest's entry, which the library's startup calls. Declared here with C
  * linkage because a freestanding C++ compiler does not give `main` any: a

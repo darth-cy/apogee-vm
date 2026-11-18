@@ -308,14 +308,17 @@ impl FamilyTrace {
 }
 
 /// One **delegation** family's entries, column-major: one per call, or for a
-/// level family one per level of a call's path (`program::delegation_per`).
+/// level family one per level of a call's path, or for an op family one per
+/// op or hash op of a call's program (`program::delegation_per`).
 ///
 /// An entry is not a cycle: it rides the cycle whose ecall requested it, and
 /// its memory queries are its words — a call's frame or a level's sibling,
 /// `words[j]` at `base + 4j`, or a call's arrays, each word at its array's
 /// address plus four a word (`constants::delegation::Per::Arrays`), or a
 /// decode call's frame, polynomial and the source words it read, the slots
-/// past them [`Query::ABSENT`] and no query (`Per::Decode`) — each written at
+/// past them [`Query::ABSENT`] and no query (`Per::Decode`), or an op's two
+/// words at `base` and its block's at its arg, a JOIN's block slots
+/// [`Query::ABSENT`] (`Per::Op`) — each written at
 /// `4·cycle + constants::delegation::FRAME_DELTA`. A frame does not fit
 /// [`Row`]'s query slots, so it lives here.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -326,13 +329,14 @@ pub struct DelegationTrace {
     /// The requesting cycle, one per entry.
     pub cycle: Vec<u64>,
     /// Where an entry's words begin, one per entry: a call's frame, a level's
-    /// sibling, a call's first array.
+    /// sibling, a call's first array, an op.
     pub base: Vec<u32>,
     /// The entry's word queries, in order.
     pub words: Vec<QueryColumns>,
     /// What each entry carries, `program::delegation_carry` columns: a
-    /// level's node, its slot's bits not yet taken and its level; none for a
-    /// call or its arrays.
+    /// level's node, its slot's bits not yet taken and its level; an op's
+    /// value, its index and a JOIN's parked value; an `MPT_ROOT` call's last
+    /// `pending`; none for any other call or its arrays.
     pub carry: Vec<Vec<u64>>,
 }
 

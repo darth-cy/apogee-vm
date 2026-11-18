@@ -18,7 +18,7 @@
 //!
 //! The ecall ABI is [`exit`] and the delegation calls, each a shim over one
 //! frame: [`poseidon2_permute`], [`merkle_root`], [`falcon512`]'s decoder,
-//! sampler and [`falcon512::s1_norm`], and [`U256`]'s divisions. An ecall carries its number in `a7` and its
+//! sampler and [`falcon512::s1_norm`], [`mpt_eval`], and [`U256`]'s divisions. An ecall carries its number in `a7` and its
 //! argument in `a0`; `docs/spec/ecall-abi.md` is the table, every number
 //! [`constants::ecall`]'s.
 //!
@@ -460,6 +460,9 @@ static FALCON512_SAMPLE: u32 = ecall::FALCON512_SAMPLE;
 #[link_section = ".apogee.delegations.falcon512_decode"]
 static FALCON512_DECODE: u32 = ecall::FALCON512_DECODE;
 
+#[link_section = ".apogee.delegations.mpt_root"]
+static MPT_ROOT: u32 = ecall::MPT_ROOT;
+
 /// One delegation call over the frame at `frame`, its ecall number read back
 /// out of `declared`. Through `black_box`: folded to an immediate, the read
 /// would leave the record unreferenced and the declaration out of the image.
@@ -585,6 +588,60 @@ fn merkle_path(slot: u32, depth: usize, siblings: *const u8) -> bool {
         && (slot as u64) >> depth == 0
         && (siblings as usize).is_multiple_of(4)
 }
+
+/// The value of the op program `ops` by the precompile
+/// (`constants::delegation::mpt`): op `i` is `(info, arg)` at `ops[2i]` and
+/// `ops[2i + 1]`, and the program runs in order over a value of 8 lanes, zero
+/// to start, which the call returns, canonical. An info word is
+/// `kind + 4·park + 8·left + 16·d`, `d < 512`. A LOAD (kind 0) makes the value
+/// the block at `arg`; a SIB (1) or a JOIN (2) makes it [`poseidon2_compress`]
+/// of the value and the other child, the other on the left where `left` is
+/// set, with `d + 1` added to lane 0 mod `p`: a crit-bit trie's branch at bit
+/// `d`. A SIB's other child is the block at `arg`; a JOIN's is the value op
+/// `arg`, an earlier op with its park bit set, started from. A block is 16
+/// words, a digest's 8 little-endian lanes, read mod `p`.
+///
+/// The ops and the blocks may be anywhere a load reaches, the advice included,
+/// so a proof advised is hashed in place. Panics unless `ops` is 1 to `2^20`
+/// whole ops. The call refuses any other program — an info word that does not
+/// decode, a block not word-aligned, a JOIN of no earlier park, a park taken by
+/// no JOIN or by two, a word read twice across the ops and the blocks — and the
+/// execution fails.
+pub fn mpt_eval(ops: &[u32]) -> Digest {
+    let n = ops.len() / 2;
+    assert!(
+        ops.len().is_multiple_of(2)
+            && (1..=constants::delegation::mpt::MAX_OPS as usize).contains(&n),
+        "mpt_eval: 1 to 2^20 ops of two words"
+    );
+    let mut frame = MptFrame {
+        ops: ops.as_ptr() as u32,
+        count: n as u32,
+        root: [0; 8],
+    };
+    // SAFETY: the frame is 18 words, 8-aligned, the call's whole frame, below
+    // the advice region on the stack; the ops are a borrow apart from it,
+    // readable for `8n` bytes, and each block an op names is the caller's to
+    // keep readable.
+    unsafe { delegate(&MPT_ROOT, (&mut frame as *mut MptFrame).cast()) };
+    Digest(frame.root)
+}
+
+/// `MPT_ROOT`'s frame, word for word `constants::delegation::mpt`'s.
+#[repr(C)]
+struct MptFrame {
+    ops: u32,
+    count: u32,
+    root: [u64; 8],
+}
+
+const _: () = {
+    use constants::delegation::mpt as m;
+    assert!(core::mem::offset_of!(MptFrame, ops) == 4 * m::OPS);
+    assert!(core::mem::offset_of!(MptFrame, count) == 4 * m::COUNT);
+    assert!(core::mem::offset_of!(MptFrame, root) == 4 * m::ROOT);
+    assert!(core::mem::size_of::<MptFrame>() == 4 * m::FRAME);
+};
 
 /// `(floor(a·b/d), a·b mod d)` by the precompile (`docs/spec/precompiles.md`
 /// §4). The caller owes `d ≠ 0` and a quotient below `2^256`, which an
@@ -743,6 +800,26 @@ pub unsafe extern "C" fn apogee_falcon512_decode(
         *end = at;
     }
     norm
+}
+
+/// `mpt_eval()` over the `n` ops at `ops`, two words each: the program's value
+/// written to `root`. Returns 0, or 1 and writes nothing when `n` is 0 or
+/// above `2^20` or `ops` is not 4-aligned.
+///
+/// # Safety
+/// `ops` is valid for reads of `2n` `uint32_t` and `root` for writes of 8
+/// `uint64_t`; each block an op names is valid for reads of 16 `uint32_t`.
+#[no_mangle]
+pub unsafe extern "C" fn apogee_mpt_eval(ops: *const u32, n: u32, root: *mut u64) -> i32 {
+    let whole = (1..=constants::delegation::mpt::MAX_OPS).contains(&n);
+    match whole && (ops as usize).is_multiple_of(4) {
+        true => {
+            let program = core::slice::from_raw_parts(ops, 2 * n as usize);
+            *root.cast::<[u64; 8]>() = mpt_eval(program).0;
+            0
+        }
+        false => 1,
+    }
 }
 
 /// `U256::mul_div_rem()`: `q = floor(a·b/d)` and `r = a·b mod d`, four

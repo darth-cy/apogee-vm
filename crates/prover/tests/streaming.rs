@@ -95,12 +95,13 @@ fn a1_the_streamed_block_does_not_depend_on_max_in_flight() {
     );
 }
 
-/// `guests/precompiles`' statement: five of the six precompiles it declares,
-/// its input holding no Falcon-512 verification case, so the `Invocations`
-/// arm — each of their ten families a shard, `FALCON_DECODE` none — beside
-/// its execution and window shards; proved once at the default in flight and verified,
-/// its journal the run's. `crates/checker/tests/precompiles.rs` holds that
-/// journal to the host's and the statement's multiset to its circuits.
+/// `guests/precompiles`' statement: six of the seven precompiles it declares,
+/// its input holding no Falcon-512 verification case and its advice a trie
+/// program of one step, so the `Invocations` arm — each of their thirteen
+/// families a shard, `FALCON_DECODE` none — beside its execution and window
+/// shards; proved once at the default in flight and verified, its journal the
+/// run's. `crates/checker/tests/precompiles.rs` holds that journal to the
+/// host's and the statement's multiset to its circuits.
 #[test]
 #[ignore = "proves the precompiles statement"]
 fn a2_a_statement_with_precompile_calls_streams_and_verifies() {
@@ -118,7 +119,7 @@ fn a2_a_statement_with_precompile_calls_streams_and_verifies() {
             &0u32.to_le_bytes(),
         ]
         .concat(),
-        advice: Vec::new(),
+        advice: [1u32.to_le_bytes().as_slice(), &[0u8; 128]].concat(),
     };
     let (block, _) =
         prove_block_streaming(&setup, &io, prover::DEFAULT_MAX_IN_FLIGHT).expect("it proves");
@@ -140,6 +141,9 @@ fn a2_a_statement_with_precompile_calls_streams_and_verifies() {
         constants::family::FALCON_SPLIT,
         constants::family::FALCON_PRODUCT,
         constants::family::FALCON_SAMPLE,
+        constants::family::MPT,
+        constants::family::MPT_NODES,
+        constants::family::MPT_ROUNDS,
     ] {
         let at = setup
             .program

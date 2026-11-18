@@ -133,6 +133,38 @@ pub fn input_of(name: &str) -> Vec<u8> {
     }
 }
 
+/// The advice each traced guest runs on here: `precompiles`' long program of
+/// 4,100 steps, whose ops straddle an `MPT_NODES` shard at `2^12` and whose
+/// hash ops an `MPT_ROUNDS` one at `2^16`, and none for any other guest.
+pub fn advice_of(name: &str) -> Vec<u8> {
+    match name {
+        "precompiles" => precompiles_advice(4_100),
+        _ => Vec::new(),
+    }
+}
+
+/// `guests/precompiles`' advice for a long program of `steps` hash ops: its
+/// blocks 0 and 1 arbitrary, block 0's top lane `2^64 − 1` and block 1's lane
+/// 3 `p`, each read mod `p`, then each block the last 8 lanes of the duplex's
+/// step before its own: the permutation, and `d + 1` added to lane 0 at step
+/// `s`, `d = s mod 512`.
+pub fn precompiles_advice(steps: u32) -> Vec<u8> {
+    let start: [u64; 16] = std::array::from_fn(|k| match k {
+        7 => u64::MAX,
+        11 => field::A64_C5,
+        _ => (k as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15),
+    });
+    let mut out = steps.to_le_bytes().to_vec();
+    out.extend(start.iter().flat_map(|l| l.to_le_bytes()));
+    let mut state = start.map(field::Fp::from_u64);
+    for s in 1..steps {
+        transcript::poseidon2_permute(&mut state);
+        state[0] += field::Fp::from_u64(s as u64 % 512 + 1);
+        out.extend(state[8..].iter().flat_map(|x| x.to_u64().to_le_bytes()));
+    }
+    out
+}
+
 /// The status each traced guest exits with on [`input_of`]'s input: 0, but
 /// for `addsub`, `control` and `alu`, whose exit statuses are their results.
 pub fn exit_code_of(name: &str) -> i32 {
@@ -173,9 +205,14 @@ impl Traced {
 pub fn traced(name: &str) -> Traced {
     let image = image(name);
     let (tables, config) = preprocess(&image);
-    let (traces, log, profile, execution) =
-        trace_run(&image, &io(&input_of(name)), &tables, &config)
-            .unwrap_or_else(|e| panic!("{name}: {e}"));
+    let advice = advice_of(name);
+    let (traces, log, profile, execution) = trace_run(
+        &image,
+        &with_advice(&input_of(name), &advice),
+        &tables,
+        &config,
+    )
+    .unwrap_or_else(|e| panic!("{name}: {e}"));
     assert_eq!(
         execution.exit_code,
         exit_code_of(name),
@@ -190,7 +227,7 @@ pub fn traced(name: &str) -> Traced {
         log,
         profile,
         execution,
-        advice: Vec::new(),
+        advice,
     }
 }
 
