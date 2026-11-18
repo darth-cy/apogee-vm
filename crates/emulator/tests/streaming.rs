@@ -50,8 +50,10 @@ const GUESTS: [(&str, u32); 11] = [
     // calls fill the rounds' 256-call buffer mid-execution. Falcon's are at
     // `2^16`, and its 1,025 calls fill `FALCON_SPLIT`'s 1,024. The long trie
     // program's 6,151 ops fill `MPT_NODES`' 4,096 and its 4,100 hash ops
-    // `MPT_ROUNDS`' 256, each mid-call.
-    ("precompiles", 16),
+    // `MPT_ROUNDS`' 256, each mid-call. Every other family is at `2^18`, the
+    // least height on the menu its decoded tables fit: its code runs past pc
+    // `2^17`, a row being `pc/2`.
+    ("precompiles", 18),
 ];
 
 /// Every family at `2^height`; for `precompiles`, the delegation families at
