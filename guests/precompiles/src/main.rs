@@ -320,7 +320,11 @@ fn main() {
     // took and adds `d + 1` to lane 0, every lane below `p` from then on. Its
     // words are written in a `while`: a debug build pays for every iterator
     // call.
-    state.iter_mut().for_each(|lane| *lane %= P);
+    let mut k = 0;
+    while k < 16 {
+        state[k] %= P;
+        k += 1;
+    }
     let mut ops = vec![0u32; 2 * (1 + steps + steps / 2) as usize];
     let words = ops.as_mut_slice();
     words[1] = block(0);
@@ -338,12 +342,18 @@ fn main() {
             words[w + 3] = w as u32 / 2;
             w += 4;
         }
-        let x: [u64; 8] = core::array::from_fn(|k| state[k]);
+        let x = [
+            state[0], state[1], state[2], state[3], state[4], state[5], state[6], state[7],
+        ];
         poseidon2_permute(&mut state);
-        for (lane, x) in state.iter_mut().zip(x) {
-            *lane = plus(*lane, x);
-        }
-        state[0] = plus(state[0], d as u64 + 1);
+        state[0] = plus(plus(state[0], x[0]), d as u64 + 1);
+        state[1] = plus(state[1], x[1]);
+        state[2] = plus(state[2], x[2]);
+        state[3] = plus(state[3], x[3]);
+        state[4] = plus(state[4], x[4]);
+        state[5] = plus(state[5], x[5]);
+        state[6] = plus(state[6], x[6]);
+        state[7] = plus(state[7], x[7]);
         (s, addr) = (s + 1, addr + 64);
     }
     let root = mpt_eval(&ops);
@@ -432,7 +442,9 @@ fn op(kind: u32, bits: u32, d: u32) -> u32 {
     kind | bits | d << 4
 }
 
-/// `x + t` mod `p`, each below it.
+/// `x + t` mod `p`, each below it: inlined even in a debug build, whose long
+/// program takes nine a step.
+#[inline(always)]
 fn plus(x: u64, t: u64) -> u64 {
     match x.overflowing_add(t) {
         (s, false) if s < P => s,
