@@ -69,6 +69,9 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize - family::RETIRED.len()] =
     family::FALCON_PRODUCT,
     family::FALCON_SAMPLE,
     family::FALCON_DECODE,
+    family::MPT,
+    family::MPT_NODES,
+    family::MPT_ROUNDS,
 ];
 
 /// The **frame family** of ecall `number`, the one whose row reads the frame
@@ -115,24 +118,30 @@ pub fn delegation_per(family: FamilyId) -> Per {
 }
 
 /// How many values an entry of delegation `family` carries:
-/// `delegation::CARRY` for a level's, none for a call's or its arrays.
+/// `delegation::CARRY` for a level's, `delegation::mpt::CARRY` for an op's or
+/// a hash op's, `delegation::mpt::CALL_CARRY` for an `MPT_ROOT` call's, none
+/// for any other call's, its arrays or a decode call's.
 pub fn delegation_carry(family: FamilyId) -> usize {
     match delegation_per(family) {
+        Per::Call if family == family::MPT => delegation::mpt::CALL_CARRY,
         Per::Call | Per::Arrays | Per::Decode => 0,
         Per::Level => delegation::CARRY,
+        Per::Op | Per::Hash => delegation::mpt::CARRY,
     }
 }
 
 /// Whether delegation `family`'s rows read their entries' words from RAM: it
 /// is the first family of its number recording its kind of entry, a call's
-/// frame family, `MERKLE_LEVELS` or `FALCON_SPLIT`. A later family holds the
-/// same entries and touches no RAM.
+/// frame family, `MERKLE_LEVELS`, `FALCON_SPLIT` or `MPT_NODES`. A later
+/// family holds the same entries and touches no RAM, and so does a hash op's,
+/// whose entries are some of its ops'.
 pub fn reads_ram(family: FamilyId) -> bool {
     delegation_type(family).is_some_and(|(_, n, _, _, per)| {
-        delegation::TYPES
-            .iter()
-            .find(|t| t.1 == *n && t.4 == *per)
-            .is_some_and(|t| t.0 == family)
+        *per != Per::Hash
+            && delegation::TYPES
+                .iter()
+                .find(|t| t.1 == *n && t.4 == *per)
+                .is_some_and(|t| t.0 == family)
     })
 }
 
@@ -172,6 +181,9 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::FALCON_PRODUCT => "FALCON_PRODUCT",
         family::FALCON_SAMPLE => "FALCON_SAMPLE",
         family::FALCON_DECODE => "FALCON_DECODE",
+        family::MPT => "MPT",
+        family::MPT_NODES => "MPT_NODES",
+        family::MPT_ROUNDS => "MPT_ROUNDS",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -337,7 +349,10 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::FALCON_SPLIT
         | family::FALCON_PRODUCT
         | family::FALCON_SAMPLE
-        | family::FALCON_DECODE => &[],
+        | family::FALCON_DECODE
+        | family::MPT
+        | family::MPT_NODES
+        | family::MPT_ROUNDS => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }

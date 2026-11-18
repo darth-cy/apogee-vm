@@ -36,6 +36,7 @@ pub mod mem_subword;
 pub mod mem_word;
 pub mod memory;
 pub mod merkle;
+pub mod mpt;
 pub mod mul_div;
 pub mod mul_div_u256;
 pub mod poseidon2;
@@ -145,6 +146,9 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
             f::FALCON_PRODUCT => (falcon::product_artifact, falcon::product_channels()),
             f::FALCON_SAMPLE => (falcon::sample_artifact, falcon::sample_channels()),
             f::FALCON_DECODE => (falcon_decode::artifact, falcon_decode::channels()),
+            f::MPT => (mpt::artifact, mpt::channels()),
+            f::MPT_NODES => (mpt::nodes_artifact, mpt::nodes_channels()),
+            f::MPT_ROUNDS => (mpt::rounds_artifact, mpt::rounds_channels()),
             _ => return None,
         };
     if trace_vars < minimum_trace_vars(&channels) {

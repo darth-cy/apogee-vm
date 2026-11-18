@@ -179,6 +179,9 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
         family::FALCON_PRODUCT => Some(falcon_product),
         family::FALCON_SAMPLE => Some(falcon_sample),
         family::FALCON_DECODE => Some(falcon_decode),
+        family::MPT => Some(mpt_root),
+        family::MPT_NODES => Some(mpt_nodes),
+        family::MPT_ROUNDS => Some(mpt_rounds),
         _ => None,
     }
 }
@@ -363,19 +366,29 @@ fn merkle_rounds(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)
     rounds(src, family::MERKLE_ROUNDS)
 }
 
+/// `MPT_ROUNDS`, `constraints::mpt`: a hash op's permutation, boundary 1 to
+/// 16 of its op, its last round writing op `i + 1`'s raw lanes alone, from
+/// the op's entry as `MPT_NODES` holds it.
+fn mpt_rounds(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    rounds(src, family::MPT_ROUNDS)
+}
+
 /// The rounds of one permutation an entry (`constraints::poseidon2::rounds`):
-/// a `POSEIDON2` call's frame lanes, or a Merkle level's ordered pair, through
-/// `M_E` and then sixteen rows, row `k` at `first + stride·k`, the last idle.
+/// a `POSEIDON2` call's frame lanes, a Merkle level's ordered pair or a trie
+/// hash op's two children, through `M_E` and then sixteen rows, row `k` at
+/// `first + stride·k`, the last idle.
 fn rounds(src: &ShardSource, fam: FamilyId) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     use constraints::merkle::{LEVEL, STRIDE};
     use constraints::poseidon2::{internal, round_constant, stamp, PARTIAL, ROWS};
     use transcript::WIDTH;
     let calls = *src.invocations(fam)?;
     let level = fam == family::MERKLE_ROUNDS;
+    let op = fam == family::MPT_ROUNDS;
     let mut w = Witness::new(fam, ROWS * calls.len());
     let [live, cycle, stamp_col, ext, int] =
         ["live", "cycle", "stamp", "ext", "int"].map(|c| w.col(c));
-    let keep = level.then(|| w.col("keep"));
+    let keep = (level || op).then(|| w.col("keep"));
+    let op_c0 = op.then(|| w.col("op_c0"));
     let kinds: Vec<usize> = (0..ROWS - 1).map(|k| w.col(&format!("row{k}"))).collect();
     let lanes = |prefix: &str, w: &mut Witness| -> Vec<usize> {
         (0..WIDTH)
@@ -393,13 +406,26 @@ fn rounds(src: &ShardSource, fam: FamilyId) -> Result<Vec<(PolyAddress, Multilin
         })
         .collect();
     for c in 0..calls.len() {
-        let input: [Fp; WIDTH] = match level {
-            false => std::array::from_fn(|i| lane(&calls, i, c, false)),
-            true => level_input(&calls, c),
+        let input: [Fp; WIDTH] = match fam {
+            family::MERKLE_ROUNDS => level_input(&calls, c),
+            family::MPT_ROUNDS => {
+                let hash = MptOp::of(&calls, c)?;
+                if hash.kind == delegation::mpt::LOAD {
+                    let cycle = calls.cycles()[c];
+                    return Err(format!("cycle {cycle}: a LOAD among MPT_ROUNDS' entries"));
+                }
+                hash.children()
+            }
+            _ => std::array::from_fn(|i| lane(&calls, i, c, false)),
         };
-        let at = |k: usize| match level {
-            false => stamp(k as u64),
-            true => LEVEL * calls.carry(9)[c] + STRIDE * (k as u64 + 1),
+        // A level's and a hash op's index, carried at 9 by both.
+        let at = |k: usize| match fam {
+            family::MERKLE_ROUNDS => LEVEL * calls.carry(9)[c] + STRIDE * (k as u64 + 1),
+            family::MPT_ROUNDS => {
+                constraints::mpt::SPAN * calls.carry(9)[c]
+                    + constraints::mpt::STRIDE * (k as u64 + 1)
+            }
+            _ => stamp(k as u64),
         };
         let mut state = input;
         transcript::external(&mut state);
@@ -419,6 +445,9 @@ fn rounds(src: &ShardSource, fam: FamilyId) -> Result<Vec<(PolyAddress, Multilin
             );
             if let Some(keep) = keep {
                 w.put(keep, r, (k < ROWS - 2) as u64);
+            }
+            if let Some(op_c0) = op_c0 {
+                w.put(op_c0, r, calls.carry(9)[c] >> 16);
             }
             for (i, col) in s.iter().enumerate() {
                 w.put_fp(*col, r, state[i]);
@@ -553,6 +582,203 @@ fn merkle_levels(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)
             w.put_fp(*c, r, Fp::from_u64(calls.carry(i)[r]));
         }
         let mut x = level_input(&calls, r);
+        transcript::external(&mut x);
+        for (j, c) in u.iter().enumerate() {
+            w.put_fp(*c, r, x[j]);
+        }
+    }
+    Ok(w.finish(src.height))
+}
+
+/// An `MPT_ROOT` op entry decoded (`delegation::Per::Op`): its info's
+/// fields, the value entering it, its raw lanes with `pending` added to lane
+/// 0, and its other child, a block's lanes or a JOIN's parked ones.
+struct MptOp {
+    kind: u32,
+    park: u64,
+    left: u64,
+    d: u64,
+    cur: [Fp; 8],
+    other: [Fp; 8],
+}
+
+impl MptOp {
+    /// Entry `r`, from its words and its carry (`delegation::mpt::CARRY`):
+    /// the raw lanes at 0..8, `pending` at 8, the op's index at 9 and a
+    /// JOIN's parked lanes at 10..18. Refuses an info word that does not
+    /// decode.
+    fn of(calls: &FrameSlice, r: usize) -> Result<MptOp, String> {
+        use constants::delegation::mpt::{DEPTH_BOUND, DEPTH_SHIFT, JOIN};
+        let info = calls.word(0).read_value[r];
+        let kind = (info & 3) as u32;
+        if kind > JOIN || info >= (DEPTH_BOUND << DEPTH_SHIFT) as u64 {
+            let cycle = calls.cycles()[r];
+            return Err(format!(
+                "cycle {cycle}: the MPT info word {info:#x} does not decode"
+            ));
+        }
+        let lanes = |at: usize| -> [Fp; 8] {
+            std::array::from_fn(|k| Fp::from_u64(calls.carry(at + k)[r]))
+        };
+        let mut cur = lanes(0);
+        cur[0] += Fp::from_u64(calls.carry(8)[r]);
+        let other = match kind {
+            JOIN => lanes(10),
+            _ => std::array::from_fn(|k| lane(calls, 1 + k, r, false)),
+        };
+        Ok(MptOp {
+            kind,
+            park: info >> 2 & 1,
+            left: info >> 3 & 1,
+            d: info >> DEPTH_SHIFT,
+            cur,
+            other,
+        })
+    }
+
+    /// The permutation's input: `cur ‖ other`, or `other ‖ cur` where `left`.
+    fn children(&self) -> [Fp; 16] {
+        let (l, r) = match self.left {
+            0 => (self.cur, self.other),
+            _ => (self.other, self.cur),
+        };
+        std::array::from_fn(|i| if i < 8 { l[i] } else { r[i - 8] })
+    }
+}
+
+/// `MPT`, `constraints::mpt`: the frame, the count's bound, op `n`'s stamp and
+/// op pointer, the call's carry `pending` and the raw lanes it leaves of the
+/// root's, and each root lane's halfwords and top test. Refuses a count the
+/// circuit cannot hold.
+fn mpt_root(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constants::delegation::mpt::{COUNT, MAX_OPS, OP, OPS, ROOT};
+    use constraints::mpt::SPAN;
+    let fam = family::MPT;
+    let (calls, mut w) = frame_fill(src, fam)?;
+    let [count_c0, last, end, pending] = ["count_c0", "last", "end", "pending"].map(|c| w.col(c));
+    let o: Vec<usize> = (0..8).map(|l| w.fcol(&format!("o{l}"))).collect();
+    let halves: Vec<[usize; 4]> = (0..8)
+        .map(|l| canonical_columns(&mut w, &format!("root{l}")))
+        .collect();
+    for r in 0..calls.len() {
+        let (ops, count) = (
+            frame_word(&calls, OPS, r, false),
+            frame_word(&calls, COUNT, r, false),
+        );
+        if !(1..=MAX_OPS as u64).contains(&count) {
+            let cycle = calls.cycles()[r];
+            return Err(format!("cycle {cycle}: an MPT_ROOT call of {count} ops"));
+        }
+        let tweak = calls.carry(0)[r];
+        w.row(
+            r,
+            &[
+                (count_c0, (count - 1) >> 16),
+                (last, SPAN * count),
+                (end, ops + 4 * OP as u64 * count),
+                (pending, tweak),
+            ],
+        );
+        for l in 0..8 {
+            let (lo_w, hi_w) = (
+                frame_word(&calls, ROOT + 2 * l, r, true),
+                frame_word(&calls, ROOT + 2 * l + 1, r, true),
+            );
+            let lane = Fp::from_u64(lo_w | hi_w << 32);
+            let raw = match l {
+                0 => lane - Fp::from_u64(tweak),
+                _ => lane,
+            };
+            w.put_fp(o[l], r, raw);
+            canonical(&mut w, halves[l], r, lo_w, hi_w);
+        }
+    }
+    Ok(w.finish(src.height))
+}
+
+/// `MPT_NODES`, `constraints::mpt`: one row an op, from its entry's carry and
+/// its words, its info decoded into the masks, `left` and `d`, its arg, and
+/// its block's words, each with its high halfword. A JOIN's row, whose op
+/// reads no block, holds zeros in its block words and in their gap chunks
+/// those of `4·cycle`. Refuses a JOIN whose arg is no op's index.
+fn mpt_nodes(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constants::delegation::mpt::{BLOCK, JOIN, LOAD, MAX_OPS};
+    use constraints::mpt::SPAN;
+    let fam = family::MPT_NODES;
+    let calls = *src.invocations(fam)?;
+    let mut w = Witness::new(fam, calls.len());
+    let [live, cycle, stamp, op_ptr, pending, pending_next] = [
+        "live",
+        "cycle",
+        "stamp",
+        "op_ptr",
+        "pending",
+        "pending_next",
+    ]
+    .map(|c| w.col(c));
+    let [is_hash, is_join, park, is_load, block] =
+        ["is_hash", "is_join", "park", "is_load", "block"].map(|c| w.col(c));
+    let [left, d, park_at, op_c0, join_c0] =
+        ["left", "d", "park_at", "op_c0", "join_c0"].map(|c| w.col(c));
+    let port = |w: &mut Witness, name: &str| {
+        let cols = ["read_ts", "read_value"].map(|c| w.col(&format!("{name}_{c}")));
+        (cols, [0, 1].map(|c| w.col(&format!("{name}_gap_c{c}"))))
+    };
+    let (info, arg) = (port(&mut w, "info"), port(&mut w, "arg"));
+    let words: Vec<([usize; 2], [usize; 2], usize)> = (0..BLOCK)
+        .map(|j| {
+            let (cols, chunks) = port(&mut w, &format!("w{j}"));
+            (cols, chunks, w.col(&format!("w{j}_h16")))
+        })
+        .collect();
+    let o: Vec<usize> = (0..8).map(|k| w.fcol(&format!("o{k}"))).collect();
+    let other: Vec<usize> = (0..8).map(|k| w.fcol(&format!("other{k}"))).collect();
+    let u: Vec<usize> = (0..16).map(|j| w.fcol(&format!("u{j}"))).collect();
+    for r in 0..calls.len() {
+        let op = MptOp::of(&calls, r)?;
+        let (index, at) = (calls.carry(9)[r], calls.cycles()[r]);
+        let (hash, join) = ((op.kind != LOAD) as u64, (op.kind == JOIN) as u64);
+        let target = join * calls.word(1).read_value[r];
+        if target >= MAX_OPS as u64 {
+            return Err(format!("cycle {at}: a JOIN of op {target}"));
+        }
+        w.row(
+            r,
+            &[
+                (live, 1),
+                (cycle, at),
+                (stamp, SPAN * index),
+                (op_ptr, calls.word(0).addr[r] as u64),
+                (pending, calls.carry(8)[r]),
+                (pending_next, hash * (op.d + 1)),
+                (is_hash, hash),
+                (is_join, join),
+                (park, op.park),
+                (is_load, 1 - hash),
+                (block, 1 - join),
+                (left, op.left),
+                (d, op.d),
+                (park_at, SPAN * target),
+                (op_c0, index >> 16),
+                (join_c0, target >> 16),
+            ],
+        );
+        access(&mut w, info.0, info.1, &calls, 0, r);
+        access(&mut w, arg.0, arg.1, &calls, 1, r);
+        for (j, (cols, chunks, h16)) in words.iter().enumerate() {
+            match join {
+                1 => idle_gap(&mut w, *chunks, at, r),
+                _ => {
+                    access(&mut w, *cols, *chunks, &calls, 2 + j, r);
+                    w.put(*h16, r, calls.word(2 + j).read_value[r] >> 16);
+                }
+            }
+        }
+        for k in 0..8 {
+            w.put_fp(o[k], r, Fp::from_u64(calls.carry(k)[r]));
+            w.put_fp(other[k], r, op.other[k]);
+        }
+        let mut x = op.children();
         transcript::external(&mut x);
         for (j, c) in u.iter().enumerate() {
             w.put_fp(*c, r, x[j]);

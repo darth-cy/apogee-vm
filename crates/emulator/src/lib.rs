@@ -1790,6 +1790,10 @@ impl<'a> Recorder<'a> {
                         self.calls[at] += 1;
                         self.flush_calls(at);
                     }
+                    // No executor answers `MPT_ROOT` yet: `delegate` finds no
+                    // function for its frame family and stops before a call
+                    // could record an op.
+                    Per::Op | Per::Hash => unreachable!("an MPT_ROOT call recorded"),
                     // One entry, its base the first array's: `s2`'s.
                     Per::Arrays => {
                         let base = call.arrays.first().expect("a call's arrays").0;

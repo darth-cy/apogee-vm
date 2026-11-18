@@ -414,7 +414,7 @@ pub mod generic_table {
 /// The number is what everything else cites: canonical ordering is ascending
 /// `FamilyId`, the program-identity digest absorbs families in that order, and
 /// shard transcripts are seeded with it. Ids 0–6 are the execution families,
-/// 7–11 the window families and 12–17 and 21–23 the delegation families
+/// 7–11 the window families and 12–17 and 21–28 the delegation families
 /// ([`crate::delegation`], `docs/spec/circuits.md` §1); 18–20 are
 /// [`family::RETIRED`].
 ///
@@ -517,10 +517,23 @@ pub mod family {
     /// fields or a signature's compressed `s2`, 128 rows a call, four
     /// coefficients a row, row 0 also the frame (`constraints::falcon_decode`).
     pub const FALCON_DECODE: u32 = 25;
+    /// A trie root's **frame** row, one a call: the anchor, the 18-word
+    /// frame, the op program's first state sent to and its last received from
+    /// [`MPT_NODES`]' chain in `address_space::MPT`, the root written
+    /// canonical (`constraints::mpt`).
+    pub const MPT: u32 = 26;
+    /// One row an op of a call's program: its two words and its block read
+    /// from RAM, a park written or a parked value read, and a hash op's two
+    /// children, in order through the external layer, sent to [`MPT_ROUNDS`].
+    pub const MPT_NODES: u32 = 27;
+    /// A hash op's permutation, 16 rows: [`POSEIDON2_ROUNDS`]' rows keyed by
+    /// the op, the last round writing the first eight lanes alone. Touches no
+    /// RAM.
+    pub const MPT_ROUNDS: u32 = 28;
 
     /// How many family numbers this table defines, [`RETIRED`] ones among
     /// them.
-    pub const COUNT: u32 = 26;
+    pub const COUNT: u32 = 29;
 
     /// The **retired** family numbers, a Keccak-f[1600] permutation's three:
     /// struck out and never reassigned. A table indexed by `FamilyId` keeps an
@@ -596,6 +609,9 @@ pub mod family {
         false, // FALCON_PRODUCT
         false, // FALCON_SAMPLE
         false, // FALCON_DECODE
+        false, // MPT
+        false, // MPT_NODES
+        false, // MPT_ROUNDS
     ];
 
     /// The trace-height menu, ascending: the heights the registries build
@@ -651,6 +667,9 @@ pub mod family {
         1 << 16, // FALCON_PRODUCT, likewise
         1 << 16, // FALCON_SAMPLE, likewise
         1 << 16, // FALCON_DECODE, likewise
+        1 << 16, // MPT, likewise
+        1 << 16, // MPT_NODES, likewise
+        1 << 16, // MPT_ROUNDS, likewise: its op's bound
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -965,6 +984,14 @@ pub mod ecall {
     /// preserved.
     pub const FALCON512_DECODE: u32 = 0x0516;
 
+    /// A delegation call: the root of the op program the 18-word frame at
+    /// `a0` names, its ops' address and count, written over words 2–17 as 8
+    /// canonical lanes, two little-endian words each (`delegation::mpt`). A
+    /// program the circuit cannot prove is refused. The frame lies below
+    /// `guest_memory::ADVICE_ORIGIN`; the ops and their blocks may be
+    /// anywhere a load reaches. `a0` is preserved.
+    pub const MPT_ROOT: u32 = 0x0517;
+
     /// Linux `ENOSYS`. Every number but [`EXIT`] and the delegation calls
     /// returns `-ENOSYS` in `a0`: a number nobody has assigned, or a retired
     /// one (`docs/spec/ecall-abi.md` §4). Such a call executes and cannot be
@@ -1014,6 +1041,14 @@ pub mod address_space {
     /// tuples `(FALCON_DECODE, cycle, 4r + j, x, y)`, `j < 4`
     /// (`constraints::falcon_decode`).
     pub const FALCON_DECODE: u8 = 9;
+    /// An `MPT_ROOT` call's op program between rows: op `i` owns the
+    /// timestamps `256i + 16b + slot`, boundaries `b ≤ 16` of 16 slots, its
+    /// boundary 16 op `i + 1`'s 0, each a tuple `(MPT, cycle, ts, x, y)`. At
+    /// boundary 0 slots 0–3 are the raw lane pairs of the value entering the
+    /// op, slot 8 its control `(op_ptr, pending)`, `pending` what lane 0 adds,
+    /// and slots 12–15 its park; boundaries 1–15 are a hash op's permutation
+    /// states and 16 its output (`constraints::mpt`).
+    pub const MPT: u8 = 10;
 }
 
 /// The memory argument's clock and its own numbers.
@@ -1098,7 +1133,8 @@ pub mod delegation {
     /// What one entry of a delegation family's buffer is.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Per {
-        /// One call: its frame's words.
+        /// One call: its frame's words, and for an [`ecall::MPT_ROOT`] call
+        /// the [`mpt::CALL_CARRY`] value beside them.
         Call,
         /// One level of an [`ecall::MERKLE_ROOT`] path: its sibling's 16 words,
         /// accessed at the call's timestamp like a frame's, and the [`CARRY`]
@@ -1119,6 +1155,15 @@ pub mod delegation {
         /// timestamp like a frame's. It carries nothing: a call's rows divide
         /// every height, so no call splits across shards.
         Decode,
+        /// One op of an [`ecall::MPT_ROOT`] program, [`mpt::OP_WORDS`] words:
+        /// its info and arg at `op_ptr`, then its block's [`mpt::BLOCK`] words
+        /// at `arg`, or for a JOIN, which reads no block, the slots absent.
+        /// All at the call's timestamp like a frame's and written back
+        /// unchanged; the [`mpt::CARRY`] values beside them.
+        Op,
+        /// A hash op's [`Per::Op`] entry, words and carry alike: a SIB's or a
+        /// JOIN's, never a LOAD's.
+        Hash,
     }
 
     /// The values a level entry carries: what its rows start from that none of
@@ -1231,18 +1276,82 @@ pub mod delegation {
         pub const ROWS: usize = super::falcon::N / SLOTS;
     }
 
+    /// [`ecall::MPT_ROOT`]'s frame, by word, and its op program: `n` ops of
+    /// [`OP`] words, `(info, arg)`, evaluated in order over a value `cur`, 8
+    /// lanes, from zero. A LOAD makes `cur` a block's lanes; a SIB or a JOIN
+    /// makes it `F(l ‖ r)` with `d + 1` added to lane 0, `(l, r)` the value
+    /// and the other child in the order `left` names, the other a block for a
+    /// SIB and for a JOIN the value an earlier op parked, each park consumed
+    /// once. The root is the last `cur`.
+    pub mod mpt {
+        /// The address of op 0, word-aligned: op `i` is at `OPS + 8i`.
+        pub const OPS: usize = 0;
+        /// The ops, `n`, from 1 to [`MAX_OPS`].
+        pub const COUNT: usize = 1;
+        /// Words `2..18`, written: the root, 8 lanes, two little-endian words
+        /// each, canonical.
+        pub const ROOT: usize = 2;
+        /// The frame's words.
+        pub const FRAME: usize = 18;
+        /// An op's words: its info and its arg, a block's word-aligned
+        /// address for a LOAD or a SIB and for a JOIN the index of the op
+        /// whose park it consumes.
+        pub const OP: usize = 2;
+        /// A block's words: a digest's 8 lanes, two little-endian words each,
+        /// read mod `p`.
+        pub const BLOCK: usize = 16;
+        /// An op entry's words: its own, then its block's.
+        pub const OP_WORDS: usize = OP + BLOCK;
+        /// The most ops a call takes.
+        pub const MAX_OPS: u32 = 1 << 20;
+        /// The longest key a table may have, in bytes.
+        pub const MAX_KEY: usize = 64;
+        /// The most bytes a leaf's key and value take together: 16 lanes of
+        /// seven.
+        pub const MAX_LEAF: usize = 112;
+        /// The kind, an info word mod 4, that makes `cur` a block's lanes.
+        pub const LOAD: u32 = 0;
+        /// The kind that hashes `cur` with a block.
+        pub const SIB: u32 = 1;
+        /// The kind that hashes `cur` with a parked value.
+        pub const JOIN: u32 = 2;
+        /// An info word's park bit: the op parks the `cur` entering it.
+        pub const PARK: u32 = 4;
+        /// An info word's left bit: the other child is the left one.
+        pub const LEFT: u32 = 8;
+        /// Where an info word's depth `d` begins, its bits above the left
+        /// bit.
+        pub const DEPTH_SHIFT: u32 = 4;
+        /// The depths an info word names: `d` below this, so every info word
+        /// is below `2^13`.
+        pub const DEPTH_BOUND: u32 = 512;
+        /// The values an op entry carries: what its row starts from that none
+        /// of its words gives, so that a shard may begin mid-call. Values
+        /// `0..8` are the raw lanes of the `cur` entering the op, 8 its
+        /// `pending`, what lane 0 adds to them, 9 the op's index, and `10..18`
+        /// a JOIN's parked lanes as its park wrote them, lane 0 with its
+        /// `pending` added, zeros for any other op.
+        pub const CARRY: usize = 18;
+        /// The value a call entry carries: the last op's `pending`, which the
+        /// frame row receives beside op `n`'s raw lanes and adds to the root's
+        /// lane 0, and which no frame word gives apart from that lane.
+        pub const CALL_CARRY: usize = 1;
+    }
+
     /// Every delegation family as `(family, ecall number, words an entry, rows
     /// an entry, what an entry is)`, ascending by family. A row is never
     /// reassigned.
     ///
     /// Each family of a number records every entry of its kind: a call's, one
-    /// per level of a call's path, or a call's arrays. The first family of a
-    /// number and a kind reads the entry's words from RAM: for a call, the
-    /// number's **frame family**, whose row a call also reads the anchor
-    /// through; for a level, `MERKLE_LEVELS`; for arrays, `FALCON_SPLIT`. A
-    /// later one only expands the entry into rows of its own, reading its words
+    /// per level of a call's path, a call's arrays, one per op of a call's
+    /// program, or one per hash op. The first family of a number and a kind
+    /// reads the entry's words from RAM: for a call, the number's **frame
+    /// family**, whose row a call also reads the anchor through; for a level,
+    /// `MERKLE_LEVELS`; for arrays, `FALCON_SPLIT`; for an op, `MPT_NODES`.
+    /// A later one, and a hash op's family, whose entries are some of its
+    /// ops', only expands the entry into rows of its own, reading its words
     /// from its buffer and no memory but its own address space.
-    pub const TYPES: [(u32, u32, usize, u32, Per); 11] = [
+    pub const TYPES: [(u32, u32, usize, u32, Per); 14] = [
         (family::POSEIDON2, ecall::POSEIDON2, 32, 1, Per::Call),
         (
             family::POSEIDON2_ROUNDS,
@@ -1307,6 +1416,21 @@ pub mod delegation {
             falcon_decode::WORDS,
             falcon_decode::ROWS as u32,
             Per::Decode,
+        ),
+        (family::MPT, ecall::MPT_ROOT, mpt::FRAME, 1, Per::Call),
+        (
+            family::MPT_NODES,
+            ecall::MPT_ROOT,
+            mpt::OP_WORDS,
+            1,
+            Per::Op,
+        ),
+        (
+            family::MPT_ROUNDS,
+            ecall::MPT_ROOT,
+            mpt::OP_WORDS,
+            16,
+            Per::Hash,
         ),
     ];
 }

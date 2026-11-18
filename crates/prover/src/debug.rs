@@ -309,6 +309,9 @@ pub fn family_name(f: FamilyId) -> String {
         family::FALCON_PRODUCT => "FALCON_PRODUCT".to_string(),
         family::FALCON_SAMPLE => "FALCON_SAMPLE".to_string(),
         family::FALCON_DECODE => "FALCON_DECODE".to_string(),
+        family::MPT => "MPT".to_string(),
+        family::MPT_NODES => "MPT_NODES".to_string(),
+        family::MPT_ROUNDS => "MPT_ROUNDS".to_string(),
         other => format!("family({other})"),
     }
 }
