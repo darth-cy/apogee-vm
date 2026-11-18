@@ -1,0 +1,17 @@
+[package]
+name = "apogee-mpt"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The MPT precompile's crit-bit trie, the host's half: tables, their roots and
+# the batched proofs a guest opens them by. Test infrastructure, never linked by
+# the prover, the verifier or a guest.
+
+[dependencies]
+field.workspace = true
+transcript.workspace = true
+
+[dev-dependencies]
+# The seeded RNG the random tables and batches are drawn with.
+test-support.workspace = true

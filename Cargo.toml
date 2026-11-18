@@ -27,6 +27,7 @@ members = [
     "tools/artifact-dump",
     "tools/test-support",
     "tools/falcon512/rust",
+    "tools/mpt",
 ]
 
 # Excluded: `crates/guest-sdk` says why in its manifest, and `guests/` is the
