@@ -577,9 +577,9 @@ fn mpt_root(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
 /// its words, its info decoded into the masks, `left` and `d`, its arg, and
 /// its block's words, each with its high halfword. A JOIN's row, whose op
 /// reads no block, holds zeros in its block words and in their gap chunks
-/// those of `4·cycle`. Refuses a JOIN whose arg is no op's index.
+/// those of `4·cycle`. Refuses a JOIN whose arg is not an earlier op's index.
 fn mpt_nodes(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
-    use constants::delegation::mpt::{BLOCK, JOIN, LOAD, MAX_OPS};
+    use constants::delegation::mpt::{BLOCK, JOIN, LOAD};
     use constraints::mpt::SPAN;
     let fam = family::MPT_NODES;
     let calls = *src.invocations(fam)?;
@@ -616,9 +616,12 @@ fn mpt_nodes(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, S
         let (index, at) = (calls.carry(9)[r], calls.cycles()[r]);
         let (hash, join) = ((op.kind != LOAD) as u64, (op.kind == JOIN) as u64);
         let target = join * calls.word(1).read_value[r];
-        if target >= MAX_OPS as u64 {
-            return Err(format!("cycle {at}: a JOIN of op {target}"));
-        }
+        // `join`'s value: `i − 1 − arg` for a JOIN, and for any other op `i`.
+        let back = match join {
+            0 => index,
+            _ if target < index => index - 1 - target,
+            _ => return Err(format!("cycle {at}: op {index}'s JOIN of op {target}")),
+        };
         w.row(
             r,
             &[
@@ -637,7 +640,7 @@ fn mpt_nodes(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, S
                 (d, op.d),
                 (park_at, SPAN * target),
                 (op_c0, index >> 16),
-                (join_c0, target >> 16),
+                (join_c0, back >> 16),
             ],
         );
         access(&mut w, info.0, info.1, &calls, 0, r);

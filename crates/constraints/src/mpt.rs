@@ -176,7 +176,8 @@ fn frame_row() -> Builder {
 ///               cur_k = o_k + [k = 0]·pending, L_k = cur_k + left·(other_k − cur_k),
 ///               R_k = other_k + left·(cur_k − other_k)
 /// op            stamp/256 < 2^20
-/// park_at_rule  park_at − 256·is_join·arg       join   park_at/256 < 2^20
+/// park_at_rule  park_at − 256·is_join·arg
+/// join          (stamp − park_at)/256 − is_join < 2^20: i − 1 − arg on a JOIN, i elsewhere
 /// info, arg     the words at op_ptr and op_ptr + 4, read and written back at
 ///               4·cycle + FRAME_DELTA, their gaps in [0, 2^38)
 /// w{j}          the block's word j at arg + 4j likewise under block, and a word:
@@ -194,9 +195,11 @@ fn frame_row() -> Builder {
 /// `w_2k + 2^32·w_2k+1`, read mod `p`; each word is bounded as a load bounds
 /// the word it reads, as an advised block's words are otherwise unbounded.
 /// `u` is `M_E(cur ‖ other)` where `left` is 0 and `M_E(other ‖ cur)` where it
-/// is 1, degree 2. A JOIN's arg is an op's index, bounded so that the stamp it
-/// reads is an op's and a slot's; for a LOAD or a SIB it is the block's
-/// address, which an access at it holds to a word.
+/// is 1, degree 2. A JOIN's arg is the index of an op before it, `join`
+/// holding `i − 1 − arg` below `2^20`, as the executor holds it: without the
+/// bound a JOIN could take its own park, or a later op's. An arg the bound
+/// leaves within `2^20` of `p` reads a stamp no op sends. For a LOAD or a SIB
+/// the arg is the block's address, which an access at it holds to a word.
 fn nodes() -> Builder {
     let mut b = Builder::new(family::MPT_NODES);
     let live = b.live;
@@ -286,7 +289,11 @@ fn nodes() -> Builder {
         // same two words would.
         b.word(&name, read[j].into());
     }
-    b.bounded("join", Expr::from(park_at) * per_op(), OP_BITS);
+    b.bounded(
+        "join",
+        (stamp - Expr::from(park_at)) * per_op() - Expr::from(is_join),
+        OP_BITS,
+    );
 
     let space = address_space::MPT;
     let pair = |v: &[PolyAddress], s: usize| (Part::of(v[2 * s]), Part::of(v[2 * s + 1]));

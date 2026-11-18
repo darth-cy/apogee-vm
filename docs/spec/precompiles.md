@@ -425,7 +425,8 @@ pending_rule   pending_next − is_hash·(d + 1)
 other{k}_rule  block·(other_k − w_2k − 2^32·w_2k+1)                         k < 8
 u{j}_rule      u_j − Σ_k M_E[j][k]·L_k − M_E[j][8 + k]·R_k                  j < 16
                cur_k = o_k + [k = 0]·pending, (L, R) = (cur, other), swapped where left is 1
-op, join       stamp/256 ∈ [0, 2^20)     park_at − 256·is_join·arg,  park_at/256 ∈ [0, 2^20)
+op             stamp/256 ∈ [0, 2^20)     park_at_rule   park_at − 256·is_join·arg
+join           (stamp − park_at)/256 − is_join ∈ [0, 2^20): i − 1 − arg on a JOIN, i elsewhere
 info, arg      read at op_ptr and op_ptr + 4, written back at 4·cycle + FRAME_DELTA
 w{j}           the block's word j at arg + 4j likewise under block, and a word
 receive   (stamp + s, o_2s, o_2s+1), s < 4      (stamp + 8, op_ptr, pending)
@@ -438,10 +439,12 @@ send      (stamp + 264, op_ptr + 8, pending_next)
 
 The kind is `is_hash + is_join`, so no info word of kind 3 or at or above `2^13` decodes, and `u`
 is `M_E` of the children in `left`'s order at degree 2, with no column for either order. A JOIN's
-`arg` is an op's index, bounded so that the stamp it reads is an op's and a slot's; a LOAD's or a
-SIB's is an address, which its block's accesses hold to one. A masked-off access still owes its gap
-on a live row (§1's `access_under`), where the fill writes the chunks of `4·cycle`. 137 committed
-columns, 112 obligations (128 leaves, 15 free), 27 and 35 leaves.
+`arg` is the index of an op before it, as the executor holds it. Without `join`, a JOIN could take
+its own park or a later op's, and an `arg` the bound leaves within `2^20` of `p` reads a stamp no
+op sends. A LOAD's or a SIB's `arg` is an address, which its block's accesses hold to one. A
+masked-off access still owes its gap on a live row (§1's `access_under`), where the fill writes the
+chunks of `4·cycle`. 137 committed columns, 112 obligations (128 leaves, 15 free), 27 and 35
+leaves.
 
 `MPT_ROUNDS` is §3.2's rows from `constraints::poseidon2::rounds`, keyed for a hash op: row `k`
 reads boundary `k + 1`, its stamp `256i + 16(k + 1)` with the op `i` bounded below `2^20`, and the

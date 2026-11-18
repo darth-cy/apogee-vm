@@ -11,7 +11,10 @@
 //!   block words still owe the gap chunks of `4·cycle`;
 //! - **the call balances**: the space-10 tuples its rows read and write,
 //!   decoded from the circuits' own leaves, are one multiset, and with the
-//!   root one off they are not.
+//!   root one off they are not;
+//! - **a JOIN takes an earlier park**: the JOIN's row naming its own park or
+//!   a later op's is refused by its `join` bound alone, though its own park
+//!   would answer the one it takes.
 
 use std::collections::BTreeMap;
 
@@ -282,10 +285,17 @@ impl Shard {
         self.columns.iter().map(|c| c.get_base(r)).collect()
     }
 
-    /// Every row-local relation and range obligation row `r` breaks, its
+    fn at(&self, name: &str) -> usize {
+        self.index[&self
+            .a
+            .column(name)
+            .unwrap_or_else(|| panic!("no column `{name}`"))]
+    }
+
+    /// Every row-local relation and range obligation `row` breaks at `r`, its
     /// scratch computed from it.
-    fn refused(&self, r: usize) -> Vec<String> {
-        let (a, row) = (&self.a, self.row(r));
+    fn refused(&self, row: &[Fp], r: usize) -> Vec<String> {
+        let a = &self.a;
         let virtuals: Vec<Fp2> = a
             .virtuals
             .iter()
@@ -308,7 +318,7 @@ impl Shard {
             lower = produced;
         }
         let w = WitnessRow {
-            committed: row,
+            committed: row.to_vec(),
             row: r,
             scratch,
         };
@@ -317,11 +327,11 @@ impl Shard {
         out
     }
 
-    /// Row `r`'s live memory leaves, decoded from the circuit's own gates:
-    /// each with its side, a write or a read, and its tuple `(space, addr,
-    /// ts, val, hi)`. A leaf is `1 + mask·(γ − 1 + space + Σ α·part)`, so
-    /// with `γ = 1` and one `α` at 1 it gives its space and that part.
-    fn leaves(&self, r: usize) -> Vec<(bool, [u64; 5])> {
+    /// `row`'s live memory leaves, decoded from the circuit's own gates: each
+    /// with its side, a write or a read, and its tuple `(space, addr, ts, val,
+    /// hi)`. A leaf is `1 + mask·(γ − 1 + space + Σ α·part)`, so with `γ = 1`
+    /// and one `α` at 1 it gives its space and that part.
+    fn leaves(&self, row: &[Fp]) -> Vec<(bool, [u64; 5])> {
         let slots = [
             challenge_slot::MEM_GAMMA,
             challenge_slot::MEM_ALPHA_ADDR,
@@ -338,7 +348,6 @@ impl Shard {
                 ch
             })
             .collect();
-        let row = self.row(r);
         let mut out = Vec::new();
         for e in &self.a.layers[0].producing {
             let relation = &self.a.relations[e.relation as usize].name;
@@ -379,7 +388,7 @@ fn space(shards: &[Shard]) -> (Vec<[u64; 5]>, Vec<[u64; 5]>) {
     let (mut reads, mut writes) = (Vec::new(), Vec::new());
     for s in shards {
         for r in 0..s.live {
-            for (write, t) in s.leaves(r) {
+            for (write, t) in s.leaves(&s.row(r)) {
                 if t[0] == address_space::MPT as u64 {
                     match write {
                         true => writes.push(t),
@@ -404,7 +413,7 @@ fn every_row_holds_and_the_call_balances() {
         assert!(s.live > 0, "{label} has a live row");
         let last = (1 << s.a.trace_vars) - 1;
         for r in (0..s.live + 2).chain([last]) {
-            let broken = s.refused(r);
+            let broken = s.refused(&s.row(r), r);
             assert!(broken.is_empty(), "{label} row {r} breaks {broken:?}");
         }
     }
@@ -421,7 +430,7 @@ fn every_row_holds_and_the_call_balances() {
     // raw lane it receives is no longer the one the last round wrote.
     let skewed = Shard::new(&program, &entries(1)[0]);
     assert!(
-        skewed.refused(0).is_empty(),
+        skewed.refused(&skewed.row(0), 0).is_empty(),
         "a skewed root's row holds alone"
     );
     let shards = [
@@ -431,4 +440,82 @@ fn every_row_holds_and_the_call_balances() {
     ];
     let (reads, writes) = space(&shards);
     assert_ne!(reads, writes, "a root one off balances");
+}
+
+/// An `MPT_NODES` row's `u`: `M_E` of its `cur` and its other child in its
+/// `left`'s order.
+fn node_u(s: &Shard, row: &[Fp]) -> [Fp; 16] {
+    let cur = node_cur(s, row);
+    let other: [Fp; 8] = std::array::from_fn(|k| row[s.at(&format!("other{k}"))]);
+    let mut x = match row[s.at("left")] == Fp::ONE {
+        true => join(other, cur),
+        false => join(cur, other),
+    };
+    transcript::external(&mut x);
+    x
+}
+
+/// An `MPT_NODES` row's `cur`: its raw lanes, `pending` added to lane 0.
+fn node_cur(s: &Shard, row: &[Fp]) -> [Fp; 8] {
+    std::array::from_fn(|k| match k {
+        0 => row[s.at("o0")] + row[s.at("pending")],
+        _ => row[s.at(&format!("o{k}"))],
+    })
+}
+
+/// The JOIN, op 2, naming its own park or op 3's instead of op 1's, its arg
+/// and `park_at` moved. Naming its own, its park bit is set, its other child
+/// is the `cur` it parks and `u` is recomputed, so the park it sends is the
+/// park it receives and no other op owes it one. Every other row-local
+/// relation holds, and `join` alone refuses the row, whatever chunk stands
+/// beside it, as the executor refuses a JOIN no earlier park answers.
+#[test]
+fn a_join_of_its_own_park_or_a_later_ones_is_refused() {
+    let program = program();
+    let s = Shard::new(&program, &entries(0)[1]);
+    let r = 2;
+    let honest = s.row(r);
+    assert!(
+        honest[s.at("is_join")] == Fp::ONE && honest[s.at("arg_read_value")] == Fp::ONE,
+        "op 2 is the JOIN of op 1's park"
+    );
+    for target in [2, 3] {
+        let mut row = honest.clone();
+        row[s.at("arg_read_value")] = f(target);
+        row[s.at("park_at")] = f(256 * target);
+        if target == 2 {
+            row[s.at("park")] = Fp::ONE;
+            row[s.at("info_read_value")] += f(PARK as u64);
+            for (k, x) in node_cur(&s, &row).iter().enumerate() {
+                row[s.at(&format!("other{k}"))] = *x;
+            }
+            for (j, v) in node_u(&s, &row).iter().enumerate() {
+                row[s.at(&format!("u{j}"))] = *v;
+            }
+            let slots = 256 * target + 12..256 * target + 16;
+            let (mut sent, mut taken) = (Vec::new(), Vec::new());
+            for (write, t) in s.leaves(&row) {
+                if t[0] == address_space::MPT as u64 && slots.contains(&t[2]) {
+                    match write {
+                        true => sent.push(t),
+                        false => taken.push(t),
+                    }
+                }
+            }
+            sent.sort();
+            taken.sort();
+            assert!(
+                sent.len() == 4 && sent == taken,
+                "its own park answers the park it takes"
+            );
+        }
+        for c0 in [0, 1, 0xf, 0xffff] {
+            row[s.at("join_c0")] = f(c0);
+            let broken = s.refused(&row, r);
+            assert!(
+                !broken.is_empty() && broken.iter().all(|n| n.starts_with("join_")),
+                "a JOIN of op {target}, chunk {c0:#x}: refused by `join` alone, not {broken:?}"
+            );
+        }
+    }
 }
