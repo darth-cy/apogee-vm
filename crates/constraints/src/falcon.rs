@@ -264,10 +264,10 @@ const _: () = {
     // padded to a power of two, and a row a residue.
     let t = &constants::delegation::TYPES;
     let columns = (CHAINS.len() * COLUMNS).next_power_of_two() as u32;
-    assert!(t[6].0 == family::FALCON && t[6].2 == FRAME && t[6].3 == 1);
-    assert!(t[7].0 == family::FALCON_SPLIT && t[7].2 == ARRAYS && t[7].3 == columns);
-    assert!(t[8].0 == family::FALCON_PRODUCT && t[8].2 == ARRAYS);
-    assert!(t[8].3 == RESIDUES as u32);
+    assert!(t[3].0 == family::FALCON && t[3].2 == FRAME && t[3].3 == 1);
+    assert!(t[4].0 == family::FALCON_SPLIT && t[4].2 == ARRAYS && t[4].3 == columns);
+    assert!(t[5].0 == family::FALCON_PRODUCT && t[5].2 == ARRAYS);
+    assert!(t[5].3 == RESIDUES as u32);
 };
 
 /// The chain of `c`, whose `acc` is `‖s1‖²`.
@@ -284,7 +284,7 @@ const _: () = {
     // Each bound a RANGE16 one; a lane two words, each two digits' halfwords.
     assert!(Q < 1 << 16 && TOP < 1 << 16 && FRAME == 2 * LANES && DIGITS == 4);
     // The registry's words an entry and rows a call.
-    let t = &constants::delegation::TYPES[9];
+    let t = &constants::delegation::TYPES[6];
     assert!(t.0 == family::FALCON_SAMPLE && t.1 == ecall::FALCON512_SAMPLE);
     assert!(t.2 == FRAME && t.3 == 1);
 };

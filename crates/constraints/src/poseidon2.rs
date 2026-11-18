@@ -106,12 +106,12 @@ pub fn internal_forms() -> ([Form; PARTIAL], [Form; WIDTH]) {
 }
 
 /// Whose permutation a [`rounds`] builder lays out: a `POSEIDON2` call's, in
-/// `address_space::POSEIDON2`, or one level's of a Merkle path, in
-/// `address_space::MERKLE` (`crate::merkle`).
+/// `address_space::POSEIDON2`, or one hash op's of a trie's op program, in
+/// `address_space::MPT` (`crate::mpt`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Keyed {
     Call,
-    Level,
+    Op,
 }
 
 /// The rounds of one permutation, sixteen rows: row `k` reads lane pair `j`
@@ -121,19 +121,19 @@ pub(crate) enum Keyed {
 /// ```text
 /// one_kind      Σ_k row_k − live                 the kind bits, one-hot on a live row
 /// stamp_rule    stamp − Σ_k 8k·row_k              a call's (POSEIDON2_ROUNDS)
-/// level_range   (stamp − Σ_k 16(k + 1)·row_k)/256 < 2^16
-///                                                 a level's (MERKLE_ROUNDS): 256L + 16(k + 1)
+/// op            (stamp − Σ_k 16(k + 1)·row_k)/256 < 2^20
+///                                                 a hash op's (MPT_ROUNDS): 256i + 16(k + 1)
 /// ext_rule      ext − Σ_{k external} row_k        int_rule   int − live + ext
 /// y{j}_rule     y_j − ext·s_j − int·L_j(s, z) − Σ_k row_k·c_k[j]
 /// y{j}_sq_rule  y2_j − y_j²                       y{j}_cube_rule   z_j − y2_j·y_j
 /// o{l}_rule     o_l − ext·Σ_k M_E[l][k]·z_k − int·K_l(s, z)
-/// keep_rule     keep − live + row14               a level's: the last round writes
+/// keep_rule     keep − live + row14               a hash op's: the last round writes
 ///                                                 pairs 0..3 alone, the node
 /// ```
 ///
 /// `L_j` and `K_l` are [`internal_forms`], `c_k` [`round_constant`]. Every
 /// gate is degree 2, the kind riding a linear factor. A call's stride is 8 and
-/// a level's [`crate::merkle::STRIDE`], so its control fits beside its pairs.
+/// a hash op's [`crate::mpt::STRIDE`], so its control fits beside its pairs.
 pub(crate) fn rounds(keyed: Keyed) -> Builder {
     let (fam, space, stride, first) = match keyed {
         Keyed::Call => (
@@ -142,10 +142,10 @@ pub(crate) fn rounds(keyed: Keyed) -> Builder {
             PAIRS as u64,
             0,
         ),
-        Keyed::Level => (
-            family::MERKLE_ROUNDS,
-            address_space::MERKLE,
-            crate::merkle::STRIDE,
+        Keyed::Op => (
+            family::MPT_ROUNDS,
+            address_space::MPT,
+            crate::mpt::STRIDE,
             1,
         ),
     };
@@ -157,14 +157,14 @@ pub(crate) fn rounds(keyed: Keyed) -> Builder {
     let o: Vec<PolyAddress> = (0..WIDTH).map(|i| b.mcol(&format!("o{i}"))).collect();
     let kinds: Vec<PolyAddress> = (0..ROWS - 1).map(|k| b.bit(&format!("row{k}"))).collect();
     b.gate("one_kind", sum(&kinds) - live);
-    // Row `k` reads boundary `first + k`, a level's offset by its `256L`.
+    // Row `k` reads boundary `first + k`, a hash op's offset by its `256i`.
     let mut at = Expr::from(stamp_col);
     for (k, x) in kinds.iter().enumerate() {
         at = at - *x * (stride * (first + k as u64));
     }
     match keyed {
         Keyed::Call => b.gate("stamp_rule", at),
-        Keyed::Level => b.range16("level_range", at * crate::merkle::per_level()),
+        Keyed::Op => b.bounded("op", at * crate::mpt::per_op(), crate::mpt::OP_BITS),
     }
     let ext = b.col("ext");
     let int = b.col("int");
@@ -208,7 +208,7 @@ pub(crate) fn rounds(keyed: Keyed) -> Builder {
     }
     let keep = match keyed {
         Keyed::Call => live,
-        Keyed::Level => {
+        Keyed::Op => {
             // A leaf's mask, so an `M` column with a booleanity gate of its
             // own, which the rule already implies.
             let keep = b.mcol("keep");
@@ -245,7 +245,8 @@ pub(crate) fn rounds(keyed: Keyed) -> Builder {
     b
 }
 
-/// `name`, a lane, is the words `lo` and `hi` and canonical, below `p`:
+/// `name`, a lane, an expression, is the words `lo` and `hi` and canonical,
+/// below `p`:
 ///
 /// ```text
 /// {name}_rule        lane − lo − 2^32·hi
@@ -259,13 +260,13 @@ pub(crate) fn rounds(keyed: Keyed) -> Builder {
 pub(crate) fn canonical(
     b: &mut Builder,
     name: &str,
-    lane: PolyAddress,
+    lane: impl Into<Expr>,
     lo: PolyAddress,
     hi: PolyAddress,
 ) {
     let live = b.live;
     let lit = |v: Fp| Coeff::Literal(v);
-    b.gate(&format!("{name}_rule"), lane - lo - hi * T32);
+    b.gate(&format!("{name}_rule"), lane.into() - lo - hi * T32);
     let l1 = b.word(&format!("{name}_lo"), lo.into());
     let h1 = b.word(&format!("{name}_hi"), hi.into());
     let inv = b.col(&format!("{name}_inv"));

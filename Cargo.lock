@@ -35,6 +35,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "apogee-mpt"
+version = "0.1.0"
+dependencies = [
+ "field",
+ "test-support",
+ "transcript",
+]
+
+[[package]]
 name = "ark-ff"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -339,6 +348,7 @@ name = "emulator"
 version = "0.1.0"
 dependencies = [
  "apogee-falcon512",
+ "apogee-mpt",
  "constants",
  "field",
  "isa",

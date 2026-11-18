@@ -83,10 +83,10 @@ A family's rows, in the order they are appended, are cut into shards of its `VmC
 ([memory.md](memory.md) §2). `trace::plan_shards` is `⌈rows/h⌉` per family over the
 `CycleProfile`, a cycle-owning family's rows being its cycles and a delegation family's its entries
 times its rows an entry, so a family the execution never reached has no shard. A delegation shard
-is whole entries, a call's, a path level's or a call's arrays: `h` over the rows an entry of them,
-a power of two dividing `h`. A path's levels may straddle two shards, each level carrying what its
-rows start from ([precompiles.md](precompiles.md) §6). A window family plans 0; its shards are
-windows ([memory.md](memory.md) §3), counted by `shard_counts` in `crates/prover/src/lib.rs`: one
+is whole entries, a call's, a call's arrays, an op's or a hash op's: `h` over the rows an entry of
+them, a power of two dividing `h`. A trie program's ops may straddle shards, each op carrying what
+its rows start from ([precompiles.md](precompiles.md) §6.7). A window family plans 0; its shards
+are windows ([memory.md](memory.md) §3), counted by `shard_counts` in `crates/prover/src/lib.rs`: one
 `INIT_TEARDOWN` shard and one of each public window whatever the execution did, a `ZERO_WINDOWS`
 shard per entry of `init_windows`, and one per advice window supplied
 (`trace::advice_window_count`). The counts are the statement's `shard_counts`
@@ -96,11 +96,13 @@ shard per entry of `init_windows`, and one per advice window supplied
 has reached `h` rows is handed over as `ShardChunk { family, index, rows }`, `index = rows/h − 1`,
 and replaced by an empty one; a delegation buffer holding a shard's entries likewise, its chunk
 carrying them in `calls`. A cycle appends one row, to its owning family's buffer, and a delegation
-call one entry to each of its families, or one per level of its path, each pushed and flushed in
-turn, so a buffer reaches `h` without passing it, a step fills at most one a family (a path's 32
-levels are fewer than any delegation shard holds), and no entry is split. At exit `finish`
-hands over the partial buffers. Chunks arrive in fill order, not statement order, and pass 1
-asserts that each family's count is the plan's.
+call one entry to each of its families, or one per op and per hash op of its program, each pushed
+and flushed in turn, so a buffer reaches `h` without passing it and no entry is split. A step fills
+at most one buffer a family while a trie call's entries fit one shard of each of its families,
+`h` ops of `MPT_NODES` and `h/16` hash ops of `MPT_ROUNDS`, 4,096 at `2^16`, and the SDK's
+`Trie::root` keeps every call within one at the default heights ([precompiles.md](precompiles.md)
+§6.3). At exit `finish` hands over the partial buffers. Chunks arrive in fill order, not statement
+order, and pass 1 asserts that each family's count is the plan's.
 
 ## 5. The pipeline
 
@@ -115,7 +117,7 @@ parallelism is rayon over data.
 | held | bound | by |
 | --- | --- | --- |
 | claimed shards, and all built from them | `max_in_flight` | one a worker; asserted in `Source::claim` |
-| filled, unclaimed shards | rows only, one per family | the executor steps only for a claim with nothing waiting, a step fills at most one buffer and the exit one per family; asserted in `Source::admit` |
+| filled, unclaimed shards | rows only, one per family | the executor steps only for a claim with nothing waiting, a step fills at most one buffer a family (§4) and the exit one; asserted in `Source::admit` |
 
 The executor never runs ahead of demand, and there is no batch: a slow shard holds one worker.
 The workers are not rayon threads. A shard's forward pass and sumchecks run on rayon's global

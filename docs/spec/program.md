@@ -172,7 +172,7 @@ the family set, and nothing selects it:
    its instructions;
 2. a **window** family, whose rows are memory locations — `INIT_TEARDOWN` (7), `ZERO_WINDOWS` (8),
    `PUBLIC_INPUT` (9), `PUBLIC_OUTPUT` (10), `ADVICE_WINDOWS` (11) — is always present;
-3. a **delegation** family (12–17, 21–25), whose rows are precompile calls, is present when the
+3. a **delegation** family (12–14, 21–28), whose rows are precompile calls, is present when the
    image declares its number (`program::declared_delegations`: a number of `image.delegations`, §3,
    each family of the number then present, an unregistered number refused as `UnknownDelegation`;
    [precompiles.md](precompiles.md) §1).

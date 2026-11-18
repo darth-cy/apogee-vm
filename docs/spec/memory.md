@@ -290,7 +290,7 @@ at most `2^22` rows (the menu's top), and fewer than `2^65` tuples, at most 81 a
   below `2^36`.
 - **Every other write** is a live row's query at `4·cycle + Δ` (§2.1's mask rule), or a precompile's
   word at `4·cycle + FRAME_DELTA` of the ecall row that requested it, whose cycle a frame row
-  reads through the anchor and any other row through its call's state: a Merkle level, a
+  reads through the anchor and any other row through its call's state: an `MPT_NODES` row, a
   `FALCON_SPLIT` row, a `FALCON_DECODE` row past the first ([precompiles.md](precompiles.md) §2,
   §6, §7, §8). Every write timestamp, init or not, is therefore an integer below `2^38`, and so is
   every read one, which equals a write's. Each gap holds over the integers (§2.4), every edge

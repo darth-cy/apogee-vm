@@ -23,8 +23,8 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use common::{exit_code_of, image, input_of, io, uniform};
-use constants::delegation::{self, Per};
+use common::{advice_of, exit_code_of, image, input_of, uniform, with_advice};
+use constants::delegation::Per;
 use emulator::{trace_run, ShardChunk, StreamingRun};
 use program::{decode_program, family_name, FamilyId, ProgramParams};
 use trace::{plan_shards, FamilyTraces, MemoryEventLog};
@@ -48,8 +48,12 @@ const GUESTS: [(&str, u32); 11] = [
     ("shards", 16),
     // The precompiles, their delegation families at `2^12`: 302 Poseidon2
     // calls fill the rounds' 256-call buffer mid-execution. Falcon's are at
-    // `2^16`, and its 1,025 calls fill `FALCON_SPLIT`'s 1,024.
-    ("precompiles", 16),
+    // `2^16`, and its 1,025 calls fill `FALCON_SPLIT`'s 1,024. The long trie
+    // program's 6,151 ops fill `MPT_NODES`' 4,096 and its 4,100 hash ops
+    // `MPT_ROUNDS`' 256, each mid-call. Every other family is at `2^18`, the
+    // least height on the menu its decoded tables fit: its code runs past pc
+    // `2^17`, a row being `pc/2`.
+    ("precompiles", 18),
 ];
 
 /// Every family at `2^height`; for `precompiles`, the delegation families at
@@ -85,7 +89,7 @@ fn stream(name: &str, height: u32) -> Streamed {
     let image = image(name);
     let (tables, config) = decode_program(&image, &params(name, height))
         .unwrap_or_else(|e| panic!("{name} decodes at 2^{height}: {e}"));
-    let guest_io = io(&input_of(name));
+    let guest_io = with_advice(&input_of(name), &advice_of(name));
     let mut run = StreamingRun::new(&image, &guest_io, &tables, &config)
         .unwrap_or_else(|e| panic!("{name} starts: {e}"));
     let mut chunks = Vec::new();
@@ -126,16 +130,18 @@ fn whole(
     let image = image(name);
     let (tables, config) = decode_program(&image, &params(name, height))
         .unwrap_or_else(|e| panic!("{name} decodes: {e}"));
-    trace_run(&image, &io(&input_of(name)), &tables, &config)
-        .unwrap_or_else(|e| panic!("{name} traces: {e}"))
+    let guest_io = with_advice(&input_of(name), &advice_of(name));
+    trace_run(&image, &guest_io, &tables, &config).unwrap_or_else(|e| panic!("{name} traces: {e}"))
 }
 
 #[test]
 fn the_chunks_are_the_planned_shards_row_for_row() {
     let mut split_families = 0;
-    // The level families' chunks that begin inside a path, by family: a
+    // The op families' chunks that begin inside a program, by family: a
     // continuation the carry alone describes.
-    let mut mid_path: BTreeMap<FamilyId, u32> = BTreeMap::new();
+    let mut mid_program: BTreeMap<FamilyId, u32> = BTreeMap::new();
+    // Each op family's last entry handed over: its cycle and its op index.
+    let mut last: BTreeMap<FamilyId, (u64, u64)> = BTreeMap::new();
     let mut total_stops = 0;
     for (name, height) in GUESTS {
         let s = stream(name, height);
@@ -224,10 +230,31 @@ fn the_chunks_are_the_planned_shards_row_for_row() {
                 for (got, want) in calls.carry.iter().zip(&buffer.carry) {
                     assert_eq!(got[..], want[start..start + calls.len()], "{name}: a carry");
                 }
-                if program::delegation_per(chunk.family) == Per::Level
-                    && calls.carry[delegation::CARRY - 1].first() > Some(&0)
-                {
-                    *mid_path.entry(chunk.family).or_default() += 1;
+                // Carry value 16 is an op's index (`delegation::mpt::CARRY`). A
+                // chunk begins inside a call where its first entry's is past 0,
+                // or for a hash op's, which a LOAD before it has none of, where
+                // the chunk before ended in the same call. It then continues
+                // that one: the next op, or a later hash op.
+                let kind = program::delegation_per(chunk.family);
+                let index = |e: usize| calls.carry[16][e];
+                let before = last.get(&chunk.family).copied();
+                let mid = match kind {
+                    Per::Op => index(0) > 0,
+                    Per::Hash => before.is_some_and(|(cycle, _)| cycle == calls.cycle[0]),
+                    _ => false,
+                };
+                if mid {
+                    *mid_program.entry(chunk.family).or_default() += 1;
+                    let (cycle, op) = before.expect("a chunk before");
+                    assert_eq!(calls.cycle[0], cycle, "{name}: a program's ops in one call");
+                    match kind {
+                        Per::Op => assert_eq!(index(0), op + 1, "{name}: the next op"),
+                        _ => assert!(index(0) > op, "{name}: a later hash op"),
+                    }
+                }
+                if matches!(kind, Per::Op | Per::Hash) {
+                    let end = calls.len() - 1;
+                    last.insert(chunk.family, (calls.cycle[end], index(end)));
                 }
                 if program::delegation_rows(chunk.family) > 1 && calls.len() == per {
                     split_families += 1;
@@ -260,16 +287,13 @@ fn the_chunks_are_the_planned_shards_row_for_row() {
     // At least one family is cut into more than one shard: a comparison over
     // single-shard families alone would never test the index arithmetic.
     assert!(split_families >= 1, "{split_families} families cut in two");
-    // And a path crosses a shard of each level family: `precompiles`'
-    // depth-20 path is levels 4,080 to 4,099, a level shard holding 4,096 and
-    // a round shard 256 at `2^12`.
-    for family in [
-        constants::family::MERKLE_LEVELS,
-        constants::family::MERKLE_ROUNDS,
-    ] {
+    // And a program crosses a shard of each op family: `precompiles`' long
+    // one's ops are 16 to 6,166, a node shard holding 4,096 and a round shard
+    // 256 hash ops at `2^12`.
+    for family in [constants::family::MPT_NODES, constants::family::MPT_ROUNDS] {
         assert!(
-            mid_path.get(&family) >= Some(&1),
-            "a {} shard begins inside a path",
+            mid_program.get(&family) >= Some(&1),
+            "a {} shard begins inside a call",
             family_name(family)
         );
     }

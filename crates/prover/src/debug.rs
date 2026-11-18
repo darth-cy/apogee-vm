@@ -301,14 +301,14 @@ pub fn family_name(f: FamilyId) -> String {
         family::POSEIDON2 => "POSEIDON2".to_string(),
         family::POSEIDON2_ROUNDS => "POSEIDON2_ROUNDS".to_string(),
         family::MUL_DIV_U256 => "MUL_DIV_U256".to_string(),
-        family::MERKLE_ROOT => "MERKLE_ROOT".to_string(),
-        family::MERKLE_LEVELS => "MERKLE_LEVELS".to_string(),
-        family::MERKLE_ROUNDS => "MERKLE_ROUNDS".to_string(),
         family::FALCON => "FALCON".to_string(),
         family::FALCON_SPLIT => "FALCON_SPLIT".to_string(),
         family::FALCON_PRODUCT => "FALCON_PRODUCT".to_string(),
         family::FALCON_SAMPLE => "FALCON_SAMPLE".to_string(),
         family::FALCON_DECODE => "FALCON_DECODE".to_string(),
+        family::MPT => "MPT".to_string(),
+        family::MPT_NODES => "MPT_NODES".to_string(),
+        family::MPT_ROUNDS => "MPT_ROUNDS".to_string(),
         other => format!("family({other})"),
     }
 }

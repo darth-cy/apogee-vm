@@ -35,7 +35,7 @@ pub mod lookup;
 pub mod mem_subword;
 pub mod mem_word;
 pub mod memory;
-pub mod merkle;
+pub mod mpt;
 pub mod mul_div;
 pub mod mul_div_u256;
 pub mod poseidon2;
@@ -137,14 +137,14 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
             f::POSEIDON2 => (poseidon2::artifact, poseidon2::channels()),
             f::POSEIDON2_ROUNDS => (poseidon2::rounds_artifact, poseidon2::rounds_channels()),
             f::MUL_DIV_U256 => (mul_div_u256::artifact, mul_div_u256::channels()),
-            f::MERKLE_ROOT => (merkle::artifact, merkle::channels()),
-            f::MERKLE_LEVELS => (merkle::levels_artifact, merkle::levels_channels()),
-            f::MERKLE_ROUNDS => (merkle::rounds_artifact, merkle::rounds_channels()),
             f::FALCON => (falcon::artifact, falcon::channels()),
             f::FALCON_SPLIT => (falcon::split_artifact, falcon::split_channels()),
             f::FALCON_PRODUCT => (falcon::product_artifact, falcon::product_channels()),
             f::FALCON_SAMPLE => (falcon::sample_artifact, falcon::sample_channels()),
             f::FALCON_DECODE => (falcon_decode::artifact, falcon_decode::channels()),
+            f::MPT => (mpt::artifact, mpt::channels()),
+            f::MPT_NODES => (mpt::nodes_artifact, mpt::nodes_channels()),
+            f::MPT_ROUNDS => (mpt::rounds_artifact, mpt::rounds_channels()),
             _ => return None,
         };
     if trace_vars < minimum_trace_vars(&channels) {

@@ -112,18 +112,13 @@ pub fn input_of(name: &str) -> Vec<u8> {
         // Reads nothing: its exit status is its result. `shards` is the same
         // shape — it counts its own checks — and `tests/streaming.rs` streams it.
         "addsub" | "control" | "alu" | "mem" | "shards" => Vec::new(),
-        // One leaf of zeros, a Merkle root over one leaf being the leaf, a
-        // path of the fewest siblings, zeros, from slot 0, and 126 runs: the
-        // last path straddles a round shard. Then Falcon-512's three arrays
-        // of zeros and 1,024 more calls, more than a `FALCON_SPLIT` shard
-        // holds at `2^16`, and no verification (`guests/precompiles`).
+        // One leaf of zeros, the root over one leaf being the leaf. Then
+        // Falcon-512's three arrays of zeros and 1,024 more calls, more than a
+        // `FALCON_SPLIT` shard holds at `2^16`, and no verification
+        // (`guests/precompiles`).
         "precompiles" => [
             1u32.to_le_bytes().as_slice(),
             &[0u8; 64],
-            &0u32.to_le_bytes(),
-            &16u32.to_le_bytes(),
-            &[0u8; 64 * 16],
-            &126u32.to_le_bytes(),
             &[0u8; 3 * 1024],
             &1024u32.to_le_bytes(),
             &0u32.to_le_bytes(),
@@ -131,6 +126,47 @@ pub fn input_of(name: &str) -> Vec<u8> {
         .concat(),
         other => panic!("no input chosen for {other}"),
     }
+}
+
+/// The advice each traced guest runs on here: `precompiles`' long program of
+/// 4,100 steps, whose ops straddle an `MPT_NODES` shard at `2^12` and whose
+/// hash ops an `MPT_ROUNDS` one at `2^16`, and none for any other guest.
+pub fn advice_of(name: &str) -> Vec<u8> {
+    match name {
+        // No trie scenario: `tests/guests.rs` runs them.
+        "precompiles" => precompiles_advice(4_100, &[]),
+        _ => Vec::new(),
+    }
+}
+
+/// `guests/precompiles`' advice for a long program of `steps` hash ops and
+/// the trie scenarios `tries`: its blocks 0 and 1 arbitrary, block 0's top
+/// lane `2^64 − 1` and block 1's lane 3 `p`, each read mod `p`, then each
+/// block the last 8 lanes of the duplex's step before its own: the
+/// permutation, the first 8 lanes it took added back to its first 8, and
+/// `d + 1` added to lane 0 at step `s`, `d = s mod 512`, a branch at `d`;
+/// then the scenarios' count and each one's bytes.
+pub fn precompiles_advice(steps: u32, tries: &[Vec<u8>]) -> Vec<u8> {
+    let start: [u64; 16] = std::array::from_fn(|k| match k {
+        7 => u64::MAX,
+        11 => field::A64_C5,
+        _ => (k as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15),
+    });
+    let mut out = steps.to_le_bytes().to_vec();
+    out.extend(start.iter().flat_map(|l| l.to_le_bytes()));
+    let mut state = start.map(field::Fp::from_u64);
+    for s in 1..steps {
+        let x: [field::Fp; 8] = std::array::from_fn(|k| state[k]);
+        transcript::poseidon2_permute(&mut state);
+        for (lane, x) in state.iter_mut().zip(x) {
+            *lane += x;
+        }
+        state[0] += field::Fp::from_u64(s as u64 % 512 + 1);
+        out.extend(state[8..].iter().flat_map(|x| x.to_u64().to_le_bytes()));
+    }
+    out.extend((tries.len() as u32).to_le_bytes());
+    tries.iter().for_each(|t| out.extend(t));
+    out
 }
 
 /// The status each traced guest exits with on [`input_of`]'s input: 0, but
@@ -173,9 +209,14 @@ impl Traced {
 pub fn traced(name: &str) -> Traced {
     let image = image(name);
     let (tables, config) = preprocess(&image);
-    let (traces, log, profile, execution) =
-        trace_run(&image, &io(&input_of(name)), &tables, &config)
-            .unwrap_or_else(|e| panic!("{name}: {e}"));
+    let advice = advice_of(name);
+    let (traces, log, profile, execution) = trace_run(
+        &image,
+        &with_advice(&input_of(name), &advice),
+        &tables,
+        &config,
+    )
+    .unwrap_or_else(|e| panic!("{name}: {e}"));
     assert_eq!(
         execution.exit_code,
         exit_code_of(name),
@@ -190,7 +231,7 @@ pub fn traced(name: &str) -> Traced {
         log,
         profile,
         execution,
-        advice: Vec::new(),
+        advice,
     }
 }
 

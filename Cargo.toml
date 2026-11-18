@@ -27,6 +27,7 @@ members = [
     "tools/artifact-dump",
     "tools/test-support",
     "tools/falcon512/rust",
+    "tools/mpt",
 ]
 
 # Excluded: `crates/guest-sdk` says why in its manifest, and `guests/` is the
@@ -94,6 +95,11 @@ sha3 = "0.10"
 # `guests/amazon` are held to. Never linked by the prover, the verifier or a
 # guest.
 apogee-falcon512 = { path = "tools/falcon512/rust" }
+
+# Test only. The MPT precompile's crit-bit trie, the host's half: tables, their
+# roots and the proofs a guest opens them by, which the SDK's trie is held to.
+# Never linked by the prover, the verifier or a guest.
+apogee-mpt = { path = "tools/mpt" }
 
 # Test only. Falcon-512 keys from a seed, `tools/falcon512/rust`'s keygen.
 # Never linked by the prover, the verifier or a guest.

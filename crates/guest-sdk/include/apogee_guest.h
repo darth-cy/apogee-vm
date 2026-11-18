@@ -10,7 +10,7 @@
  * An Apogee guest has no files and no streams. Its public input, advice and
  * journal are memory the proof binds — or, for advice, does not — and these
  * four calls are the whole of reaching them (docs/guest-program-manual.md §11,
- * docs/spec/public-values.md). The last six calls are precompiles, each
+ * docs/spec/public-values.md). The last eight calls are precompiles, each
  * a circuit of its own (docs/spec/precompiles.md).
  *
  * The library also provides `memcpy`, `memmove`, `memset` and `memcmp`, the
@@ -57,17 +57,6 @@ void apogee_poseidon2_permute(uint64_t state[16]);
 int32_t apogee_mul_div_u256(const uint64_t a[4], const uint64_t b[4], const uint64_t d[4],
                             uint64_t q[4], uint64_t r[4]);
 
-/* The root of the Merkle path from the 8 lanes at `leaf` at `slot` up `depth`
- * siblings at `siblings`, 64 bytes each, level 0's first, by the precompile,
- * written to `root`. Level L's node is apogee_poseidon2_permute of the node
- * below and its sibling, the node below first where bit L of `slot` is 0,
- * truncated to its first 8 lanes. The siblings may be anywhere, the advice
- * included, each lane read mod p. Returns 0, or 1 and writes nothing when
- * depth is outside 16..32, slot is not below 2^depth, a leaf lane is not below
- * p, or `siblings` is not 4-aligned. */
-int32_t apogee_merkle_root(uint32_t slot, uint32_t depth, const uint64_t leaf[8],
-                           const uint8_t *siblings, uint64_t root[8]);
-
 /* ||s1||^2 by the precompile, s1 = (c - s2*h) mod (q, x^512 + 1), q = 12289,
  * each coefficient centered to [-6144, 6144] and every coefficient of h, s2
  * and c read mod q: Falcon-512 verification's lattice check. Below 2^35.
@@ -101,6 +90,44 @@ void apogee_falcon512_sample(uint64_t lanes[8]);
  * one of these, the call refuses: the execution fails. */
 uint32_t apogee_falcon512_decode(uint32_t mode, const uint8_t *src, uint16_t dst[512],
                                  uint32_t *end);
+
+/* The value of the op program of `n` ops at `ops`, by the precompile, written
+ * to `root`: op i is (info, arg) at ops[2i] and ops[2i + 1], run in order over
+ * a value of 8 lanes, zero to start, each lane written below p. An info word
+ * is kind + 4*park + 8*left + 16*d, d < 512. A LOAD (kind 0) makes the value
+ * the block at `arg`; a SIB (1) or a JOIN (2) makes it apogee_poseidon2_permute
+ * of the value and the other child, the other first where `left` is set,
+ * truncated to its first 8 lanes, with d + 1 added to lane 0 mod p: a crit-bit
+ * trie's branch at bit d. A SIB's other child is the block at `arg`; a JOIN's
+ * is the value op `arg`, an earlier op with its park bit set, started from. A
+ * block is 16 words, 8 little-endian lanes, each read mod p; the ops and the
+ * blocks may be anywhere a load reaches, the advice included. Returns 0, or 1
+ * and writes nothing when n is 0 or above 2^20 or `ops` is not 4-aligned. The
+ * call refuses any other program -- an info word that does not decode, a block
+ * not 4-aligned, a JOIN of no earlier park, a park taken by no JOIN or by two,
+ * a word read twice across the ops and the blocks -- and the execution fails. */
+int32_t apogee_mpt_eval(const uint32_t *ops, uint32_t n, uint64_t root[8]);
+
+/* A crit-bit trie's leaf, by the precompile: apogee_poseidon2_permute of the
+ * `key_len` bytes at `key` and then the `value_len` at `value`, packed seven
+ * to a lane, little-endian, and zero-extended to 16 lanes, truncated to its
+ * first 8 and written to `leaf`. Neither length is bound, so a table's keys
+ * are one length and its values one width. Returns 0, or 1 and writes nothing
+ * when the two are over 112 bytes. */
+int32_t apogee_mpt_leaf(const uint8_t *key, size_t key_len, const uint8_t *value,
+                        size_t value_len, uint64_t leaf[8]);
+
+/* A table's root by apogee_mpt_eval, written to `root`: the table whose batch
+ * touches the `m` keys at `keys`, `key_len` bytes each, strictly ascending,
+ * with their leaves, 8 lanes each, at `leaves`, opened by the batch's proof
+ * at `proof`, its 4 + 68*s bytes, s its first word (docs/spec/precompiles.md);
+ * the zero digest for an empty table. The proof's digests are read in place,
+ * the advice included. Returns 0, or 1 and writes nothing when key_len is
+ * outside 1..64, a leaf lane is not below p, or `proof` is not 4-aligned. Keys
+ * not strictly ascending, and a proof that does not open them, exit 101, a
+ * panic. */
+int32_t apogee_mpt_root(size_t key_len, size_t m, const uint8_t *keys, const uint64_t *leaves,
+                        const uint8_t *proof, uint64_t root[8]);
 
 /* The guest's entry, which the library's startup calls. Declared here with C
  * linkage because a freestanding C++ compiler does not give `main` any: a

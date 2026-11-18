@@ -61,14 +61,14 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize - family::RETIRED.len()] =
     family::POSEIDON2,
     family::POSEIDON2_ROUNDS,
     family::MUL_DIV_U256,
-    family::MERKLE_ROOT,
-    family::MERKLE_LEVELS,
-    family::MERKLE_ROUNDS,
     family::FALCON,
     family::FALCON_SPLIT,
     family::FALCON_PRODUCT,
     family::FALCON_SAMPLE,
     family::FALCON_DECODE,
+    family::MPT,
+    family::MPT_NODES,
+    family::MPT_ROUNDS,
 ];
 
 /// The **frame family** of ecall `number`, the one whose row reads the frame
@@ -77,8 +77,8 @@ pub fn delegation_family(number: u32) -> Option<FamilyId> {
     delegation_families(number).next()
 }
 
-/// Every family recording an entry of ecall `number`, a call's, a level's or
-/// a call's arrays, its frame family first.
+/// Every family recording an entry of ecall `number`, a call's, a call's
+/// arrays, an op's or a hash op's, its frame family first.
 pub fn delegation_families(number: u32) -> impl Iterator<Item = FamilyId> {
     delegation::TYPES
         .iter()
@@ -92,8 +92,8 @@ fn delegation_type(family: FamilyId) -> Option<&'static (u32, u32, usize, u32, P
 }
 
 /// The words of an entry of `family` in 32-bit words, or `None` if it is not
-/// a delegation family: a call's frame, a level's sibling, or a call's
-/// arrays. A family expanding an entry holds its words too.
+/// a delegation family: a call's frame, a call's arrays, or an op's words and
+/// block. A family expanding an entry holds its words too.
 pub fn delegation_frame_words(family: FamilyId) -> Option<usize> {
     delegation_type(family).map(|(_, _, words, ..)| *words)
 }
@@ -106,8 +106,8 @@ pub fn delegation_rows(family: FamilyId) -> u32 {
         .unwrap_or_else(|| panic!("family {family} is not a delegation family"))
 }
 
-/// What an entry of delegation `family` is, a call, a level of one or a
-/// call's arrays. Panics on a family that is not a delegation family.
+/// What an entry of delegation `family` is, a call, a call's arrays, an op of
+/// one or a hash op. Panics on a family that is not a delegation family.
 pub fn delegation_per(family: FamilyId) -> Per {
     delegation_type(family)
         .map(|(.., per)| *per)
@@ -115,24 +115,29 @@ pub fn delegation_per(family: FamilyId) -> Per {
 }
 
 /// How many values an entry of delegation `family` carries:
-/// `delegation::CARRY` for a level's, none for a call's or its arrays.
+/// `delegation::mpt::CARRY` for an op's or a hash op's,
+/// `delegation::mpt::CALL_CARRY` for an `MPT_ROOT` call's, none for any other
+/// call's, its arrays or a decode call's.
 pub fn delegation_carry(family: FamilyId) -> usize {
     match delegation_per(family) {
+        Per::Call if family == family::MPT => delegation::mpt::CALL_CARRY,
         Per::Call | Per::Arrays | Per::Decode => 0,
-        Per::Level => delegation::CARRY,
+        Per::Op | Per::Hash => delegation::mpt::CARRY,
     }
 }
 
 /// Whether delegation `family`'s rows read their entries' words from RAM: it
 /// is the first family of its number recording its kind of entry, a call's
-/// frame family, `MERKLE_LEVELS` or `FALCON_SPLIT`. A later family holds the
-/// same entries and touches no RAM.
+/// frame family, `FALCON_SPLIT` or `MPT_NODES`. A later family holds the same
+/// entries and touches no RAM, and so does a hash op's, whose entries are some
+/// of its ops'.
 pub fn reads_ram(family: FamilyId) -> bool {
     delegation_type(family).is_some_and(|(_, n, _, _, per)| {
-        delegation::TYPES
-            .iter()
-            .find(|t| t.1 == *n && t.4 == *per)
-            .is_some_and(|t| t.0 == family)
+        *per != Per::Hash
+            && delegation::TYPES
+                .iter()
+                .find(|t| t.1 == *n && t.4 == *per)
+                .is_some_and(|t| t.0 == family)
     })
 }
 
@@ -164,14 +169,14 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::POSEIDON2 => "POSEIDON2",
         family::POSEIDON2_ROUNDS => "POSEIDON2_ROUNDS",
         family::MUL_DIV_U256 => "MUL_DIV_U256",
-        family::MERKLE_ROOT => "MERKLE_ROOT",
-        family::MERKLE_LEVELS => "MERKLE_LEVELS",
-        family::MERKLE_ROUNDS => "MERKLE_ROUNDS",
         family::FALCON => "FALCON",
         family::FALCON_SPLIT => "FALCON_SPLIT",
         family::FALCON_PRODUCT => "FALCON_PRODUCT",
         family::FALCON_SAMPLE => "FALCON_SAMPLE",
         family::FALCON_DECODE => "FALCON_DECODE",
+        family::MPT => "MPT",
+        family::MPT_NODES => "MPT_NODES",
+        family::MPT_ROUNDS => "MPT_ROUNDS",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -330,14 +335,14 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::POSEIDON2
         | family::POSEIDON2_ROUNDS
         | family::MUL_DIV_U256
-        | family::MERKLE_ROOT
-        | family::MERKLE_LEVELS
-        | family::MERKLE_ROUNDS
         | family::FALCON
         | family::FALCON_SPLIT
         | family::FALCON_PRODUCT
         | family::FALCON_SAMPLE
-        | family::FALCON_DECODE => &[],
+        | family::FALCON_DECODE
+        | family::MPT
+        | family::MPT_NODES
+        | family::MPT_ROUNDS => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }

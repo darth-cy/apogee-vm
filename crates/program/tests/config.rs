@@ -119,15 +119,15 @@ fn a_config_of_every_family_round_trips() {
         bytecode_size_words: 1 << 20,
     };
     assert_eq!(VmConfig::from_bytes(&all.to_bytes()), Some(all.clone()));
-    // A retired number in `MERKLE_ROUNDS`' place, between 17 and 21, is
+    // A retired number in `MUL_DIV_U256`'s place, between 13 and 21, is
     // refused as an unknown one is.
     let at = all
         .families
         .iter()
-        .position(|(f, _)| *f == family::MERKLE_ROUNDS);
+        .position(|(f, _)| *f == family::MUL_DIV_U256);
     for retired in family::RETIRED {
         let mut config = all.clone();
-        config.families[at.expect("MERKLE_ROUNDS is present")].0 = retired;
+        config.families[at.expect("MUL_DIV_U256 is present")].0 = retired;
         assert_eq!(VmConfig::from_bytes(&config.to_bytes()), None, "{retired}");
     }
 }

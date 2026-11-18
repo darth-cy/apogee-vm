@@ -8,12 +8,12 @@
 
 mod common;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use common::{image, instr_at, io, preprocess, traced, TRACED};
 use emulator::{run, trace_run, EmuError};
 use loader::Slot;
-use test_support::to_hex;
+use test_support::{to_hex, Rng};
 
 /// `fib` reads its `n` out of the public input window and leaves its term in
 /// the journal, so the committed record is both of its public values and a
@@ -568,223 +568,6 @@ fn the_recorded_public_input_is_what_the_host_supplied() {
     assert_eq!(traced.io.input, window);
 }
 
-/// The host's side of `guests/marketplace`: a sparse table of listings as the
-/// guest commits to it, each node `transcript`'s permutation of two digests,
-/// truncated, each leaf a listing's 76 bytes packed seven to a lane beside four
-/// zeros and a tag lane of 1.
-mod market {
-    use std::collections::BTreeMap;
-
-    use field::Fp;
-
-    pub const DEPTH: usize = 20;
-    pub const LISTING: usize = 76;
-    pub type Digest = [u64; 8];
-    pub type Listing = [u8; LISTING];
-
-    pub fn compress(l: &Digest, r: &Digest) -> Digest {
-        let mut s: [Fp; 16] =
-            std::array::from_fn(|i| Fp::from_u64(if i < 8 { l[i] } else { r[i - 8] }));
-        transcript::poseidon2_permute(&mut s);
-        std::array::from_fn(|i| s[i].to_u64())
-    }
-
-    /// Eleven lanes of seven bytes, four zeros and the tag 1, permuted once.
-    pub fn leaf(listing: &Listing) -> Digest {
-        let mut bytes = [0u8; 77];
-        bytes[..LISTING].copy_from_slice(listing);
-        let mut lanes = [0u64; 16];
-        for (i, lane) in lanes.iter_mut().take(11).enumerate() {
-            let mut b = [0u8; 8];
-            b[..7].copy_from_slice(&bytes[7 * i..7 * i + 7]);
-            *lane = u64::from_le_bytes(b);
-        }
-        lanes[15] = 1;
-        compress(
-            lanes[..8].try_into().expect("8 lanes"),
-            lanes[8..].try_into().expect("8 lanes"),
-        )
-    }
-
-    pub fn listing(seller: u64, item: u64, price: u128, stock: u64, currency: [u8; 20]) -> Listing {
-        let mut b = [0u8; LISTING];
-        b[..8].copy_from_slice(&seller.to_le_bytes());
-        b[8..16].copy_from_slice(&item.to_le_bytes());
-        b[16..32].copy_from_slice(&price.to_le_bytes());
-        b[48..56].copy_from_slice(&stock.to_le_bytes());
-        b[56..].copy_from_slice(&currency);
-        b
-    }
-
-    /// The listed slots; every other slot holds the all-zero listing.
-    pub struct Table(pub BTreeMap<u32, Listing>);
-
-    impl Table {
-        fn node(&self, level: usize, index: u32, empty: &[Digest]) -> Digest {
-            let slots = index << level..(index + 1) << level;
-            match (self.0.range(slots).next(), level) {
-                (None, _) => empty[level],
-                (Some((_, l)), 0) => leaf(l),
-                _ => compress(
-                    &self.node(level - 1, 2 * index, empty),
-                    &self.node(level - 1, 2 * index + 1, empty),
-                ),
-            }
-        }
-
-        fn empty() -> Vec<Digest> {
-            let mut out = vec![leaf(&[0; LISTING])];
-            for l in 0..DEPTH {
-                out.push(compress(&out[l], &out[l]));
-            }
-            out
-        }
-
-        pub fn root(&self) -> Digest {
-            self.node(DEPTH, 0, &Table::empty())
-        }
-
-        /// `slot`'s listing and its siblings from the leaf up: its proof.
-        pub fn proof(&self, slot: u32) -> Vec<u8> {
-            let empty = Table::empty();
-            let mut out = self.0.get(&slot).copied().unwrap_or([0; LISTING]).to_vec();
-            for level in 0..DEPTH {
-                let sibling = self.node(level, (slot >> level) ^ 1, &empty);
-                out.extend(sibling.iter().flat_map(|l| l.to_le_bytes()));
-            }
-            out
-        }
-    }
-}
-
-/// `guests/marketplace` follows its listings table by its Merkle root.
-///
-/// Two listings, one in a token and one in the native currency, then eleven
-/// operations whose outcomes are this table's own reading of the rules: buy 4
-/// of 10 at 25 in the token (cost 100, fee 0.3 at 30 bps), buy past the stock,
-/// reprice by the seller into a second token, reprice by another account, list
-/// over a listing, list an empty slot in the first token, buy the repriced
-/// listing's last unit at 4 (fee 0.012), buy from oneself, delist, an op that
-/// does not exist, and buy 1 of the new listing at 1 (fee 0.003); amounts in
-/// units of `10^18`. Six apply and five are refused, and the journal is both
-/// roots and a tally per currency bought in, in first-purchase order, the first
-/// token's two purchases summed. The advice is a proof for each run of
-/// consecutive ops on one slot, under the table the runs before it left: the
-/// eleven ops are seven runs of up to three, slot 5's ops in three of them. The
-/// batch with a record past its `n_ops` panics, and so does the same advice one
-/// sibling off.
-#[test]
-fn marketplace_follows_its_table_by_its_root() {
-    use market::{listing, Table};
-    const E18: u128 = 1_000_000_000_000_000_000;
-    const NATIVE: [u8; 20] = [0; 20];
-    const TOKEN: [u8; 20] = [0xa0; 20];
-    const OTHER: [u8; 20] = [0xb7; 20];
-    let mut table = Table(
-        [
-            (5, listing(1, 100, 25 * E18, 10, TOKEN)),
-            (77_777, listing(2, 200, 3 * E18, 1, NATIVE)),
-        ]
-        .into_iter()
-        .collect(),
-    );
-    let before = table.root();
-    let last = (1 << market::DEPTH) - 1;
-    // (kind, slot, account, item, price, quantity, currency), and the slot's
-    // listing after the op where it applies: `Some(None)` empties it.
-    type Op = (u32, u32, u64, u64, u128, u64, [u8; 20]);
-    let ops: [(Op, Option<Option<market::Listing>>); 11] = [
-        (
-            (2, 5, 9, 0, 0, 4, NATIVE),
-            Some(Some(listing(1, 100, 25 * E18, 6, TOKEN))),
-        ),
-        ((2, 5, 9, 0, 0, 7, NATIVE), None),
-        (
-            (1, 77_777, 2, 0, 4 * E18, 0, OTHER),
-            Some(Some(listing(2, 200, 4 * E18, 1, OTHER))),
-        ),
-        ((1, 77_777, 3, 0, 5 * E18, 0, TOKEN), None),
-        ((0, 5, 4, 300, E18, 1, TOKEN), None),
-        (
-            (0, last, 4, 300, E18, 1000, TOKEN),
-            Some(Some(listing(4, 300, E18, 1000, TOKEN))),
-        ),
-        (
-            (2, 77_777, 9, 0, 0, 1, NATIVE),
-            Some(Some(listing(2, 200, 4 * E18, 0, OTHER))),
-        ),
-        ((2, 5, 1, 0, 0, 1, NATIVE), None),
-        ((3, 5, 1, 0, 0, 0, NATIVE), Some(None)),
-        ((9, 5, 1, 0, 0, 0, NATIVE), None),
-        (
-            (2, last, 9, 0, 0, 1, NATIVE),
-            Some(Some(listing(4, 300, E18, 999, TOKEN))),
-        ),
-    ];
-    let mut input: Vec<u8> = before.iter().flat_map(|l| l.to_le_bytes()).collect();
-    input.extend(30u32.to_le_bytes());
-    input.extend((ops.len() as u32).to_le_bytes());
-    let mut advice = Vec::new();
-    let mut run_slot = None;
-    for ((kind, slot, account, item, price, quantity, currency), after) in ops {
-        input.extend(kind.to_le_bytes());
-        input.extend(slot.to_le_bytes());
-        input.extend(account.to_le_bytes());
-        input.extend(item.to_le_bytes());
-        input.extend(price.to_le_bytes());
-        input.extend([0u8; 16]);
-        input.extend(quantity.to_le_bytes());
-        input.extend(currency);
-        if run_slot != Some(slot) {
-            advice.extend(table.proof(slot));
-            run_slot = Some(slot);
-        }
-        match after {
-            Some(Some(l)) => {
-                table.0.insert(slot, l);
-            }
-            Some(None) => {
-                table.0.remove(&slot);
-            }
-            None => {}
-        }
-    }
-    let mut journal: Vec<u8> = before
-        .iter()
-        .chain(&table.root())
-        .flat_map(|l| l.to_le_bytes())
-        .collect();
-    journal.extend(6u32.to_le_bytes());
-    journal.extend(5u32.to_le_bytes());
-    journal.extend(2u32.to_le_bytes());
-    for (currency, volume, fees) in [
-        (TOKEN, 101 * E18, 303 * E18 / 1000),
-        (OTHER, 4 * E18, 12 * E18 / 1000),
-    ] {
-        journal.extend(currency);
-        for total in [volume, fees] {
-            journal.extend(total.to_le_bytes());
-            journal.extend([0u8; 16]);
-        }
-    }
-    let image = image("marketplace");
-    let e = run(&image, &common::with_advice(&input, &advice)).unwrap();
-    assert_eq!(e.exit_code, 0);
-    assert_eq!(to_hex(&e.io.output), to_hex(&journal));
-
-    let mut surplus = input.clone();
-    surplus.extend([0u8; 84]);
-    let e = run(&image, &common::with_advice(&surplus, &advice)).unwrap();
-    assert_eq!(e.exit_code, 101, "a record past n_ops is a malformed batch");
-
-    advice[market::LISTING] ^= 1;
-    let e = run(&image, &common::with_advice(&input, &advice)).unwrap();
-    assert_eq!(
-        e.exit_code, 101,
-        "a proof one sibling off does not open the table"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Falcon-512 verification, executed
 // ---------------------------------------------------------------------------
@@ -809,18 +592,15 @@ fn stream_end(stream: &[u8]) -> usize {
     8 * i + 8 - stream[i].trailing_zeros() as usize
 }
 
-/// `guests/precompiles` over `cases`, after its other calls at their fewest:
-/// a zero leaf up sixteen zero siblings, no runs, and the zero arrays' norm
-/// once. Each case's key and signature, then each one's message and context.
-/// Seven cases of short messages and contexts fill the public input window.
-fn falcon_run(cases: &[Case]) -> Result<emulator::Execution, EmuError> {
+/// `guests/precompiles` over `cases` and the trie scenarios `tries`, after its
+/// other calls at their fewest: a zero leaf, the zero arrays' norm once, and a
+/// long trie program of one step. Each case's key and signature, then each
+/// one's message and context. Eight cases of short messages and contexts fill
+/// the public input window.
+fn precompiles_run(cases: &[Case], tries: &[Vec<u8>]) -> Result<emulator::Execution, EmuError> {
     let mut input = [
         1u32.to_le_bytes().as_slice(),
         &[0u8; 64],
-        &0u32.to_le_bytes(),
-        &16u32.to_le_bytes(),
-        &[0u8; 64 * 16],
-        &0u32.to_le_bytes(),
         &[0u8; 3 * 1024],
         &0u32.to_le_bytes(),
     ]
@@ -837,12 +617,13 @@ fn falcon_run(cases: &[Case]) -> Result<emulator::Execution, EmuError> {
             input.extend(field);
         }
     }
-    run(&image("precompiles"), &io(&input))
+    let advice = common::precompiles_advice(1, tries);
+    run(&image("precompiles"), &common::with_advice(&input, &advice))
 }
 
 /// Every one of `cases` verifies: the guest exits 0, a 1 journaled a case.
 fn falcon_verifies(cases: &[Case]) {
-    let execution = falcon_run(cases).unwrap();
+    let execution = precompiles_run(cases, &[]).unwrap();
     assert_eq!(execution.exit_code, 0);
     let journal = execution.io.output;
     assert_eq!(journal[journal.len() - cases.len()..], vec![1; cases.len()]);
@@ -858,7 +639,7 @@ enum Failure {
 
 /// How `case`, run alone, ends the execution; a panic if it does not.
 fn falcon_failure(case: Case) -> Failure {
-    match falcon_run(&[case]) {
+    match precompiles_run(&[case], &[]) {
         Ok(e) if e.exit_code == 101 => Failure::Panic,
         Err(EmuError::DelegationFrame { detail, .. }) if detail.starts_with("falcon512_decode") => {
             Failure::Refused
@@ -1030,26 +811,244 @@ fn falcon512_agrees_with_every_implementation() {
 }
 
 // ---------------------------------------------------------------------------
+// The SDK's trie, executed
+// ---------------------------------------------------------------------------
+
+/// A table of `k`-byte keys and `v`-byte values, and a batch over it.
+struct Batch {
+    k: usize,
+    v: usize,
+    table: Vec<(Vec<u8>, Vec<u8>)>,
+    inserts: Vec<(Vec<u8>, Vec<u8>)>,
+    sets: Vec<(Vec<u8>, Vec<u8>)>,
+    removes: Vec<Vec<u8>>,
+}
+
+impl Batch {
+    /// `table` of `k`-byte keys, each with a value of `v` random bytes, and a
+    /// batch inserting `inserts`, setting the next `sets` keys of `table` to
+    /// new values and removing the `removes` after them.
+    fn new(
+        rng: &mut Rng,
+        (k, v): (usize, usize),
+        table: &[Vec<u8>],
+        inserts: &[Vec<u8>],
+        (sets, removes): (usize, usize),
+    ) -> Batch {
+        let mut valued = |keys: &[Vec<u8>]| -> Vec<(Vec<u8>, Vec<u8>)> {
+            keys.iter()
+                .map(|key| (key.clone(), rng.next_bytes(v)))
+                .collect()
+        };
+        Batch {
+            k,
+            v,
+            table: valued(table),
+            inserts: valued(inserts),
+            sets: valued(&table[..sets]),
+            removes: table[sets..sets + removes].to_vec(),
+        }
+    }
+
+    /// The batch as `guests/precompiles` reads a trie scenario, where its
+    /// proof begins, and the root `tools/mpt` gives the table after it. The
+    /// guest opens every key the batch sets or removes and each insert's
+    /// witness, all on the table before the batch.
+    fn scenario(&self) -> (Vec<u8>, usize, apogee_mpt::Digest) {
+        let mut trie = apogee_mpt::Trie::new(self.k);
+        for (key, value) in &self.table {
+            trie.insert(key, apogee_mpt::leaf(key, value));
+        }
+        let mut opened: BTreeSet<Vec<u8>> = self.removes.iter().cloned().collect();
+        opened.extend(self.sets.iter().map(|(key, _)| key.clone()));
+        if !trie.is_empty() {
+            opened.extend(self.inserts.iter().map(|(key, _)| trie.witness(key)));
+        }
+        let opened: Vec<Vec<u8>> = opened.into_iter().collect();
+        let values: BTreeMap<&Vec<u8>, &Vec<u8>> =
+            self.table.iter().map(|(key, value)| (key, value)).collect();
+        let word = |n: usize| (n as u32).to_le_bytes();
+        let mut out = [word(self.k), word(self.v), word(opened.len())].concat();
+        for key in &opened {
+            out.extend(key);
+            out.extend(values[key]);
+        }
+        let proof = out.len();
+        out.extend(trie.proof(&opened));
+        out.extend(trie.root().iter().flat_map(|lane| lane.to_le_bytes()));
+        for edits in [&self.inserts, &self.sets] {
+            out.extend(word(edits.len()));
+            for (key, value) in edits {
+                out.extend(key);
+                out.extend(value);
+                trie.insert(key, apogee_mpt::leaf(key, value));
+            }
+        }
+        out.extend(word(self.removes.len()));
+        for key in &self.removes {
+            out.extend(key);
+            trie.remove(key);
+        }
+        (out, proof, trie.root())
+    }
+}
+
+/// `n` distinct keys by `draw`.
+fn keys(rng: &mut Rng, n: usize, draw: impl Fn(&mut Rng) -> Vec<u8>) -> Vec<Vec<u8>> {
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    while out.len() < n {
+        let key = draw(rng);
+        if seen.insert(key.clone()) {
+            out.push(key);
+        }
+    }
+    out
+}
+
+/// A table of 40 four-byte keys, 36 with the top bit set and `0x10` to
+/// `0x13`, and a batch inserting four keys, setting five and removing three
+/// and then `0x10`: the one key it touches under the branch over `0x10` to
+/// `0x13`, which the remove leaves with two opaque children.
+fn four_byte_batch(rng: &mut Rng) -> Batch {
+    let drawn = keys(rng, 40, |rng| {
+        let mut key = rng.next_bytes(4);
+        key[0] |= 0x80;
+        key
+    });
+    let mut table = drawn[..36].to_vec();
+    table.splice(8..8, (0x10..0x14).map(|b| vec![0, 0, 0, b]));
+    Batch::new(rng, (4, 8), &table, &drawn[36..], (5, 4))
+}
+
+/// `guests/precompiles` streamed on `input`, its public input, and the trie
+/// scenarios `tries`, each shard dropped as it fills: the execution, and its
+/// `MPT_ROOT` calls, its profile's `MPT` rows, one a call.
+fn trie_calls(input: &[u8], tries: &[Vec<u8>]) -> (emulator::Execution, u64) {
+    let image = image("precompiles");
+    let (tables, config) = preprocess(&image);
+    let io = common::with_advice(input, &common::precompiles_advice(1, tries));
+    let mut run = emulator::StreamingRun::new(&image, &io, &tables, &config).unwrap();
+    while !run.next_shards().unwrap().is_empty() {}
+    let (_, streamed) = run.finish().unwrap();
+    let (_, calls) = streamed
+        .profile
+        .counts
+        .into_iter()
+        .find(|&(family, _)| family == constants::family::MPT)
+        .expect("the profile counts every family");
+    (streamed.execution, calls)
+}
+
+/// Each trie scenario's root in `guests/precompiles`' journal is the root
+/// `tools/mpt` gives its table after its batch: an empty table taking
+/// inserts; a table the batch does not touch, its proof the root alone; four-
+/// and forty-byte keys, the longer ones sharing their first 32 bytes in three
+/// groups so their crit bits pass 256, each table a few dozen keys under
+/// inserts, sets and removes; every key of a table removed, its proof no
+/// sibling; one key of two removed, the other an opaque root; and 2,100
+/// four-byte keys, each opened and set, whose program of 4,199 ops is over
+/// the 4,096 a call may have. `Trie::root` splits that one at its root branch,
+/// its halves some 2,100 ops each, so each of its two roots is three calls:
+/// its halves' and one hashing the two.
+#[test]
+fn the_sdk_trie_opens_and_edits_tables_as_tools_mpt_does() {
+    let mut rng = Rng::new(0x0517);
+    let prefixes: Vec<Vec<u8>> = (0..3).map(|_| rng.next_bytes(32)).collect();
+    let forty = keys(&mut rng, 34, |rng| {
+        let prefix = &prefixes[rng.next_u64() as usize % 3];
+        [prefix.as_slice(), &rng.next_bytes(8)].concat()
+    });
+    let small = keys(&mut rng, 10, |rng| rng.next_bytes(4));
+    let wide = keys(&mut rng, 2_100, |rng| rng.next_bytes(4));
+    let batches = [
+        Batch::new(&mut rng, (4, 8), &[], &small[..5], (0, 0)),
+        Batch::new(&mut rng, (4, 4), &small[..6], &[], (0, 0)),
+        four_byte_batch(&mut rng),
+        Batch::new(&mut rng, (40, 24), &forty[..30], &forty[30..], (4, 4)),
+        Batch::new(&mut rng, (4, 4), &small[..6], &[], (0, 6)),
+        Batch::new(&mut rng, (4, 8), &small[6..8], &[], (0, 1)),
+        Batch::new(&mut rng, (4, 4), &wide, &[], (wide.len(), 0)),
+    ];
+    let (tries, roots): (Vec<Vec<u8>>, Vec<apogee_mpt::Digest>) = batches
+        .iter()
+        .map(|batch| {
+            let (bytes, _, root) = batch.scenario();
+            (bytes, root)
+        })
+        .unzip();
+    // The public input `precompiles_run` lays out, with no Falcon-512 case.
+    let input = precompiles_run(&[], &[]).unwrap().io.input;
+    let (e, calls) = trie_calls(&input, &tries);
+    assert_eq!(e.exit_code, 0);
+    let (_, others) = trie_calls(&input, &tries[..tries.len() - 1]);
+    assert_eq!(calls - others, 2 * 3, "the 2,100 keys' two roots");
+    let journaled = &e.io.output[e.io.output.len() - 64 * roots.len()..];
+    for (i, root) in roots.iter().enumerate() {
+        let want: Vec<u8> = root.iter().flat_map(|lane| lane.to_le_bytes()).collect();
+        assert_eq!(
+            to_hex(&journaled[64 * i..64 * i + 64]),
+            to_hex(&want),
+            "scenario {i}"
+        );
+    }
+}
+
+/// A proof altered is refused, the guest panicking where the proof as made
+/// opens: a sibling's digest a bit off opens to another root, and the first
+/// sibling's word owned past the last key is never taken.
+#[test]
+fn a_trie_proof_altered_does_not_open() {
+    let mut rng = Rng::new(0x0517);
+    let batch = four_byte_batch(&mut rng);
+    let (bytes, proof, _) = batch.scenario();
+    let s = u32::from_le_bytes(bytes[proof..proof + 4].try_into().unwrap()) as usize;
+    let m = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+    assert!(s > 1, "the batch has siblings");
+    let mut digest = bytes.clone();
+    digest[proof + 4 + 4 * s + 64 + 9] ^= 0x10;
+    let mut word = bytes.clone();
+    let at = proof + 4;
+    let w = u32::from_le_bytes(word[at..at + 4].try_into().unwrap());
+    word[at..at + 4].copy_from_slice(&(w % 512 + 512 * m).to_le_bytes());
+    for (scenario, exit, what) in [
+        (bytes, 0, "the proof as made"),
+        (digest, 101, "a sibling's digest"),
+        (word, 101, "a sibling's word"),
+    ] {
+        let e = precompiles_run(&[], &[scenario]).unwrap();
+        assert_eq!(e.exit_code, exit, "{what}");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // guests/amazon: signed purchases against two tables
 // ---------------------------------------------------------------------------
 
-/// The host's side of `guests/amazon`: its two tables as sparse trees over
-/// `market`'s node, a record's leaf its address's four lanes, the rest of its
-/// bytes packed seven to a lane, and its table's tag, 1 for a user and 2 for a
-/// listing, in lane 15; and the store's rules, read apart from the guest's,
-/// over a `U256` of two `u128` halves.
+/// The host's side of `guests/amazon`: its two tables as `tools/mpt`'s tries,
+/// the users keyed by address and the listings by id big-endian, a record's
+/// leaf its key's and its value's, and the snapshot the two roots compressed;
+/// and the store's rules, read apart from the guest's, over a `U256` of two
+/// `u128` halves.
 mod amazon {
     use std::collections::{BTreeMap, BTreeSet};
 
-    pub use super::market::{compress, Digest};
+    use apogee_mpt::{leaf, Trie};
+    use field::Fp;
 
-    pub const DEPTH: usize = 20;
+    pub use apogee_mpt::Digest;
 
-    /// A user's name: K's first 32 bytes, K the key digest of its key.
+    /// A user's name, its key in the users table: K's first 32 bytes, K the
+    /// key digest of its key.
     pub type Address = [u8; 32];
 
-    /// The zero address, which names no account.
-    pub const NO_ACCOUNT: Address = [0; 32];
+    /// The first 8 lanes of the permutation of `l ‖ r`, with no feed-forward.
+    pub fn compress(l: &Digest, r: &Digest) -> Digest {
+        let mut s: [Fp; 16] =
+            std::array::from_fn(|i| Fp::from_u64(if i < 8 { l[i] } else { r[i - 8] }));
+        transcript::poseidon2_permute(&mut s);
+        std::array::from_fn(|i| s[i].to_u64())
+    }
 
     /// `hi · 2^128 + lo`: a balance, a price, the volume.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -1098,35 +1097,7 @@ mod amazon {
         }
     }
 
-    /// `bytes` seven to a lane, little-endian.
-    fn pack(bytes: &[u8]) -> Vec<u64> {
-        bytes
-            .chunks(7)
-            .map(|seven| {
-                let mut b = [0u8; 8];
-                b[..seven.len()].copy_from_slice(seven);
-                u64::from_le_bytes(b)
-            })
-            .collect()
-    }
-
-    /// A record's leaf: `address`'s four lanes, then `rest` seven bytes to a
-    /// lane, zeros, and `tag` in lane 15, permuted once.
-    fn leaf(address: &Address, rest: &[u8], tag: u64) -> Digest {
-        let mut lanes = [0u64; 16];
-        for (lane, eight) in lanes.iter_mut().zip(address.chunks(8)) {
-            *lane = u64::from_le_bytes(eight.try_into().expect("8 bytes"));
-        }
-        let rest = pack(rest);
-        lanes[4..4 + rest.len()].copy_from_slice(&rest);
-        lanes[15] = tag;
-        compress(
-            lanes[..8].try_into().expect("8 lanes"),
-            lanes[8..].try_into().expect("8 lanes"),
-        )
-    }
-
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct User {
         pub address: Address,
         pub balance: U256,
@@ -1134,21 +1105,17 @@ mod amazon {
     }
 
     impl User {
+        /// The record: the address, its key, then its value, the balance and
+        /// the nonce.
         pub fn bytes(&self) -> Vec<u8> {
             let mut b = self.address.to_vec();
             b.extend(self.balance.le_bytes());
             b.extend(self.nonce.to_le_bytes());
             b
         }
-
-        /// The address, then the balance and the nonce in six lanes, and the
-        /// tag 1.
-        pub fn leaf(&self) -> Digest {
-            leaf(&self.address, &self.bytes()[32..], 1)
-        }
     }
 
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Listing {
         pub seller: Address,
         pub item: u64,
@@ -1157,6 +1124,7 @@ mod amazon {
     }
 
     impl Listing {
+        /// The value: the seller, the item, the price and the stock.
         pub fn bytes(&self) -> Vec<u8> {
             let mut b = self.seller.to_vec();
             b.extend(self.item.to_le_bytes());
@@ -1164,59 +1132,30 @@ mod amazon {
             b.extend(self.stock.to_le_bytes());
             b
         }
-
-        /// The seller's address, then the item, the price and the stock in
-        /// seven lanes, and the tag 2.
-        pub fn leaf(&self) -> Digest {
-            leaf(&self.seller, &self.bytes()[32..], 2)
-        }
     }
 
-    /// A table: each slot's leaf, every slot not listed holding `empty[0]`.
-    pub struct Tree {
-        leaves: BTreeMap<u32, Digest>,
-        empty: Vec<Digest>,
+    /// The tables' tries: each user's leaf at its address, and each listing's
+    /// at its id big-endian.
+    pub fn tables(
+        users: &BTreeMap<Address, User>,
+        listings: &BTreeMap<u32, Listing>,
+    ) -> (Trie, Trie) {
+        let mut user_trie = Trie::new(32);
+        for (a, u) in users {
+            user_trie.insert(a, leaf(a, &u.bytes()[32..]));
+        }
+        let mut listing_trie = Trie::new(4);
+        for (id, l) in listings {
+            let key = id.to_be_bytes();
+            listing_trie.insert(&key, leaf(&key, &l.bytes()));
+        }
+        (user_trie, listing_trie)
     }
 
-    impl Tree {
-        pub fn new(empty: Digest, leaves: impl IntoIterator<Item = (u32, Digest)>) -> Tree {
-            let mut levels = vec![empty];
-            for l in 0..DEPTH {
-                levels.push(compress(&levels[l], &levels[l]));
-            }
-            Tree {
-                leaves: leaves.into_iter().collect(),
-                empty: levels,
-            }
-        }
-
-        fn node(&self, level: usize, index: u32) -> Digest {
-            let slots = index << level..(index + 1) << level;
-            match (self.leaves.range(slots).next(), level) {
-                (None, _) => self.empty[level],
-                (Some((_, leaf)), 0) => *leaf,
-                _ => compress(
-                    &self.node(level - 1, 2 * index),
-                    &self.node(level - 1, 2 * index + 1),
-                ),
-            }
-        }
-
-        pub fn root(&self) -> Digest {
-            self.node(DEPTH, 0)
-        }
-
-        /// `slot`'s siblings from the leaf up, 64 bytes each.
-        pub fn path(&self, slot: u32) -> Vec<u8> {
-            (0..DEPTH)
-                .flat_map(|level| self.node(level, (slot >> level) ^ 1))
-                .flat_map(|lane| lane.to_le_bytes())
-                .collect()
-        }
-
-        pub fn set(&mut self, slot: u32, leaf: Digest) {
-            self.leaves.insert(slot, leaf);
-        }
+    /// The tables' snapshot: the users root and the listings root, compressed.
+    pub fn snapshot(users: &BTreeMap<Address, User>, listings: &BTreeMap<u32, Listing>) -> Digest {
+        let (user_trie, listing_trie) = tables(users, listings);
+        compress(&user_trie.root(), &listing_trie.root())
     }
 
     /// A request: the 92 bytes its buyer signs.
@@ -1243,7 +1182,7 @@ mod amazon {
     }
 
     /// The store as the host reads its rules: the users by address and the
-    /// listings by slot, the volume, and the users and the listings the
+    /// listings by id, the volume, and the users and the listings the
     /// requests have read.
     pub struct Model {
         pub users: BTreeMap<Address, User>,
@@ -1258,12 +1197,11 @@ mod amazon {
         /// that is not valid or does not apply, a panic, as the guest's.
         pub fn settle(&mut self, r: &Request, market: u64) {
             assert!(r.market == market, "a request for another market");
-            assert!(r.buyer != NO_ACCOUNT, "a request from the zero address");
             self.read_users.insert(r.buyer);
             let buyer = self.users[&r.buyer];
             assert!(r.nonce != u64::MAX, "a request at the last nonce");
             assert!(r.nonce == buyer.nonce, "a request not at its buyer's nonce");
-            self.users.get_mut(&r.buyer).expect("an account").nonce += 1;
+            self.users.get_mut(&r.buyer).expect("a user").nonce += 1;
             self.purchase(r, buyer);
         }
 
@@ -1271,7 +1209,7 @@ mod amazon {
         /// moved, or a panic.
         fn purchase(&mut self, r: &Request, buyer: User) {
             self.read_listings.insert(r.listing);
-            let listing = self.listings.get(&r.listing).copied().unwrap_or_default();
+            let listing = self.listings[&r.listing];
             assert!(
                 r.quantity != 0 && r.quantity <= listing.stock,
                 "a quantity of 0 or more than the stock"
@@ -1281,7 +1219,6 @@ mod amazon {
                 listing.seller != r.buyer,
                 "a purchase of the buyer's own listing"
             );
-            assert!(listing.seller != NO_ACCOUNT, "a seller with no account");
             let cost = listing
                 .price
                 .checked_mul(r.quantity)
@@ -1297,12 +1234,9 @@ mod amazon {
                 .volume
                 .checked_add(cost)
                 .expect("the volume past 2^256");
-            self.users.get_mut(&r.buyer).expect("an account").balance = buyer.balance.minus(cost);
-            self.users
-                .get_mut(&listing.seller)
-                .expect("an account")
-                .balance = paid;
-            self.listings.get_mut(&r.listing).expect("in stock").stock -= r.quantity;
+            self.users.get_mut(&r.buyer).expect("a user").balance = buyer.balance.minus(cost);
+            self.users.get_mut(&listing.seller).expect("a user").balance = paid;
+            self.listings.get_mut(&r.listing).expect("a listing").stock -= r.quantity;
             self.volume = volume;
         }
     }
@@ -1311,42 +1245,41 @@ mod amazon {
 /// `guests/amazon` settles a batch of Falcon-512-signed purchases against its
 /// users and listings by their snapshot.
 ///
-/// Forty users, each named by its key's address and each with a key from a
-/// seed of its own, in slots apart whose order is not their addresses'; and
-/// 22 listings, fourteen of 30 units
-/// and up sold by users who also buy; then 77 requests, sequenced by listing
-/// as a sequencer gathering each listing's requests would, each buyer's
-/// nonces in the batch's order. Each applies: seventy-one purchases of one to
-/// three units, the last unit of a listing of one, both of a listing of two,
-/// a seller's purchase paid for by a sale earlier in the batch, and a
-/// purchase at `2^255`. Every request is signed by its buyer, new signatures
-/// each run, as signing is randomized. The advice holds what the batch reads
-/// and nothing else: the records it reads, then each request, its buyer's key
-/// at the buyer's first, and its signature, the key and the signature in the
-/// SDK's advised forms, converted as a host converts them. The journal is
-/// both snapshots, the count of purchases and the volume. The execution
-/// panics with a byte past the public input's market; with the first request
-/// from an address the advice does not hold, and, signed again by its signer,
-/// for another market, from the zero address, or at the nonce after its
-/// buyer's; with a request at the last nonce, its buyer's record advised;
-/// with a request that does not apply, signed by its buyer and last in the
-/// batch: a unit of the listing of one once sold, a max price one below the
-/// price, the buyer's own listing, a seller with no account, a cost past
-/// `2^256`, a cost past the balance, or a seller's balance or the volume past
-/// `2^256`; and with a byte after the advice's last path, a user no request
-/// reads, the first key another user's, the first signature one bit of its
-/// salt off, or its buyer's over another of its requests, and a user's
-/// balance one off. The decode call refuses the
-/// first key with its first coefficient at least `q`, the first signature
-/// with its `s2` all zeros, and a signature with a one just after its end, in
-/// its last word. The first key left out, and the first signature a word
-/// longer, its last byte 1, put every read after them off, a panic or the
-/// decode call's refusal. Each is its own execution.
+/// Forty users, each keyed by its key's address and each with a key from a
+/// seed of its own; and 22 listings at ids apart, fourteen of 30 units and up
+/// sold by users who also buy; then 77 requests, sequenced by listing as a
+/// sequencer gathering each listing's requests would, each buyer's nonces in
+/// the batch's order. Each applies: seventy-one purchases of one to three
+/// units, the last unit of a listing of one, both of a listing of two, a
+/// seller's purchase paid for by a sale earlier in the batch, and a purchase at
+/// `2^255`. Every request is signed by its buyer, new signatures each run, as
+/// signing is randomized. The advice holds what the batch reads and nothing
+/// else: the records it reads and each table's proof of them, `tools/mpt`'s,
+/// then each request, its buyer's key at the buyer's first, and its signature,
+/// the key and the signature in the SDK's advised forms, converted as a host
+/// converts them. The journal is both snapshots, the count of purchases and
+/// the volume. The execution panics with a byte past the public input's
+/// market; with the first request from an address no user has, and, signed
+/// again by its signer, for another market, from a user the advice does not
+/// hold, or at the nonce after its buyer's; with a request at the last nonce,
+/// its buyer's record advised; with a request that does not apply, signed by
+/// its buyer and last in the batch: a unit of the listing of one once sold, a
+/// max price one below the price, the buyer's own listing, a seller no user
+/// is, a cost past `2^256`, a cost past the balance, or a seller's balance or
+/// the volume past `2^256`; and with a byte after the advice's last signature,
+/// a user no request reads, the first key another user's, the first signature
+/// one bit of its salt off, or its buyer's over another of its requests, and a
+/// user's balance one off. The decode call refuses the first key with its
+/// first coefficient at least `q`, the first signature with its `s2` all
+/// zeros, and a signature with a one just after its end, in its last word. The
+/// first key left out, and the first signature a word longer, its last byte 1,
+/// put every read after them off, a panic or the decode call's refusal. Each
+/// is its own execution.
 #[test]
 fn amazon_settles_signed_purchases_by_its_snapshot() {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use amazon::{compress, Address, Listing, Model, Request, Tree, User, NO_ACCOUNT, U256};
+    use amazon::{snapshot, tables, Address, Listing, Model, Request, User, U256};
     use apogee_falcon512::{address, key_advice, keygen, sign, signature_advice};
 
     const E18: u128 = 1_000_000_000_000_000_000;
@@ -1369,18 +1302,17 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     const BIG: usize = 19;
     const BIG_TOO: usize = 20;
     const UNPAYABLE: usize = 21;
-    const VACANT: usize = 22;
-    let slot = |i: usize| (i * 26_800) as u32;
     let listing = |j: usize| (7 + j * 40_009) as u32;
     let half = U256 {
         hi: 1 << 127,
         lo: 0,
     };
+    // An address no user has.
+    let stranger = address(b"no user's key");
 
-    // Each user's key, by its address, and the slot its record is in.
+    // Each user's key, by its address.
     let mut secret = BTreeMap::new();
     let mut keys = BTreeMap::new();
-    let mut slots = BTreeMap::new();
     let mut users = BTreeMap::new();
     let mut addresses: Vec<Address> = Vec::new();
     for i in 0..40 {
@@ -1414,12 +1346,11 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
             },
         );
         keys.insert(a, key);
-        slots.insert(a, slot(i));
         addresses.push(a);
     }
     let user = |i: usize| addresses[i];
     let mut listings = BTreeMap::new();
-    for j in 0..VACANT {
+    for j in 0..=UNPAYABLE {
         let (seller, price, stock) = match j {
             SINGLE => (user(4), U256::small(7 * E18), 1),
             PAIR => (user(10), U256::small(3 * E18), 2),
@@ -1428,7 +1359,7 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
             OVERFILLS => (user(ALMOST_FULL), U256::small(10 * E18), 5),
             BIG => (user(BIG_SELLER), half, 3),
             BIG_TOO => (user(9), half, 1),
-            UNPAYABLE => (NO_ACCOUNT, U256::small(E18), 5),
+            UNPAYABLE => (stranger, U256::small(E18), 5),
             _ => (
                 user(2 * j + 1),
                 U256::small((j as u128 + 1) * E18 + j as u128 * E18 / 10),
@@ -1446,7 +1377,7 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
             },
         );
     }
-    let price = |j: usize| listings.get(&listing(j)).copied().unwrap_or_default().price;
+    let price = |j: usize| listings[&listing(j)].price;
 
     let mut batch: Vec<(Address, usize, u64, U256)> = (0..70)
         .map(|k| {
@@ -1471,21 +1402,8 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     // they came.
     batch.sort_by_key(|&(_, j, ..)| listing(j));
 
-    let tables = |users: &BTreeMap<Address, User>, listings: &BTreeMap<u32, Listing>| {
-        (
-            Tree::new(
-                User::default().leaf(),
-                users.iter().map(|(a, u)| (slots[a], u.leaf())),
-            ),
-            Tree::new(
-                Listing::default().leaf(),
-                listings.iter().map(|(&s, l)| (s, l.leaf())),
-            ),
-        )
-    };
-    let (user_tree, listing_tree) = tables(&users, &listings);
-    let roots = [user_tree.root(), listing_tree.root()];
-    let before = compress(&roots[0], &roots[1]);
+    let (user_trie, listing_trie) = tables(&users, &listings);
+    let before = snapshot(&users, &listings);
 
     let mut model = Model {
         users: users.clone(),
@@ -1529,63 +1447,43 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     // The model panics at a request that does not apply.
     assert_eq!(batch.len(), 77, "the batch is each case it claims");
 
-    // The advice for the users `held`, the listings at the slots `listed` and
-    // the `n` requests of `stream`: the roots, each user's record as the
-    // snapshot holds it, by address, and each listing's, by slot; `n`, then
-    // the stream; and a path a record, each under its table as the records
-    // before it left it. And where the stream starts, and the snapshot the
-    // paths write.
+    // The advice for the users `held`, the listings at the ids `listed` and
+    // the `n` requests of `stream`: each user's record as the snapshot holds
+    // it, by address, and each listing's id and value, by id; each table's
+    // proof of those keys; then `n` and the stream. And where the stream
+    // starts.
     let advice_for = |held: &BTreeSet<Address>, listed: &BTreeSet<u32>, n: usize, stream: &[u8]| {
-        let (mut user_tree, mut listing_tree) = tables(&users, &listings);
-        let mut advice: Vec<u8> = roots
-            .iter()
-            .flatten()
-            .flat_map(|l| l.to_le_bytes())
-            .collect();
-        advice.extend((held.len() as u32).to_le_bytes());
+        let mut advice = (held.len() as u32).to_le_bytes().to_vec();
         for a in held {
-            advice.extend(slots[a].to_le_bytes());
             advice.extend(users[a].bytes());
         }
         advice.extend((listed.len() as u32).to_le_bytes());
-        for slot in listed {
-            advice.extend(slot.to_le_bytes());
-            advice.extend(listings.get(slot).copied().unwrap_or_default().bytes());
+        for id in listed {
+            advice.extend(id.to_le_bytes());
+            advice.extend(listings[id].bytes());
         }
+        advice.extend(user_trie.proof(&held.iter().collect::<Vec<_>>()));
+        let ids: Vec<[u8; 4]> = listed.iter().map(|id| id.to_be_bytes()).collect();
+        advice.extend(listing_trie.proof(&ids));
         advice.extend((n as u32).to_le_bytes());
         let batch_at = advice.len();
         advice.extend(stream);
-        for a in held {
-            advice.extend(user_tree.path(slots[a]));
-            user_tree.set(slots[a], model.users[a].leaf());
-        }
-        for slot in listed {
-            advice.extend(listing_tree.path(*slot));
-            let l = model.listings.get(slot).copied().unwrap_or_default();
-            listing_tree.set(*slot, l.leaf());
-        }
-        let after = compress(&user_tree.root(), &listing_tree.root());
-        (advice, batch_at, after)
+        (advice, batch_at)
     };
-    let (advice, batch_at, after) = advice_for(
+    let (advice, batch_at) = advice_for(
         &model.read_users,
         &model.read_listings,
         batch.len(),
         &stream,
     );
-    // Every request, key and signature is a whole number of words, so every
-    // one and every path is on a word where the stream is.
+    // Every record, proof, request, key and signature is a whole number of
+    // words, so every one is on a word where the stream is.
     assert!(
         batch_at.is_multiple_of(4) && stream.len().is_multiple_of(4),
         "the stream starts and ends on a word"
     );
-    let (users_after, listings_after) = tables(&model.users, &model.listings);
-    assert_eq!(
-        after,
-        compress(&users_after.root(), &listings_after.root()),
-        "the paths write the tables the batch leaves"
-    );
 
+    let after = snapshot(&model.users, &model.listings);
     let mut journal: Vec<u8> = before
         .iter()
         .chain(&after)
@@ -1632,22 +1530,22 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     );
 
     // The first request, from a user who signed it, now from an address no
-    // user has: the advice cannot hold it, and nothing proves it absent.
+    // user has: the advice cannot hold it.
     let (buyer, ..) = batch[0];
-    let mut stranger = advice.clone();
-    stranger[batch_at..batch_at + 32].copy_from_slice(&address(b"no user's key"));
+    let mut strange = advice.clone();
+    strange[batch_at..batch_at + 32].copy_from_slice(&stranger);
     assert!(
-        panics(&input, &stranger),
+        panics(&input, &strange),
         "a request from an address the advice does not hold is a malformed batch"
     );
 
     assert!(
         panics(&input, &spliced(advice.len(), &[0])),
-        "a byte after the last path"
+        "a byte after the last signature"
     );
 
-    // The idle user's record and its path, each in its place: it opens the
-    // users table, and the batch does not read it.
+    // The idle user's record, and the users proof of it with the rest: it
+    // opens the users table, and the batch does not read it.
     let mut idle = model.read_users.clone();
     assert!(idle.insert(user(IDLE)), "no request reads it");
     assert!(
@@ -1689,8 +1587,9 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     assert!(ends(&keyless), "a key the stream lacks");
 
     // The first request, one field changed, signed again by its signer: for
-    // another market, from the zero address, or at the nonce after its
-    // buyer's. None is valid, so each is a malformed batch.
+    // another market, from the idle user, whom the advice does not hold, or at
+    // the nonce after its buyer's. None is valid, so each is a malformed
+    // batch.
     let resigned = |at: usize, bytes: &[u8]| {
         let mut request = advice[batch_at..batch_at + 92].to_vec();
         request[at..at + bytes.len()].copy_from_slice(bytes);
@@ -1708,8 +1607,8 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         "a request for another market"
     );
     assert!(
-        panics(&input, &resigned(0, &NO_ACCOUNT)),
-        "a request from the zero address"
+        panics(&input, &resigned(0, &user(IDLE))),
+        "a request from a user the advice does not hold"
     );
     let skipped = users[&buyer].nonce + 1;
     assert!(
@@ -1743,12 +1642,12 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
 
     // A request that does not apply, its buyer's at the buyer's nonce after
     // the batch, signed, last in the batch, its buyer's key with it where the
-    // buyer has no request before it, and the records it reads advised: one
-    // for each reason a purchase cannot apply, a unit of a listing of one
-    // once sold, a max price one below the price, the buyer's own listing, a
-    // seller with no account, a cost past `2^256`, a cost past the balance,
-    // and a seller's balance and the volume past `2^256`. Each is a malformed
-    // batch.
+    // buyer has no request before it, and the records it reads advised where
+    // the tables hold them: one for each reason a purchase cannot apply, a
+    // unit of a listing of one once sold, a max price one below the price, the
+    // buyer's own listing, a seller no user is, a cost past `2^256`, a cost
+    // past the balance, and a seller's balance and the volume past `2^256`.
+    // Each is a malformed batch.
     let appended = |(buyer, j, quantity, max_price): (Address, usize, u64, U256)| {
         let r = Request {
             buyer,
@@ -1766,7 +1665,11 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         requests.extend(signature_advice(&sign(&secret[&buyer], &r.bytes(), CONTEXT)).unwrap());
         let mut advised = model.read_users.clone();
         let seller = listings[&r.listing].seller;
-        advised.extend([buyer, seller].into_iter().filter(|&a| a != NO_ACCOUNT));
+        advised.extend(
+            [buyer, seller]
+                .into_iter()
+                .filter(|a| users.contains_key(a)),
+        );
         let mut advised_listings = model.read_listings.clone();
         advised_listings.insert(r.listing);
         advice_for(&advised, &advised_listings, batch.len() + 1, &requests).0
@@ -1835,10 +1738,10 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         "another request's signature is a malformed batch"
     );
 
-    // The first user's balance, one off: its record no longer opens the
-    // users table.
+    // The first user's balance, one off: its leaf is not the users table's,
+    // and the roots are not the snapshot.
     let mut unopened = advice.clone();
-    unopened[128 + 4 + 4 + 32] ^= 1;
+    unopened[4 + 32] ^= 1;
     assert!(
         panics(&input, &unopened),
         "a balance the table does not hold"

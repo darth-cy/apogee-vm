@@ -16,10 +16,10 @@ Families 0–6 (`constants::family`) are the **execution** families, one execute
 row ([add-sub.md](add-sub.md), [jump-branch-slt.md](jump-branch-slt.md),
 [bitwise.md](bitwise.md), [mul-div.md](mul-div.md), [memory-ops.md](memory-ops.md) §3,
 §4, §6); 7–11 the **window** families, one memory word a row ([memory.md](memory.md) §3,
-[public-values.md](public-values.md) §4); 12–17 and 21–25 the **delegation** families, a block of
-1 to 128 rows an entry of a precompile call: the call, a path's level, the call's arrays, or a
-decode call with every word it touches ([precompiles.md](precompiles.md) §1); 18–20 are retired,
-never to be reassigned.
+[public-values.md](public-values.md) §4); 12–14 and 21–28 the **delegation** families, a block of
+1 to 128 rows an entry of a precompile call: the call, the call's arrays, a decode call with every
+word it touches, or an op of the call's program ([precompiles.md](precompiles.md) §1); 15–20 are
+retired, never to be reassigned.
 
 Shapes at the default height `2^n` (`constants::family::DEFAULT_HEIGHTS`): committed columns,
 enforcing gates, obligations per channel (`TIMESTAMP/RANGE16/GENERIC/DECODER`), row-wise gate
@@ -43,9 +43,9 @@ lists (the halving ones are `n`), inner columns, artifact bytes, and a shard pro
 | 12 | `POSEIDON2` | 16 | 164 | 130 | 0 | 98 | 0/210/0/0 | 9 | 1,344 | 208,518 | 44,376 |
 | 13 | `POSEIDON2_ROUNDS` | 16 | 35 | 65 | 0 | 84 | — | 4 | 62 | 58,609 | 15,088 |
 | 14 | `MUL_DIV_U256` | 16 | 91 | 135 | 0 | 48 | 0/239/0/0 | 9 | 1,218 | 180,932 | 41,272 |
-| 15 | `MERKLE_ROOT` | 16 | 94 | 72 | 0 | 54 | 0/120/0/0 | 8 | 704 | 103,449 | 31,056 |
-| 16 | `MERKLE_LEVELS` | 16 | 63 | 50 | 0 | 20 | 0/97/0/0 | 8 | 704 | 138,302 | 30,208 |
-| 17 | `MERKLE_ROUNDS` | 16 | 36 | 66 | 0 | 85 | 0/1/0/0 | 4 | 104 | 64,028 | 16,304 |
+| 15 | retired | | | | | | | | | | |
+| 16 | retired | | | | | | | | | | |
+| 17 | retired | | | | | | | | | | |
 | 18 | retired | | | | | | | | | | |
 | 19 | retired | | | | | | | | | | |
 | 20 | retired | | | | | | | | | | |
@@ -54,6 +54,9 @@ lists (the halving ones are `n`), inner columns, artifact bytes, and a shard pro
 | 23 | `FALCON_PRODUCT` | 16 | 101 | 144 | 0 | 84 | 0/192/0/0 | 9 | 1,344 | 222,800 | 43,592 |
 | 24 | `FALCON_SAMPLE` | 16 | 67 | 82 | 0 | 41 | 0/162/0/0 | 9 | 1,218 | 152,197 | 40,040 |
 | 25 | `FALCON_DECODE` | 16 | 67 | 114 | 0 | 118 | 0/119/0/0 | 8 | 704 | 190,235 | 31,296 |
+| 26 | `MPT` | 16 | 84 | 71 | 0 | 45 | 0/117/0/0 | 8 | 704 | 101,942 | 30,880 |
+| 27 | `MPT_NODES` | 16 | 80 | 57 | 0 | 38 | 0/112/0/0 | 8 | 830 | 186,210 | 32,608 |
+| 28 | `MPT_ROUNDS` | 16 | 36 | 67 | 0 | 85 | 0/3/0/0 | 4 | 110 | 64,811 | 16,416 |
 
 The bytes are the GKR pass and outputs; the witness commitment and the opening come on top
 ([proof.md](proof.md) §9, [pcs.md](pcs.md) §7).
@@ -68,10 +71,9 @@ halving lists, one per variable and as wide as the outputs, and no gate below th
 `PUBLIC_INPUT`'s, byte for byte at one height, all `constraints::memory` constructors
 ([memory.md](memory.md) §3). Every other family's is its own module's `artifact`, the delegation
 families' on `constraints::delegation`'s builder: `poseidon2::{artifact, rounds_artifact}`,
-`mul_div_u256::artifact`, `merkle::{artifact, levels_artifact, rounds_artifact}`,
-`falcon::{artifact, split_artifact, product_artifact, sample_artifact}` and
-`falcon_decode::artifact`, the two rounds families on one builder, `poseidon2::rounds`, keyed for
-a call or a level.
+`mul_div_u256::artifact`, `falcon::{artifact, split_artifact, product_artifact, sample_artifact}`,
+`falcon_decode::artifact` and `mpt::{artifact, nodes_artifact, rounds_artifact}`, the two rounds
+families on one builder, `poseidon2::rounds`, keyed for a call or a hash op.
 
 ## 2. How a family circuit is assembled
 

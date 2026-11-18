@@ -4,7 +4,8 @@ The binaries around the prover and verifier, none on a proof path: `bench` measu
 (§1), `profiler` counts a guest's cycles (§2), a `debug-info` build logs a proving run (§3),
 `checker` validates circuits and the global transcript (§4), `artifact-dump` exports a guest's
 `ProgramImage` (§5), `verifier` checks a proof from files (§6), `kat-gen` writes the committed
-reference vectors (§7), and a generator outside the workspace is a reference oracle (§8).
+reference vectors (§7), a generator outside the workspace is a reference oracle (§8), and
+`tools/mpt` builds tables' tries, roots and proofs on the host (§9).
 
 ## 1. bench
 
@@ -230,3 +231,16 @@ in `algorithm_1` at a characteristic of `2^31` or more. It turns that route off 
 only; an inverse is unique, so the output is the same. The output's `MAT_DIAG16_M_1` and `RC16`
 are `params.rs` value for value, without the partial rows' zero lanes, and its last vector is the
 permutation of `[0, 1, …, 15]` that `the_permutation_is_the_generators` asserts.
+
+## 9. The host's trie
+
+`tools/mpt`, the crate `apogee-mpt`, is the trie's host half ([precompiles.md](spec/precompiles.md)
+§6): what a test or a batch driver builds a table's root and its batches' proofs with, linked by no
+prover, verifier or guest. `leaf(key, value)` and `branch(c, l, r)` are §6.1's hashes over
+`transcript::poseidon2_permute`; `Trie::new(key_len)` is an empty table, with `insert(key, leaf)`,
+which inserts or replaces, `remove`, `get` and `root`. `witness(key)` is the key of the leaf a walk
+on `key`'s bits reaches. `proof(touched)` is §6.2's bytes for the touched keys, each in the table,
+in any order: for a batch, the keys it reads, sets or removes and each insert's witness, all on the
+table before the batch. Its suites hold the hashes and small tables to the hand formulas, a root to
+the definition whatever the insertion order, and a proof to an opener written from the guest's
+validation, which batches of sets, inserts and removes then edit to the root after.
