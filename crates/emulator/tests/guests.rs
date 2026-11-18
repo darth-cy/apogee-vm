@@ -1217,23 +1217,30 @@ fn a_trie_proof_altered_does_not_open() {
 // guests/amazon: signed purchases against two tables
 // ---------------------------------------------------------------------------
 
-/// The host's side of `guests/amazon`: its two tables as sparse trees over
-/// `market`'s node, a record's leaf its address's four lanes, the rest of its
-/// bytes packed seven to a lane, and its table's tag, 1 for a user and 2 for a
-/// listing, in lane 15; and the store's rules, read apart from the guest's,
-/// over a `U256` of two `u128` halves.
+/// The host's side of `guests/amazon`: its two tables as `tools/mpt`'s tries,
+/// the users keyed by address and the listings by id big-endian, a record's
+/// leaf its key's and its value's, and the snapshot the two roots compressed;
+/// and the store's rules, read apart from the guest's, over a `U256` of two
+/// `u128` halves.
 mod amazon {
     use std::collections::{BTreeMap, BTreeSet};
 
-    pub use super::market::{compress, Digest};
+    use apogee_mpt::{leaf, Trie};
+    use field::Fp;
 
-    pub const DEPTH: usize = 20;
+    pub use apogee_mpt::Digest;
 
-    /// A user's name: K's first 32 bytes, K the key digest of its key.
+    /// A user's name, its key in the users table: K's first 32 bytes, K the
+    /// key digest of its key.
     pub type Address = [u8; 32];
 
-    /// The zero address, which names no account.
-    pub const NO_ACCOUNT: Address = [0; 32];
+    /// The first 8 lanes of the permutation of `l ‖ r`, with no feed-forward.
+    pub fn compress(l: &Digest, r: &Digest) -> Digest {
+        let mut s: [Fp; 16] =
+            std::array::from_fn(|i| Fp::from_u64(if i < 8 { l[i] } else { r[i - 8] }));
+        transcript::poseidon2_permute(&mut s);
+        std::array::from_fn(|i| s[i].to_u64())
+    }
 
     /// `hi · 2^128 + lo`: a balance, a price, the volume.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -1282,35 +1289,7 @@ mod amazon {
         }
     }
 
-    /// `bytes` seven to a lane, little-endian.
-    fn pack(bytes: &[u8]) -> Vec<u64> {
-        bytes
-            .chunks(7)
-            .map(|seven| {
-                let mut b = [0u8; 8];
-                b[..seven.len()].copy_from_slice(seven);
-                u64::from_le_bytes(b)
-            })
-            .collect()
-    }
-
-    /// A record's leaf: `address`'s four lanes, then `rest` seven bytes to a
-    /// lane, zeros, and `tag` in lane 15, permuted once.
-    fn leaf(address: &Address, rest: &[u8], tag: u64) -> Digest {
-        let mut lanes = [0u64; 16];
-        for (lane, eight) in lanes.iter_mut().zip(address.chunks(8)) {
-            *lane = u64::from_le_bytes(eight.try_into().expect("8 bytes"));
-        }
-        let rest = pack(rest);
-        lanes[4..4 + rest.len()].copy_from_slice(&rest);
-        lanes[15] = tag;
-        compress(
-            lanes[..8].try_into().expect("8 lanes"),
-            lanes[8..].try_into().expect("8 lanes"),
-        )
-    }
-
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct User {
         pub address: Address,
         pub balance: U256,
@@ -1318,21 +1297,17 @@ mod amazon {
     }
 
     impl User {
+        /// The record: the address, its key, then its value, the balance and
+        /// the nonce.
         pub fn bytes(&self) -> Vec<u8> {
             let mut b = self.address.to_vec();
             b.extend(self.balance.le_bytes());
             b.extend(self.nonce.to_le_bytes());
             b
         }
-
-        /// The address, then the balance and the nonce in six lanes, and the
-        /// tag 1.
-        pub fn leaf(&self) -> Digest {
-            leaf(&self.address, &self.bytes()[32..], 1)
-        }
     }
 
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Listing {
         pub seller: Address,
         pub item: u64,
@@ -1341,6 +1316,7 @@ mod amazon {
     }
 
     impl Listing {
+        /// The value: the seller, the item, the price and the stock.
         pub fn bytes(&self) -> Vec<u8> {
             let mut b = self.seller.to_vec();
             b.extend(self.item.to_le_bytes());
@@ -1348,59 +1324,30 @@ mod amazon {
             b.extend(self.stock.to_le_bytes());
             b
         }
-
-        /// The seller's address, then the item, the price and the stock in
-        /// seven lanes, and the tag 2.
-        pub fn leaf(&self) -> Digest {
-            leaf(&self.seller, &self.bytes()[32..], 2)
-        }
     }
 
-    /// A table: each slot's leaf, every slot not listed holding `empty[0]`.
-    pub struct Tree {
-        leaves: BTreeMap<u32, Digest>,
-        empty: Vec<Digest>,
+    /// The tables' tries: each user's leaf at its address, and each listing's
+    /// at its id big-endian.
+    pub fn tables(
+        users: &BTreeMap<Address, User>,
+        listings: &BTreeMap<u32, Listing>,
+    ) -> (Trie, Trie) {
+        let mut user_trie = Trie::new(32);
+        for (a, u) in users {
+            user_trie.insert(a, leaf(a, &u.bytes()[32..]));
+        }
+        let mut listing_trie = Trie::new(4);
+        for (id, l) in listings {
+            let key = id.to_be_bytes();
+            listing_trie.insert(&key, leaf(&key, &l.bytes()));
+        }
+        (user_trie, listing_trie)
     }
 
-    impl Tree {
-        pub fn new(empty: Digest, leaves: impl IntoIterator<Item = (u32, Digest)>) -> Tree {
-            let mut levels = vec![empty];
-            for l in 0..DEPTH {
-                levels.push(compress(&levels[l], &levels[l]));
-            }
-            Tree {
-                leaves: leaves.into_iter().collect(),
-                empty: levels,
-            }
-        }
-
-        fn node(&self, level: usize, index: u32) -> Digest {
-            let slots = index << level..(index + 1) << level;
-            match (self.leaves.range(slots).next(), level) {
-                (None, _) => self.empty[level],
-                (Some((_, leaf)), 0) => *leaf,
-                _ => compress(
-                    &self.node(level - 1, 2 * index),
-                    &self.node(level - 1, 2 * index + 1),
-                ),
-            }
-        }
-
-        pub fn root(&self) -> Digest {
-            self.node(DEPTH, 0)
-        }
-
-        /// `slot`'s siblings from the leaf up, 64 bytes each.
-        pub fn path(&self, slot: u32) -> Vec<u8> {
-            (0..DEPTH)
-                .flat_map(|level| self.node(level, (slot >> level) ^ 1))
-                .flat_map(|lane| lane.to_le_bytes())
-                .collect()
-        }
-
-        pub fn set(&mut self, slot: u32, leaf: Digest) {
-            self.leaves.insert(slot, leaf);
-        }
+    /// The tables' snapshot: the users root and the listings root, compressed.
+    pub fn snapshot(users: &BTreeMap<Address, User>, listings: &BTreeMap<u32, Listing>) -> Digest {
+        let (user_trie, listing_trie) = tables(users, listings);
+        compress(&user_trie.root(), &listing_trie.root())
     }
 
     /// A request: the 92 bytes its buyer signs.
@@ -1427,7 +1374,7 @@ mod amazon {
     }
 
     /// The store as the host reads its rules: the users by address and the
-    /// listings by slot, the volume, and the users and the listings the
+    /// listings by id, the volume, and the users and the listings the
     /// requests have read.
     pub struct Model {
         pub users: BTreeMap<Address, User>,
@@ -1442,12 +1389,11 @@ mod amazon {
         /// that is not valid or does not apply, a panic, as the guest's.
         pub fn settle(&mut self, r: &Request, market: u64) {
             assert!(r.market == market, "a request for another market");
-            assert!(r.buyer != NO_ACCOUNT, "a request from the zero address");
             self.read_users.insert(r.buyer);
             let buyer = self.users[&r.buyer];
             assert!(r.nonce != u64::MAX, "a request at the last nonce");
             assert!(r.nonce == buyer.nonce, "a request not at its buyer's nonce");
-            self.users.get_mut(&r.buyer).expect("an account").nonce += 1;
+            self.users.get_mut(&r.buyer).expect("a user").nonce += 1;
             self.purchase(r, buyer);
         }
 
@@ -1455,7 +1401,7 @@ mod amazon {
         /// moved, or a panic.
         fn purchase(&mut self, r: &Request, buyer: User) {
             self.read_listings.insert(r.listing);
-            let listing = self.listings.get(&r.listing).copied().unwrap_or_default();
+            let listing = self.listings[&r.listing];
             assert!(
                 r.quantity != 0 && r.quantity <= listing.stock,
                 "a quantity of 0 or more than the stock"
@@ -1465,7 +1411,6 @@ mod amazon {
                 listing.seller != r.buyer,
                 "a purchase of the buyer's own listing"
             );
-            assert!(listing.seller != NO_ACCOUNT, "a seller with no account");
             let cost = listing
                 .price
                 .checked_mul(r.quantity)
@@ -1481,12 +1426,9 @@ mod amazon {
                 .volume
                 .checked_add(cost)
                 .expect("the volume past 2^256");
-            self.users.get_mut(&r.buyer).expect("an account").balance = buyer.balance.minus(cost);
-            self.users
-                .get_mut(&listing.seller)
-                .expect("an account")
-                .balance = paid;
-            self.listings.get_mut(&r.listing).expect("in stock").stock -= r.quantity;
+            self.users.get_mut(&r.buyer).expect("a user").balance = buyer.balance.minus(cost);
+            self.users.get_mut(&listing.seller).expect("a user").balance = paid;
+            self.listings.get_mut(&r.listing).expect("a listing").stock -= r.quantity;
             self.volume = volume;
         }
     }
@@ -1495,42 +1437,41 @@ mod amazon {
 /// `guests/amazon` settles a batch of Falcon-512-signed purchases against its
 /// users and listings by their snapshot.
 ///
-/// Forty users, each named by its key's address and each with a key from a
-/// seed of its own, in slots apart whose order is not their addresses'; and
-/// 22 listings, fourteen of 30 units
-/// and up sold by users who also buy; then 77 requests, sequenced by listing
-/// as a sequencer gathering each listing's requests would, each buyer's
-/// nonces in the batch's order. Each applies: seventy-one purchases of one to
-/// three units, the last unit of a listing of one, both of a listing of two,
-/// a seller's purchase paid for by a sale earlier in the batch, and a
-/// purchase at `2^255`. Every request is signed by its buyer, new signatures
-/// each run, as signing is randomized. The advice holds what the batch reads
-/// and nothing else: the records it reads, then each request, its buyer's key
-/// at the buyer's first, and its signature, the key and the signature in the
-/// SDK's advised forms, converted as a host converts them. The journal is
-/// both snapshots, the count of purchases and the volume. The execution
-/// panics with a byte past the public input's market; with the first request
-/// from an address the advice does not hold, and, signed again by its signer,
-/// for another market, from the zero address, or at the nonce after its
-/// buyer's; with a request at the last nonce, its buyer's record advised;
-/// with a request that does not apply, signed by its buyer and last in the
-/// batch: a unit of the listing of one once sold, a max price one below the
-/// price, the buyer's own listing, a seller with no account, a cost past
-/// `2^256`, a cost past the balance, or a seller's balance or the volume past
-/// `2^256`; and with a byte after the advice's last path, a user no request
-/// reads, the first key another user's, the first signature one bit of its
-/// salt off, or its buyer's over another of its requests, and a user's
-/// balance one off. The decode call refuses the
-/// first key with its first coefficient at least `q`, the first signature
-/// with its `s2` all zeros, and a signature with a one just after its end, in
-/// its last word. The first key left out, and the first signature a word
-/// longer, its last byte 1, put every read after them off, a panic or the
-/// decode call's refusal. Each is its own execution.
+/// Forty users, each keyed by its key's address and each with a key from a
+/// seed of its own; and 22 listings at ids apart, fourteen of 30 units and up
+/// sold by users who also buy; then 77 requests, sequenced by listing as a
+/// sequencer gathering each listing's requests would, each buyer's nonces in
+/// the batch's order. Each applies: seventy-one purchases of one to three
+/// units, the last unit of a listing of one, both of a listing of two, a
+/// seller's purchase paid for by a sale earlier in the batch, and a purchase at
+/// `2^255`. Every request is signed by its buyer, new signatures each run, as
+/// signing is randomized. The advice holds what the batch reads and nothing
+/// else: the records it reads and each table's proof of them, `tools/mpt`'s,
+/// then each request, its buyer's key at the buyer's first, and its signature,
+/// the key and the signature in the SDK's advised forms, converted as a host
+/// converts them. The journal is both snapshots, the count of purchases and
+/// the volume. The execution panics with a byte past the public input's
+/// market; with the first request from an address no user has, and, signed
+/// again by its signer, for another market, from a user the advice does not
+/// hold, or at the nonce after its buyer's; with a request at the last nonce,
+/// its buyer's record advised; with a request that does not apply, signed by
+/// its buyer and last in the batch: a unit of the listing of one once sold, a
+/// max price one below the price, the buyer's own listing, a seller no user
+/// is, a cost past `2^256`, a cost past the balance, or a seller's balance or
+/// the volume past `2^256`; and with a byte after the advice's last signature,
+/// a user no request reads, the first key another user's, the first signature
+/// one bit of its salt off, or its buyer's over another of its requests, and a
+/// user's balance one off. The decode call refuses the first key with its
+/// first coefficient at least `q`, the first signature with its `s2` all
+/// zeros, and a signature with a one just after its end, in its last word. The
+/// first key left out, and the first signature a word longer, its last byte 1,
+/// put every read after them off, a panic or the decode call's refusal. Each
+/// is its own execution.
 #[test]
 fn amazon_settles_signed_purchases_by_its_snapshot() {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use amazon::{compress, Address, Listing, Model, Request, Tree, User, NO_ACCOUNT, U256};
+    use amazon::{snapshot, tables, Address, Listing, Model, Request, User, U256};
     use apogee_falcon512::{address, key_advice, keygen, sign, signature_advice};
 
     const E18: u128 = 1_000_000_000_000_000_000;
@@ -1553,18 +1494,17 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     const BIG: usize = 19;
     const BIG_TOO: usize = 20;
     const UNPAYABLE: usize = 21;
-    const VACANT: usize = 22;
-    let slot = |i: usize| (i * 26_800) as u32;
     let listing = |j: usize| (7 + j * 40_009) as u32;
     let half = U256 {
         hi: 1 << 127,
         lo: 0,
     };
+    // An address no user has.
+    let stranger = address(b"no user's key");
 
-    // Each user's key, by its address, and the slot its record is in.
+    // Each user's key, by its address.
     let mut secret = BTreeMap::new();
     let mut keys = BTreeMap::new();
-    let mut slots = BTreeMap::new();
     let mut users = BTreeMap::new();
     let mut addresses: Vec<Address> = Vec::new();
     for i in 0..40 {
@@ -1598,12 +1538,11 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
             },
         );
         keys.insert(a, key);
-        slots.insert(a, slot(i));
         addresses.push(a);
     }
     let user = |i: usize| addresses[i];
     let mut listings = BTreeMap::new();
-    for j in 0..VACANT {
+    for j in 0..=UNPAYABLE {
         let (seller, price, stock) = match j {
             SINGLE => (user(4), U256::small(7 * E18), 1),
             PAIR => (user(10), U256::small(3 * E18), 2),
@@ -1612,7 +1551,7 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
             OVERFILLS => (user(ALMOST_FULL), U256::small(10 * E18), 5),
             BIG => (user(BIG_SELLER), half, 3),
             BIG_TOO => (user(9), half, 1),
-            UNPAYABLE => (NO_ACCOUNT, U256::small(E18), 5),
+            UNPAYABLE => (stranger, U256::small(E18), 5),
             _ => (
                 user(2 * j + 1),
                 U256::small((j as u128 + 1) * E18 + j as u128 * E18 / 10),
@@ -1630,7 +1569,7 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
             },
         );
     }
-    let price = |j: usize| listings.get(&listing(j)).copied().unwrap_or_default().price;
+    let price = |j: usize| listings[&listing(j)].price;
 
     let mut batch: Vec<(Address, usize, u64, U256)> = (0..70)
         .map(|k| {
@@ -1655,21 +1594,8 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     // they came.
     batch.sort_by_key(|&(_, j, ..)| listing(j));
 
-    let tables = |users: &BTreeMap<Address, User>, listings: &BTreeMap<u32, Listing>| {
-        (
-            Tree::new(
-                User::default().leaf(),
-                users.iter().map(|(a, u)| (slots[a], u.leaf())),
-            ),
-            Tree::new(
-                Listing::default().leaf(),
-                listings.iter().map(|(&s, l)| (s, l.leaf())),
-            ),
-        )
-    };
-    let (user_tree, listing_tree) = tables(&users, &listings);
-    let roots = [user_tree.root(), listing_tree.root()];
-    let before = compress(&roots[0], &roots[1]);
+    let (user_trie, listing_trie) = tables(&users, &listings);
+    let before = snapshot(&users, &listings);
 
     let mut model = Model {
         users: users.clone(),
@@ -1713,63 +1639,43 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     // The model panics at a request that does not apply.
     assert_eq!(batch.len(), 77, "the batch is each case it claims");
 
-    // The advice for the users `held`, the listings at the slots `listed` and
-    // the `n` requests of `stream`: the roots, each user's record as the
-    // snapshot holds it, by address, and each listing's, by slot; `n`, then
-    // the stream; and a path a record, each under its table as the records
-    // before it left it. And where the stream starts, and the snapshot the
-    // paths write.
+    // The advice for the users `held`, the listings at the ids `listed` and
+    // the `n` requests of `stream`: each user's record as the snapshot holds
+    // it, by address, and each listing's id and value, by id; each table's
+    // proof of those keys; then `n` and the stream. And where the stream
+    // starts.
     let advice_for = |held: &BTreeSet<Address>, listed: &BTreeSet<u32>, n: usize, stream: &[u8]| {
-        let (mut user_tree, mut listing_tree) = tables(&users, &listings);
-        let mut advice: Vec<u8> = roots
-            .iter()
-            .flatten()
-            .flat_map(|l| l.to_le_bytes())
-            .collect();
-        advice.extend((held.len() as u32).to_le_bytes());
+        let mut advice = (held.len() as u32).to_le_bytes().to_vec();
         for a in held {
-            advice.extend(slots[a].to_le_bytes());
             advice.extend(users[a].bytes());
         }
         advice.extend((listed.len() as u32).to_le_bytes());
-        for slot in listed {
-            advice.extend(slot.to_le_bytes());
-            advice.extend(listings.get(slot).copied().unwrap_or_default().bytes());
+        for id in listed {
+            advice.extend(id.to_le_bytes());
+            advice.extend(listings[id].bytes());
         }
+        advice.extend(user_trie.proof(&held.iter().collect::<Vec<_>>()));
+        let ids: Vec<[u8; 4]> = listed.iter().map(|id| id.to_be_bytes()).collect();
+        advice.extend(listing_trie.proof(&ids));
         advice.extend((n as u32).to_le_bytes());
         let batch_at = advice.len();
         advice.extend(stream);
-        for a in held {
-            advice.extend(user_tree.path(slots[a]));
-            user_tree.set(slots[a], model.users[a].leaf());
-        }
-        for slot in listed {
-            advice.extend(listing_tree.path(*slot));
-            let l = model.listings.get(slot).copied().unwrap_or_default();
-            listing_tree.set(*slot, l.leaf());
-        }
-        let after = compress(&user_tree.root(), &listing_tree.root());
-        (advice, batch_at, after)
+        (advice, batch_at)
     };
-    let (advice, batch_at, after) = advice_for(
+    let (advice, batch_at) = advice_for(
         &model.read_users,
         &model.read_listings,
         batch.len(),
         &stream,
     );
-    // Every request, key and signature is a whole number of words, so every
-    // one and every path is on a word where the stream is.
+    // Every record, proof, request, key and signature is a whole number of
+    // words, so every one is on a word where the stream is.
     assert!(
         batch_at.is_multiple_of(4) && stream.len().is_multiple_of(4),
         "the stream starts and ends on a word"
     );
-    let (users_after, listings_after) = tables(&model.users, &model.listings);
-    assert_eq!(
-        after,
-        compress(&users_after.root(), &listings_after.root()),
-        "the paths write the tables the batch leaves"
-    );
 
+    let after = snapshot(&model.users, &model.listings);
     let mut journal: Vec<u8> = before
         .iter()
         .chain(&after)
@@ -1816,22 +1722,22 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     );
 
     // The first request, from a user who signed it, now from an address no
-    // user has: the advice cannot hold it, and nothing proves it absent.
+    // user has: the advice cannot hold it.
     let (buyer, ..) = batch[0];
-    let mut stranger = advice.clone();
-    stranger[batch_at..batch_at + 32].copy_from_slice(&address(b"no user's key"));
+    let mut strange = advice.clone();
+    strange[batch_at..batch_at + 32].copy_from_slice(&stranger);
     assert!(
-        panics(&input, &stranger),
+        panics(&input, &strange),
         "a request from an address the advice does not hold is a malformed batch"
     );
 
     assert!(
         panics(&input, &spliced(advice.len(), &[0])),
-        "a byte after the last path"
+        "a byte after the last signature"
     );
 
-    // The idle user's record and its path, each in its place: it opens the
-    // users table, and the batch does not read it.
+    // The idle user's record, and the users proof of it with the rest: it
+    // opens the users table, and the batch does not read it.
     let mut idle = model.read_users.clone();
     assert!(idle.insert(user(IDLE)), "no request reads it");
     assert!(
@@ -1873,8 +1779,9 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
     assert!(ends(&keyless), "a key the stream lacks");
 
     // The first request, one field changed, signed again by its signer: for
-    // another market, from the zero address, or at the nonce after its
-    // buyer's. None is valid, so each is a malformed batch.
+    // another market, from the idle user, whom the advice does not hold, or at
+    // the nonce after its buyer's. None is valid, so each is a malformed
+    // batch.
     let resigned = |at: usize, bytes: &[u8]| {
         let mut request = advice[batch_at..batch_at + 92].to_vec();
         request[at..at + bytes.len()].copy_from_slice(bytes);
@@ -1892,8 +1799,8 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         "a request for another market"
     );
     assert!(
-        panics(&input, &resigned(0, &NO_ACCOUNT)),
-        "a request from the zero address"
+        panics(&input, &resigned(0, &user(IDLE))),
+        "a request from a user the advice does not hold"
     );
     let skipped = users[&buyer].nonce + 1;
     assert!(
@@ -1927,12 +1834,12 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
 
     // A request that does not apply, its buyer's at the buyer's nonce after
     // the batch, signed, last in the batch, its buyer's key with it where the
-    // buyer has no request before it, and the records it reads advised: one
-    // for each reason a purchase cannot apply, a unit of a listing of one
-    // once sold, a max price one below the price, the buyer's own listing, a
-    // seller with no account, a cost past `2^256`, a cost past the balance,
-    // and a seller's balance and the volume past `2^256`. Each is a malformed
-    // batch.
+    // buyer has no request before it, and the records it reads advised where
+    // the tables hold them: one for each reason a purchase cannot apply, a
+    // unit of a listing of one once sold, a max price one below the price, the
+    // buyer's own listing, a seller no user is, a cost past `2^256`, a cost
+    // past the balance, and a seller's balance and the volume past `2^256`.
+    // Each is a malformed batch.
     let appended = |(buyer, j, quantity, max_price): (Address, usize, u64, U256)| {
         let r = Request {
             buyer,
@@ -1950,7 +1857,11 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         requests.extend(signature_advice(&sign(&secret[&buyer], &r.bytes(), CONTEXT)).unwrap());
         let mut advised = model.read_users.clone();
         let seller = listings[&r.listing].seller;
-        advised.extend([buyer, seller].into_iter().filter(|&a| a != NO_ACCOUNT));
+        advised.extend(
+            [buyer, seller]
+                .into_iter()
+                .filter(|a| users.contains_key(a)),
+        );
         let mut advised_listings = model.read_listings.clone();
         advised_listings.insert(r.listing);
         advice_for(&advised, &advised_listings, batch.len() + 1, &requests).0
@@ -2019,10 +1930,10 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         "another request's signature is a malformed batch"
     );
 
-    // The first user's balance, one off: its record no longer opens the
-    // users table.
+    // The first user's balance, one off: its leaf is not the users table's,
+    // and the roots are not the snapshot.
     let mut unopened = advice.clone();
-    unopened[128 + 4 + 4 + 32] ^= 1;
+    unopened[4 + 32] ^= 1;
     assert!(
         panics(&input, &unopened),
         "a balance the table does not hold"
