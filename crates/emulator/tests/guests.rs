@@ -1142,13 +1142,36 @@ fn four_byte_batch(rng: &mut Rng) -> Batch {
     Batch::new(rng, (4, 8), &table, &drawn[36..], (5, 4))
 }
 
+/// `guests/precompiles` streamed on `input`, its public input, and the trie
+/// scenarios `tries`, each shard dropped as it fills: the execution, and its
+/// `MPT_ROOT` calls, its profile's `MPT` rows, one a call.
+fn trie_calls(input: &[u8], tries: &[Vec<u8>]) -> (emulator::Execution, u64) {
+    let image = image("precompiles");
+    let (tables, config) = preprocess(&image);
+    let io = common::with_advice(input, &common::precompiles_advice(1, tries));
+    let mut run = emulator::StreamingRun::new(&image, &io, &tables, &config).unwrap();
+    while !run.next_shards().unwrap().is_empty() {}
+    let (_, streamed) = run.finish().unwrap();
+    let (_, calls) = streamed
+        .profile
+        .counts
+        .into_iter()
+        .find(|&(family, _)| family == constants::family::MPT)
+        .expect("the profile counts every family");
+    (streamed.execution, calls)
+}
+
 /// Each trie scenario's root in `guests/precompiles`' journal is the root
 /// `tools/mpt` gives its table after its batch: an empty table taking
 /// inserts; a table the batch does not touch, its proof the root alone; four-
 /// and forty-byte keys, the longer ones sharing their first 32 bytes in three
 /// groups so their crit bits pass 256, each table a few dozen keys under
 /// inserts, sets and removes; every key of a table removed, its proof no
-/// sibling; and one key of two removed, the other an opaque root.
+/// sibling; one key of two removed, the other an opaque root; and 2,100
+/// four-byte keys, each opened and set, whose program of 4,199 ops is over
+/// the 4,096 a call may have. `Trie::root` splits that one at its root branch,
+/// its halves some 2,100 ops each, so each of its two roots is three calls:
+/// its halves' and one hashing the two.
 #[test]
 fn the_sdk_trie_opens_and_edits_tables_as_tools_mpt_does() {
     let mut rng = Rng::new(0x0517);
@@ -1158,6 +1181,7 @@ fn the_sdk_trie_opens_and_edits_tables_as_tools_mpt_does() {
         [prefix.as_slice(), &rng.next_bytes(8)].concat()
     });
     let small = keys(&mut rng, 10, |rng| rng.next_bytes(4));
+    let wide = keys(&mut rng, 2_100, |rng| rng.next_bytes(4));
     let batches = [
         Batch::new(&mut rng, (4, 8), &[], &small[..5], (0, 0)),
         Batch::new(&mut rng, (4, 4), &small[..6], &[], (0, 0)),
@@ -1165,6 +1189,7 @@ fn the_sdk_trie_opens_and_edits_tables_as_tools_mpt_does() {
         Batch::new(&mut rng, (40, 24), &forty[..30], &forty[30..], (4, 4)),
         Batch::new(&mut rng, (4, 4), &small[..6], &[], (0, 6)),
         Batch::new(&mut rng, (4, 8), &small[6..8], &[], (0, 1)),
+        Batch::new(&mut rng, (4, 4), &wide, &[], (wide.len(), 0)),
     ];
     let (tries, roots): (Vec<Vec<u8>>, Vec<apogee_mpt::Digest>) = batches
         .iter()
@@ -1173,8 +1198,12 @@ fn the_sdk_trie_opens_and_edits_tables_as_tools_mpt_does() {
             (bytes, root)
         })
         .unzip();
-    let e = precompiles_run(&[], &tries).unwrap();
+    // The public input `precompiles_run` lays out, with no Falcon-512 case.
+    let input = precompiles_run(&[], &[]).unwrap().io.input;
+    let (e, calls) = trie_calls(&input, &tries);
     assert_eq!(e.exit_code, 0);
+    let (_, others) = trie_calls(&input, &tries[..tries.len() - 1]);
+    assert_eq!(calls - others, 2 * 3, "the 2,100 keys' two roots");
     let journaled = &e.io.output[e.io.output.len() - 64 * roots.len()..];
     for (i, root) in roots.iter().enumerate() {
         let want: Vec<u8> = root.iter().flat_map(|lane| lane.to_le_bytes()).collect();

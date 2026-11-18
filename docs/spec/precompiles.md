@@ -210,7 +210,7 @@ conditions that single out the quotient. 226 committed columns, 239 obligations 
 | `mpt_eval(ops: &[u32]) -> Digest` | the `MPT_ROOT` call over the program of `ops.len() / 2` ops where they lie, its frame on the caller's stack: the program's value (§6.3); panics first unless the ops are 1 to `2^20` whole ones |
 | `mpt::leaf(key, value) -> Digest` | a trie's leaf (§6.1), one `POSEIDON2` call; panics past 112 bytes |
 | `mpt::Trie::open(key_len, entries, advice: &[u8], at: &mut usize) -> Trie` | the pruned trie of a batch's touched keys, `entries` their `(key, leaf)` pairs ascending, from the proof at `advice[at..]`, which `at` moves past; panics on any proof that is not one (§6.2) |
-| `Trie::root(&self) -> Digest` | zero for the empty table, otherwise one `mpt_eval` call over the trie's post-order program, the proof's digests read in place (§6.3) |
+| `Trie::root(&self) -> Digest` | zero for the empty table, otherwise `mpt_eval` over the trie's post-order program, the proof's digests read in place: one call while it fits a shard, 4,096 ops, and past that split at its root branch (§6.3) |
 | `Trie::set(key, leaf)`, `insert(key, leaf)`, `remove(key)` | an opened key's new leaf; a key the table lacks, under a branch at its crit bit with the opened leaf its walk reaches, spliced above the first node deeper than it; an opened key, its parent's other child taking the parent's place. Each walks from the root on the key's bits and panics where the walk meets a node not opened, so a batch inserts before it removes |
 | `falcon512::Poly` | 512 `u16` coefficients, word-aligned, coefficient `i` at index `i`: any 512 are a polynomial, read mod `q` |
 | `falcon512::s1_norm(&Poly, &Poly, &Poly) -> u64` | the call over `h`, `s2` and `c` where they lie, its frame five words on the caller's stack: `‖s1‖²`, below `2^35` (§7); panics first unless the three arrays are apart |
@@ -321,7 +321,7 @@ trusts.
 
 ### 6.3 The op program
 
-`Trie::root` is one call over a program of `n` ops, `1 ≤ n ≤ MAX_OPS = 2^20`, two words each:
+A call runs a program of `n` ops, `1 ≤ n ≤ MAX_OPS = 2^20`, two words each:
 
 ```text
 info   kind + 4·park + 8·left + 16·d      kind 0 LOAD, 1 SIB, 2 JOIN; park and left bits; d < 512
@@ -350,8 +350,18 @@ The root is the value after the last op. The SDK emits the pruned trie post-orde
 | a branch at `c` with none | `emit(left, park)`; `emit(right, park = 1)`, its first op `i`; then `JOIN(c, left = 1, i)` |
 
 Each digest is read once a call, a leaf's where the trie holds it and a sibling's in the advice. The
-empty table's root is zero and makes no call; any other root is the call's, an opaque one by one
+empty table's root is zero and makes no call; any other root is a call's value, an opaque one by one
 LOAD, so every root `Trie::root` returns is canonical.
+
+**A call fits a shard.** `Trie::root` is one call over `emit(root, park = 0)` while the program is
+at most `B` ops, `B = min(h_NODES, h_ROUNDS / 16)` at the default heights, an `MPT_NODES` entry an
+op and a 16-row `MPT_ROUNDS` entry a hash op, which at most every op is: 4,096 at `2^16`. So a
+call's entries fill at most one buffer of each family ([streaming.md](streaming.md) §4), and a table
+under `B` ops, as a batch's usually is, is one call. A longer program splits at its root, a branch
+at `c`: each child's value by the same rule, held in a local of its own, then one call
+`[LOAD(&left), SIB(c, left = 0, &right)]`. Each node's ops are counted once, bottom-up: a leaf's or
+a sibling's 1, a branch's its children's and its hash op, less 1 where a child is a sibling, whose
+block the hash op reads in place of its LOAD.
 
 ### 6.4 The call
 

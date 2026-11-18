@@ -1,7 +1,9 @@
 //! A table's crit-bit trie, the guest's half: opened from the proof a batch
 //! is advised with, edited, and hashed by the trie precompile, [`mpt_eval`],
-//! in one call. `docs/spec/precompiles.md`'s MPT section defines the trie,
-//! its hashes and the proof; `tools/mpt` is the host's half.
+//! in one call, or in several each within a shard where the trie's program
+//! is longer than one (`docs/spec/precompiles.md` §6.3). That spec's MPT
+//! section defines the trie, its hashes and the proof; `tools/mpt` is the
+//! host's half.
 //!
 //! A table's keys are one length, 1 to 64 bytes, and **its values are one
 //! width**: [`leaf`] packs a key and its value and binds neither length, so a
@@ -23,35 +25,73 @@
 //! node not opened, into its parent's place, where a later insert's walk would
 //! meet it and panic.
 
+use alloc::vec;
 use alloc::vec::Vec;
+use core::slice;
 
 use constants::delegation::mpt::{DEPTH_SHIFT, JOIN, LEFT, LOAD, MAX_KEY, MAX_LEAF, PARK, SIB};
+use constants::delegation::TYPES;
+use constants::family::{DEFAULT_HEIGHTS, MPT_NODES, MPT_ROUNDS};
 
 use crate::{mpt_eval, poseidon2_permute, Digest};
+
+/// The most ops a call [`Trie::root`] makes has: as many as one shard of each
+/// of the call's families holds at its default height, `MPT_NODES` taking an
+/// entry an op and `MPT_ROUNDS` one a hash op, which at most every op is, at
+/// [`rows`] rows an entry: 4,096 at `2^16`. A call's entries then fill at
+/// most one buffer of each family as the executor streams them
+/// (`docs/spec/streaming.md` §4).
+const BUDGET: usize = {
+    let ops = DEFAULT_HEIGHTS[MPT_NODES as usize] / rows(MPT_NODES);
+    let hashes = DEFAULT_HEIGHTS[MPT_ROUNDS as usize] / rows(MPT_ROUNDS);
+    (if ops < hashes { ops } else { hashes }) as usize
+};
+
+/// The rows an entry of delegation `family` takes, its [`TYPES`] row's: an
+/// op's `MPT_NODES` entry 1, a hash op's `MPT_ROUNDS` entry 16.
+const fn rows(family: u32) -> u32 {
+    let mut i = 0;
+    while TYPES[i].0 != family {
+        i += 1;
+    }
+    TYPES[i].3
+}
 
 /// A leaf: the first 8 lanes of the permutation of `key ‖ value` packed seven
 /// bytes to a lane, little-endian, and zero-extended to 16 lanes, one
 /// [`poseidon2_permute`] call. Panics if the two are over 112 bytes.
+///
+/// The bytes are copied into zeroed words, little-endian, so that every load
+/// is an aligned word's, as the VM requires. Lanes `8g` to `8g + 7` are then
+/// words `7g` to `7g + 6`, 448 bits: lane `8g + j` is word `7g + j − 1`'s top
+/// `8j` bits and above them word `7g + j`'s low `56 − 8j`, lane `8g` word
+/// `7g`'s low 56.
 pub fn leaf(key: &[u8], value: &[u8]) -> Digest {
+    const LANE: u64 = (1 << 56) - 1;
+    let (k, n) = (key.len(), key.len() + value.len());
     assert!(
-        key.len() + value.len() <= MAX_LEAF,
+        n <= MAX_LEAF,
         "mpt::leaf: a key and its value are at most 112 bytes"
     );
+    // The 112 bytes' words and one more, zero, that the second group's
+    // window of 8 words ends on.
+    let mut words = [0u64; MAX_LEAF / 8 + 1];
+    // SAFETY: the words' own bytes, initialized, and a byte is aligned
+    // anywhere.
+    let bytes =
+        unsafe { slice::from_raw_parts_mut(words.as_mut_ptr().cast::<u8>(), 8 * words.len()) };
+    bytes[..k].copy_from_slice(key);
+    bytes[k..n].copy_from_slice(value);
     let mut state = [0u64; 16];
-    let (mut lane, mut shift) = (0, 0);
-    for bytes in [key, value] {
-        for &byte in bytes {
-            state[lane] |= (byte as u64) << shift;
-            shift += 8;
-            if shift == 56 {
-                (lane, shift) = (lane + 1, 0);
-            }
+    for g in 0..2 {
+        let (w, lanes) = (&words[7 * g..7 * g + 8], &mut state[8 * g..8 * g + 8]);
+        lanes[0] = w[0] & LANE;
+        for j in 1..8 {
+            lanes[j] = ((w[j - 1] >> (64 - 8 * j)) | (w[j] << (8 * j))) & LANE;
         }
     }
     poseidon2_permute(&mut state);
-    let mut lanes = [0; 8];
-    lanes.copy_from_slice(&state[..8]);
-    Digest(lanes)
+    Digest(state[..8].try_into().expect("8 lanes"))
 }
 
 /// An opened table: the pruned trie of the keys a batch touches, its nodes in
@@ -196,17 +236,64 @@ impl<'a> Trie<'a> {
     }
 
     /// The root: the zero digest for the empty table, and otherwise the value
-    /// of the pruned trie's program by one [`mpt_eval`] call, canonical even
-    /// where the root is a sibling, one LOAD. The program is post-order, in a
-    /// buffer of its own, and names each digest once: a leaf's in the arena,
-    /// a sibling's in the proof.
+    /// of the pruned trie's program by [`mpt_eval`], canonical even where the
+    /// root is a sibling, one LOAD. The program is post-order, in a buffer of
+    /// its own, and names each digest once: a leaf's in the arena, a sibling's
+    /// in the proof.
+    ///
+    /// **A call fits a shard.** The program is one call while it is at most
+    /// `BUDGET` ops, 4,096, one shard's at the default heights, as a batch's
+    /// usually is. A longer one splits at its root branch: each child's value
+    /// by this rule, held in a local of its own, and one call hashing the two,
+    /// a LOAD of the left and a SIB of the right (`docs/spec/precompiles.md`
+    /// §6.3). The ops are counted once, a branch's from its children's.
     pub fn root(&self) -> Digest {
         let Some(root) = self.root else {
             return Digest::default();
         };
         let mut ops = Vec::with_capacity(2 * self.nodes.len());
         self.emit(root, 0, &mut ops);
-        mpt_eval(&ops)
+        if ops.len() <= 2 * BUDGET {
+            return mpt_eval(&ops);
+        }
+        let mut counts = vec![0; self.nodes.len()];
+        self.count(root, &mut counts);
+        self.split(root, &counts)
+    }
+
+    /// `node`'s value, its ops `counts[node]`: one call over its program if
+    /// they are at most [`BUDGET`], and otherwise, a branch at `c`, each
+    /// child's value by this, held in a local of its own, distinct storage
+    /// each read once, and one call `[LOAD(&left), SIB(c, left = 0, &right)]`.
+    fn split(&self, node: usize, counts: &[u32]) -> Digest {
+        if counts[node] as usize <= BUDGET {
+            let mut ops = Vec::with_capacity(2 * counts[node] as usize);
+            self.emit(node, 0, &mut ops);
+            return mpt_eval(&ops);
+        }
+        let Node::Branch(c, children) = self.nodes[node] else {
+            unreachable!("a leaf or a sibling is one op")
+        };
+        let [left, right] = children.map(|child| self.split(child, counts));
+        let at = |value: &Digest| (value as *const Digest).addr() as u32;
+        let d = (c as u32) << DEPTH_SHIFT;
+        mpt_eval(&[LOAD, at(&left), SIB | d, at(&right)])
+    }
+
+    /// The ops of `node`'s program, [`Trie::emit`]'s, each node's in `counts`
+    /// as it is counted: a leaf's or a sibling's 1, and a branch's its
+    /// children's and its hash op, less 1 where a child is a sibling, whose
+    /// block the hash op reads in place of its LOAD.
+    fn count(&self, node: usize, counts: &mut [u32]) -> u32 {
+        let n = match self.nodes[node] {
+            Node::Branch(_, [left, right]) => {
+                let sibling = self.opaque(left).or(self.opaque(right)).is_some();
+                self.count(left, counts) + self.count(right, counts) + 1 - sibling as u32
+            }
+            _ => 1,
+        };
+        counts[node] = n;
+        n
     }
 
     /// Replaces an opened key's leaf. Panics unless the walk on `key` reaches

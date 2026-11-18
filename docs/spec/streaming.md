@@ -99,9 +99,10 @@ carrying them in `calls`. A cycle appends one row, to its owning family's buffer
 call one entry to each of its families, or one per op and per hash op of its program, each pushed
 and flushed in turn, so a buffer reaches `h` without passing it and no entry is split. A step fills
 at most one buffer a family while a trie call's entries fit one shard of each of its families,
-`h` ops of `MPT_NODES` and `h/16` hash ops of `MPT_ROUNDS`, 4,096 at `2^16`. At exit `finish`
-hands over the partial buffers. Chunks arrive in fill order, not statement order, and pass 1
-asserts that each family's count is the plan's.
+`h` ops of `MPT_NODES` and `h/16` hash ops of `MPT_ROUNDS`, 4,096 at `2^16`, and the SDK's
+`Trie::root` keeps every call within one at the default heights ([precompiles.md](precompiles.md)
+§6.3). At exit `finish` hands over the partial buffers. Chunks arrive in fill order, not statement
+order, and pass 1 asserts that each family's count is the plan's.
 
 ## 5. The pipeline
 
