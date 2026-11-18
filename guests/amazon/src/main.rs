@@ -80,11 +80,12 @@
 //! ```
 //!
 //! A record's leaf is [`mpt::leaf`] of its key and its value, one permutation
-//! of the two packed seven bytes to a lane, and a table's root is its trie's,
-//! the trie precompile's hash of it (`docs/spec/precompiles.md`'s MPT section).
-//! A leaf binds neither length, and each table's keys are one length and its
-//! values one width, 40 bytes a user's and 80 a listing's. A listing's key is
-//! its id big-endian, so the trie's order, its keys' byte order, is the ids'.
+//! of the two packed seven bytes to a lane, fed forward, and a table's root is
+//! its trie's, the trie precompile's hash of it (`docs/spec/precompiles.md`'s
+//! MPT section). A leaf binds neither length, and each table's keys are one
+//! length and its values one width, 40 bytes a user's and 80 a listing's. A
+//! listing's key is its id big-endian, so the trie's order, its keys' byte
+//! order, is the ids'.
 //!
 //! The batch sets leaves and neither inserts nor removes a key: a request
 //! whose buyer, listing or seller the advice does not hold is a malformed

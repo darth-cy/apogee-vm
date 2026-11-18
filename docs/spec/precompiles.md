@@ -256,14 +256,29 @@ its right the trie of those whose bit `c` is 1: **canonical**, a function of `S`
 
 ```text
 F(x)              the first 8 lanes of transcript::poseidon2_permute(x): poseidon2_compress
-leaf(key, value)  F(pack7(key ‖ value)),   |key| + |value| ≤ 112
+leaf(key, value)  F(x) + x[0..8] lane by lane mod p, x = pack7(key ‖ value), |key| + |value| ≤ 112
 branch(c, L, R)   F(L ‖ R) with c + 1 added to lane 0, mod p
 the empty table   the zero digest, 8 zero lanes; a table of one key has its leaf as its root
 ```
 
 `pack7` packs the bytes seven to a lane, little-endian, each lane below `2^56`, and zero-extends to
 16 lanes. It binds neither length: a table's keys are one length, and its values must be one width.
-The tweak binds the crit bit and keeps every branch's digest apart from every leaf's.
+The tweak binds the crit bit.
+
+**Why a leaf feeds forward and a branch does not.** `F` truncates a public permutation, which
+inverts: any 8 lanes are `F` of the 16 its inverse gives them beside 8 of one's choosing. Over
+records, `F(pack7(·))` would cost an inversion only the lanes' restriction, the top byte of each
+lane a record fills and all of each it leaves zero: 128 bits at 112 bytes, so `2^128` inversions
+and `2^64` Grover iterations, against the 128-bit quantum target of
+[transcript.md](transcript.md) §5.1. The feed-forward puts the output out of an inversion's
+reach, since `x` is the inverse's output too, so a leaf costs the digest's generic bounds: `2^512`
+calls for a preimage and `2^256` for a collision, `2^256` and `2^170` quantumly. A branch's
+children are digests the guest opens in turn. It hashes each touched key's leaf from the record it
+reads and never opens a sibling, and the proof's words, not a digest, say which node is a leaf. So
+a forged opening must reach, from a root through branches inverted at will, the leaf of a record
+the guest reads. That is a claw between what inversions reach and what `leaf` reaches, at the
+collision bounds, which is why `F` serves for a branch and for `poseidon2_compress` over the
+tables' roots, though not over records.
 
 **What a root proves.** A walk goes from the root on a key's bits, taking at a branch at `c` the
 child its bit `c` names. A batch's proof opens each key the batch touches at the leaf its walk

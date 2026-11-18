@@ -1,8 +1,9 @@
 //! The trie against `docs/spec/precompiles.md`'s MPT section by hand: a leaf is
-//! `F` of its key and value packed seven bytes to a lane, a branch is `F` of its
-//! children with its crit bit plus one added to lane 0, and the root is the
-//! trie the definition gives the key set, whatever order the table was built
-//! in. The walk an insert is witnessed by, and what the tool refuses.
+//! `F` of its key and value packed seven bytes to a lane plus the first 8 of
+//! those lanes, a branch is `F` of its children with its crit bit plus one
+//! added to lane 0, and the root is the trie the definition gives the key set,
+//! whatever order the table was built in. The walk an insert is witnessed by,
+//! and what the tool refuses.
 
 use std::array;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -19,13 +20,14 @@ fn f(mut state: [Fp; 16]) -> Digest {
 }
 
 /// A leaf by hand: byte `i` of `key ‖ value` is itself times `256^(i mod 7)` in
-/// lane `⌊i / 7⌋`.
+/// lane `⌊i / 7⌋`, and lane `j < 8` of the permutation takes lane `j` back.
 fn hand_leaf(key: &[u8], value: &[u8]) -> Digest {
     let mut state = [Fp::ZERO; 16];
     for (i, &b) in key.iter().chain(value).enumerate() {
         state[i / 7] += Fp::from_u64((b as u64) << (8 * (i % 7)));
     }
-    f(state)
+    let out = f(state);
+    array::from_fn(|j| (Fp::from_u64(out[j]) + state[j]).to_u64())
 }
 
 /// A branch by hand: `F(l ‖ r)`, then lane 0 plus `c + 1` mod `p`.
@@ -78,7 +80,8 @@ fn panic_message<R>(f: impl FnOnce() -> R) -> String {
 }
 
 /// Keys and values from a byte to the full 112, across lane boundaries: a leaf
-/// is the bytes seven to a lane, little-endian, zero-extended, permuted once.
+/// is the bytes seven to a lane, little-endian, zero-extended, permuted once and
+/// fed forward.
 #[test]
 fn a_leaf_is_its_bytes_seven_to_a_lane() {
     let mut rng = Rng::new(0x1eaf);

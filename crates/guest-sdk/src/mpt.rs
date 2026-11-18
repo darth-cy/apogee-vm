@@ -33,6 +33,8 @@ use constants::delegation::mpt::{DEPTH_SHIFT, JOIN, LEFT, LOAD, MAX_KEY, MAX_LEA
 use constants::delegation::TYPES;
 use constants::family::{DEFAULT_HEIGHTS, MPT_NODES, MPT_ROUNDS};
 
+use field::Fp;
+
 use crate::{mpt_eval, poseidon2_permute, Digest};
 
 /// The most ops a call [`Trie::root`] makes has: as many as one shard of each
@@ -57,9 +59,11 @@ const fn rows(family: u32) -> u32 {
     TYPES[i].3
 }
 
-/// A leaf: the first 8 lanes of the permutation of `key ‖ value` packed seven
-/// bytes to a lane, little-endian, and zero-extended to 16 lanes, one
-/// [`poseidon2_permute`] call. Panics if the two are over 112 bytes.
+/// A leaf: `x`, `key ‖ value` packed seven bytes to a lane, little-endian, and
+/// zero-extended to 16 lanes, its permutation's first 8 lanes plus its own,
+/// mod `p`, one [`poseidon2_permute`] call. The feed-forward keeps the
+/// permutation's inverse from finding a record for a digest
+/// (`docs/spec/precompiles.md` §6.1). Panics if the two are over 112 bytes.
 ///
 /// The bytes are copied into zeroed words, little-endian, so that every load
 /// is an aligned word's, as the VM requires. Lanes `8g` to `8g + 7` are then
@@ -90,8 +94,11 @@ pub fn leaf(key: &[u8], value: &[u8]) -> Digest {
             lanes[j] = ((w[j - 1] >> (64 - 8 * j)) | (w[j] << (8 * j))) & LANE;
         }
     }
+    let x: [u64; 8] = state[..8].try_into().expect("8 lanes");
     poseidon2_permute(&mut state);
-    Digest(state[..8].try_into().expect("8 lanes"))
+    Digest(core::array::from_fn(|k| {
+        (Fp::from_u64(state[k]) + Fp::from_u64(x[k])).to_u64()
+    }))
 }
 
 /// An opened table: the pruned trie of the keys a batch touches, its nodes in

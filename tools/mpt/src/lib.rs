@@ -32,9 +32,9 @@ const MAX_KEY: usize = 64;
 /// A leaf's most bytes, its key's and its value's: 16 lanes of seven.
 const MAX_LEAF: usize = 112;
 
-/// A leaf: `F` of `key ‖ value` packed seven bytes to a lane, little-endian,
-/// each lane below `2^56`, and zero-extended to 16 lanes. Panics if the two are
-/// more than 112 bytes.
+/// A leaf: `F(x) + x[0..8]` lane by lane mod `p`, `x` being `key ‖ value`
+/// packed seven bytes to a lane, little-endian, each lane below `2^56`, and
+/// zero-extended to 16 lanes. Panics if the two are more than 112 bytes.
 pub fn leaf(key: &[u8], value: &[u8]) -> Digest {
     let bytes = [key, value].concat();
     assert!(
@@ -45,12 +45,13 @@ pub fn leaf(key: &[u8], value: &[u8]) -> Digest {
     for (lane, seven) in lanes.iter_mut().zip(bytes.chunks(7)) {
         *lane = seven.iter().rev().fold(0, |x, &b| (x << 8) | b as u64);
     }
-    f(lanes)
+    let out = f(lanes);
+    array::from_fn(|i| (Fp::from_u64(out[i]) + Fp::from_u64(lanes[i])).to_u64())
 }
 
 /// A branch at crit bit `c` over `left` and `right`: `F(left ‖ right)` with
-/// `c + 1` added to lane 0 mod `p`, binding the crit bit and keeping every
-/// branch apart from every leaf. Panics unless `c` is below 512.
+/// `c + 1` added to lane 0 mod `p`, binding the crit bit. Panics unless `c` is
+/// below 512.
 pub fn branch(c: usize, left: &Digest, right: &Digest) -> Digest {
     assert!(c < 8 * MAX_KEY, "branch: a crit bit is below 512");
     let mut lanes = [0; 16];
@@ -62,8 +63,8 @@ pub fn branch(c: usize, left: &Digest, right: &Digest) -> Digest {
 }
 
 /// `F`, the SDK's `poseidon2_compress`: the first 8 lanes of the
-/// Poseidon2-A64-C5 permutation of `lanes`, each read mod `p`, with no
-/// feed-forward.
+/// Poseidon2-A64-C5 permutation of `lanes`, each read mod `p`. A branch takes
+/// it as it is, and a leaf feeds its lanes forward.
 fn f(lanes: [u64; 16]) -> Digest {
     let mut state = lanes.map(Fp::from_u64);
     poseidon2_permute(&mut state);
