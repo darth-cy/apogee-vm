@@ -33,8 +33,6 @@ use constants::delegation::mpt::{DEPTH_SHIFT, JOIN, LEFT, LOAD, MAX_KEY, MAX_LEA
 use constants::delegation::TYPES;
 use constants::family::{DEFAULT_HEIGHTS, MPT_NODES, MPT_ROUNDS};
 
-use field::Fp;
-
 use crate::{mpt_eval, poseidon2_permute, Digest};
 
 /// The most ops a call [`Trie::root`] makes has: as many as one shard of each
@@ -96,9 +94,20 @@ pub fn leaf(key: &[u8], value: &[u8]) -> Digest {
     }
     let x: [u64; 8] = state[..8].try_into().expect("8 lanes");
     poseidon2_permute(&mut state);
-    Digest(core::array::from_fn(|k| {
-        (Fp::from_u64(state[k]) + Fp::from_u64(x[k])).to_u64()
-    }))
+    Digest(core::array::from_fn(|k| add(state[k], x[k])))
+}
+
+/// `a + b mod p` for `a` and `b` below `p`, as `field::Fp` adds: `b + 59`
+/// cannot carry, and `a + b + 59` carries exactly when `a + b ≥ p`. A
+/// permutation's lanes are written below `p` and a packed lane is below `2^56`,
+/// so neither is reduced first.
+fn add(a: u64, b: u64) -> u64 {
+    let (t, carry) = a.overflowing_add(b + 59);
+    if carry {
+        t
+    } else {
+        t - 59
+    }
 }
 
 /// An opened table: the pruned trie of the keys a batch touches, its nodes in
