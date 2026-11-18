@@ -612,7 +612,8 @@ fn every_row_holds_and_every_constraint_bites() {
     let requests = Shard::new(program, archive, family::ADD_SUB_LUI_AUIPC);
     let delegates = requests.at("delegates");
     let mut seen = 0;
-    for r in 0..requests.live + 2 {
+    // A full shard has no padding row.
+    for r in 0..(requests.live + 2).min(requests.rows) {
         let row = requests.row(r);
         seen += (row[delegates] == Fp::ONE) as usize;
         let broken = requests.refused(&row, r);

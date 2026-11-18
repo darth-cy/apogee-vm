@@ -316,9 +316,11 @@ fn main() {
     }
 
     // The long program, its value a duplex of the permutation: from blocks 0
-    // and 1, each step permutes, adds back the first 8 lanes it took, read mod
-    // `p`, and adds `d + 1` to lane 0. Its words are written in a `while`: a
-    // debug build pays for every iterator call.
+    // and 1 read mod `p`, each step permutes, adds back the first 8 lanes it
+    // took and adds `d + 1` to lane 0, every lane below `p` from then on. Its
+    // words are written in a `while`: a debug build pays for every iterator
+    // call.
+    state.iter_mut().for_each(|lane| *lane %= P);
     let mut ops = vec![0u32; 2 * (1 + steps + steps / 2) as usize];
     let words = ops.as_mut_slice();
     words[1] = block(0);
@@ -336,7 +338,7 @@ fn main() {
             words[w + 3] = w as u32 / 2;
             w += 4;
         }
-        let x: [u64; 8] = core::array::from_fn(|k| state[k] % P);
+        let x: [u64; 8] = core::array::from_fn(|k| state[k]);
         poseidon2_permute(&mut state);
         for (lane, x) in state.iter_mut().zip(x) {
             *lane = plus(*lane, x);
