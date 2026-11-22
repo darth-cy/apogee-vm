@@ -67,7 +67,7 @@ The guests in the tree are worked examples:
 | `amm`, `orderbook` | 128- and 256-bit integers with no heap; `BTreeMap`, sorting, a sorted order from advice checked |
 | `amazon` | a database of two tables a proof follows by digest (§3.3); requests signed with Falcon-512 (§3.1) |
 | `atomics`, `opcodes`, `rvc-dense` | the A extension from `core::sync::atomic`; every RV64IMAC instruction; RVC expansion |
-| `addsub`, `control`, `alu`, `mem`, `shards` | assembly with its own `_start` and no SDK, exiting with its result; `shards` fills two `2^20` shards |
+| `addsub`, `control`, `alu`, `mem`, `shards` | assembly with its own `_start` and no SDK, checking its own result and exiting 0; `shards` fills two `2^20` shards |
 | `cpp-primes` | a C++ guest, built by CMake against the C/C++ SDK (§11) |
 
 ### 2.1 Run the same logic on the host
@@ -94,7 +94,7 @@ fn main() {
     let want = guest_sdk::public_input(); // 32 bytes: a digest of the advice
     let data = guest_sdk::advice(); // the prover's bytes, bound by nothing
     if digest(data).as_slice() != want {
-        guest_sdk::exit(1); // refused before anything derived from it is committed
+        guest_sdk::exit(1); // refused: a run that exits nonzero has no proof
     }
     let sum = data.iter().fold(0u32, |s, b| s.wrapping_add(u32::from(*b)));
     guest_sdk::commit(&sum.to_le_bytes()); // the journal: what the proof publishes
@@ -110,8 +110,10 @@ fn main() {
 - `read_input` copies and may return short; `advice()` on a run given no advice is the fatal
   `OutOfBounds`.
 - `commit` appends and exits 70 rather than overflow: commit a growing output as a digest.
-- Nothing is published at exit: a run that panics or exits nonzero has a verifying proof of what it
-  committed, so a verifier reads the exit status.
+- **Only a run that exits 0 has a proof.** A panic (101), a journal overflow (70), an exhausted heap
+  (71) or any `exit(n)` with `n ≠ 0` is refused by the prover, naming the status, and by the
+  verifier ([proof.md](spec/proof.md) §6): failing is how a guest refuses, and a verifier never
+  reads a status.
 - Checking the advice is the guest's job: committing a function of unchecked advice publishes what
   the prover chose ([public-values.md](spec/public-values.md) §6).
 - **Every failure ends the run.** Whatever makes the input or the advice malformed, a record that
@@ -414,7 +416,8 @@ height and every byte of the code and the image. Derivation refuses, naming the 
 
 ## 9. When it goes wrong
 
-**An exit status the SDK chose** ([ecall-abi.md](spec/ecall-abi.md) §6):
+**An exit status the SDK chose** ([ecall-abi.md](spec/ecall-abi.md) §6), which `host::prove` refuses
+by name before proving anything: no status but 0 has a proof.
 
 | status | cause, and what to do |
 | --- | --- |
@@ -447,14 +450,13 @@ let setup = host::setup(&elf, &params).expect("registers");
 let proven = host::prove(&setup, &io, host::DEFAULT_MAX_IN_FLIGHT).expect("proves"); // 8 shards in flight
 host::verify(&setup.vk, &proven.block).expect("verifies");
 assert_eq!(setup.vk.identity.to_bytes(), registered); // from your own channel, never the proof
-assert_eq!(proven.exit_code, 0);
 ```
 
-The block's statement carries the public input, the journal and the exit status. A family with
-rows costs at least a whole shard of its height, so a short run wastes less at smaller heights:
-`2^20` is an instruction family's floor
-([lookup.md](spec/lookup.md) §3), and each choice of heights is its own identity. A shard's cost is
-[architecture.md](architecture.md) §7.
+The block's statement carries the public input, the journal and the exit status, which is 0:
+`host::prove` refuses any other before proving anything, and `host::verify` refuses its statement
+(§9). A family with rows costs at least a whole shard of its height, so a short run wastes less at
+smaller heights: `2^20` is an instruction family's floor ([lookup.md](spec/lookup.md) §3), and each
+choice of heights is its own identity. A shard's cost is [architecture.md](architecture.md) §7.
 
 ## 11. A guest in C or C++
 

@@ -103,7 +103,11 @@ fn the_layouts_are_the_specs() {
     assert_eq!(u32_at(opening), 0, "no fold");
     assert_eq!(b.len(), opening + 4 + (2 * 16 + 4) + 4 + 8 * 8 + 4 + 4);
 
-    let public = statement();
+    // A status of its own, so that the bytes below are found by value: the
+    // wire form carries any status, and step 0 is what refuses one but 0.
+    let mut public = statement();
+    public.exit_status = 42;
+    public.boundary.reg_values[9] = 42;
     let b = public.to_bytes();
     // input (4 + 3), output (4), status, counts (4 + 24 — six families),
     // windows (4), then the 95 boundary scalars of 8 bytes: x10's low word is

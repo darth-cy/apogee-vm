@@ -400,10 +400,10 @@ fn the_row_reading_and_the_log_reading_of_a_frame_agree() {
         ("heap", 40, 0, HEIGHT),
         ("atomics", 37, 0, HEIGHT),
         ("rvc-dense", 7, 0, HEIGHT),
-        ("addsub", 0, 42, HEIGHT),
-        ("mem", 0, 66, HEIGHT),
-        ("alu", 0, 144, HEIGHT),
-        ("control", 0, 17, HEIGHT),
+        ("addsub", 0, 0, HEIGHT),
+        ("mem", 0, 0, HEIGHT),
+        ("alu", 0, 0, HEIGHT),
+        ("control", 0, 0, HEIGHT),
     ] {
         let t = common::traced_exiting_at(name, input, status, height);
         for trace in t.traces.families.iter().filter(|f| !f.is_empty()) {

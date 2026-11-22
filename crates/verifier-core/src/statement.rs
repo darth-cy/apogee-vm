@@ -445,10 +445,10 @@ pub struct GlobalTranscript {
 /// The global transcript, `docs/spec/proof.md` §2: run identically by the
 /// prover's global phase and by the verifier. Every field of `statement` is
 /// absorbed but two: `memory_roots`, computed after the challenges and bound by
-/// each shard's own proof, and `exit_status`, bound only by step 10b,
-/// `verify_global_memory`, which holds it to `x10`'s final value in the
-/// boundary absorbed here. A caller that skips step 10b has not bound the
-/// status. Every shard's memory commitment precedes the memory challenges, so
+/// each shard's own proof, and `exit_status`, which step 0 requires to be 0
+/// and step 10b, `verify_global_memory`, holds to `x10`'s final value in the
+/// boundary absorbed here. A caller that skips step 10b has not bound `x10`
+/// to it. Every shard's memory commitment precedes the memory challenges, so
 /// no `M` column can be chosen after them.
 ///
 /// `statement` must be consistent with `vk`: one shard count per config family.

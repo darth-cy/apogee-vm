@@ -25,7 +25,7 @@ Every number this VM implements.
 
 | Number | Constant | Class | What |
 | --- | --- | --- | --- |
-| 93 | `EXIT` | deterministic | end the execution with status `a0`'s low word, read as an `i32`: the statement's exit status; nonzero is a failed execution, still provable |
+| 93 | `EXIT` | deterministic | end the execution with status `a0`'s low word, read as an `i32`: the statement's exit status. Only 0 is provable: nonzero is a failed execution, which the prover and the verifier refuse ([proof.md](proof.md) §6, step 0) |
 | `0x0510` | `POSEIDON2` | deterministic | the Poseidon2-A64-C5 permutation of the 16 lanes at `a0`, two little-endian words each, in place; a lane read mod `p`, written canonical |
 | `0x0511` | `MUL_DIV_U256` | deterministic | `a`, `b`, `d` at `a0`, eight little-endian words each, become `⌊a·b/d⌋`, `a·b mod d`, `d`; the caller owes `d ≠ 0` and a quotient below `2^256`, which the emulator refuses as `DelegationFrame` |
 | `0x0514` | `FALCON512` | deterministic | the Falcon-512 lattice check over the 5 words at `a0`: the addresses of `h`, `s2` and `c`, 512 `u16` coefficients each, every one read mod `q = 12289`, then `‖s1‖²`'s low and high words, written, `s1 = (c − s2·h) mod (q, x^512 + 1)` centered; the caller owes word-aligned arrays disjoint from each other and the frame, which the emulator refuses as `DelegationFrame` ([precompiles.md](precompiles.md) §7) |
@@ -150,7 +150,7 @@ the rest is loads and stores.
 | `advice()` | the advice payload, its length clamped to the region; bound by nothing, so the guest checks it |
 | `exit(code)` | `EXIT`; publishes nothing beyond what was committed |
 | allocator | bumps up from `__heap_start`, never frees; exits 71 when a block would end above `__stack_top − STACK_RESERVE` or the live `sp` |
-| panic handler | exits 101 and writes nothing: a panicking guest is provable, having published what it committed |
+| panic handler | exits 101 and writes nothing: a panicking guest has no proof (§2) |
 | `poseidon2_permute(state)`, `Digest`, `poseidon2_compress(l, r)` | `POSEIDON2` over a `[u64; 16]`; 8 lanes, each below `p`; and the first 8 lanes of the permutation of two `Digest`s ([precompiles.md](precompiles.md) §5) |
 | `U256` | a 256-bit integer; its division and `mul_div` are `MUL_DIV_U256` |
 | `mpt_eval(ops)` | `MPT_ROOT` over an op program of `ops.len() / 2` ops, whose blocks may be advice read in place ([precompiles.md](precompiles.md) §5, §6.3) |

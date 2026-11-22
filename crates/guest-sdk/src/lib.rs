@@ -215,8 +215,8 @@ pub fn read_input(buf: &mut [u8]) -> usize {
 /// Exits [`EXIT_IO_ERROR`] rather than truncating on a journal that would not
 /// fit: a caller reads [`journal`] back, and must not see one it did not write.
 ///
-/// **A guest that panics has still published what it committed**, because the
-/// journal is memory and the panic handler does not have to know about it.
+/// **A guest that panics after committing publishes nothing**: the journal is
+/// memory and keeps what it holds, but a run that exits 101 has no proof.
 pub fn commit(bytes: &[u8]) {
     let origin = guest_memory::PUBLIC_OUTPUT_ORIGIN as usize;
     let len = word_at(origin) as usize;
@@ -266,7 +266,7 @@ pub fn advice() -> &'static [u8] {
     unsafe { slice_at(origin + 4, len as usize) }
 }
 
-/// Exit with `code`. A nonzero status is a failed execution.
+/// Exit with `code`. A nonzero status is a failed execution, with no proof.
 pub fn exit(code: i32) -> ! {
     // Asked again rather than spun on: `EXIT` does not return under any
     // executor, so the loop exists only so that a broken one cannot fall
@@ -420,12 +420,12 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     // diagnostic stream: the only bytes leaving an execution are the journal,
     // which a proof binds, and the exit status. Writing the message anywhere a
     // host could read it would need an unprovable ecall, and routing it into
-    // the journal would break `exit` publishing nothing -- a guest that panics
-    // has still published exactly what it committed
-    // (`docs/spec/public-values.md` §7).
+    // the journal would break `exit` publishing nothing. A host that needs the
+    // message reruns the guest's logic natively, where it prints
+    // (`docs/guest-program-manual.md` §2.1).
     //
-    // What this buys is worth more than the message: with no write on the
-    // panic path, **a panicking guest is provable**.
+    // The status is the whole verdict: 101 is a failed execution, and only one
+    // that exits 0 has a proof, so **a panicking guest is not provable**.
     exit(EXIT_PANIC)
 }
 

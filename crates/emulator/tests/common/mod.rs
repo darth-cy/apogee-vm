@@ -109,8 +109,9 @@ pub fn input_of(name: &str) -> Vec<u8> {
         "heap" => 40u32.to_le_bytes().to_vec(),
         "atomics" => 37u32.to_le_bytes().to_vec(),
         "rvc-dense" => 7u32.to_le_bytes().to_vec(),
-        // Reads nothing: its exit status is its result. `shards` is the same
-        // shape — it counts its own checks — and `tests/streaming.rs` streams it.
+        // Reads nothing: each checks its own result and exits 0. `shards` is
+        // the same shape — it counts its own checks — and `tests/streaming.rs`
+        // streams it.
         "addsub" | "control" | "alu" | "mem" | "shards" => Vec::new(),
         // One leaf of zeros, the root over one leaf being the leaf. Then
         // Falcon-512's three arrays of zeros and 1,024 more calls, more than a
@@ -169,19 +170,6 @@ pub fn precompiles_advice(steps: u32, tries: &[Vec<u8>]) -> Vec<u8> {
     out
 }
 
-/// The status each traced guest exits with on [`input_of`]'s input: 0, but
-/// for `addsub`, `control` and `alu`, whose exit statuses are their results.
-pub fn exit_code_of(name: &str) -> i32 {
-    match name {
-        "addsub" => 42,
-        "control" => 17,
-        "alu" => 144,
-        "mem" => 66,
-        "shards" => 2,
-        _ => 0,
-    }
-}
-
 /// One guest, preprocessed and traced.
 pub struct Traced {
     pub image: ProgramImage,
@@ -206,20 +194,20 @@ impl Traced {
     }
 }
 
+/// Guest `name`, traced on [`input_of`]'s input and [`advice_of`]'s advice,
+/// on which every guest checks its own result and exits 0.
 pub fn traced(name: &str) -> Traced {
+    traced_on(name, &with_advice(&input_of(name), &advice_of(name)), 0)
+}
+
+/// Guest `name`, traced on `io`, on which it must exit with `status`.
+pub fn traced_on(name: &str, io: &GuestIo, status: i32) -> Traced {
     let image = image(name);
     let (tables, config) = preprocess(&image);
-    let advice = advice_of(name);
-    let (traces, log, profile, execution) = trace_run(
-        &image,
-        &with_advice(&input_of(name), &advice),
-        &tables,
-        &config,
-    )
-    .unwrap_or_else(|e| panic!("{name}: {e}"));
+    let (traces, log, profile, execution) =
+        trace_run(&image, io, &tables, &config).unwrap_or_else(|e| panic!("{name}: {e}"));
     assert_eq!(
-        execution.exit_code,
-        exit_code_of(name),
+        execution.exit_code, status,
         "{name} exited {}",
         execution.exit_code
     );
@@ -231,7 +219,7 @@ pub fn traced(name: &str) -> Traced {
         log,
         profile,
         execution,
-        advice,
+        advice: io.advice.clone(),
     }
 }
 

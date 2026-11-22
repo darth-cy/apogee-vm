@@ -17,7 +17,7 @@ ecall is `EXIT` (the retired POSIX numbers: [ecall-abi.md](ecall-abi.md) §3). A
 `emulator::Execution::io`. A byte-moving syscall would need cross-row constraints tying each
 transfer row to its buffer and length, which this arithmetization has no place for, while a window
 is bound by the multiset and one comparison (§5) and asks nothing of the guest. Nor does the guest
-hash its output: nothing rests on its honesty, and a panic loses nothing it committed.
+hash its output: nothing rests on its honesty.
 
 ## 2. The memory map
 
@@ -158,8 +158,9 @@ one the journal publishes.
 A guest reaches the regions with loads and stores at the `constants::guest_memory` constants,
 through `guest_sdk::public_input`, `guest_sdk::commit` and `guest_sdk::advice`, none of which issues
 an ecall; [ecall-abi.md](ecall-abi.md) §6 is the API and the
-[guest program manual](../guest-program-manual.md) the walkthrough. Nothing is published at exit,
-so a guest that panics has published what it committed, and its run is proved like any other.
+[guest program manual](../guest-program-manual.md) the walkthrough. Nothing is published at exit:
+the journal is what the guest's stores left in the window. A run that panics or exits nonzero has
+no proof at all ([proof.md](proof.md) §6, step 0), so what it committed is published to no one.
 
 ## 8. Cost
 
@@ -179,5 +180,8 @@ so a guest that panics has published what it committed, and its run is proved li
   form; a guest writing the window directly must.
 - **Nothing orders the journal's writes, and nothing forces a guest to read its input.** The proof
   binds a window's contents, not its accesses.
-- **Read the exit status first.** It is `x10`'s final low word, read as an `i32` ([memory.md](memory.md) §4): a failed
-  run, a panic included, has a verifying proof and a journal too (§7).
+- **Only exit status 0 is provable.** The statement's status is `x10`'s final low word
+  ([memory.md](memory.md) §4), and verification refuses any other before reading anything else
+  ([proof.md](proof.md) §6, step 0): a failed run — a panic (101), a journal past its window (70),
+  an exhausted heap (71), any `exit(n)` with `n ≠ 0` — has no proof, and a verifier reads a journal,
+  never a status.

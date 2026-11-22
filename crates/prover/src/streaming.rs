@@ -130,6 +130,11 @@ pub const DEFAULT_MAX_IN_FLIGHT: usize = 8;
 /// position, each proof is a function of the global state and its own columns
 /// alone, and `tests/streaming.rs` proves the bytes equal at `max_in_flight` 1
 /// and 8.
+///
+/// **Only an execution that exits 0 is proved.** Any other status is
+/// [`ProverError::NonzeroExit`], the moment pass 1's execution ends and before
+/// any shard is proven — but after pass 1 has committed the `M` columns of
+/// every shard the execution filled, since the status exists only at the exit.
 pub fn prove_block_streaming(
     setup: &ProverSetup,
     io: &GuestIo,
@@ -199,6 +204,18 @@ fn pass1(
     let boundary = build_boundary_finals(&done.state);
     report.cycles = done.execution.cycle_count;
 
+    // **Only an execution that exits 0 is provable** (`docs/spec/proof.md`
+    // §6, step 0). The status, `x10`'s final low word, exists once the guest
+    // has exited, which is here: refused before a window shard is committed,
+    // before the statement and before pass 2 proves any shard. The shards the
+    // execution filled have had their `M` columns committed by now, and that
+    // work is lost; a caller that would rather not pay it executes the guest
+    // first, as `host::prove` does.
+    let status = boundary.reg_values[9] as u32;
+    if status != 0 {
+        return Err(ProverError::NonzeroExit { status });
+    }
+
     // The cut the streaming executor made is the plan's, family by family. It
     // cannot differ -- both are `ceil(rows / height)` over the same rows -- and
     // an assertion is what says so out loud rather than leaving the reader to
@@ -248,26 +265,10 @@ fn pass1(
     report.peak_in_flight = report.peak_in_flight.max(peak);
     report.shards = order.len();
 
-    // **A nonzero exit status, on a line of its own**, as the archived path's
-    // statement phase prints one. A guest that panicked exits 101 having
-    // published whatever it had committed so far — a journal that decodes, a
-    // proof that verifies, and an answer to a different question. A run whose
-    // guest aborted should not need a careful reading to say so, and on this
-    // path there is no statement phase to say it anywhere else.
-    if (boundary.reg_values[9] as u32) != 0 {
-        dlog!(
-            Phase,
-            "apogee ABORTED  the guest exited {} (x10), journal={}B: this proves an \
-             execution that failed, not one that succeeded",
-            (boundary.reg_values[9] as u32),
-            done.execution.io.output.len()
-        );
-    }
-
     let statement = PublicInputs {
         input: done.execution.io.input.clone(),
         output: done.execution.io.output.clone(),
-        exit_status: (boundary.reg_values[9] as u32),
+        exit_status: status,
         shard_counts: counts,
         windows,
         boundary,

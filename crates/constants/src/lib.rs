@@ -922,8 +922,8 @@ pub mod guest_memory {
 /// exactly the provable ones. `docs/spec/ecall-abi.md` specifies the table.
 pub mod ecall {
     /// Terminate. `a0` is the exit status; a nonzero status is a failed
-    /// execution, which is still an execution and is reported rather than
-    /// refused.
+    /// execution, which the executor reports and the prover and the verifier
+    /// refuse: only an execution that exits 0 has a proof.
     ///
     /// The only ecall a guest may issue besides the delegation calls. Its
     /// number is 93, and nothing downstream reads any meaning into the value.

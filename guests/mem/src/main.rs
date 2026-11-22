@@ -35,7 +35,9 @@
 //!
 //! # The result
 //!
-//! The exit status, `a0`: **66**, the number of checks, or 1 from `fail`.
+//! The exit status, `a0`: `s0 − 66`, the checks counted less the **66** there
+//! are, so 0 when every one ran and passed, the only status with a proof
+//! (`docs/spec/proof.md` §6); 1 from `fail`.
 
 use core::arch::global_asm;
 
@@ -464,8 +466,8 @@ global_asm!(
     "  addi  s0, s0, 1", // 66: amomin.w compares the words signed: -2 < 1
     // The result.
     "done:",
-    "  addi  a0, s0, 0",
-    "  addi  a7, x0, 93", // EXIT
+    "  addi  a0, s0, -66", // the checks counted less the 66 there are
+    "  addi  a7, x0, 93",  // EXIT
     "  ecall",
     "fail:",
     "  addi  a0, x0, 1",
