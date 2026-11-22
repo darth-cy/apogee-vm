@@ -156,11 +156,11 @@ one the journal publishes.
 ## 7. The guest's view
 
 A guest reaches the regions with loads and stores at the `constants::guest_memory` constants,
-through `guest_sdk::public_input`, `guest_sdk::commit` and `guest_sdk::advice`, none of which issues
-an ecall; [ecall-abi.md](ecall-abi.md) §6 is the API and the
-[guest program manual](../guest-program-manual.md) the walkthrough. Nothing is published at exit:
-the journal is what the guest's stores left in the window. A run that panics or exits nonzero has
-no proof at all ([proof.md](proof.md) §6, step 0), so what it committed is published to no one.
+through `guest_sdk::public_input`, `guest_sdk::commit` and `guest_sdk::advice`, writable through
+`guest_sdk::advice_mut`, none of which issues an ecall; [ecall-abi.md](ecall-abi.md) §6 is the API
+and the [guest program manual](../guest-program-manual.md) the walkthrough. Nothing is published at
+exit: the journal is what the guest's stores left in the window. A run that panics or exits nonzero
+has no proof at all ([proof.md](proof.md) §6, step 0), so what it committed is published to no one.
 
 ## 8. Cost
 

@@ -16,8 +16,11 @@
 //! root, and [`Trie::reach`] proves a key absent by the other key's leaf its
 //! walk reaches. [`Trie::set`], [`Trie::insert`] and [`Trie::remove`] then
 //! edit the trie as the table is edited, each walking from the root on the
-//! key's bits: the trie is its own index. [`Trie::root`] after them is the
-//! table's root after the batch.
+//! key's bits: the trie is its own index. [`Trie::set_opened`] sets an opened
+//! key's leaf by its place among the keys opened, with no walk, for a guest
+//! that holds its records in that order, each record's leaf [`record_leaf`]
+//! of it where it lies. [`Trie::root`] after them is the table's root after
+//! the batch.
 //!
 //! **A batch that inserts and removes inserts first.** An insert's walk must
 //! reach an opened leaf, which the proof opens as the walk reaches it on the
@@ -66,33 +69,55 @@ const fn rows(family: u32) -> u32 {
 /// (`docs/spec/precompiles.md` §6.1). Panics if the two are over 112 bytes.
 ///
 /// The bytes are copied into zeroed words, little-endian, so that every load
-/// is an aligned word's, as the VM requires. Lanes `8g` to `8g + 7` are then
-/// words `7g` to `7g + 6`, 448 bits: lane `8g + j` is word `7g + j − 1`'s top
-/// `8j` bits and above them word `7g + j`'s low `56 − 8j`, lane `8g` word
-/// `7g`'s low 56.
+/// is an aligned word's, as the VM requires, and packed as [`record_leaf`]
+/// packs a record's.
 pub fn leaf(key: &[u8], value: &[u8]) -> Digest {
-    const LANE: u64 = (1 << 56) - 1;
     let (k, n) = (key.len(), key.len() + value.len());
     assert!(
         n <= MAX_LEAF,
         "mpt::leaf: a key and its value are at most 112 bytes"
     );
-    // The 112 bytes' words and one more, zero, that the second group's
-    // window of 8 words ends on.
-    let mut words = [0u64; MAX_LEAF / 8 + 1];
+    let mut words = [0u64; MAX_LEAF / 8];
     // SAFETY: the words' own bytes, initialized, and a byte is aligned
     // anywhere.
     let bytes =
         unsafe { slice::from_raw_parts_mut(words.as_mut_ptr().cast::<u8>(), 8 * words.len()) };
     bytes[..k].copy_from_slice(key);
     bytes[k..n].copy_from_slice(value);
+    record_leaf(&words)
+}
+
+/// The leaf of a record held as `u64`s where it lies, its key and then its
+/// value: [`leaf`] of its `8·W` bytes, little-endian, split anywhere, as a
+/// leaf binds neither length. Its lanes are packed straight from the `u64`s,
+/// with no copy, so a guest editing its records in place
+/// (`docs/guest-program-manual.md` §3.3) hashes each where it is. A record is
+/// at most 14 `u64`s, 112 bytes.
+///
+/// Lanes `8g` to `8g + 7` are `u64`s `7g` to `7g + 6`, 448 bits, those past
+/// the record zero: lane `8g + j` is `u64` `7g + j − 1`'s top `8j` bits and
+/// above them `u64` `7g + j`'s low `56 − 8j`, lane `8g` `u64` `7g`'s low 56.
+#[inline]
+pub fn record_leaf<const W: usize>(record: &[u64; W]) -> Digest {
+    const LANE: u64 = (1 << 56) - 1;
+    const {
+        assert!(
+            W <= MAX_LEAF / 8,
+            "mpt::record_leaf: a record is at most 112 bytes"
+        )
+    };
+    let word = |i: usize| if i < W { record[i] } else { 0 };
     let mut state = [0u64; 16];
-    for g in 0..2 {
-        let (w, lanes) = (&words[7 * g..7 * g + 8], &mut state[8 * g..8 * g + 8]);
-        lanes[0] = w[0] & LANE;
-        for j in 1..8 {
-            lanes[j] = ((w[j - 1] >> (64 - 8 * j)) | (w[j] << (8 * j))) & LANE;
+    let mut g = 0;
+    while g < 2 {
+        state[8 * g] = word(7 * g) & LANE;
+        let mut j = 1;
+        while j < 8 {
+            let (low, high) = (word(7 * g + j - 1), word(7 * g + j));
+            state[8 * g + j] = ((low >> (64 - 8 * j)) | (high << (8 * j))) & LANE;
+            j += 1;
         }
+        g += 1;
     }
     let x: [u64; 8] = state[..8].try_into().expect("8 lanes");
     poseidon2_permute(&mut state);
@@ -113,12 +138,15 @@ fn add(a: u64, b: u64) -> u64 {
 }
 
 /// An opened table: the pruned trie of the keys a batch touches, its nodes in
-/// an arena, and its root, none for the empty table. The keys are borrowed,
-/// and a sibling's digest stays where the proof holds it.
+/// an arena, and its root, none for the empty table; and how many of its
+/// leaves are set by index, the keys it opened, none once a key is removed.
+/// The keys are borrowed, and a sibling's digest stays where the proof holds
+/// it.
 pub struct Trie<'a> {
     key_len: usize,
     nodes: Vec<Node<'a>>,
     root: Option<usize>,
+    opened: usize,
 }
 
 /// A node of the pruned trie.
@@ -126,7 +154,11 @@ enum Node<'a> {
     /// A touched key and its leaf.
     Leaf(&'a [u8], Digest),
     /// A sibling: the address of its digest, 16 words the call reads mod `p`.
-    Opaque(u32),
+    /// A `usize`, though an address is below `2^32`: then every node's fields
+    /// start on 8 bytes, and opening writes a leaf's digest into its node
+    /// directly, where a `u32` here staged it, twice, through misaligned
+    /// copies.
+    Opaque(usize),
     /// A branch at a crit bit over its children, left then right.
     Branch(usize, [usize; 2]),
 }
@@ -182,11 +214,12 @@ impl<'a> Trie<'a> {
         }
         let m = nodes.len();
         let base = advice.as_ptr().addr() + digests;
-        nodes.extend((0..s).map(|j| Node::Opaque((base + 64 * j) as u32)));
+        nodes.extend((0..s).map(|j| Node::Opaque(base + 64 * j)));
         let mut trie = Trie {
             key_len,
             nodes,
             root: None,
+            opened: m,
         };
         if m == 0 {
             assert!(
@@ -335,6 +368,24 @@ impl<'a> Trie<'a> {
         self.nodes[at] = Node::Leaf(reached, leaf);
     }
 
+    /// Replaces the leaf of the `i`-th key [`Trie::open`] was given, node
+    /// `i`, with no walk: a guest holding its records in the order it opened
+    /// them writes each back by its place. An insert keeps every opened leaf
+    /// where it was, and a remove takes one out of the trie, so this panics
+    /// unless `i` is below the count of keys opened, and after any remove: a
+    /// batch sets by place before it removes.
+    pub fn set_opened(&mut self, i: usize, leaf: Digest) {
+        assert!(
+            i < self.opened,
+            "mpt::Trie::set_opened: an opened key's place, before any remove"
+        );
+        // The digest alone, in place: rebuilding the node would stage it.
+        match &mut self.nodes[i] {
+            Node::Leaf(_, digest) => *digest = leaf,
+            _ => unreachable!("node i is opened key i's leaf"),
+        }
+    }
+
     /// Inserts a key the table does not hold, with its leaf: under a branch at
     /// `c`, the crit bit of `key` and the opened key its walk reaches, spliced
     /// above the first node on that walk deeper than `c`. The empty table's
@@ -374,6 +425,8 @@ impl<'a> Trie<'a> {
     pub fn remove(&mut self, key: &[u8]) {
         let (_, reached, slot, above) = self.walk(key);
         assert!(reached == key, "mpt::Trie::remove: an opened key");
+        // The removed key's node leaves the trie, so no place is set after it.
+        self.opened = 0;
         match slot {
             Some((parent, side)) => {
                 let other = self.children(parent)[1 - side];
@@ -415,7 +468,7 @@ impl<'a> Trie<'a> {
         let first = (ops.len() / 2) as u32;
         match self.nodes[node] {
             Node::Leaf(_, ref leaf) => op(ops, LOAD | park, (leaf as *const Digest).addr() as u32),
-            Node::Opaque(at) => op(ops, LOAD | park, at),
+            Node::Opaque(at) => op(ops, LOAD | park, at as u32),
             Node::Branch(c, [left, right]) => {
                 let d = (c as u32) << DEPTH_SHIFT;
                 match (self.opaque(left), self.opaque(right)) {
@@ -445,7 +498,7 @@ impl<'a> Trie<'a> {
     /// The address of `node`'s digest, if it is a sibling.
     fn opaque(&self, node: usize) -> Option<u32> {
         match self.nodes[node] {
-            Node::Opaque(at) => Some(at),
+            Node::Opaque(at) => Some(at as u32),
             _ => None,
         }
     }

@@ -13,8 +13,9 @@
 //! file descriptors, no streams and no I/O syscall. An execution's three kinds
 //! of input and output are *memory*, reached with ordinary loads and stores:
 //! [`public_input`] is the verifier-bound input, [`advice`] is prover-supplied
-//! and bound by nothing, and [`commit`] appends to the verifier-bound journal.
-//! `docs/spec/public-values.md` specifies all three.
+//! and bound by nothing, writable through [`advice_mut`] and read in place as
+//! `u64`s through [`as_u64s`], and [`commit`] appends to the verifier-bound
+//! journal. `docs/spec/public-values.md` specifies all three.
 //!
 //! The ecall ABI is [`exit`] and the delegation calls, each a shim over one
 //! frame: [`poseidon2_permute`], [`falcon512`]'s decoder, sampler and
@@ -258,12 +259,84 @@ pub fn journal() -> &'static [u8] {
 /// **Calling this on a run given no advice is that fatal error**, not an empty
 /// slice: no advice means no advice region at all, so that a program which uses
 /// none pays no `ADVICE_WINDOWS` shard (`docs/spec/public-values.md` §6).
+///
+/// Panics once [`advice_mut`] has lent the region.
 pub fn advice() -> &'static [u8] {
+    lend_advice(SHARED);
     let origin = guest_memory::ADVICE_ORIGIN as usize;
     let len = word_at(origin).min(4 * guest_memory::ADVICE_WORDS - 4);
     // SAFETY: `len` is clamped to the region, and the executor refuses a read
     // past the bytes it was given rather than returning something else.
     unsafe { slice_at(origin + 4, len as usize) }
+}
+
+/// The **advice, writable**: [`advice`]'s bytes, for a guest that reads and
+/// writes advised records where they lie rather than copying them out
+/// (`docs/guest-program-manual.md` §3.3). A store there is an ordinary store
+/// (`docs/spec/public-values.md` §6), and writing binds nothing: a guest holds
+/// each record to what the proof binds before it trusts it, as with
+/// [`advice`].
+///
+/// **One borrow.** The writable advice is lent once and never beside
+/// [`advice`]'s: a second call, or a call after `advice`, panics.
+pub fn advice_mut() -> &'static mut [u8] {
+    lend_advice(WRITABLE);
+    let origin = guest_memory::ADVICE_ORIGIN as usize;
+    let len = word_at(origin).min(4 * guest_memory::ADVICE_WORDS - 4);
+    // SAFETY: as `advice`'s, and the region's one borrow: `lend_advice` has
+    // refused every other.
+    unsafe { core::slice::from_raw_parts_mut((origin + 4) as *mut u8, len as usize) }
+}
+
+/// How the advice is lent: 0 before either accessor, [`SHARED`] once
+/// [`advice`] has lent it, any number of times, and [`WRITABLE`] once
+/// [`advice_mut`] has, once.
+static mut ADVICE_LENT: u8 = 0;
+const SHARED: u8 = 1;
+const WRITABLE: u8 = 2;
+
+/// The advice lent as `kind`, or a panic where that borrow would meet
+/// another: shared ones meet each other, and the writable one meets none.
+fn lend_advice(kind: u8) {
+    // SAFETY: the guest is single-threaded with no re-entrancy, so the
+    // read-modify-write of `ADVICE_LENT` cannot race.
+    unsafe {
+        let lent = core::ptr::addr_of_mut!(ADVICE_LENT);
+        assert!(
+            *lent == 0 || (*lent == SHARED && kind == SHARED),
+            "guest_sdk: the writable advice is the region's one borrow"
+        );
+        *lent = kind;
+    }
+}
+
+/// `bytes` as the little-endian `u64`s they hold, each one `ld`: 8-aligned and
+/// a whole number of `u64`s, or a panic. A guest reads advised records where
+/// they lie through it, with no copy and no byte loads.
+pub fn as_u64s(bytes: &[u8]) -> &[u64] {
+    assert!(
+        whole_u64s(bytes.as_ptr(), bytes.len()),
+        "guest_sdk::as_u64s: 8-aligned bytes, a whole number of u64s"
+    );
+    // SAFETY: 8-aligned and a whole number of `u64`s, every bit pattern is a
+    // `u64`, and the borrow is `bytes`' own.
+    unsafe { core::slice::from_raw_parts(bytes.as_ptr().cast(), bytes.len() / 8) }
+}
+
+/// [`as_u64s`], writable: each `u64` read with one `ld` and written with one
+/// `sd`, where the bytes lie.
+pub fn as_u64s_mut(bytes: &mut [u8]) -> &mut [u64] {
+    assert!(
+        whole_u64s(bytes.as_ptr(), bytes.len()),
+        "guest_sdk::as_u64s_mut: 8-aligned bytes, a whole number of u64s"
+    );
+    // SAFETY: as `as_u64s`', and the borrow is `bytes`' own, exclusive.
+    unsafe { core::slice::from_raw_parts_mut(bytes.as_mut_ptr().cast(), bytes.len() / 8) }
+}
+
+/// Whether `len` bytes at `at` are 8-aligned and a whole number of `u64`s.
+fn whole_u64s(at: *const u8, len: usize) -> bool {
+    at.addr().is_multiple_of(8) && len.is_multiple_of(8)
 }
 
 /// Exit with `code`. A nonzero status is a failed execution, with no proof.

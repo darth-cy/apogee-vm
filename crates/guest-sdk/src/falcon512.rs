@@ -102,6 +102,18 @@ impl PublicKey {
     // Inline: the key is then built in the caller's frame, not copied there.
     #[inline]
     pub fn decode(h: &[u8]) -> PublicKey {
+        let mut key = MaybeUninit::<PublicKey>::uninit();
+        PublicKey::decode_into(h, &mut key);
+        // SAFETY: `decode_into` has written the key whole.
+        unsafe { key.assume_init() }
+    }
+
+    /// [`PublicKey::decode`] into `key`, a slot of the caller's, which it
+    /// returns written: the call writes `h` there and K and the prefix are
+    /// written beside it, so a key kept for later, in an arena of keys say,
+    /// is never copied there. Panics, or the call refuses, as `decode` does.
+    #[inline]
+    pub fn decode_into<'k>(h: &[u8], key: &'k mut MaybeUninit<PublicKey>) -> &'k mut PublicKey {
         assert!(
             h.len() == KEY_BYTES,
             "falcon512::PublicKey::decode: a key is 896 bytes"
@@ -110,7 +122,6 @@ impl PublicKey {
             h.as_ptr().addr().is_multiple_of(4),
             "falcon512::PublicKey::decode: a key is word-aligned"
         );
-        let mut key = MaybeUninit::<PublicKey>::uninit();
         let at = key.as_mut_ptr();
         // SAFETY: `h` is 224 words, word-aligned, a key's whole stream; the
         // key's `h` is 256 words, word-aligned, which the call writes whole.
@@ -121,14 +132,15 @@ impl PublicKey {
         sponge.encoded_key(h);
         poseidon2_permute(&mut sponge.state);
         let k = Digest(core::array::from_fn(|i| sponge.state[i]));
-        let mut prefix = Sponge::ZERO;
-        prefix.field(1, SIGNATURE_DOMAIN);
-        prefix.field(2, &le_bytes::<64>(&k));
-        // SAFETY: `h` is the call's, and the rest of the key is written here.
+        // SAFETY: `h` is the call's, and the rest of the key is written here,
+        // the prefix absorbed in place once it is written zero.
         unsafe {
             (&raw mut (*at).k).write(k);
-            (&raw mut (*at).prefix).write(prefix);
-            key.assume_init()
+            let prefix = &raw mut (*at).prefix;
+            prefix.write(Sponge::ZERO);
+            (*prefix).field(1, SIGNATURE_DOMAIN);
+            (*prefix).field(2, &le_bytes::<64>(&k));
+            key.assume_init_mut()
         }
     }
 
