@@ -53,13 +53,13 @@
 //! and valid for this store and snapshot: no one but its buyer can sign a
 //! request. Every request in a batch applies. One that cannot, or whose
 //! signature does not verify under its buyer's key, is a malformed batch, a
-//! panic, never an outcome. The sequencer checks the requests and their
-//! signatures and drops each one that cannot apply before it batches them, as
-//! a rollup's block producer does.
+//! panic, never an outcome. The app's backend, which builds the batch, checks
+//! the requests and their signatures and leaves out each one that cannot
+//! apply.
 //!
-//! **The order is the sequencer's.** The guest settles the requests in the
+//! **The order is the backend's.** The guest settles the requests in the
 //! order the batch gives and never sorts. A buyer's nonces order its own
-//! requests; the rest is the sequencer's policy, each listing's requests
+//! requests; the rest is the backend's policy, each listing's requests
 //! gathered, say, and it becomes part of the batch: which buyer a listing's
 //! last unit goes to, and whether a seller has been paid when it buys, follow
 //! the order. The order costs nothing here, as each record is opened once

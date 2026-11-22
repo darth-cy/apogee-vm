@@ -1247,8 +1247,8 @@ mod amazon {
 ///
 /// Forty users, each keyed by its key's address and each with a key from a
 /// seed of its own; and 22 listings at ids apart, fourteen of 30 units and up
-/// sold by users who also buy; then 77 requests, sequenced by listing as a
-/// sequencer gathering each listing's requests would, each buyer's nonces in
+/// sold by users who also buy; then 77 requests, ordered by listing as a
+/// backend gathering each listing's requests would, each buyer's nonces in
 /// the batch's order. Each applies: seventy-one purchases of one to three
 /// units, the last unit of a listing of one, both of a listing of two, a
 /// seller's purchase paid for by a sale earlier in the batch, and a purchase at
@@ -1398,7 +1398,7 @@ fn amazon_settles_signed_purchases_by_its_snapshot() {
         (user(RICH[0]), BIG, 1, half),
         (user(15), 6, 1, price(6)),
     ]);
-    // The sequencer's order: each listing's requests together, in the order
+    // The backend's order: each listing's requests together, in the order
     // they came.
     batch.sort_by_key(|&(_, j, ..)| listing(j));
 

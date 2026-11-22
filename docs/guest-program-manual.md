@@ -191,11 +191,11 @@ Cutting a guest's cycles has more than one strategy, and two are in use:
 
 - **A precompile module.** The VM proves a hot operation in a circuit of its own, which the guest
   calls instead of running it (§3.1).
-- **The input's format.** Whoever builds the input, a sequencer say, can shape it so the guest does
+- **The input's format.** Whoever builds the input, a backend say, can shape it so the guest does
   less, and the guest presumes that shape rather than making it: it asserts the shape and never
   sorts. `guests/amazon`'s advice holds each record its batch reads once, ascending by key, so its
   batch runs in memory and each table costs one validation and one finalization however its
-  requests interleave (§3.3). The requests' order is the sequencer's policy and becomes part of the
+  requests interleave (§3.3). The requests' order is the builder's policy and becomes part of the
   batch: the guest proves the order it is given, and another order can be another result.
 
 ### 3.3 A database's state
@@ -217,7 +217,7 @@ keeps it the same way. This is the common convention for an on-chain database.
   publishes its root. A statement carries the snapshot before its batch in the public input and the
   snapshot after it in the journal.
 - **Actions stay off-chain.** Proving is what costs, so action records are not in the snapshot. They
-  are the batch itself, the input a sequencer orders (§3.2), and once proved they are kept in an
+  are the batch itself, the input a backend orders (§3.2), and once proved they are kept in an
   ordinary database for data availability: whoever holds them and the snapshot before a batch can
   rebuild the state after it.
 - **One validation and one finalization a table.** A batch's advice holds the records it touches,
@@ -231,8 +231,8 @@ keeps it the same way. This is the common convention for an on-chain database.
 - **The proof is the prover's.** Its node data comes from the prover's own data-availability store
   of the tables, as advice, never from a request or its caller. A request carries no tree
   information: it names a record by its key alone.
-- **The sequencer orders; the guest presumes it and asserts it.** The records are ascending by key,
-  which `Trie::open` asserts, and the requests come in the sequencer's order, which the guest
+- **The builder orders; the guest presumes it and asserts it.** The records are ascending by key,
+  which `Trie::open` asserts, and the requests come in the builder's order, which the guest
   settles as given and never sorts (§3.2).
 
 ```rust
@@ -266,13 +266,13 @@ buyer's nonce, take the snapshot to the next. So a proof does not say which requ
 settled, only that each was signed and valid for this store and snapshot. Every request in a batch
 applies: one for another market or not at its buyer's nonce, one whose signature does not verify
 under its buyer's key, one whose buyer or listing the advice does not hold, or one its listing or
-the balances cannot settle is a malformed batch, a panic. The sequencer checks the requests and
-their signatures and drops each one that cannot apply before it batches them, as a rollup's block
-producer does. The advice holds every record the batch reads and no other, each once, the users
-ascending by address and the listings by id; then the users' proof and the listings' proof; then
-the requests, each followed by its user's key, only at the user's first, and its signature, in the
-SDK's compact forms, each a whole number of words read in place. A byte past the last one read is a
-panic.
+the balances cannot settle is a malformed batch, a panic. The app's backend, which builds the batch,
+checks the requests and their signatures and leaves out each one that cannot apply, so a batch
+reaches the prover entirely valid. The advice holds every record the batch reads and no other, each
+once, the users ascending by address and the listings by id; then the users' proof and the listings'
+proof; then the requests, each followed by its user's key, only at the user's first, and its
+signature, in the SDK's compact forms, each a whole number of words read in place. A byte past the
+last one read is a panic.
 
 ## 4. Build it
 
