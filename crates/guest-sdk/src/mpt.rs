@@ -13,10 +13,11 @@
 //! their pruned trie, and panics on any proof that is not one. [`Trie::root`]
 //! is that trie's root, which the caller holds to the root it trusts: equal,
 //! each touched key's leaf is the one a walk on its bits reaches from that
-//! root. [`Trie::set`], [`Trie::insert`] and [`Trie::remove`] then edit the
-//! trie as the table is edited, each walking from the root on the key's bits:
-//! the trie is its own index. [`Trie::root`] after them is the table's root
-//! after the batch.
+//! root, and [`Trie::reach`] proves a key absent by the other key's leaf its
+//! walk reaches. [`Trie::set`], [`Trie::insert`] and [`Trie::remove`] then
+//! edit the trie as the table is edited, each walking from the root on the
+//! key's bits: the trie is its own index. [`Trie::root`] after them is the
+//! table's root after the batch.
 //!
 //! **A batch that inserts and removes inserts first.** An insert's walk must
 //! reach an opened leaf, which the proof opens as the walk reaches it on the
@@ -311,6 +312,19 @@ impl<'a> Trie<'a> {
         };
         counts[node] = n;
         n
+    }
+
+    /// The key of the opened leaf the walk on `key`'s bits reaches, none in
+    /// the empty table. A walk on a key the table holds reaches that key's
+    /// leaf, so one that reaches another key's proves `key` absent. Panics on
+    /// a key not the table's length and where the walk reaches a node not
+    /// opened.
+    pub fn reach(&self, key: &[u8]) -> Option<&'a [u8]> {
+        assert!(
+            key.len() == self.key_len,
+            "mpt::Trie: a key is the table's length"
+        );
+        self.root.map(|_| self.walk(key).1)
     }
 
     /// Replaces an opened key's leaf. Panics unless the walk on `key` reaches
