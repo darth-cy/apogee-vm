@@ -109,10 +109,8 @@ fn main() {
 
 - `read_input` copies and may return short; `advice()` on a run given no advice is the fatal
   `OutOfBounds`.
-- `advice_mut()` is the advice writable, for a guest that edits advised records where they lie: the
-  region's one borrow, so a second call, or one beside `advice()`, panics. `as_u64s(bytes)` and
-  `as_u64s_mut(bytes)` view 8-aligned bytes as the `u64`s they hold, each one `ld` or `sd`, and
-  panic on any others.
+- `advice_mut()` lends the advice writable, once; `as_u64s` and `as_u64s_mut` view 8-aligned bytes
+  as `u64`s.
 - `commit` appends and exits 70 rather than overflow: commit a growing output as a digest.
 - **Only a run that exits 0 has a proof.** A panic (101), a journal overflow (70), an exhausted heap
   (71) or any `exit(n)` with `n ≠ 0` is refused by the prover, naming the status, and by the
@@ -203,13 +201,8 @@ Cutting a guest's cycles has more than one strategy, and two are in use:
   requests interleave (§3.3). The requests' order is the builder's policy and becomes part of the
   batch: the guest proves the order it is given, and another order can be another result.
 
-  The builder also knows where everything lies in the advice, so it says so, and the guest checks
-  rather than searches: each of `guests/amazon`'s requests carries its records' places among the
-  advised records, the guest holding the key at each place to the one the request names, a few
-  word compares, and panicking on any other. Its records and requests are whole numbers of `u64`s,
-  their fields ordered by width so that each `u64` and `u128` lies on 8 bytes, and the guest reads
-  and writes them where they lie (`advice_mut`, `as_u64s_mut`): no field is copied out or
-  assembled from bytes, and no record is copied back.
+  The builder also knows where each record lies, so it says so and the guest checks instead of
+  searching; records laid out as whole `u64`s are read and edited where they lie.
 
 ### 3.3 A database's state
 
@@ -241,11 +234,8 @@ keeps it the same way. This is the common convention for an on-chain database.
   record at a time, and takes its `root()` again: one finalization a table, however many records
   changed. A batch that inserts and removes inserts first: an insert's walk must reach a leaf the
   proof opened, and a remove can lift a node the proof did not open into that walk.
-- **A record edited where it lies.** A guest may settle the batch on the advised records
-  themselves, the advice being writable: each record a whole number of `u64`s, its key then its
-  value, its leaf `mpt::record_leaf(&record)` packed from it in place, and each changed record set
-  back by its place among the keys opened, `set_opened(i, leaf)`, with no walk. A batch sets by
-  place before it removes.
+- **A record edited where it lies.** With writable advice a guest edits records in place and sets
+  each changed one back by its opened place (`mpt::record_leaf`, `Trie::set_opened`), with no walk.
 - **The proof is the prover's.** Its node data comes from the prover's own data-availability store
   of the tables, as advice, never from a request or its caller. A request carries no tree
   information: it names a record by its key alone.
@@ -270,35 +260,13 @@ let after = poseidon2_compress(&users.root(), &listings.root()); // the finaliza
 and `apogee_mpt_root` a table's validation, its sorted keys, their leaves and its proof to its
 root; a batch's edits are Rust's alone ([ecall-abi.md](spec/ecall-abi.md) §7).
 
-`guests/amazon` is the two-table case. Its users are keyed by address, 32 bytes, each value the
-user's balance (`u128`) and nonce, 24 bytes; its listings by `id.to_be_bytes()`, 4 bytes, each value
-the listing's item (`u32`), seller, price (`u128`) and stock, 60 bytes; and its snapshot is
-`compress(users_root, listings_root)`. Its actions are purchases, each a request whose first 76
-bytes its buyer signed with Falcon-512 (§3.1) under the context `apogee/amazon/purchase/v2`,
-settled against the records where the advice holds them, so a seller may spend later in a batch
-what it earned earlier in it. A user is named by its key's address: a request names its buyer by it
-and a listing its seller, and the key advised at its first signature must have that address,
-computed from the same bytes the user's signatures are verified under; the key is decoded into an
-arena of keys, `decode_into`, and kept there for the user's later signatures. A request names its
-listing by its key, the id big-endian, and carries no tree information. The requests and their
-signatures are advice the prover chooses (§3), and the public input is the snapshot and the market
-alone: the statement is that signed requests, each its buyer's at that buyer's nonce, take the
-snapshot to the next. So a proof does not say which requests a batch settled, only that each was
-signed and valid for this store and snapshot. Every request in a batch applies: one for another
-market or not at its buyer's nonce, one whose signature does not verify under its buyer's key, one
-whose buyer, listing or seller the advice does not hold, or one its listing or the balances cannot
-settle is a malformed batch, a panic. The app's backend, which builds the batch, checks the requests
-and their signatures and leaves out each one that cannot apply, so a batch reaches the prover
-entirely valid. The advice holds three counts, the requests, the users and the listings; every
-record the batch reads and no other, each once, the users ascending by address and the listings by
-id, a user's record 56 bytes and a listing's 64; then the requests, each its 76 signed bytes and
-its buyer's, listing's and seller's places among the records, `u32`s the guest checks by key, 88
-bytes; then the users' proof and the listings' proof; then each request's user's key, only at the
-user's first, and its signature, in the SDK's compact forms. The records and the requests are whole
-numbers of `u64`s on 8 bytes, edited and read where they lie; the proofs, keys and signatures are
-whole numbers of words, read in place. After the batch each record's leaf is packed again where it
-lies and set by its place, and a record the batch does not read, or a byte past the last one read,
-is a panic.
+`guests/amazon` is the two-table case: users keyed by address, listings by id, its snapshot the
+compression of the two roots. Its actions are purchases, each signed by its buyer with Falcon-512
+(§3.1). The public input is the snapshot and the market; the requests, keys and signatures are
+advice, and every request applies or the batch panics, so the backend that builds the batch leaves
+out any request that cannot apply. It is specialized on its structure: each request carries its
+records' places, checked instead of searched, and records are edited where they lie and written back
+by place. Its layout is documented in its source.
 
 ## 4. Build it
 
