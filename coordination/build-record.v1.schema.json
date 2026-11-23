@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "apogee/build-record/v1",
+  "description": "What one build was made from and what it made (minting.md §4).",
+  "type": "object",
+  "required": ["format", "manifest", "framework", "core", "toolchain", "elf_sha256", "identity", "image", "heights"],
+  "additionalProperties": false,
+  "properties": {
+    "format": { "const": "apogee/build-record/v1" },
+    "manifest": { "description": "The manifest's digest.", "type": "string", "pattern": "^[0-9a-f]{128}$" },
+    "framework": { "description": "The apogee-host commit.", "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "core": { "description": "The apogee-vm commit of apogee-host's core/ submodule.", "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "toolchain": { "description": "The Rust release rust-toolchain.toml pins.", "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "elf_sha256": { "description": "SHA-256 of the release guest ELF.", "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "identity": { "description": "The ELF's program identity at heights.", "type": "string", "pattern": "^[0-9a-f]{128}$" },
+    "image": { "description": "The Prover Host image's digest.", "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "heights": {
+      "description": "One height per family number of that core, by number; 0 at a retired number.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "integer", "minimum": 0 }
+    }
+  }
+}

@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "apogee/app-manifest/v1",
+  "description": "An app manifest, the Apogee Deployment Suite's build output (minting.md §2). This schema is the form; the generator checks the rules beyond it (minting.md §2.1).",
+  "type": "object",
+  "required": ["format", "app", "tables", "roles", "actions", "retired_tags", "logic", "genesis_admins"],
+  "additionalProperties": false,
+  "properties": {
+    "format": { "const": "apogee/app-manifest/v1" },
+    "app": {
+      "type": "object",
+      "required": ["id", "name"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "tables": { "type": "array", "items": { "$ref": "#/$defs/table" } },
+    "roles": { "type": "array", "items": { "$ref": "#/$defs/role" } },
+    "actions": {
+      "type": "array",
+      "items": { "oneOf": [{ "$ref": "#/$defs/signed" }, { "$ref": "#/$defs/settled" }, { "$ref": "#/$defs/admin" }] }
+    },
+    "retired_tags": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/tag" } },
+    "logic": {
+      "type": "object",
+      "propertyNames": { "pattern": "^(signed|settled|admin)/[a-z][a-z0-9_]{0,63}\\.rs$" },
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "genesis_admins": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^0x[0-9a-f]{72}$" }
+    }
+  },
+  "$defs": {
+    "snake": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+    "pascal": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]{0,63}$" },
+    "upper": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$" },
+    "tag": { "type": "integer", "minimum": 256, "maximum": 4294967295 },
+    "field": {
+      "type": "object",
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/snake" },
+        "type": { "enum": ["bool", "u8", "u16", "u32", "u64", "u128", "UserAddress", "Owner", "L1Address", "bytes32", "enum"] },
+        "variants": { "type": "array", "minItems": 2, "uniqueItems": true, "items": { "$ref": "#/$defs/pascal" } }
+      },
+      "if": { "properties": { "type": { "const": "enum" } } },
+      "then": { "required": ["variants"] },
+      "else": { "not": { "required": ["variants"] } }
+    },
+    "fields": { "type": "array", "items": { "$ref": "#/$defs/field" } },
+    "table": {
+      "type": "object",
+      "required": ["id", "name", "key", "value", "holds_funds"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "integer", "minimum": 3, "maximum": 255 },
+        "name": { "$ref": "#/$defs/pascal" },
+        "key": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/field" } },
+        "value": { "$ref": "#/$defs/fields" },
+        "holds_funds": { "type": "boolean" }
+      }
+    },
+    "role": {
+      "type": "object",
+      "required": ["name", "bit"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/upper" },
+        "bit": { "type": "integer", "minimum": 1, "maximum": 63 }
+      }
+    },
+    "auth": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": { "kind": { "const": "user" } }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "n"],
+          "additionalProperties": false,
+          "properties": { "kind": { "const": "parties" }, "n": { "type": "integer", "minimum": 2, "maximum": 4 } }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "role"],
+          "additionalProperties": false,
+          "properties": { "kind": { "const": "role" }, "role": { "$ref": "#/$defs/upper" } }
+        }
+      ]
+    },
+    "consumption": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": { "kind": { "const": "once" } }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "size"],
+          "additionalProperties": false,
+          "properties": { "kind": { "const": "fillable" }, "size": { "$ref": "#/$defs/snake" } }
+        }
+      ]
+    },
+    "settlement": {
+      "type": "object",
+      "required": ["fields"],
+      "additionalProperties": false,
+      "properties": {
+        "fields": { "$ref": "#/$defs/fields" },
+        "list": {
+          "type": "object",
+          "required": ["name", "entry"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "$ref": "#/$defs/snake" },
+            "entry": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/field" } }
+          }
+        }
+      }
+    },
+    "signed": {
+      "type": "object",
+      "required": ["name", "tag", "kind", "auth", "fields"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/snake" },
+        "tag": { "$ref": "#/$defs/tag" },
+        "kind": { "const": "signed" },
+        "auth": { "$ref": "#/$defs/auth" },
+        "fields": { "$ref": "#/$defs/fields" }
+      }
+    },
+    "settled": {
+      "type": "object",
+      "required": ["name", "tag", "kind", "fields", "consumption", "settlement"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/snake" },
+        "tag": { "$ref": "#/$defs/tag" },
+        "kind": { "const": "settled" },
+        "fields": { "$ref": "#/$defs/fields" },
+        "consumption": { "$ref": "#/$defs/consumption" },
+        "settlement": { "$ref": "#/$defs/settlement" }
+      }
+    },
+    "admin": {
+      "type": "object",
+      "required": ["name", "tag", "kind", "fields"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/snake" },
+        "tag": { "$ref": "#/$defs/tag" },
+        "kind": { "const": "admin" },
+        "fields": { "$ref": "#/$defs/fields" }
+      }
+    }
+  }
+}

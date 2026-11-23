@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "POST /v1/batches",
+  "description": "A batch as the backend submits it (runtime.md §1.3). Its replies are $defs: accepted, refusal, paused and error (runtime.md §1.4).",
+  "type": "object",
+  "required": ["batch", "keys", "signatures", "authorization"],
+  "additionalProperties": false,
+  "properties": {
+    "batch": { "description": "The batch bytes: an 80-byte header, then the units; whole words.", "type": "string", "pattern": "^(0x)?([0-9a-fA-F]{8}){20,}$" },
+    "keys": { "description": "Each unit signer's key, once, in any order.", "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/key" } },
+    "signatures": {
+      "description": "One list a unit, in the batch's order: a signed unit's signers in order, a settled unit's one a request, an admin unit's none.",
+      "type": "array",
+      "items": { "type": "array", "items": { "$ref": "#/$defs/signature" } }
+    },
+    "authorization": {
+      "type": "object",
+      "required": ["key", "signature"],
+      "additionalProperties": false,
+      "properties": { "key": { "$ref": "#/$defs/key" }, "signature": { "$ref": "#/$defs/signature" } }
+    }
+  },
+  "$defs": {
+    "key": { "description": "A Falcon-512 v1.2 key, 897 bytes: 0x09, then h.", "type": "string", "pattern": "^(0x)?09[0-9a-fA-F]{1792}$" },
+    "signature": { "description": "A Falcon-512 v1.2 signature, 666 bytes: 0x39, the salt, s2.", "type": "string", "pattern": "^(0x)?39[0-9a-fA-F]{1330}$" },
+    "accepted": {
+      "description": "200.",
+      "type": "object",
+      "required": ["status", "batch", "g_new", "public_input", "journal"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "const": "accepted" },
+        "batch": { "type": "integer", "minimum": 1 },
+        "g_new": { "type": "string", "pattern": "^0x[0-9a-f]{128}$" },
+        "public_input": { "type": "string", "pattern": "^[0-9a-f]{488}$" },
+        "journal": { "type": "string", "pattern": "^[0-9a-f]{416}([0-9a-f]{112})*$" }
+      }
+    },
+    "refusal": {
+      "description": "400 for batch; 409 for tip, clock and queues; 422 for the rest.",
+      "type": "object",
+      "required": ["status", "check", "unit", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "const": "refused" },
+        "check": { "enum": ["batch", "tip", "clock", "queues", "authorization", "keys", "vault", "signatures", "unit"] },
+        "unit": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "message": { "type": "string" }
+      }
+    },
+    "paused": {
+      "description": "503: a batch with units while the Prover Host is paused.",
+      "type": "object",
+      "required": ["status", "message"],
+      "additionalProperties": false,
+      "properties": { "status": { "const": "paused" }, "message": { "type": "string" } }
+    },
+    "error": {
+      "description": "400 malformed, 401 unauthorized, 403 forbidden, 413 too_large, 500 error, 503 unavailable.",
+      "type": "object",
+      "required": ["status", "error"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "enum": ["malformed", "unauthorized", "forbidden", "too_large", "error", "unavailable"] },
+        "error": { "type": "string" }
+      }
+    }
+  }
+}

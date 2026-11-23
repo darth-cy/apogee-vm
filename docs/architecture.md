@@ -35,6 +35,9 @@ choosing, executes instruction by instruction to `EXIT` with status 0, having wr
 journal: no other status has a proof ([proof.md](spec/proof.md) §6). Nothing is claimed of the
 advice, and nothing is hidden: no proof is blinded.
 
+How the core coordinates with the Apogee Deployment Suite and apogee-host is canonical in
+[coordination/](../coordination/README.md).
+
 ## 2. From a binary to a proof
 
 1. **The program.** `loader` reads the ELF into a `ProgramImage`, expanding compressed instructions
