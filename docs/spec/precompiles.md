@@ -723,7 +723,7 @@ above `T`, so it never sees one the guest should have skipped, and no lane is re
 **The per-key prefix.** K is 141 lanes, 17 permutations absorbing and one to squeeze, and
 `(1, SIGNATURE_DOMAIN)` and `(2, K)` are 7 + 12 = 19 lanes, 2 permutations, leaving three rate
 lanes written. Every signature under the key continues from that state, so `PublicKey::decode`
-computes K and the prefix once. A 76-byte message under a 25-byte context is then 27 lanes, 3
+computes K and the prefix once. A 96-byte message under a 25-byte context is then 30 lanes, 4
 permutations, and the squeeze 16, one more when a lane among the first 128 is skipped, with
 probability `1 − (1 − 1.0177·10^−3)^128 ≈ 12.2%`.
 

@@ -14,8 +14,9 @@
 //! of input and output are *memory*, reached with ordinary loads and stores:
 //! [`public_input`] is the verifier-bound input, [`advice`] is prover-supplied
 //! and bound by nothing, writable through [`advice_mut`] and read in place as
-//! `u64`s through [`as_u64s`], and [`commit`] appends to the verifier-bound
-//! journal. `docs/spec/public-values.md` specifies all three.
+//! `u64`s through [`as_u64s`] or `u32`s through [`as_u32s`], and [`commit`]
+//! appends to the verifier-bound journal. `docs/spec/public-values.md`
+//! specifies all three.
 //!
 //! The ecall ABI is [`exit`] and the delegation calls, each a shim over one
 //! frame: [`poseidon2_permute`], [`falcon512`]'s decoder, sampler and
@@ -315,7 +316,7 @@ fn lend_advice(kind: u8) {
 /// they lie through it, with no copy and no byte loads.
 pub fn as_u64s(bytes: &[u8]) -> &[u64] {
     assert!(
-        whole_u64s(bytes.as_ptr(), bytes.len()),
+        whole(bytes.as_ptr(), bytes.len(), 8),
         "guest_sdk::as_u64s: 8-aligned bytes, a whole number of u64s"
     );
     // SAFETY: 8-aligned and a whole number of `u64`s, every bit pattern is a
@@ -327,16 +328,31 @@ pub fn as_u64s(bytes: &[u8]) -> &[u64] {
 /// `sd`, where the bytes lie.
 pub fn as_u64s_mut(bytes: &mut [u8]) -> &mut [u64] {
     assert!(
-        whole_u64s(bytes.as_ptr(), bytes.len()),
+        whole(bytes.as_ptr(), bytes.len(), 8),
         "guest_sdk::as_u64s_mut: 8-aligned bytes, a whole number of u64s"
     );
     // SAFETY: as `as_u64s`', and the borrow is `bytes`' own, exclusive.
     unsafe { core::slice::from_raw_parts_mut(bytes.as_mut_ptr().cast(), bytes.len() / 8) }
 }
 
-/// Whether `len` bytes at `at` are 8-aligned and a whole number of `u64`s.
-fn whole_u64s(at: *const u8, len: usize) -> bool {
-    at.addr().is_multiple_of(8) && len.is_multiple_of(8)
+/// `bytes` as the little-endian `u32`s they hold, each one `lwu`: 4-aligned
+/// and a whole number of `u32`s, or a panic. Advised words that are not
+/// whole `u64`s, a run of `u32` counts or indices say, are read where they
+/// lie through it.
+pub fn as_u32s(bytes: &[u8]) -> &[u32] {
+    assert!(
+        whole(bytes.as_ptr(), bytes.len(), 4),
+        "guest_sdk::as_u32s: 4-aligned bytes, a whole number of u32s"
+    );
+    // SAFETY: 4-aligned and a whole number of `u32`s, every bit pattern is a
+    // `u32`, and the borrow is `bytes`' own.
+    unsafe { core::slice::from_raw_parts(bytes.as_ptr().cast(), bytes.len() / 4) }
+}
+
+/// Whether `len` bytes at `at` are `width`-aligned and a whole number of
+/// `width`s.
+fn whole(at: *const u8, len: usize, width: usize) -> bool {
+    at.addr().is_multiple_of(width) && len.is_multiple_of(width)
 }
 
 /// Exit with `code`. A nonzero status is a failed execution, with no proof.

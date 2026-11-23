@@ -110,7 +110,7 @@ fn main() {
 - `read_input` copies and may return short; `advice()` on a run given no advice is the fatal
   `OutOfBounds`.
 - `advice_mut()` lends the advice writable, once; `as_u64s` and `as_u64s_mut` view 8-aligned bytes
-  as `u64`s.
+  as `u64`s, and `as_u32s` 4-aligned bytes as `u32`s.
 - `commit` appends and exits 70 rather than overflow: commit a growing output as a digest.
 - **Only a run that exits 0 has a proof.** A panic (101), a journal overflow (70), an exhausted heap
   (71) or any `exit(n)` with `n ≠ 0` is refused by the prover, naming the status, and by the
@@ -177,7 +177,7 @@ let len = key.verify(&request, &advice[s..], b"app/v1"); // a signature of reque
   ([precompiles.md](spec/precompiles.md) §7.7), is Poseidon2 calls and `FALCON512_SAMPLE` ones. A
   standard Falcon-512 signature does not verify; `tools/falcon512` signs under this HashToPoint.
   Decoding computes K and HashToPoint's per-key prefix from K, once, ≈2.0K cycles; verifying a
-  signature of a 76-byte message under a 25-byte context continues from there, ≈2.1K.
+  signature of a 96-byte message under a 25-byte context continues from there, ≈2.1K.
   `key.key_digest()` is K and `key.address()` the key's address, K's first 32 bytes, which names
   an account; `falcon512::s1_norm` is the lattice check alone and `falcon512::sample` the sampler,
   for a guest with encodings of its own.
@@ -248,7 +248,7 @@ use guest_sdk::{mpt::{self, Trie}, poseidon2_compress};
 
 // After the records, each table's proof: its touched keys and their leaves, ascending.
 let mut users = Trie::open(32, user_leaves, advice, &mut at);
-let mut listings = Trie::open(4, listing_leaves, advice, &mut at);
+let mut listings = Trie::open(8, listing_leaves, advice, &mut at);
 assert!(poseidon2_compress(&users.root(), &listings.root()) == snapshot); // the validation
 // … the batch, settled in memory …
 users.set(&address, mpt::leaf(&address, &user_value)); // each changed record, once, by key

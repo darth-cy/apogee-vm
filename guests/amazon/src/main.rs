@@ -11,20 +11,21 @@
 //! of its bytes, key first; the snapshot is [`poseidon2_compress`] of the
 //! users root and the listings root. An address is the first 32 bytes of K,
 //! the key digest of a Falcon-512 public key (`docs/spec/precompiles.md`
-//! §7.7). Widths are fixed, as a leaf binds neither length; integers are
-//! little-endian except ids, which are big-endian.
+//! §7.7). Widths are fixed, as a leaf binds neither length; amounts are
+//! [`U256`]s, and integers are little-endian except a listing's id, which is
+//! big-endian as the listings' key, so the trie orders listings by id.
 //!
 //! ```text
-//! user     56 B  address, balance u128, nonce u64
-//! listing  64 B  id u32, item u32, seller address, price u128, stock u64
-//! request  88 B  buyer address, max price u128, quantity u64, nonce u64,
-//!                market u64, listing id u32; then the buyer's, listing's
-//!                and seller's places, u32 each
+//! user     72 B  address, balance U256, nonce u64
+//! listing  88 B  id u64, item u64, seller address, price U256, stock u64
+//! request  96 B  buyer address, max price U256, quantity u64, nonce u64,
+//!                market u64, listing id u64
+//! places   12 B  a request's buyer's, listing's and seller's, u32 each
 //! ```
 //!
-//! A buyer signs all but its request's places, the first 76 bytes, under the
-//! context `apogee/amazon/purchase/v2`. A place is a record's index among its
-//! table's advised records.
+//! A buyer signs its request, all 96 bytes, under the context
+//! `apogee/amazon/purchase/v3`. A place is a record's index among its table's
+//! advised records.
 //!
 //! **Public input**, exactly 72 bytes: the snapshot before, 8 `u64` lanes each
 //! below `p`, then the market, `u64`.
@@ -35,6 +36,7 @@
 //! user records     each user the batch reads, once, ascending by address
 //! listing records  each listing the batch reads, once, ascending by id
 //! requests         the n requests, in the batch's order
+//! places           each request's places, in the same order
 //! users proof      the users trie's batched proof of those addresses
 //! listings proof   the listings trie's, of those ids
 //! stream           per request: its buyer's key if this is the buyer's
@@ -45,20 +47,22 @@
 //! the SDK's advised forms, from `tools/falcon512`'s `key_advice` and
 //! `signature_advice`.
 //!
-//! **Journal**, 148 bytes: the snapshots before and after, as in the input,
-//! then the purchases (`u32`, n) and the volume (`u128`, the costs' sum).
+//! **Journal**, 164 bytes: the snapshots before and after, as in the input,
+//! then the purchases (`u32`, n) and the volume (`U256`, the costs' sum).
 //!
 //! **A request applies** if its market is the input's, its nonce is its
 //! buyer's and below `2^64 − 1`, its signature verifies under its buyer's key,
 //! `1 ≤ quantity ≤ stock`, `price ≤ max price`, the seller is not the buyer,
-//! and `cost = price · quantity` is below `2^128`, at most the buyer's balance,
-//! and takes neither the seller's balance nor the volume to `2^128`. It spends
+//! and `cost = price · quantity` is below `2^256`, at most the buyer's balance,
+//! and takes neither the seller's balance nor the volume to `2^256`. It spends
 //! the nonce, moves the cost from buyer to seller, takes the quantity from the
 //! stock and adds the cost to the volume. No key is inserted or removed.
 //!
 //! **Specialization.** The guest checks the key at each advised place instead
-//! of searching, edits the records in place in the writable advice, and writes
-//! each back to its trie by its place ([`Trie::set_opened`]).
+//! of searching, edits the records in place in the writable advice, every
+//! field an aligned `u64` or four, and writes each back to its trie by its
+//! place ([`Trie::set_opened`]). Past the counts, every record and request
+//! lies on 8 bytes and the places on a word.
 //!
 //! **Strictness.** An invalid request, or advice out of the order and forms
 //! above, ends the execution: a panic, or the decode call's refusal of a
@@ -75,50 +79,45 @@ use core::mem::{self, MaybeUninit};
 
 use guest_sdk::falcon512::{PublicKey, KEY_BYTES};
 use guest_sdk::mpt::{self, Trie};
-use guest_sdk::{poseidon2_compress, Digest};
+use guest_sdk::{poseidon2_compress, Digest, U256};
 
 guest_sdk::entry!(main);
 
 /// A user's record, in `u64`s: its address, its balance and its nonce.
-const USER: usize = 7;
-/// A listing's record, in `u64`s: its id and item, seller, price and stock.
-const LISTING: usize = 8;
-/// A request, in `u64`s: the bytes its buyer signs, then its three places.
-const REQUEST: usize = 11;
-/// The bytes of a request its buyer signs.
-const SIGNED: usize = 76;
-/// The advice's counts, a `u32` each: requests, users, listings.
-const COUNTS: usize = 12;
+const USER: usize = 9;
+/// A listing's record, in `u64`s: its id, item, seller, price and stock.
+const LISTING: usize = 11;
+/// A request, in `u64`s: the bytes its buyer signs.
+const REQUEST: usize = 12;
+/// A request's places, in `u32`s: its buyer's, listing's and seller's.
+const PLACES: usize = 3;
+/// The advice's counts, in `u32`s: requests, users, listings.
+const COUNTS: usize = 3;
 const INPUT: usize = 72;
-const JOURNAL: usize = 148;
+const JOURNAL: usize = 164;
 
 // The advice's bytes start 4 bytes in, past its length word, so past the
-// counts each record and request lies on 8 bytes; signed bytes and keys are
-// whole words.
-const _: () = assert!(
-    (4 + COUNTS).is_multiple_of(8)
-        && SIGNED.is_multiple_of(4)
-        && SIGNED <= 8 * REQUEST
-        && KEY_BYTES.is_multiple_of(4)
-);
+// counts each record and request lies on 8 bytes, and the places after them
+// on a word, as are keys.
+const _: () = assert!((4 + 4 * COUNTS).is_multiple_of(8) && KEY_BYTES.is_multiple_of(4));
 /// The context a buyer signs its requests under.
-const CONTEXT: &[u8] = b"apogee/amazon/purchase/v2";
+const CONTEXT: &[u8] = b"apogee/amazon/purchase/v3";
 
 /// A user's record where the advice holds it: the address in `u64`s 0 to 3,
-/// the balance in [`BALANCE`] and the one after, the nonce in [`NONCE`].
+/// the balance from [`BALANCE`], the nonce in [`NONCE`].
 type User = [u64; USER];
-/// A listing's: id (big-endian) and item in `u64` 0, the seller from
+/// A listing's: its id (big-endian) in `u64` 0, item 1, the seller from
 /// [`SELLER`], the price from [`PRICE`], the stock in [`STOCK`].
 type Listing = [u64; LISTING];
-/// A request's: buyer in `u64`s 0–3, max price 4–5, quantity 6, nonce 7,
-/// market 8, listing id then buyer's place 9, listing's then seller's place 10.
+/// A request's: buyer in `u64`s 0–3, max price 4–7, quantity 8, nonce 9,
+/// market 10, listing id (big-endian) 11.
 type Request = [u64; REQUEST];
 
 const BALANCE: usize = 4;
-const NONCE: usize = 6;
-const SELLER: usize = 1;
-const PRICE: usize = 5;
-const STOCK: usize = 7;
+const NONCE: usize = 8;
+const SELLER: usize = 2;
+const PRICE: usize = 6;
+const STOCK: usize = 10;
 
 /// A record's key, held apart for the trie to borrow while the records change.
 #[repr(align(8))]
@@ -167,27 +166,36 @@ struct Store<'r> {
     listings_marked: Vec<bool>,
     keys: Vec<Option<&'static PublicKey>>,
     slots: &'static mut [MaybeUninit<PublicKey>],
-    volume: u128,
+    volume: U256,
 }
 
 impl Store<'_> {
-    /// Applies request `r`, `message` its signed bytes, to the records in
-    /// place, marking each it writes; reads the buyer's key (at its first
-    /// request) and the signature from `stream` at `at`, moving `at` past.
-    /// Panics, or the decode call refuses, unless the request applies.
-    fn settle(&mut self, market: u64, r: &Request, message: &[u8], stream: &[u8], at: &mut usize) {
-        assert!(r[8] == market, "amazon: a request for another market");
-        let b = (r[9] >> 32) as usize;
+    /// Applies request `r`, its places `places`, to the records in place,
+    /// marking each it writes; reads the buyer's key (at its first request)
+    /// and the signature of `message`, `r`'s bytes, from `stream` at `at`,
+    /// moving `at` past. Panics, or the decode call refuses, unless the
+    /// request applies.
+    fn settle(
+        &mut self,
+        market: u64,
+        r: &Request,
+        places: &[u32; PLACES],
+        message: &[u8],
+        stream: &[u8],
+        at: &mut usize,
+    ) {
+        assert!(r[10] == market, "amazon: a request for another market");
+        let b = places[0] as usize;
         let buyer = &self.users[b];
         assert!(
             address_is(buyer, r),
             "amazon: a buyer's place names another user"
         );
         assert!(
-            r[7] == buyer[NONCE],
+            r[9] == buyer[NONCE],
             "amazon: a request not at its buyer's nonce"
         );
-        let next = r[7]
+        let next = r[9]
             .checked_add(1)
             .expect("amazon: a request at the last nonce");
         // The buyer's key, decoded into the next slot at its first request,
@@ -213,20 +221,20 @@ impl Store<'_> {
         self.users[b][NONCE] = next;
         self.users_marked[b] = true;
 
-        let l = r[10] as u32 as usize;
+        let l = places[1] as usize;
         let listing = &self.listings[l];
         assert!(
-            listing[0] as u32 == r[9] as u32,
+            listing[0] == r[11],
             "amazon: a listing's place names another listing"
         );
-        let (quantity, stock) = (r[6], listing[STOCK]);
+        let (quantity, stock) = (r[8], listing[STOCK]);
         assert!(
             quantity != 0 && quantity <= stock,
             "amazon: a quantity of 0 or more than the stock"
         );
-        let price = u128_at(listing, PRICE);
+        let price = u256_at(listing, PRICE);
         assert!(
-            price <= u128_at(r, 4),
+            price <= u256_at(r, 4),
             "amazon: a price above the max price"
         );
         assert!(
@@ -234,25 +242,25 @@ impl Store<'_> {
             "amazon: a purchase of the buyer's own listing"
         );
         let cost = price
-            .checked_mul(quantity as u128)
-            .expect("amazon: a cost past 2^128");
-        let balance = u128_at(&self.users[b], BALANCE);
+            .checked_mul(U256::from(quantity))
+            .expect("amazon: a cost past 2^256");
+        let balance = u256_at(&self.users[b], BALANCE);
         assert!(cost <= balance, "amazon: a cost above the buyer's balance");
-        let s = (r[10] >> 32) as usize;
+        let s = places[2] as usize;
         let seller = &self.users[s];
         assert!(
             address_is(seller, &listing[SELLER..]),
             "amazon: a seller's place names another user"
         );
-        let paid = u128_at(seller, BALANCE)
+        let paid = u256_at(seller, BALANCE)
             .checked_add(cost)
-            .expect("amazon: the seller's balance past 2^128");
+            .expect("amazon: the seller's balance past 2^256");
         let volume = self
             .volume
             .checked_add(cost)
-            .expect("amazon: the volume past 2^128");
-        set_u128(&mut self.users[b], BALANCE, balance - cost);
-        set_u128(&mut self.users[s], BALANCE, paid);
+            .expect("amazon: the volume past 2^256");
+        set_u256(&mut self.users[b], BALANCE, balance - cost);
+        set_u256(&mut self.users[s], BALANCE, paid);
         self.listings[l][STOCK] = stock - quantity;
         self.volume = volume;
         self.users_marked[s] = true;
@@ -283,20 +291,24 @@ fn main() {
     let before = digest_at(input, 0);
     let market = u64_at(input, 64);
 
-    // The advice: counts, records (edited in place), requests, proofs, stream.
-    let (counts, records) = guest_sdk::advice_mut().split_at_mut(COUNTS);
-    let n = u32_at(counts, 0) as usize;
-    let (users, records) = records.split_at_mut(8 * USER * u32_at(counts, 4) as usize);
-    let (listings, rest) = records.split_at_mut(8 * LISTING * u32_at(counts, 8) as usize);
+    // The advice: counts, records (edited in place), requests, places, proofs,
+    // stream.
+    let (counts, records) = guest_sdk::advice_mut().split_at_mut(4 * COUNTS);
+    let counts = guest_sdk::as_u32s(counts);
+    let n = counts[0] as usize;
+    let (users, records) = records.split_at_mut(8 * USER * counts[1] as usize);
+    let (listings, rest) = records.split_at_mut(8 * LISTING * counts[2] as usize);
     let rest: &'static [u8] = rest;
     let (requests, rest) = rest.split_at(8 * REQUEST * n);
+    let (places, rest) = rest.split_at(4 * PLACES * n);
     let users = guest_sdk::as_u64s_mut(users).as_chunks_mut::<USER>().0;
     let listings = guest_sdk::as_u64s_mut(listings)
         .as_chunks_mut::<LISTING>()
         .0;
     let signed = guest_sdk::as_u64s(requests).as_chunks::<REQUEST>().0;
+    let places = guest_sdk::as_u32s(places).as_chunks::<PLACES>().0;
 
-    // Each record's key: a user's address, a listing's id (its first 4 bytes).
+    // Each record's key: a user's address, a listing's id, its first 8 bytes.
     let mut user_keys = Vec::with_capacity(users.len());
     let mut i = 0;
     while i < users.len() {
@@ -306,12 +318,12 @@ fn main() {
     let mut listing_keys = Vec::with_capacity(listings.len());
     let mut i = 0;
     while i < listings.len() {
-        listing_keys.push(Key((listings[i][0] as u32).to_le_bytes()));
+        listing_keys.push(Key(listings[i][0].to_le_bytes()));
         i += 1;
     }
     let mut at = 0;
     let mut user_trie = Trie::open(32, Entries::new(&user_keys, users), rest, &mut at);
-    let mut listing_trie = Trie::open(4, Entries::new(&listing_keys, listings), rest, &mut at);
+    let mut listing_trie = Trie::open(8, Entries::new(&listing_keys, listings), rest, &mut at);
     assert!(
         poseidon2_compress(&user_trie.root(), &listing_trie.root()) == before,
         "amazon: the advised records do not open the snapshot"
@@ -325,12 +337,12 @@ fn main() {
         listings_marked: vec![false; l],
         keys: vec![None; u],
         slots: Box::leak(Box::new_uninit_slice(u)),
-        volume: 0,
+        volume: U256::ZERO,
     };
     let mut i = 0;
     while i < n {
-        let message = &requests[8 * REQUEST * i..][..SIGNED];
-        store.settle(market, &signed[i], message, rest, &mut at);
+        let message = &requests[8 * REQUEST * i..][..8 * REQUEST];
+        store.settle(market, &signed[i], &places[i], message, rest, &mut at);
         i += 1;
     }
     assert!(
@@ -359,17 +371,19 @@ fn address_is(a: &[u64], b: &[u64]) -> bool {
     a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3]
 }
 
-/// The `u128` in `r`'s `u64`s `i` and `i + 1`, the low first.
+/// The `U256` in `r`'s `u64`s `i` to `i + 3`, its limbs, the low first.
 #[inline(always)]
-fn u128_at(r: &[u64], i: usize) -> u128 {
-    (r[i] as u128) | ((r[i + 1] as u128) << 64)
+fn u256_at(r: &[u64], i: usize) -> U256 {
+    U256([r[i], r[i + 1], r[i + 2], r[i + 3]])
 }
 
-/// `v` into `r`'s `u64`s `i` and `i + 1`, the low first.
+/// `v`'s limbs into `r`'s `u64`s `i` to `i + 3`, the low first.
 #[inline(always)]
-fn set_u128(r: &mut [u64], i: usize, v: u128) {
-    r[i] = v as u64;
-    r[i + 1] = (v >> 64) as u64;
+fn set_u256(r: &mut [u64], i: usize, v: U256) {
+    r[i] = v.0[0];
+    r[i + 1] = v.0[1];
+    r[i + 2] = v.0[2];
+    r[i + 3] = v.0[3];
 }
 
 /// A user's address, its record's first four `u64`s, as its 32 bytes.
@@ -390,10 +404,6 @@ fn take<'a>(bytes: &'a [u8], at: &mut usize, n: usize) -> &'a [u8] {
         .expect("amazon: the advice ended early");
     *at += n;
     taken
-}
-
-fn u32_at(b: &[u8], at: usize) -> u32 {
-    u32::from_le_bytes(b[at..at + 4].try_into().expect("four bytes"))
 }
 
 fn u64_at(b: &[u8], at: usize) -> u64 {

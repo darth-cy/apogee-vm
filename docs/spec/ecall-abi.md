@@ -150,6 +150,7 @@ the rest is loads and stores.
 | `advice()` | the advice payload, its length clamped to the region; bound by nothing, so the guest checks it |
 | `advice_mut()` | the same bytes, writable, the region's one borrow: a second call, or one beside `advice()`, panics |
 | `as_u64s(bytes)`, `as_u64s_mut(bytes)` | 8-aligned bytes, a whole number of `u64`s, as the `u64`s they hold, each one `ld` or `sd` where it lies; any other bytes panic |
+| `as_u32s(bytes)` | 4-aligned bytes, a whole number of `u32`s, as the `u32`s they hold, each one `lwu` where it lies; any other bytes panic |
 | `exit(code)` | `EXIT`; publishes nothing beyond what was committed |
 | allocator | bumps up from `__heap_start`, never frees; exits 71 when a block would end above `__stack_top − STACK_RESERVE` or the live `sp` |
 | panic handler | exits 101 and writes nothing: a panicking guest has no proof (§2) |
