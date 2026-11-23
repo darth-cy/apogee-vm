@@ -67,7 +67,7 @@ The guests in the tree are worked examples:
 | `amm`, `orderbook` | 128- and 256-bit integers with no heap; `BTreeMap`, sorting, a sorted order from advice checked |
 | `amazon` | a database of two tables a proof follows by digest (§3.3); requests signed with Falcon-512 (§3.1) |
 | `atomics`, `opcodes`, `rvc-dense` | the A extension from `core::sync::atomic`; every RV64IMAC instruction; RVC expansion |
-| `addsub`, `control`, `alu`, `mem`, `shards` | assembly with its own `_start` and no SDK, exiting with its result; `shards` fills two `2^20` shards |
+| `addsub`, `control`, `alu`, `mem`, `shards` | assembly with its own `_start` and no SDK, checking its own result and exiting 0; `shards` fills two `2^20` shards |
 | `cpp-primes` | a C++ guest, built by CMake against the C/C++ SDK (§11) |
 
 ### 2.1 Run the same logic on the host
@@ -94,7 +94,7 @@ fn main() {
     let want = guest_sdk::public_input(); // 32 bytes: a digest of the advice
     let data = guest_sdk::advice(); // the prover's bytes, bound by nothing
     if digest(data).as_slice() != want {
-        guest_sdk::exit(1); // refused before anything derived from it is committed
+        guest_sdk::exit(1); // refused: a run that exits nonzero has no proof
     }
     let sum = data.iter().fold(0u32, |s, b| s.wrapping_add(u32::from(*b)));
     guest_sdk::commit(&sum.to_le_bytes()); // the journal: what the proof publishes
@@ -104,14 +104,18 @@ fn main() {
 | region | accessors | holds | bound by the proof |
 | --- | --- | --- | --- |
 | public input | `public_input()`, `read_input(buf)` | the statement's bytes, at most 16,380 | yes |
-| advice | `advice()` | the prover's bytes, up to 2 GiB | no |
+| advice | `advice()`, `advice_mut()` | the prover's bytes, up to 2 GiB, writable | no |
 | journal | `commit(bytes)`, `journal()` | what the guest appended, at most 16,380 | its final contents |
 
 - `read_input` copies and may return short; `advice()` on a run given no advice is the fatal
   `OutOfBounds`.
+- `advice_mut()` lends the advice writable, once; `as_u64s` and `as_u64s_mut` view 8-aligned bytes
+  as `u64`s, and `as_u32s` 4-aligned bytes as `u32`s.
 - `commit` appends and exits 70 rather than overflow: commit a growing output as a digest.
-- Nothing is published at exit: a run that panics or exits nonzero has a verifying proof of what it
-  committed, so a verifier reads the exit status.
+- **Only a run that exits 0 has a proof.** A panic (101), a journal overflow (70), an exhausted heap
+  (71) or any `exit(n)` with `n ≠ 0` is refused by the prover, naming the status, and by the
+  verifier ([proof.md](spec/proof.md) §6): failing is how a guest refuses, and a verifier never
+  reads a status.
 - Checking the advice is the guest's job: committing a function of unchecked advice publishes what
   the prover chose ([public-values.md](spec/public-values.md) §6).
 - **Every failure ends the run.** Whatever makes the input or the advice malformed, a record that
@@ -163,7 +167,8 @@ let len = key.verify(&request, &advice[s..], b"app/v1"); // a signature of reque
 - `falcon512::PublicKey::decode(h)` reads a Falcon-512 public key from its advised form, `h`'s 896
   bytes, and `key.verify(msg, sig, context)` checks that `sig` begins with a signature of `msg`
   under it and the application's `context`, at most 255 bytes, and returns the signature's length,
-  so a guest reading signatures in turn steps past each. The advised forms are
+  so a guest reading signatures in turn steps past each; `PublicKey::decode_into(h, slot)` decodes
+  into a slot of the caller's, an arena of keys say, with no copy. The advised forms are
   [precompiles.md](spec/precompiles.md) §5's, which `tools/falcon512`'s `key_advice` and
   `signature_advice` make from v1.2's 897- and 666-byte encodings. Neither call answers a verdict:
   a malformed key or signature, or one that does not verify, ends the run. Decoding is the
@@ -172,7 +177,7 @@ let len = key.verify(&request, &advice[s..], b"app/v1"); // a signature of reque
   ([precompiles.md](spec/precompiles.md) §7.7), is Poseidon2 calls and `FALCON512_SAMPLE` ones. A
   standard Falcon-512 signature does not verify; `tools/falcon512` signs under this HashToPoint.
   Decoding computes K and HashToPoint's per-key prefix from K, once, ≈2.0K cycles; verifying a
-  signature of a 92-byte message under a 25-byte context continues from there, ≈2.1K.
+  signature of a 96-byte message under a 25-byte context continues from there, ≈2.1K.
   `key.key_digest()` is K and `key.address()` the key's address, K's first 32 bytes, which names
   an account; `falcon512::s1_norm` is the lattice check alone and `falcon512::sample` the sampler,
   for a guest with encodings of its own.
@@ -189,12 +194,15 @@ Cutting a guest's cycles has more than one strategy, and two are in use:
 
 - **A precompile module.** The VM proves a hot operation in a circuit of its own, which the guest
   calls instead of running it (§3.1).
-- **The input's format.** Whoever builds the input, a sequencer say, can shape it so the guest does
+- **The input's format.** Whoever builds the input, a backend say, can shape it so the guest does
   less, and the guest presumes that shape rather than making it: it asserts the shape and never
   sorts. `guests/amazon`'s advice holds each record its batch reads once, ascending by key, so its
   batch runs in memory and each table costs one validation and one finalization however its
-  requests interleave (§3.3). The requests' order is the sequencer's policy and becomes part of the
+  requests interleave (§3.3). The requests' order is the builder's policy and becomes part of the
   batch: the guest proves the order it is given, and another order can be another result.
+
+  The builder also knows where each record lies, so it says so and the guest checks instead of
+  searching; records laid out as whole `u64`s are read and edited where they lie.
 
 ### 3.3 A database's state
 
@@ -215,7 +223,7 @@ keeps it the same way. This is the common convention for an on-chain database.
   publishes its root. A statement carries the snapshot before its batch in the public input and the
   snapshot after it in the journal.
 - **Actions stay off-chain.** Proving is what costs, so action records are not in the snapshot. They
-  are the batch itself, the input a sequencer orders (§3.2), and once proved they are kept in an
+  are the batch itself, the input a backend orders (§3.2), and once proved they are kept in an
   ordinary database for data availability: whoever holds them and the snapshot before a batch can
   rebuild the state after it.
 - **One validation and one finalization a table.** A batch's advice holds the records it touches,
@@ -226,11 +234,13 @@ keeps it the same way. This is the common convention for an on-chain database.
   record at a time, and takes its `root()` again: one finalization a table, however many records
   changed. A batch that inserts and removes inserts first: an insert's walk must reach a leaf the
   proof opened, and a remove can lift a node the proof did not open into that walk.
+- **A record edited where it lies.** With writable advice a guest edits records in place and sets
+  each changed one back by its opened place (`mpt::record_leaf`, `Trie::set_opened`), with no walk.
 - **The proof is the prover's.** Its node data comes from the prover's own data-availability store
   of the tables, as advice, never from a request or its caller. A request carries no tree
   information: it names a record by its key alone.
-- **The sequencer orders; the guest presumes it and asserts it.** The records are ascending by key,
-  which `Trie::open` asserts, and the requests come in the sequencer's order, which the guest
+- **The builder orders; the guest presumes it and asserts it.** The records are ascending by key,
+  which `Trie::open` asserts, and the requests come in the builder's order, which the guest
   settles as given and never sorts (§3.2).
 
 ```rust
@@ -238,10 +248,11 @@ use guest_sdk::{mpt::{self, Trie}, poseidon2_compress};
 
 // After the records, each table's proof: its touched keys and their leaves, ascending.
 let mut users = Trie::open(32, user_leaves, advice, &mut at);
-let mut listings = Trie::open(4, listing_leaves, advice, &mut at);
+let mut listings = Trie::open(8, listing_leaves, advice, &mut at);
 assert!(poseidon2_compress(&users.root(), &listings.root()) == snapshot); // the validation
 // … the batch, settled in memory …
-users.set(&address, mpt::leaf(&address, &user_value)); // each changed record, once
+users.set(&address, mpt::leaf(&address, &user_value)); // each changed record, once, by key
+listings.set_opened(i, mpt::record_leaf(&listing_records[i])); // or by its place, where it lies
 let after = poseidon2_compress(&users.root(), &listings.root()); // the finalization
 ```
 
@@ -249,28 +260,13 @@ let after = poseidon2_compress(&users.root(), &listings.root()); // the finaliza
 and `apogee_mpt_root` a table's validation, its sorted keys, their leaves and its proof to its
 root; a batch's edits are Rust's alone ([ecall-abi.md](spec/ecall-abi.md) §7).
 
-`guests/amazon` is the two-table case. Its users are keyed by address, 32 bytes, each value the
-user's balance and nonce, 40 bytes; its listings by `id.to_be_bytes()`, 4 bytes, each value the
-listing's seller, item, price and stock, 80 bytes; and its snapshot is
-`compress(users_root, listings_root)`. Its actions are purchases, each a 92-byte request its buyer
-signed with Falcon-512 (§3.1) under the context `apogee/amazon/purchase/v1`, settled against a
-working set in memory, so a seller may spend later in a batch what it earned earlier in it. A user
-is named by its key's address: a request names its buyer by it and a listing its seller, and the
-key advised at its first signature must have that address, computed from the same bytes the user's
-signatures are verified under. A request names its listing by id, and carries no tree information.
-The requests and their signatures are advice the prover chooses (§3), and the public input is the
-snapshot and the market alone: the statement is that signed requests, each its buyer's at that
-buyer's nonce, take the snapshot to the next. So a proof does not say which requests a batch
-settled, only that each was signed and valid for this store and snapshot. Every request in a batch
-applies: one for another market or not at its buyer's nonce, one whose signature does not verify
-under its buyer's key, one whose buyer or listing the advice does not hold, or one its listing or
-the balances cannot settle is a malformed batch, a panic. The sequencer checks the requests and
-their signatures and drops each one that cannot apply before it batches them, as a rollup's block
-producer does. The advice holds every record the batch reads and no other, each once, the users
-ascending by address and the listings by id; then the users' proof and the listings' proof; then
-the requests, each followed by its user's key, only at the user's first, and its signature, in the
-SDK's compact forms, each a whole number of words read in place. A byte past the last one read is a
-panic.
+`guests/amazon` is the two-table case: users keyed by address, listings by id, its snapshot the
+compression of the two roots. Its actions are purchases, each signed by its buyer with Falcon-512
+(§3.1). The public input is the snapshot and the market; the requests, keys and signatures are
+advice, and every request applies or the batch panics, so the backend that builds the batch leaves
+out any request that cannot apply. It is specialized on its structure: each request carries its
+records' places, checked instead of searched, and records are edited where they lie and written back
+by place. Its layout is documented in its source.
 
 ## 4. Build it
 
@@ -414,7 +410,8 @@ height and every byte of the code and the image. Derivation refuses, naming the 
 
 ## 9. When it goes wrong
 
-**An exit status the SDK chose** ([ecall-abi.md](spec/ecall-abi.md) §6):
+**An exit status the SDK chose** ([ecall-abi.md](spec/ecall-abi.md) §6), which `host::prove` refuses
+by name before proving anything: no status but 0 has a proof.
 
 | status | cause, and what to do |
 | --- | --- |
@@ -447,14 +444,13 @@ let setup = host::setup(&elf, &params).expect("registers");
 let proven = host::prove(&setup, &io, host::DEFAULT_MAX_IN_FLIGHT).expect("proves"); // 8 shards in flight
 host::verify(&setup.vk, &proven.block).expect("verifies");
 assert_eq!(setup.vk.identity.to_bytes(), registered); // from your own channel, never the proof
-assert_eq!(proven.exit_code, 0);
 ```
 
-The block's statement carries the public input, the journal and the exit status. A family with
-rows costs at least a whole shard of its height, so a short run wastes less at smaller heights:
-`2^20` is an instruction family's floor
-([lookup.md](spec/lookup.md) §3), and each choice of heights is its own identity. A shard's cost is
-[architecture.md](architecture.md) §7.
+The block's statement carries the public input, the journal and the exit status, which is 0:
+`host::prove` refuses any other before proving anything, and `host::verify` refuses its statement
+(§9). A family with rows costs at least a whole shard of its height, so a short run wastes less at
+smaller heights: `2^20` is an instruction family's floor ([lookup.md](spec/lookup.md) §3), and each
+choice of heights is its own identity. A shard's cost is [architecture.md](architecture.md) §7.
 
 ## 11. A guest in C or C++
 

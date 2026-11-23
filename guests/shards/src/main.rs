@@ -36,12 +36,14 @@
 //! # Input, advice and the journal
 //!
 //! Unused. The guest reads nothing and commits nothing: `EXIT` is its only
-//! ecall, and its result is the status.
+//! ecall, and its status is its result, checked.
 //!
 //! # The result
 //!
-//! The exit status, `a0`: 2, the number of checks — the accumulator reached
-//! `64 * 16384 = 0x100000` and the counter reached 0 — or 1 from `fail`.
+//! The exit status, `a0`: `s0 − 2`, the checks counted — the accumulator
+//! reached `64 * 16384 = 0x100000` and the counter reached 0 — less the 2
+//! there are, so 0 when both passed, the only status with a proof
+//! (`docs/spec/proof.md` §6); 1 from `fail`.
 
 use core::arch::global_asm;
 
@@ -67,7 +69,7 @@ global_asm!(
     // The counter fell to exactly 0.
     "  bne   t0, x0, fail",
     "  addi  s0, s0, 1",
-    "  addi  a0, s0, 0",
+    "  addi  a0, s0, -2", // the checks counted less the 2 there are
     "  addi  a7, x0, 93", // EXIT
     "  ecall",
     "fail:",

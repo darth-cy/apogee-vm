@@ -33,6 +33,11 @@ use crate::wire::{Read, Reader, Writer};
 /// the variant; the payload says which check of it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VerifyError {
+    /// The statement's exit status is not 0, step 0: only an execution that
+    /// exits 0 has a proof. Any other status — a panic's 101, the SDK's 70
+    /// and 71, any `exit(n)` — is a failed execution, refused before anything
+    /// else the statement or a proof carries is read.
+    NonzeroExit { status: u32 },
     /// The statement is not one the key describes, or the proof was made for
     /// another statement.
     Statement(&'static str),
@@ -53,6 +58,12 @@ pub enum VerifyError {
 impl fmt::Display for VerifyError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            // Read as an `i32`, as the guest passed it: `exit(-1)` is -1.
+            VerifyError::NonzeroExit { status } => write!(
+                f,
+                "exit status: the guest exited {}, and only an execution that exits 0 has a proof",
+                *status as i32
+            ),
             VerifyError::Statement(why) => write!(f, "statement: {why}"),
             VerifyError::Malformed(why) => write!(f, "malformed proof: {why}"),
             VerifyError::Constraint { layer } => {
@@ -77,10 +88,11 @@ impl fmt::Display for VerifyError {
 // ---------------------------------------------------------------------------
 
 /// What a statement is about, `docs/spec/proof.md` §1.1: the two public
-/// payloads and the exit status the outside world asserts, then the record the
-/// prover's global phase fixed — every shard's memory commitment and roots, the
-/// boundary, the counts and the window list. Every shard of a statement is
-/// verified against one `PublicInputs`.
+/// payloads and the exit status the outside world asserts, 0 being the only
+/// one a verifier accepts, then the record the prover's global phase fixed —
+/// every shard's memory commitment and roots, the boundary, the counts and the
+/// window list. Every shard of a statement is verified against one
+/// `PublicInputs`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicInputs {
     pub input: Vec<u8>,

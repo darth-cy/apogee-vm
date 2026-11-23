@@ -95,7 +95,6 @@ The log's verdicts:
 | marker | |
 | --- | --- |
 | `self_check FAILED` | a gate fails on the prover's own values |
-| `ABORTED` | a nonzero exit status: the block proves a failed execution |
 | `OUTPUT-LAYOUT-BREAK` | outputs other than 2 + 2·channels: `reduce_shard` and `channel_cones` index channel roots from opposite ends |
 | `ALL ZERO` | a top-layer column all zero: a root of 0 |
 
@@ -103,7 +102,7 @@ The log's verdicts:
 $ APOGEE_DEBUG=detail <a debug-info run> 2>&1 | tee run.log
 $ grep -c 'begin h=' run.log; grep -c 'gkr done' run.log    # unequal: a shard died
 $ grep 'begin h=' run.log | tail -1
-$ grep -E 'FAIL|ABORTED' run.log
+$ grep FAIL run.log
 $ grep -E 'LAYOUT-BREAK|ALL ZERO' run.log
 ```
 

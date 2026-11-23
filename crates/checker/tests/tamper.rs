@@ -343,7 +343,8 @@ fn the_frame_and_halting_targets_are_refused() {
     let archive = common::archive(&setup.program);
     let h = TamperHarness::new(&setup, &archive);
 
-    // A padding row, cycle 40, rewriting x10 from 42 to 43.
+    // A padding row, cycle 40, rewriting x10 from its final value, the exit
+    // status, to 43.
     let (public, _) = h.honest();
     let x10_ts = public.boundary.reg_ts[10];
     let forgery = vec![
@@ -351,7 +352,7 @@ fn the_frame_and_halting_targets_are_refused() {
         cell(ADD, "rd_mask", 100, Fp::ONE),
         cell(ADD, "rd_addr", 100, f(10)),
         cell(ADD, "rd_read_ts", 100, f(x10_ts)),
-        cell(ADD, "rd_read_value", 100, f(42)),
+        cell(ADD, "rd_read_value", 100, f(u64::from(common::RESULT))),
         cell(ADD, "rd_write_value", 100, f(43)),
         cell(ADD, "rd_inv", 100, f(10).inverse().unwrap()),
         cell(ADD, "rd_selected", 100, f(43)),

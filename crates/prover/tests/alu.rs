@@ -58,7 +58,7 @@ fn proof_bytes(a: &constraints::CircuitArtifact, p: &ShardProof) -> usize {
 
 /// The guest decodes into four execution families — add/sub, jump/branch/slt,
 /// bitwise and mul/div — and the window families; its trace self-checks
-/// and exits with the number of checks it ran; the streaming prover proves one
+/// and exits 0, every one of its checks run; the streaming prover proves one
 /// shard of each execution family, of `INIT_TEARDOWN` and of each public
 /// window, seven in all, `ZERO_WINDOWS` and `ADVICE_WINDOWS` proving none;
 /// `verify_shard` accepts every one against the one statement; and every proof

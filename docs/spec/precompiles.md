@@ -209,14 +209,18 @@ conditions that single out the quotient. 226 committed columns, 239 obligations 
 | `U256::mul_div_rem`, `mul_div`, `div_rem` | the call; `None` where the caller's precondition fails, checked first: `d = 0`, or the high half of `a·b`, skipped when both are below `2^128`, at or above `d` |
 | `mpt_eval(ops: &[u32]) -> Digest` | the `MPT_ROOT` call over the program of `ops.len() / 2` ops where they lie, its frame on the caller's stack: the program's value (§6.3); panics first unless the ops are 1 to `2^20` whole ones |
 | `mpt::leaf(key, value) -> Digest` | a trie's leaf (§6.1), one `POSEIDON2` call; panics past 112 bytes |
+| `mpt::record_leaf(&[u64; W]) -> Digest` | `leaf` of a record's `8·W` bytes, its key then its value, packed from its `u64`s where they lie with no copy; `W` above 14, 112 bytes, does not compile |
 | `mpt::Trie::open(key_len, entries, advice: &[u8], at: &mut usize) -> Trie` | the pruned trie of a batch's touched keys, `entries` their `(key, leaf)` pairs ascending, from the proof at `advice[at..]`, which `at` moves past; panics on any proof that is not one (§6.2) |
 | `Trie::root(&self) -> Digest` | zero for the empty table, otherwise `mpt_eval` over the trie's post-order program, the proof's digests read in place: one call while it fits a shard, 4,096 ops, and past that split at its root branch (§6.3) |
+| `Trie::reach(&self, key) -> Option<&[u8]>` | the key of the opened leaf the walk on `key`'s bits reaches, none in the empty table: another key's proves `key` absent. Panics on a key not the table's length and where the walk meets a node not opened |
+| `Trie::set_opened(i, leaf)` | the leaf of the `i`-th key `open` was given, node `i`, with no walk: a record held in the order it was opened, set back by its place. Panics unless `i` is below the count opened, and after any `remove`, which takes a leaf out of the trie |
 | `Trie::set(key, leaf)`, `insert(key, leaf)`, `remove(key)` | an opened key's new leaf; a key the table lacks, under a branch at its crit bit with the opened leaf its walk reaches, spliced above the first node deeper than it; an opened key, its parent's other child taking the parent's place. Each walks from the root on the key's bits and panics where the walk meets a node not opened, so a batch inserts before it removes |
 | `falcon512::Poly` | 512 `u16` coefficients, word-aligned, coefficient `i` at index `i`: any 512 are a polynomial, read mod `q` |
 | `falcon512::s1_norm(&Poly, &Poly, &Poly) -> u64` | the call over `h`, `s2` and `c` where they lie, its frame five words on the caller's stack: `‖s1‖²`, below `2^35` (§7); panics first unless the three arrays are apart |
 | `falcon512::sample(&mut [u64; 8])` | the `FALCON512_SAMPLE` call over the lanes in place, lane `l` then coefficients `4l` to `4l + 3` of the 32 `u16` the lanes' bytes are (§9); panics first unless every lane is below `T` (§7.7) |
 | `falcon512::Q`, `SQBETA`, `KEY_BYTES`, `SALT_BYTES`, `MAX_SIGNATURE_BYTES` | `q = 12289`; `⌊β²⌋ = 34,034,726`, the most `‖s1‖² + ‖s2‖²` a signature verifies at; 896, 40 and 668: a key's advised form, a salt, and the longest signature's advised form |
 | `falcon512::PublicKey::decode(h: &[u8]) -> PublicKey` | the key whose advised form is `h`: exactly 896 bytes, word-aligned, or a panic; the `FALCON512_DECODE` call reads it in place into the key's `h`, refusing a coefficient at or above `q` (§8). Then K over the key's v1.2 encoding `0x09 ‖ h` and HashToPoint's per-key prefix from K (§7.7), both kept with `h` |
+| `falcon512::PublicKey::decode_into(h, &mut MaybeUninit<PublicKey>) -> &mut PublicKey` | `decode` into a slot of the caller's, which it returns written: the call writes `h` there and K and the prefix are written beside it, so a key kept in an arena of keys is never copied |
 | `falcon512::PublicKey::key_digest(&self) -> &Digest`, `falcon512::PublicKey::address(&self) -> [u8; 32]` | the key's K and address, computed once by `decode` |
 | `falcon512::PublicKey::verify(&self, msg: &[u8], sig: &[u8], context: &[u8]) -> usize` | the length of the signature `sig` begins with, `40 + 4·⌈end/32⌉` bytes, where it signs `msg` under the key and `context`; otherwise the execution ends. The call decodes `s2` from `sig[40..]`, refusing every stream that is not one (§8); a `context` over 255 bytes, a `sig` not word-aligned, a length past `sig`, and `s1_norm(h, s2, c) + ‖s2‖² > SQBETA` panic, `c` HashToPoint (§7.7) of K, the salt, `context` and `msg`, from the key's prefix. `sig` may continue past the signature |
 
@@ -719,7 +723,7 @@ above `T`, so it never sees one the guest should have skipped, and no lane is re
 **The per-key prefix.** K is 141 lanes, 17 permutations absorbing and one to squeeze, and
 `(1, SIGNATURE_DOMAIN)` and `(2, K)` are 7 + 12 = 19 lanes, 2 permutations, leaving three rate
 lanes written. Every signature under the key continues from that state, so `PublicKey::decode`
-computes K and the prefix once. A 92-byte message under a 25-byte context is then 30 lanes, 4
+computes K and the prefix once. A 96-byte message under a 25-byte context is then 30 lanes, 4
 permutations, and the squeeze 16, one more when a lane among the first 128 is skipped, with
 probability `1 − (1 − 1.0177·10^−3)^128 ≈ 12.2%`.
 

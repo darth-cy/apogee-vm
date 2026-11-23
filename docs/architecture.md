@@ -31,9 +31,12 @@ windows, the final registers and pc, and every shard's memory commitment and roo
 
 A proof that verifies is meant to establish that the program of that identity, started at its entry
 pc over its image, with the public input in its input window and some advice of the prover's
-choosing, executes instruction by instruction to `EXIT` with that status, having written that
-journal. Nothing is claimed of the advice, and nothing is hidden: no proof is
-blinded.
+choosing, executes instruction by instruction to `EXIT` with status 0, having written that
+journal: no other status has a proof ([proof.md](spec/proof.md) §6). Nothing is claimed of the
+advice, and nothing is hidden: no proof is blinded.
+
+How the core coordinates with the Apogee Deployment Suite and apogee-host is canonical in
+[coordination/](../coordination/README.md).
 
 ## 2. From a binary to a proof
 

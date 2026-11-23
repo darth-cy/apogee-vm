@@ -1,7 +1,7 @@
 //! What `reduce_shard` decides before and around a proof,
 //! `docs/spec/proof.md` §2 and §6: the global transcript's messages in
-//! their order, and every `Statement` and `Malformed` refusal — each
-//! the class its step names, none a panic. The proofs themselves are
+//! their order, and every `NonzeroExit`, `Statement` and `Malformed` refusal —
+//! each the class its step names, none a panic. The proofs themselves are
 //! `crates/prover/tests` and `crates/checker/tests/tamper.rs`.
 
 mod common;
@@ -67,8 +67,8 @@ fn the_global_transcript_is_the_frozen_order() {
     );
 
     // Every statement field moves the digest but two: the roots, computed
-    // after it and bound by each shard's own proof, and the exit status, bound
-    // through x10's final value at step 10.
+    // after it and bound by each shard's own proof, and the exit status, held
+    // to 0 at step 0 and to x10's final value at step 10b.
     let digest = g.digest;
     let moved = |edit: fn(&mut verifier_core::PublicInputs)| {
         let mut p = statement();
@@ -472,19 +472,46 @@ fn garbage_is_refused_and_never_panics() {
     }
 }
 
+/// **Step 0 refuses a statement whose exit status is not 0, before anything
+/// else**, `docs/spec/proof.md` §6: `NonzeroExit`, from `derive_global_phase`
+/// and so from `reduce_shard`, whatever else is wrong. Each statement here is
+/// a consistent run that exited `status`, `x10`'s final value the status too,
+/// and is refused at step 0 against a proof step 5 would refuse — its digest
+/// the honest statement's — and again with step 1 broken as well.
+#[test]
+fn a_statement_whose_exit_status_is_not_0_is_refused_first() {
+    let key = vk();
+    let proof = shell(&key, &statement());
+    for status in [42, 101, 70, 71, 1, u32::MAX] {
+        let mut p = statement();
+        p.exit_status = status;
+        p.boundary = common::finals(status);
+        let refused = VerifyError::NonzeroExit { status };
+        assert_eq!(derive_global_phase(&key, &p), Err(refused), "{status}");
+        assert_eq!(refusal(&key, &proof, &p), refused, "{status}");
+        p.shard_counts.pop();
+        assert_eq!(refusal(&key, &proof, &p), refused, "{status}");
+    }
+    assert!(
+        derive_global_phase(&key, &statement()).is_ok(),
+        "0 passes step 0"
+    );
+}
+
 /// **Step 10b reads the statement and the key, and no `ShardProof` at all**,
 /// `docs/spec/proof.md` §6: it is `verify_global_memory`, and a block
 /// runs it once however many shards it has. Its own three checks run in order
 /// — the boundary's range, then the exit status, then the product — so a
-/// statement broken two ways answers with the first.
+/// statement broken two ways answers with the first. The status itself is 0,
+/// step 0's, so what breaks the second check is `x10`'s final value.
 #[test]
 fn the_statement_half_of_the_memory_argument_is_one_check_for_a_statement() {
     let key = vk();
     let answer = |edit: fn(&mut verifier_core::PublicInputs)| {
         let mut p = statement();
         edit(&mut p);
-        // Every edit but the roots and the exit status moves the digest, so
-        // each statement is judged against challenges of its own.
+        // Every edit but the roots moves the digest, so each statement is
+        // judged against challenges of its own.
         let g = derive_global_phase(&key, &p).expect("a statement the key describes");
         verify_global_memory(&key, &g, &p)
     };
@@ -493,7 +520,7 @@ fn the_statement_half_of_the_memory_argument_is_one_check_for_a_statement() {
     assert_eq!(answer(|p| p.boundary.reg_ts[5] = 1 << 38), Err(late));
     assert_eq!(answer(|p| p.boundary.pc_ts = 1 << 38), Err(late));
     assert_eq!(
-        answer(|p| p.exit_status += 1),
+        answer(|p| p.boundary.reg_values[9] += 1),
         Err(memory("x10's final low word is not the exit status"))
     );
     // Both, and the range refusal is the one returned: 10b checks the range
@@ -501,7 +528,7 @@ fn the_statement_half_of_the_memory_argument_is_one_check_for_a_statement() {
     assert_eq!(
         answer(|p| {
             p.boundary.pc_ts = 1 << 38;
-            p.exit_status += 1;
+            p.boundary.reg_values[9] += 1;
         }),
         Err(late)
     );

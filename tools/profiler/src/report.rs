@@ -148,9 +148,9 @@ impl ProfileReport {
             "exit status",
             match self.exit_code {
                 0 => "0".to_string(),
-                // The guest SDK's own statuses, named: an execution that ran and
-                // could not *publish* is a complete profile, and reading `70` as
-                // a failed execution would be wrong.
+                // The guest SDK's own statuses, named. Each is a failed
+                // execution, with no proof, but one that ran to its exit: its
+                // profile is complete, every cycle counted.
                 70 => "70  the journal does not fit its window; every cycle below \
                        was run"
                     .to_string(),

@@ -145,7 +145,8 @@ the family buffers, the `MemoryEventLog` and the `CycleProfile` too, and `emulat
 the prover's pull-based tracer, hands over a family's buffer as a `ShardChunk` the moment it reaches
 its height ([streaming.md](streaming.md) §2). The three differ only in what records a cycle, and a
 run is a pure function of `(image, io)`, with no clock, randomness or threads, so two runs cut the
-same shards. A nonzero exit status is an execution, not an error.
+same shards. A nonzero exit status is an execution, not an executor error: the emulator reports it,
+and the prover and the verifier refuse it ([proof.md](proof.md) §6, step 0).
 
 Four points differ from a hosted RV64IMAC. `sc` always succeeds, storing and writing 0, as the
 circuits do ([memory-ops.md](memory-ops.md)). A misaligned halfword, word or doubleword access is

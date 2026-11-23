@@ -38,11 +38,14 @@ Each pass drives a fresh `emulator::StreamingRun`, which hands over a family's b
 
 **Pass 1** runs the execution to its end, the worker that claims a filled shard running its
 family's fill and committing the `M` columns among it (`prover::memory_commitment_of`), no
-multiplicities built. At exit it derives the window list, shard counts and boundary from the final
-state (§3), asserts the cut equals `trace::plan_shards`, commits the window families' shards over
-the final state in batches of at most `max_in_flight`, puts every commitment in statement order and
-runs G1–G9 ([proof.md](proof.md) §2). A commitment reads no transcript, so only its place in the
-absorbed order matters, not when it was computed.
+multiplicities built. At exit it refuses an execution whose status is not 0,
+`ProverError::NonzeroExit` ([proof.md](proof.md) §6, step 0): the status exists only there, so the
+filled shards' commitments are spent and nothing else is, and `host::prove` runs the guest once
+untraced first to spend none. Otherwise it derives the window list, shard counts and boundary from
+the final state (§3), asserts the cut equals `trace::plan_shards`, commits the window families'
+shards over the final state in batches of at most `max_in_flight`, puts every commitment in
+statement order and runs G1–G9 ([proof.md](proof.md) §2). A commitment reads no transcript, so
+only its place in the absorbed order matters, not when it was computed.
 
 **Pass 2** re-executes. The emulator is a pure function of `(image, io)`, with no clock,
 randomness or threads, so it cuts the same shards; pass 2 asserts that its `CycleProfile`,

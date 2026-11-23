@@ -35,7 +35,9 @@
 //! The guest's execution is not timed separately here. It does not need
 //! to be: `StreamingReport`'s `pass1_execute_ns` and `pass2_execute_ns` are
 //! measured inside the prover, around the executor itself, which is a tighter
-//! interval than this function could take.
+//! interval than this function could take. [`prove`]'s own untraced run, the
+//! exit-status check before the prover starts, is in `Proven::wall_nanos`
+//! alone.
 //!
 //! # The proof archive
 //!
@@ -53,7 +55,7 @@ use std::time::Instant;
 use emulator::GuestIo;
 use loader::load_elf;
 use program::{decode_program, ProgramParams};
-use prover::{Program, ProverSetup, StreamingReport};
+use prover::{Program, ProverError, ProverSetup, StreamingReport};
 use verifier_core::{BlockProof, VerifyError, VerifyingKey};
 
 /// Everything one proving run produced, beside the proof itself.
@@ -67,13 +69,14 @@ pub struct Proven {
     /// clocks and the executor's time in each, the shard count, and the most
     /// shards it held at once.
     pub report: StreamingReport,
-    /// The guest's exit status, which is `x10`'s final value.
+    /// The guest's exit status, which is `x10`'s final value: always 0, the
+    /// only status [`prove`] proves.
     pub exit_code: i32,
     /// Cycles the execution took.
     pub cycles: u64,
     /// The journal, which is also `block.statement().output`.
     pub journal: Vec<u8>,
-    /// Wall-clock of the whole call, both executions included.
+    /// Wall-clock of the whole call, all three executions included.
     pub wall_nanos: u64,
 }
 
@@ -95,7 +98,8 @@ pub fn setup(elf: &[u8], params: &ProgramParams) -> Result<ProverSetup, String> 
 
 /// Execute the guest over `io` and prove the block, streaming.
 ///
-/// One call into `prover::prove_block_streaming`, which executes the guest
+/// One untraced execution of the guest, then one call into
+/// `prover::prove_block_streaming`, which executes the guest
 /// twice — once to its statement, once to prove each shard as it fills — and
 /// never holds more than `max_in_flight` shards at once, one per worker.
 /// `max_in_flight` must be at least 1; `docs/spec/streaming.md` §5 is what it
@@ -106,19 +110,33 @@ pub fn setup(elf: &[u8], params: &ProgramParams) -> Result<ProverSetup, String> 
 /// error and no proof, which is the executor's contract and not this
 /// function's choice.
 ///
-/// The exit status is **not** checked here. A failing guest is still a provable
-/// execution and its journal is still bound; whether exit 0 was required is the
-/// caller's statement to make, and `Proven::exit_code` is how it makes it.
+/// **Only an execution that exits 0 is proved.** Any other status — a panic's
+/// 101, the SDK's 70 and 71, any `exit(n)` — is a failed execution, which no
+/// verifier accepts (`docs/spec/proof.md` §6, step 0), and is refused with
+/// `ProverError::NonzeroExit`, naming the status, before any proving work.
+/// That is what the first execution is for: the prover refuses such a run
+/// too, but the status exists only at the exit, so it learns it only after
+/// its first pass has committed every shard the execution filled. The cost is
+/// one run of the guest with no tracer, the cheapest of the three.
 pub fn prove(setup: &ProverSetup, io: &GuestIo, max_in_flight: usize) -> Result<Proven, String> {
     let started = Instant::now();
-    let (block, report) = prover::prove_block_streaming(setup, io, max_in_flight)
-        .map_err(|e| format!("the block does not prove: {e:?}"))?;
-    // The statement is where the execution's own facts live: there is no
-    // `Execution` to read them off, and these are the values the proof binds
-    // rather than a second reading of them.
+    let refused = |e: ProverError| format!("the block does not prove: {e:?}");
+    // A fatal run is the error the prover would have returned for it, from the
+    // same executor over the same `(image, io)`.
+    let execution = emulator::run(&setup.program.image, io)
+        .map_err(|e| refused(ProverError::Trace(e.to_string())))?;
+    if execution.exit_code != 0 {
+        return Err(refused(ProverError::NonzeroExit {
+            status: execution.exit_code as u32,
+        }));
+    }
+    let (block, report) =
+        prover::prove_block_streaming(setup, io, max_in_flight).map_err(refused)?;
+    // The statement is where the execution's own facts live: these are the
+    // values the proof binds rather than the check's reading of them.
     // `x10`'s final value, which the statement carries as a `u32` and the
-    // executor reports as an `i32`: the same 32 bits, so `exit(-1)` reads back
-    // as `-1` here.
+    // executor reports as an `i32`: the same 32 bits, and 0, the one status
+    // the check above lets through.
     let exit_code = block.statement().exit_status as i32;
     let journal = block.statement().output.clone();
     Ok(Proven {

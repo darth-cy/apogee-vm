@@ -3,8 +3,8 @@
 //! The jump/branch/slt family's twelve instructions — `jal`, `jalr`, the six
 //! branches, `slt`, `sltu`, `slti`, `sltiu` — at the operands and control flow
 //! where each is easiest to get wrong, checking every result itself and exiting
-//! with the number of checks that passed. `crates/prover/tests/control.rs`
-//! proves it end to end (`docs/spec/jump-branch-slt.md`).
+//! 0 when every check passed. `crates/prover/tests/control.rs` proves it end to
+//! end (`docs/spec/jump-branch-slt.md`).
 //!
 //! Everything in its image is an instruction of two execution families,
 //! add/sub/lui/auipc and jump/branch/slt, plus the exit ecall: no SDK, no
@@ -43,11 +43,13 @@
 //! # Input, advice and the journal
 //!
 //! Unused. The guest reads nothing and commits nothing: `EXIT` is its only
-//! ecall, and its result is the status.
+//! ecall, and its status is its result, checked.
 //!
 //! # The result
 //!
-//! The exit status, `a0`: 17, the number of checks, on success; 1 from `fail`.
+//! The exit status, `a0`: `s0 − 17`, the checks counted less the 17 there are,
+//! so 0 when every one ran and passed, the only status with a proof
+//! (`docs/spec/proof.md` §6); 1 from `fail`.
 
 use core::arch::global_asm;
 
@@ -243,8 +245,8 @@ global_asm!(
     ".option norvc",
     // The result.
     "done:",
-    "  addi  a0, s0, 0",
-    "  addi  a7, x0, 93", // EXIT
+    "  addi  a0, s0, -17", // the checks counted less the 17 there are
+    "  addi  a7, x0, 93",  // EXIT
     "  ecall",
     "fail:",
     "  addi  a0, x0, 1",

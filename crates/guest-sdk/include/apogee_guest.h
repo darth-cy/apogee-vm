@@ -40,8 +40,8 @@ const uint8_t *apogee_advice(size_t *len);
  * rather than overflow the journal's 16,380 bytes. */
 void apogee_commit(const void *bytes, size_t len);
 
-/* End the execution with `code`; nonzero is a failed execution, still
- * provable. Unlike returning `code` from `main`, it runs no destructor: it is
+/* End the execution with `code`; nonzero is a failed execution, with no
+ * proof. Unlike returning `code` from `main`, it runs no destructor: it is
  * C's `_Exit`. */
 __attribute__((noreturn)) void apogee_exit(int32_t code);
 

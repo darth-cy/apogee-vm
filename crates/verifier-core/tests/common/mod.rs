@@ -144,17 +144,18 @@ pub fn finals(status: u32) -> BoundaryFinals {
 }
 
 /// One `INIT_TEARDOWN` shard, one `ADD_SUB_LUI_AUIPC` shard and the two public
-/// windows', in statement order, each with its root pair.
+/// windows', in statement order, each with its root pair. Its run exits 0, the
+/// only status a statement can have past step 0.
 pub fn statement() -> PublicInputs {
     PublicInputs {
         input: vec![1, 2, 3],
         output: vec![],
-        exit_status: 42,
+        exit_status: 0,
         // One init shard, no zero window, one add/sub shard, then the window
         // families: one public input, one journal, no advice window.
         shard_counts: vec![1, 1, 0, 1, 1, 0],
         windows: vec![],
-        boundary: finals(42),
+        boundary: finals(0),
         memory_commitments: vec![
             memory_zeros(INIT, 16),
             memory_zeros(ADD, 20),

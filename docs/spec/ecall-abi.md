@@ -25,7 +25,7 @@ Every number this VM implements.
 
 | Number | Constant | Class | What |
 | --- | --- | --- | --- |
-| 93 | `EXIT` | deterministic | end the execution with status `a0`'s low word, read as an `i32`: the statement's exit status; nonzero is a failed execution, still provable |
+| 93 | `EXIT` | deterministic | end the execution with status `a0`'s low word, read as an `i32`: the statement's exit status. Only 0 is provable: nonzero is a failed execution, which the prover and the verifier refuse ([proof.md](proof.md) §6, step 0) |
 | `0x0510` | `POSEIDON2` | deterministic | the Poseidon2-A64-C5 permutation of the 16 lanes at `a0`, two little-endian words each, in place; a lane read mod `p`, written canonical |
 | `0x0511` | `MUL_DIV_U256` | deterministic | `a`, `b`, `d` at `a0`, eight little-endian words each, become `⌊a·b/d⌋`, `a·b mod d`, `d`; the caller owes `d ≠ 0` and a quotient below `2^256`, which the emulator refuses as `DelegationFrame` |
 | `0x0514` | `FALCON512` | deterministic | the Falcon-512 lattice check over the 5 words at `a0`: the addresses of `h`, `s2` and `c`, 512 `u16` coefficients each, every one read mod `q = 12289`, then `‖s1‖²`'s low and high words, written, `s1 = (c − s2·h) mod (q, x^512 + 1)` centered; the caller owes word-aligned arrays disjoint from each other and the frame, which the emulator refuses as `DelegationFrame` ([precompiles.md](precompiles.md) §7) |
@@ -148,16 +148,19 @@ the rest is loads and stores.
 | `commit(bytes)` | appends to the journal and its length word; exits 70 rather than overflow the window |
 | `journal()` | what has been committed |
 | `advice()` | the advice payload, its length clamped to the region; bound by nothing, so the guest checks it |
+| `advice_mut()` | the same bytes, writable, the region's one borrow: a second call, or one beside `advice()`, panics |
+| `as_u64s(bytes)`, `as_u64s_mut(bytes)` | 8-aligned bytes, a whole number of `u64`s, as the `u64`s they hold, each one `ld` or `sd` where it lies; any other bytes panic |
+| `as_u32s(bytes)` | 4-aligned bytes, a whole number of `u32`s, as the `u32`s they hold, each one `lwu` where it lies; any other bytes panic |
 | `exit(code)` | `EXIT`; publishes nothing beyond what was committed |
 | allocator | bumps up from `__heap_start`, never frees; exits 71 when a block would end above `__stack_top − STACK_RESERVE` or the live `sp` |
-| panic handler | exits 101 and writes nothing: a panicking guest is provable, having published what it committed |
+| panic handler | exits 101 and writes nothing: a panicking guest has no proof (§2) |
 | `poseidon2_permute(state)`, `Digest`, `poseidon2_compress(l, r)` | `POSEIDON2` over a `[u64; 16]`; 8 lanes, each below `p`; and the first 8 lanes of the permutation of two `Digest`s ([precompiles.md](precompiles.md) §5) |
 | `U256` | a 256-bit integer; its division and `mul_div` are `MUL_DIV_U256` |
 | `mpt_eval(ops)` | `MPT_ROOT` over an op program of `ops.len() / 2` ops, whose blocks may be advice read in place ([precompiles.md](precompiles.md) §5, §6.3) |
-| `mpt::leaf(key, value)`, `mpt::Trie::{open, root, set, insert, remove}` | a table's crit-bit trie: a leaf, `POSEIDON2`; a batch's touched keys opened from an advised proof and edited, each root one `mpt_eval` ([precompiles.md](precompiles.md) §5, §6.1–§6.3) |
+| `mpt::{leaf, record_leaf}`, `mpt::Trie::{open, root, set, set_opened, insert, remove}` | a table's crit-bit trie: a leaf, `POSEIDON2`, of a key and a value or of a record where it lies; a batch's touched keys opened from an advised proof and edited, by key or by an opened key's place, each root one `mpt_eval` ([precompiles.md](precompiles.md) §5, §6.1–§6.3) |
 | `falcon512::s1_norm(h, s2, c)`, `falcon512::Poly` | `FALCON512` over three word-aligned `[u16; 512]`, which may be advice read in place: `‖s1‖²` ([precompiles.md](precompiles.md) §5) |
 | `falcon512::sample(lanes)` | `FALCON512_SAMPLE` over a `[u64; 8]`, each lane below `808·q^4`, as its four base-`q` digits ([precompiles.md](precompiles.md) §5) |
-| `falcon512::PublicKey::{decode, key_digest, address, verify}` | a Falcon-512 key from its advised form, its key digest K and address, and a signature's verification under it and a context, any failure ending the execution: its decoding `FALCON512_DECODE`, its lattice check `FALCON512`, K and HashToPoint `POSEIDON2` and `FALCON512_SAMPLE` ([precompiles.md](precompiles.md) §5, §7.7) |
+| `falcon512::PublicKey::{decode, decode_into, key_digest, address, verify}` | a Falcon-512 key from its advised form, into a slot of the caller's or not, its key digest K and address, and a signature's verification under it and a context, any failure ending the execution: its decoding `FALCON512_DECODE`, its lattice check `FALCON512`, K and HashToPoint `POSEIDON2` and `FALCON512_SAMPLE` ([precompiles.md](precompiles.md) §5, §7.7) |
 
 ## 7. The C ABI
 

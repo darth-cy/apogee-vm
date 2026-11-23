@@ -67,8 +67,9 @@ pub struct Execution {
     /// The register file after the last cycle.
     pub regs: [u64; 32],
     /// The status passed to `exit`: `a0`'s low word. A nonzero status is a
-    /// failed execution, which is still an execution: it is reported, not
-    /// refused.
+    /// failed execution, which is still an execution: the executor reports
+    /// it, and the prover and the verifier refuse it, for only an execution
+    /// that exits 0 has a proof (`docs/spec/proof.md` §6, step 0).
     pub exit_code: i32,
     /// Cycles run. Cycles are numbered from 1, so
     /// this is also the last cycle's number.

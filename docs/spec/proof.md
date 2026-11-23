@@ -19,7 +19,7 @@ Every entry point is `(&VerifyingKey, proof, &PublicInputs)`: `verifier::verify_
 the prover does not control, the program identity, and compares it with the key's; the key itself
 may come from anyone (§7). The `verifier` CLI makes that comparison ([tools.md](../tools.md) §6);
 `host::verify(vk, block)`, which is `verify_block(vk, block, block.statement())`, does not, and
-leaves its caller to check the identity and the statement's input, output and exit status too.
+leaves its caller to check the identity and the statement's input and output too.
 
 ### 1.1 `PublicInputs`
 
@@ -27,7 +27,7 @@ leaves its caller to check the identity and the statement's input, output and ex
 | --- | --- |
 | `input: Vec<u8>` | the public input window's payload, at most `PUBLIC_PAYLOAD_BYTES` = 16,380 ([public-values.md](public-values.md) §3) |
 | `output: Vec<u8>` | the journal, the public output window's payload, as long |
-| `exit_status: u32` | `x10`'s final low word |
+| `exit_status: u32` | `x10`'s final low word: 0, the only status with a proof (§6, step 0) |
 | `shard_counts: Vec<u32>` | one per family of the `VmConfig`, in its order, possibly 0 |
 | `windows: Vec<u32>` | `ZERO_WINDOWS`' window ids, one per shard ([memory.md](memory.md) §3.5) |
 | `boundary: BoundaryFinals` | the 95 register and pc boundary scalars ([memory.md](memory.md) §4.1) |
@@ -90,10 +90,10 @@ G2–G4 are `verifier_core::absorb_statement_descriptor`.
 Everything a memory tuple or the reconciliation reads precedes G8 ([memory.md](memory.md) §6.1
 says why for each), the memory columns through their commitments at G6a. Two
 fields are not absorbed: `memory_roots`, which depend on the challenges and are bound by each
-shard's own GKR proof (step 10a), and `exit_status`, which step 10b holds to `v_10`, absorbed at
-G7. The digest seeds every shard (§4); a proof carries the digest it was seeded with
-(`ShardProof::global_digest`) and step 5 compares it with the replay, so a shard proof is for one
-statement under one key.
+shard's own GKR proof (step 10a), and `exit_status`, which step 0 requires to be 0 and step 10b
+holds to `v_10`, absorbed at G7. The digest seeds every shard (§4); a proof carries the digest it
+was seeded with (`ShardProof::global_digest`) and step 5 compares it with the replay, so a shard
+proof is for one statement under one key.
 
 ## 3. Binding
 
@@ -161,6 +161,7 @@ with its column count, a group of no column left out, and the values in layout o
 
 | step | class | check |
 | --- | --- | --- |
+| 0 | `NonzeroExit { status }` | `exit_status = 0` |
 | 1 | `Statement` | one shard count per config family; the key's circuits are its config's families, in order |
 | 2 | `Statement` | `check_memory_windows` ([memory.md](memory.md) §3.5); `input` and `output` each at most `PUBLIC_PAYLOAD_BYTES` |
 | 3 | `Statement` | one root pair and one memory commitment per statement shard, the total summed in `u64` first; each commitment of its family's `M` shape (§3) |
@@ -176,6 +177,13 @@ with its column count, a group of no column left out, and the values in layout o
 | 10b | `MemoryArgument` | every boundary timestamp below `2^38`; `v_10 = exit_status`; `gkr_verify::reconciles` over every shard's roots and `boundary_factors(challenges, vk.entry_pc, boundary)` ([memory.md](memory.md) §4.2) |
 | 11 | `Opening` | the opening of the column claims (§5) |
 
+**Only an execution that exits 0 has a proof.** Any other status is a failed execution: a panic
+(101), a journal past its window (70), an exhausted heap (71), any `exit(n)` with `n ≠ 0`
+([ecall-abi.md](ecall-abi.md) §6). Step 0 refuses its statement before anything else the statement
+or a proof carries is read, so a failed execution is never answered for by a binding check further
+on, and the prover refuses to prove one at all ([streaming.md](streaming.md) §2). The status stays
+in the statement, which step 10b holds to `v_10`.
+
 Step 8 cannot fail on `verify`'s output, whose base claims share layer 0's point; it states what
 step 11 relies on. Steps 1–3 hold the statement to the key before the replay indexes by it, so
 nothing a proof or statement carries makes the core panic, for a loaded key.
@@ -184,7 +192,7 @@ nothing a proof or statement carries makes the core panic, for a loaded key.
 
 | function | reads | steps | runs |
 | --- | --- | --- | --- |
-| `derive_global_phase(vk, public)` → `GlobalChallenges` | key, statement | 1–3, G1–G9 | once a statement |
+| `derive_global_phase(vk, public)` → `GlobalChallenges` | key, statement | 0–3, G1–G9 | once a statement |
 | `verify_shard_local(vk, global, proof, public)` | and one `ShardProof` | 4–10a, 10c, 11 | once a shard |
 | `verify_global_memory(vk, global, public)` | key, statement, challenges | 10b | once a statement |
 
@@ -201,7 +209,7 @@ accepts shards, each valid, whose multiset does not close.
 | | class | check |
 | --- | --- | --- |
 | B1 | `Statement` | `block.config` is `vk.config`, and `block.statement` is `public` |
-| B2 | `Statement` | `derive_global_phase`, once |
+| B2 | `NonzeroExit`, `Statement` | `derive_global_phase`, once |
 | B3 | `Statement` | `BlockProof::shape` (§1.3) |
 | B4 | `Statement` | `check_ts_windows` over the records (§8) |
 | B5 | `MemoryArgument` | `verify_global_memory`, once |

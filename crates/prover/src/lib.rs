@@ -20,7 +20,9 @@
 //! The prover checks nothing a verifier does not: a malformed input costs the
 //! honest prover a panic or a proof that fails (`docs/spec/gkr.md` §5.1). What
 //! it does check is its own program: a trace this prover cannot prove, a family
-//! no circuit proves, is refused by name before any work.
+//! no circuit proves, is refused by name before any work. And it refuses an
+//! execution whose exit status is not 0, which no verifier accepts
+//! ([`ProverError::NonzeroExit`]), before any shard is proven.
 
 /// Emit one debug-log line, in a build with the `debug-info` feature.
 ///
@@ -109,6 +111,11 @@ pub use streaming::{prove_block_streaming, StreamingReport, DEFAULT_MAX_IN_FLIGH
 /// Every way the prover refuses. One flat enum.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProverError {
+    /// The guest exited with a nonzero status, `x10`'s final low word. Only an
+    /// execution that exits 0 is provable (`docs/spec/proof.md` §6, step 0),
+    /// so the prover refuses one that does not as soon as it knows the
+    /// status, before any shard is proven.
+    NonzeroExit { status: u32 },
     /// A family of the program's config that no circuit proves at its height.
     Unregistered { family: FamilyId, height: u32 },
     /// The verifying key the setup built does not pass its own load rules.
@@ -122,6 +129,12 @@ pub enum ProverError {
 impl std::fmt::Display for ProverError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
+            // Read as an `i32`, as the guest passed it: `exit(-1)` is -1.
+            ProverError::NonzeroExit { status } => write!(
+                f,
+                "the guest exited {}: only an execution that exits 0 is provable",
+                *status as i32
+            ),
             ProverError::Unregistered { family, height } => write!(
                 f,
                 "no circuit proves family {} at height {height}",
@@ -401,6 +414,9 @@ pub(crate) fn window_of(family: FamilyId, index: u32, windows: &[u32], height: u
 
 /// The statement an archived execution proves: its streams, its exit status
 /// (`x10`'s final value), its shard counts and window list, and its boundary.
+///
+/// An execution whose exit status is not 0 has no statement to prove: it is
+/// [`ProverError::NonzeroExit`], before any memory commitment is made.
 pub fn statement_inputs(
     setup: &ProverSetup,
     archive: &TraceArchive,
@@ -428,19 +444,13 @@ pub fn statement_inputs(
         (boundary.reg_values[9] as u32),
         archive.cycle_profile().total()
     );
-    // **A nonzero exit status, on a line of its own.** It is one field among
-    // seven on the line above, and a guest that panicked exits 101 having
-    // published whatever it had committed so far — a journal that decodes, a
-    // proof that verifies, and an answer to a different question. A run whose
-    // guest aborted should not need a careful reading of a dense line to say so.
-    if (boundary.reg_values[9] as u32) != 0 {
-        dlog!(
-            Phase,
-            "apogee ABORTED  the guest exited {} (x10), journal={}B: this proves an \
-             execution that failed, not one that succeeded",
-            (boundary.reg_values[9] as u32),
-            archive.io_streams().output.len()
-        );
+    // **Only an execution that exits 0 is provable** (`docs/spec/proof.md`
+    // §6, step 0). A guest that panicked exits 101 having left whatever it had
+    // committed in its journal, and no verifier accepts a statement of it, so
+    // it is refused here, by name, before a single column is committed.
+    let status = boundary.reg_values[9] as u32;
+    if status != 0 {
+        return Err(ProverError::NonzeroExit { status });
     }
     // Every statement shard's `M` columns, filled and committed, each in its
     // own rayon task.
@@ -458,7 +468,7 @@ pub fn statement_inputs(
     Ok(StatementInputs {
         input: io.input.clone(),
         output: io.output.clone(),
-        exit_status: (boundary.reg_values[9] as u32),
+        exit_status: status,
         shard_counts: counts,
         windows,
         boundary,

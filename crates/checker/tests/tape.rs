@@ -54,12 +54,12 @@ fn key_and_statement() -> (VerifyingKey, PublicInputs) {
         .collect();
     let setup_commitments: Vec<Commitment> = circuits.iter().map(|c| zeros(c, 2)).collect();
     let entry_pc = 0x1_0000;
-    let mut boundary = BoundaryFinals {
+    // A run that exits 0, x10's final value: the only status past step 0.
+    let boundary = BoundaryFinals {
         reg_ts: [0; 32],
         pc_ts: 4,
         reg_values: [0; 31],
     };
-    boundary.reg_values[9] = 2;
     let vk = VerifyingKey {
         code_version: family::CODE_VERSION,
         entry_pc,
@@ -78,7 +78,7 @@ fn key_and_statement() -> (VerifyingKey, PublicInputs) {
     let mut statement = PublicInputs {
         input: Vec::new(),
         output: Vec::new(),
-        exit_status: 2,
+        exit_status: 0,
         shard_counts: vec![2, 1, 1, 0, 1, 1, 0],
         windows: Vec::new(),
         boundary,

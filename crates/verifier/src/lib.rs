@@ -46,8 +46,9 @@ pub fn verify_shard(
 /// it; the checks are, in order:
 ///
 /// 1. the block's descriptor is the key's and its statement is `public`;
-/// 2. the statement's own checks and the global transcript, once
-///    (`derive_global_phase`);
+/// 2. the statement's own checks — first that its exit status is 0, the only
+///    one with a proof (`VerifyError::NonzeroExit`) — and the global
+///    transcript, once (`derive_global_phase`);
 /// 3. **shard-set exactness**: the proofs are the statement's shards, each
 ///    once, no gap and no extra, in statement order;
 /// 4. the time windows: ordered and disjoint within each cycle-owning family
@@ -178,19 +179,14 @@ mod tests {
         }
     }
 
-    /// **`verify_block` runs the memory argument's statement half itself, at
-    /// check 5, and not inside its per-shard loop** (`docs/spec/proof.md`
-    /// §6). The block below carries one `INIT_TEARDOWN` shard whose proof is a
-    /// shell — a digest of zero, no outputs — so the loop
-    /// would refuse it as `Statement` the moment it read it, as the second
-    /// assertion shows. The answer is `MemoryArgument` instead, which is only
-    /// possible if check 5 ran first and read the statement alone.
-    #[test]
-    fn the_block_checks_the_statement_s_memory_argument_before_any_shard() {
+    /// A statement of [`key`]'s shape and a block of shell proofs for it: one
+    /// `INIT_TEARDOWN` shard whose proof is a shell — a digest of zero, no
+    /// outputs — and the two public windows', and a boundary timestamp out of
+    /// the clock, which is step 10b's first check. Its exit status is 0.
+    fn shell_block(vk: &VerifyingKey) -> (PublicInputs, BlockProof) {
         use constants::family;
-        use verifier_core::{BoundaryFinals, GkrProof, PublicInputs};
+        use verifier_core::{BoundaryFinals, GkrProof};
 
-        let vk = key();
         let mut boundary = BoundaryFinals {
             reg_ts: [0; 32],
             pc_ts: 0,
@@ -234,6 +230,19 @@ mod tests {
                 public_shell(family::PUBLIC_OUTPUT),
             ],
         };
+        (statement, block)
+    }
+
+    /// **`verify_block` runs the memory argument's statement half itself, at
+    /// check 5, and not inside its per-shard loop** (`docs/spec/proof.md`
+    /// §6). [`shell_block`]'s first shard is a shell, so the loop
+    /// would refuse it as `Statement` the moment it read it, as the second
+    /// assertion shows. The answer is `MemoryArgument` instead, which is only
+    /// possible if check 5 ran first and read the statement alone.
+    #[test]
+    fn the_block_checks_the_statement_s_memory_argument_before_any_shard() {
+        let vk = key();
+        let (statement, block) = shell_block(&vk);
         assert_eq!(
             verify_block(&vk, &block, &statement),
             Err(VerifyError::MemoryArgument(
@@ -242,11 +251,36 @@ mod tests {
             "check 5 reads the statement and runs before the shards"
         );
         assert_eq!(
-            verify_shard(&vk, &shell, &statement),
+            verify_shard(&vk, &block.shards[0], &statement),
             Err(VerifyError::Statement(
                 "the proof was made for another statement"
             )),
             "the loop would have answered this, so the block's answer is check 5's"
         );
+    }
+
+    /// **A nonzero exit status is refused before any other check**: step 0,
+    /// the first of check 2 (`docs/spec/proof.md` §6). The block above, which
+    /// check 5 refuses, made the statement of a run that exited `status` — the
+    /// status and `x10`'s final value both `status`, so nothing else about it
+    /// changes — answers `NonzeroExit`, by `verify_block` and by `verify_shard`
+    /// alike: neither reaches the binding checks that would refuse it later.
+    /// A panic's 101, the SDK's 70 and 71, a chosen 42, `exit(-1)`.
+    #[test]
+    fn a_nonzero_exit_status_is_refused_before_any_other_check() {
+        let vk = key();
+        for status in [42, 101, 70, 71, 1, u32::MAX] {
+            let (mut statement, mut block) = shell_block(&vk);
+            statement.exit_status = status;
+            statement.boundary.reg_values[9] = status.into();
+            block.statement = statement.clone();
+            let refused = Err(VerifyError::NonzeroExit { status });
+            assert_eq!(verify_block(&vk, &block, &statement), refused, "{status}");
+            assert_eq!(
+                verify_shard(&vk, &block.shards[0], &statement),
+                refused,
+                "{status}"
+            );
+        }
     }
 }

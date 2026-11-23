@@ -7,9 +7,10 @@
 //! `crates/checker/tests/public_values.rs` and runs in ordinary CI; what is
 //! here needs one.
 //!
-//! **Every test is `#[ignore]`d, and runs by name with `--include-ignored
-//! --test-threads=1`**: the guest's execution families are `2^20` rows, the
-//! timestamp channel's floor, and CI does not run them.
+//! **Every test but `a5` is `#[ignore]`d, and runs by name with
+//! `--include-ignored --test-threads=1`**: the guest's execution families are
+//! `2^20` rows, the timestamp channel's floor, and CI does not run them. `a5`
+//! fills no shard.
 
 mod common;
 
@@ -68,6 +69,15 @@ fn a1_the_public_values_are_bound_and_the_advice_is_not() {
     );
     assert_eq!(public.exit_status, 0, "the guest accepted its advice");
     assert_eq!(verify(&setup, &block), Ok(()));
+    // The same proof, its statement claiming the status the guest exits with
+    // on advice it refuses: refused at step 0, before any check that binds
+    // the status to `x10` could be reached (`docs/spec/proof.md` §6).
+    let mut failed = block.clone();
+    failed.statement.exit_status = 62;
+    assert_eq!(
+        verify(&setup, &failed),
+        Err(VerifyError::NonzeroExit { status: 62 })
+    );
 
     // The three families are in the statement, and their shard counts are the
     // rule: one each for the two public windows, and one advice window for 68
@@ -137,4 +147,60 @@ fn a3_a_claimed_public_value_is_the_committed_column() {
             "the {other} shard was refused for the other window's bytes"
         );
     }
+}
+
+/// The run [`a4_a_run_that_refuses_its_advice_has_no_proof`] and
+/// [`a5_the_statement_phase_refuses_a_run_that_refuses_its_advice`] prove
+/// nothing of: advice that does not check against the public input, on which
+/// the guest exits 62, publishing nothing.
+fn refused_io() -> emulator::GuestIo {
+    let mut swapped = advice();
+    swapped[0] ^= 0xFF;
+    emulator::GuestIo {
+        input: common::public_io_input(&advice()),
+        advice: swapped,
+    }
+}
+
+/// **A run that refuses its advice has no proof** (`docs/spec/proof.md` §6,
+/// step 0): the streaming prover refuses [`refused_io`]'s execution by its
+/// status the moment its first pass has run the guest, before any shard is
+/// proven.
+#[test]
+#[ignore = "a 2^20 statement's first pass; run with --include-ignored --test-threads=1"]
+fn a4_a_run_that_refuses_its_advice_has_no_proof() {
+    let setup = common::public_io_setup();
+    assert_eq!(
+        prover::prove_block_streaming(&setup, &refused_io(), common::IN_FLIGHT).unwrap_err(),
+        prover::ProverError::NonzeroExit { status: 62 }
+    );
+}
+
+/// The same run on the archived path: its statement phase refuses it before
+/// any column is filled or committed, so this needs no shard and runs in
+/// ordinary CI.
+#[test]
+fn a5_the_statement_phase_refuses_a_run_that_refuses_its_advice() {
+    let setup = common::public_io_setup();
+    let program = &setup.program;
+    let io = refused_io();
+    let (traces, log, profile, execution) =
+        emulator::trace_run(&program.image, &io, &program.tables, &program.config)
+            .expect("the guest traces");
+    assert_eq!(execution.exit_code, 62, "the checksum did not match");
+    let archive = TraceArchive::from_execution(
+        traces,
+        log,
+        profile,
+        trace::IoStreams {
+            input: execution.io.input,
+            output: execution.io.output,
+        },
+        io.advice,
+        trace::PhaseTiming { wall_nanos: 0 },
+    );
+    assert_eq!(
+        prover::statement_inputs(&setup, &archive).unwrap_err(),
+        prover::ProverError::NonzeroExit { status: 62 }
+    );
 }

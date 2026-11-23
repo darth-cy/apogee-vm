@@ -3,7 +3,7 @@
 //! A tiny guest: a straight-line chain of 64-bit additions and subtractions
 //! over the add/sub family's roster — `add`, `sub`, `addi`, `lui`, `auipc`,
 //! their 32-bit forms `addw`, `subw`, `addiw`, and the system kind's `fence`
-//! and `ecall` — that exits with its result word. `crates/prover/tests/acceptance.rs` proves it end to end
+//! and `ecall` — that checks its result word and exits 0. `crates/prover/tests/acceptance.rs` proves it end to end
 //! (`docs/spec/proof.md`).
 //!
 //! Everything in its image is an instruction of that family, which is what
@@ -21,13 +21,15 @@
 //! # Input, advice and the journal
 //!
 //! Unused. The guest reads nothing and commits nothing: `EXIT` is its only
-//! ecall, and its result is the status.
+//! ecall, and its status is its result, checked.
 //!
 //! # The result
 //!
-//! The exit status, `a0`, which is 42: `(t0 + t1) − t1 − t0` wraps twice back
-//! to 0, the compressed rows add 4 and the last `addi` 38; the W rows write
-//! registers nothing reads.
+//! 42: `(t0 + t1) − t1 − t0` wraps twice back to 0, the compressed rows add 4
+//! and 38 more makes 42; the W rows write registers nothing reads. The last
+//! `addi` adds `38 − 42` instead, so the exit status, `a0`, is the result less
+//! the 42 it must be: 0 when the chain computed it, the only status with a
+//! proof (`docs/spec/proof.md` §6), and nonzero when it did not.
 
 use core::arch::global_asm;
 
@@ -78,11 +80,12 @@ global_asm!(
     "  c.addw  a4, a5",       // a4 = 55
     "  c.subw  a4, a5",       // a4 = 56
     ".option norvc",
-    // The result: (t0 + t1) − t1 − t0 = 0, wrapping twice, plus 4, plus 38.
+    // The result, (t0 + t1) − t1 − t0 = 0, wrapping twice, plus 4, plus 38,
+    // less the 42 it must be.
     "  sub   a0, t2, t1", // a0 = t0, borrowing
     "  sub   a0, a0, t0", // a0 = 0
     "  add   a0, a0, a1", // a0 = 4
-    "  addi  a0, a0, 38", // a0 = 42
+    "  addi  a0, a0, -4", // a0 = 4 + 38 − 42 = 0, carrying out of both words
     "  addi  a7, x0, 93", // EXIT
     "  ecall",
 );

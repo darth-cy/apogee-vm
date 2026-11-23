@@ -23,7 +23,7 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use common::{advice_of, exit_code_of, image, input_of, uniform, with_advice};
+use common::{advice_of, image, input_of, uniform, with_advice};
 use constants::delegation::Per;
 use emulator::{trace_run, ShardChunk, StreamingRun};
 use program::{decode_program, family_name, FamilyId, ProgramParams};
@@ -146,7 +146,7 @@ fn the_chunks_are_the_planned_shards_row_for_row() {
     for (name, height) in GUESTS {
         let s = stream(name, height);
         let (traces, _, profile, execution) = whole(name, height);
-        assert_eq!(s.execution.exit_code, exit_code_of(name), "{name}");
+        assert_eq!(s.execution.exit_code, 0, "{name}");
         assert_eq!(s.profile, profile, "{name}: the cycle profile");
         assert_eq!(s.execution, execution, "{name}: the execution");
 

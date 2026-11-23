@@ -1,10 +1,10 @@
 //! `reduce_shard`: a shard proof reduced to its column claims and the claims
-//! opened, or the proof refused. `docs/spec/proof.md` §6, steps 1 to 11, in
+//! opened, or the proof refused. `docs/spec/proof.md` §6, steps 0 to 11, in
 //! order.
 //!
 //! The steps are split at the fork in three public parts, so a block pays for
 //! everything that depends on the statement alone once instead of once per
-//! shard: [`derive_global_phase`] is steps 1 to 3 and the replay,
+//! shard: [`derive_global_phase`] is steps 0 to 3 and the replay,
 //! [`verify_shard_local`] is steps 4 to 11 but the memory argument's statement
 //! half, and [`verify_global_memory`] is that half — step 10b, the boundary
 //! and the cross-shard root product. `reduce_shard` is their composition, and
@@ -37,8 +37,8 @@ const EXIT_STATUS_REGISTER: usize = 10 - 1;
 /// memory challenges `γ_M, α_addr, α_ts, α_val` and the global state digest.
 ///
 /// One per statement, whatever the shard counts. [`derive_global_phase`] is
-/// the only way to obtain one, and it never returns one for a statement the
-/// key does not describe.
+/// the only way to obtain one, and it never returns one for a statement whose
+/// exit status is not 0 or that the key does not describe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GlobalChallenges {
     pub memory: [Fp2; crate::statement::MEMORY_CHALLENGES],
@@ -46,15 +46,28 @@ pub struct GlobalChallenges {
 }
 
 /// The statement's checks and the global transcript, `docs/spec/proof.md`
-/// §6 steps 1 to 3 and §2: the statement is one `vk` describes, its window
-/// rules hold, its per-shard lists line up, and then G1 to G9 are replayed.
+/// §6 steps 0 to 3 and §2: the statement's exit status is 0, it is one `vk`
+/// describes, its window rules hold, its per-shard lists line up, and then G1
+/// to G9 are replayed.
 ///
 /// **Run once per statement**, by `verify_block`; `verify_shard` runs it for
-/// its one shard. The prover runs the transcript alone, `global_commit`.
+/// its one shard. Every verification path passes through it, so step 0 here
+/// is the one place a nonzero exit status is refused. The prover runs the
+/// transcript alone, `global_commit`.
 pub fn derive_global_phase(
     vk: &VerifyingKey,
     public: &PublicInputs,
 ) -> Result<GlobalChallenges, VerifyError> {
+    // 0. The statement is of an execution that exits 0, the only kind with a
+    //    proof. Checked first, so that a failed execution is refused as what
+    //    it is, whatever else about the statement or the proof is wrong:
+    //    never as a binding check further on, step 10b's among them.
+    if public.exit_status != 0 {
+        return Err(VerifyError::NonzeroExit {
+            status: public.exit_status,
+        });
+    }
+
     let statement = VerifyError::Statement;
     let config = &vk.config;
 
@@ -330,8 +343,9 @@ pub fn verify_shard_local(
 
 /// The memory argument's **statement half**, `docs/spec/proof.md` §6
 /// step 10b and `docs/spec/memory.md` §4.2: the boundary is in range and names
-/// the exit status, and the read/write root product reconciles over every
-/// shard of every family in the statement, against the boundary's two factors.
+/// the exit status, which step 0 has held to 0, and the read/write root
+/// product reconciles over every shard of every family in the statement,
+/// against the boundary's two factors.
 ///
 /// **Run once per statement**, not once per shard. Every operand is the
 /// statement's or the key's — `vk.entry_pc`, `public.boundary`,

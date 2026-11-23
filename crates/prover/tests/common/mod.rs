@@ -37,20 +37,21 @@ pub const ADD_VARS: u32 = 20;
 /// ends far below `4·2^16`.
 pub const WINDOW_VARS: u32 = 16;
 
-/// `guests/addsub`'s exit status.
-pub const RESULT: u32 = 42;
+/// `guests/addsub`'s exit status: its result less the 42 it must be, so 0,
+/// the only status with a proof (`docs/spec/proof.md` §6).
+pub const RESULT: u32 = 0;
 
-/// `guests/alu`'s exit status: the number of its checks.
-pub const ALU_RESULT: u32 = 144;
+/// `guests/alu`'s exit status: its checks counted less the 144 there are.
+pub const ALU_RESULT: u32 = 0;
 
-/// `guests/control`'s exit status: the number of its checks.
-pub const CONTROL_RESULT: u32 = 17;
+/// `guests/control`'s exit status: its checks counted less the 17 there are.
+pub const CONTROL_RESULT: u32 = 0;
 
-/// `guests/mem`'s exit status: the number of its checks.
-pub const MEM_RESULT: u32 = 66;
+/// `guests/mem`'s exit status: its checks counted less the 66 there are.
+pub const MEM_RESULT: u32 = 0;
 
-/// `guests/shards`' exit status: the number of its checks.
-pub const SHARDS_RESULT: u32 = 2;
+/// `guests/shards`' exit status: its checks counted less the 2 there are.
+pub const SHARDS_RESULT: u32 = 0;
 
 /// Guest `name`'s ELF, built from `guests/`.
 pub fn fixture(name: &str) -> Vec<u8> {

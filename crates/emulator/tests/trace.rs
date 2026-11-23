@@ -722,16 +722,16 @@ fn the_window_list_is_exactly_the_touched_windows_above_zero() {
 /// Each is `(a7, a0 read, a0 written)`, and the middle is zero where the call
 /// reads no argument at all — an ecall takes one or none. `opcodes`'
 /// `cover_ecall` makes two calls nobody answers, `0x5ff` then `0x4ff`; every
-/// guest ends in `exit(0)` — `addsub` in `exit(42)` and `control` in
-/// `exit(17)`, their results; and every call anywhere is an `exit` or answered
-/// `-ENOSYS`.
+/// guest ends in `exit(0)`, each having checked its own result; and every call
+/// anywhere is an `exit` or answered `-ENOSYS`. That `exit` writes back the
+/// status it was passed needs a status that is not 0: `public-io` refusing
+/// advice its input does not declare, with 61.
 #[test]
 fn every_ecall_answers_as_the_abi_says() {
     let neg = |errno: u32| u64::from(errno).wrapping_neg();
     const EXIT: u64 = ecall::EXIT as u64;
-    for name in TRACED {
-        let t = traced(name);
-        let calls: Vec<(u64, u64, u64)> = rows_by_cycle(&t)
+    let ecalls = |t: &common::Traced| -> Vec<(u64, u64, u64)> {
+        rows_by_cycle(t)
             .iter()
             .filter(|(_, r)| instr_at(&t.image, r.pc) == Instr::Ecall)
             .map(|(_, r)| {
@@ -742,9 +742,12 @@ fn every_ecall_answers_as_the_abi_says() {
                     q(Role::Rd).write_value,
                 )
             })
-            .collect();
-        let status = common::exit_code_of(name) as i64 as u64;
-        assert_eq!(calls.last(), Some(&(EXIT, status, status)), "{name}");
+            .collect()
+    };
+    for name in TRACED {
+        let t = traced(name);
+        let calls = ecalls(&t);
+        assert_eq!(calls.last(), Some(&(EXIT, 0, 0)), "{name}");
         for &(number, argument, result) in &calls {
             match number {
                 EXIT => {
@@ -772,4 +775,15 @@ fn every_ecall_answers_as_the_abi_says() {
             );
         }
     }
+    // Seven advice bytes where the input declares eight.
+    let refused = common::traced_on(
+        "public-io",
+        &common::with_advice(&[8, 0, 0, 0, 0, 0, 0, 0], &[0; 7]),
+        61,
+    );
+    assert_eq!(
+        ecalls(&refused).last(),
+        Some(&(EXIT, 61, 61)),
+        "exit writes back the status it was passed"
+    );
 }

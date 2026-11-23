@@ -64,7 +64,7 @@ fn proof_bytes(a: &constraints::CircuitArtifact, p: &ShardProof) -> usize {
 /// The guest decodes into the six execution families it runs — add/sub,
 /// jump/branch/slt and mul/div, the last for the shifts that build its 64-bit
 /// constants, beside the three memory-op families — and the window families;
-/// its trace self-checks and exits with the number of checks it ran, 66; the
+/// its trace self-checks and exits 0, all 66 of its checks run; the
 /// streaming prover proves one shard of each family that has one, ten of them,
 /// a `ZERO_WINDOWS` shard among them; `verify_shard` accepts every one against
 /// the one statement; and every proof has its circuit's shape, read off the
