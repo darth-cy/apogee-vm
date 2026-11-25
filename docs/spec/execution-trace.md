@@ -148,6 +148,17 @@ run is a pure function of `(image, io)`, with no clock, randomness or threads, s
 same shards. A nonzero exit status is an execution, not an executor error: the emulator reports it,
 and the prover and the verifier refuse it ([proof.md](proof.md) §6, step 0).
 
+**The cycle cap.** `emulator::run_bounded(image, io, max_cycles)` and
+`StreamingRun::new_bounded(…, max_cycles)` are `run` and `StreamingRun::new` stopped once a run
+passes `max_cycles` cycles: the cycle that would be number `max_cycles + 1` is the fatal
+`CycleLimit { limit }`, raised before it is recorded, so a guest that never exits is stopped. The
+cap is checked where the clock is, in the same per-cycle comparison against the lower of the cap
+and the clock's last cycle `2^36 − 1` (§1); a cap the clock reaches first leaves `ClockOverflow`.
+`run` is `run_bounded` at `u64::MAX`, unchanged, and the cap costs nothing measurable: over
+`guests/amazon`'s batch from `crates/emulator/tests/guests.rs`, 3,860,659 cycles, in a release
+build on an Apple M5 Pro on 2026-11-24, the medians of 15 runs are 67.4 ms for `run`, 67.5 ms for
+`run_bounded` and 67.1 ms for `run` before the cap, 57 MHz each.
+
 Four points differ from a hosted RV64IMAC. `sc` always succeeds, storing and writing 0, as the
 circuits do ([memory-ops.md](memory-ops.md)). A misaligned halfword, word or doubleword access is
 fatal, never split. Every address is below `2^32`: an effective address at or above it is the
@@ -157,9 +168,9 @@ RAM and not what executes.
 Every other stop is a fatal `EmuError`, and `run` and `trace_run` return no trace beside one:
 `NotAnInstruction` (the all-zero halfword included), `IllegalInstruction`, `Ebreak`, `Misaligned`,
 `OutOfBounds` (an access outside [ecall-abi.md](ecall-abi.md) §5's regions, or an advice word past
-what the host supplied), `ClockOverflow`, and `PublicInputTooLong` and `JournalTooLong` (the input,
-or the journal's length word at exit, above a window's payload). An unassigned ecall number is not
-an error but `-ENOSYS` (§6).
+what the host supplied), `ClockOverflow`, `CycleLimit` under a cap, and `PublicInputTooLong` and
+`JournalTooLong` (the input, or the journal's length word at exit, above a window's payload). An
+unassigned ecall number is not an error but `-ENOSYS` (§6).
 
 There is no second executor: `crates/emulator/tests/trace.rs` restates §4's table and checks every
 traced row against it, and §9's check and the checker's multiset, memory and family-row suites hold

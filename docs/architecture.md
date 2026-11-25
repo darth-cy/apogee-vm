@@ -113,7 +113,7 @@ shard's witness commitment before its lookup challenges ([proof.md](spec/proof.m
 | traps are not provable | a misaligned access, an access outside mapped memory, `ebreak` or a pc with no instruction ends an execution with no proof ([execution-trace.md](spec/execution-trace.md) §10) |
 | code is static | the instruction stream is the image decoded at load; one undecodable word in an executable segment refuses the program ([program.md](spec/program.md)) |
 | code size | `.text` within a decoded table's reach of its load address, 7.94 MiB at `2^22`, and the image within `bytecode_size_words`, 4 MiB by default ([program.md](spec/program.md) §5, §7) |
-| execution length | timestamps are 38 bits: `2^36 − 1` cycles ([execution-trace.md](spec/execution-trace.md) §1) |
+| execution length | timestamps are 38 bits: `2^36 − 1` cycles ([execution-trace.md](spec/execution-trace.md) §1); a caller's cap stops a run sooner, `CycleLimit` ([execution-trace.md](spec/execution-trace.md) §10) |
 | prover memory | set by the shards in flight ([streaming.md](spec/streaming.md) §5) |
 
 ## 6. How the code is checked
