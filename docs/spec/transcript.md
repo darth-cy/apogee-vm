@@ -126,13 +126,13 @@ chunks) or
 
 ## 4. Tags
 
-`Tag = u64`: `constants::transcript_tags`, 30 tags numbered from 1 to 31 and named by
+`Tag = u64`: `constants::transcript_tags`, 31 tags numbered from 1 to 32 and named by
 `transcript_tags::NAMES[tag − 1]`; 0 is not a tag, and 13 is retired, never to be reassigned.
 Kinds: **S** scalars, `Fp` or `Fp2` (†† marks `Fp2`, two lanes a value), **B** bytes, **C**
 challenge. Where: G1–G9 and the shard transcript are
 [proof.md](proof.md) §2, §4; identity [program.md](program.md) §8; GKR [gkr.md](gkr.md) §5;
-`io_digest` [public-values.md](public-values.md) §5; the opening [pcs.md](pcs.md) §7. † marks a
-tag on no proof path.
+`io_digest` [public-values.md](public-values.md) §5; the opening [pcs.md](pcs.md) §7; the circuit
+check [streaming.md](streaming.md) §7. † marks a tag on no proof path.
 
 | tag | | | where |
 | --- | --- | --- | --- |
@@ -167,6 +167,7 @@ tag on no proof path.
 | 29 | `PCS_CHALLENGE` | C | the opening: every challenge |
 | 30 | `PCS_DIGEST` | S | a terminal digest's own sponge |
 | 31 | `FAMILY_CIRCUIT` | B | identity: one family's circuit, as a key carries it |
+| 32 | `CIRCUIT_CHECK` | B, C | the circuit check's sponge: the identity, the input and the advice, then its challenges † |
 
 ## 5. Security
 

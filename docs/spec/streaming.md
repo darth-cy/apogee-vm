@@ -2,7 +2,8 @@
 
 How one execution becomes a `BlockProof`: the guest runs twice, and a fixed number of workers
 prove its shards as the executor fills them. The block is [proof.md](proof.md)'s, and its bytes do
-not depend on the schedule; this page fixes when each column exists, and so what a proof costs.
+not depend on the schedule; this page fixes when each column exists, and so what a proof costs,
+and how the same witness is checked against its circuits without a proof (§7).
 
 ## 1. The prover, and what it costs
 
@@ -180,3 +181,77 @@ encodings, each refusing a byte too many or too few:
 | `PostGkr` | per shard, in statement order: family `u32`, index `u32`, `ts_start` and `ts_end` `u64`, the witness commitment, the outputs, the GKR proof, the base claims' point, the shard transcript's snapshot after the GKR proof |
 | `PostOpening` | each shard's `ShardProof` bytes, its opening in them |
 | `Final` | the complete `PublicInputs` bytes, then the proofs |
+
+## 7. The circuit check
+
+`host::check(setup, io, max_in_flight, max_cycles) -> Result<CheckReport, CheckFailure>` holds
+the execution a proof would be made of to every circuit the proof would be verified by,
+committing and proving nothing. A Prover Host runs it on each candidate batch, so a batch whose
+proof would fail is refused before any proving starts: a run the executor accepts and the circuits
+reject is a completeness defect of the core.
+
+1. **The untraced run.** `emulator::run_bounded(image, io, max_cycles)` refuses a fatal run, a
+   run that passes `max_cycles` cycles (`EmuError::CycleLimit { limit }`,
+   [execution-trace.md](execution-trace.md) §10) and a nonzero exit status before any column
+   exists, as `host::prove`'s first run does.
+2. **The witness pass.** `prover::witness_block_streaming(setup, io, max_in_flight, max_cycles,
+   work)` is pass 1's execution (§2) under the same cap, the same pipeline (§5) and the same
+   statement record, but where pass 1 commits a shard's `M` columns it fills every column through
+   the fill and multiplicities pass 2's proof takes them from (`ShardWitness`) and hands them to
+   `work`; window shards come after the exit, in batches of `max_in_flight`. Its memory is §1's
+   bound without any forward pass: at most `max_in_flight` shards' committed columns.
+3. **Each shard**, as it fills: `checker::evaluate_rows` evaluates every row-local relation of
+   the family's flat list on every row through the kernel, padding rows among them, and folds the
+   halving lists over the rows into the circuit's outputs ([circuits.md](circuits.md) §3); then
+   each channel's root pair must hold, the public windows' value columns must be the statement's
+   words, and the time window must be within the clock.
+4. **The statement**: `check_memory_windows`, `check_ts_windows` over every shard's record, and
+   `verifier_core::verify_global_memory` over every shard's roots: the boundary in range,
+   `v_10 = exit_status`, and the multiset reconciling against the register and pc boundary.
+
+The challenges are the check's own: the five memory challenges, then `g` and `β`, squeezed from a
+Poseidon2 transcript ([transcript.md](transcript.md)) that absorbs the program identity, the
+public input and the advice under `CIRCUIT_CHECK`. The witness is a function of exactly those, so
+no input can be chosen against the values it is checked at; each fingerprint wrongly agrees with
+probability about its degree over `|Fp2|`.
+
+| a proof's check ([proof.md](proof.md) §6) | the circuit check |
+| --- | --- |
+| 0, exit status 0 | the untraced run's status, and the record's |
+| 2, the window rules and the payload ceiling | `check_memory_windows`; the executor refuses an input or journal past its window |
+| 4, the time window | each shard's, and `check_ts_windows` over all (B4) |
+| 7–8, the GKR pass | every relation on every row, exactly, rather than at a random point |
+| 9, each channel's root pair | the same pairs, folded from the rows |
+| 10c, the public windows | every word of the value column, rather than one evaluation |
+| 10b, the boundary and the reconciliation | `verify_global_memory` itself, over the folded roots |
+| 1, 3, 5, 6, 10a, 11, B1, B3 | not checked: they read commitments, the transcript or a proof's shape, which an honest prover's columns always meet |
+
+A refusal, `CheckFailure`, names what fails: `Execution(EmuError)`, `NonzeroExit { status }`,
+`Prover(ProverError)` (a column the fill refuses, such as an unassigned ecall's row),
+`Relation { family, shard, row, relation }` (the lowest row, the first relation there in relation
+order), `Channel { family, shard, channel, unmatched }` (the first tuple no table row holds, from
+`checker::channel_sums`, or `None` where the counts are what is wrong), `PublicValue { family,
+shard, row }`, `Statement(_)`, `Memory(_)`, or `Unsupported { family, detail }`, a circuit the
+evaluator cannot read, a defect of the core. A shard's failure is the earliest in fill order, as
+§5's is.
+
+**What it does not establish.** That the two passes of a proof build the same columns, which the
+executor's determinism gives and pass 2 asserts; that the commitments and openings verify, which
+they do for an honest prover's columns; and anything [proof.md](proof.md) §1's statement binds
+that this execution does not choose: the identity a verifier holds, the key.
+
+**Cost**, measured on 2026-11-24 on an Apple M5 Pro (18 cores, 48 GB), release build, under
+`apogee-host`'s `guard.sh 8 900`, on `guests/amazon`'s batch from
+`crates/emulator/tests/guests.rs` (77 signed purchases, 3,860,659 cycles) with its execution
+families at `2^20`, 22 statement shards:
+
+| | wall | peak RSS |
+| --- | --- | --- |
+| `emulator::run` | 68 ms | 3.8 MB |
+| `host::check`, `max_in_flight` 8 | 4.9 s, the executor 0.8 s of it | 5.3 GB |
+| `host::check`, `max_in_flight` 1 | 11.9 s | 2.2 GB |
+| `host::setup`, once a program | 2.1 s | 0.34 GB |
+
+The peaks include the setup. A check's time is the prover's fill of every shard and one
+evaluation of every row; its memory is the shards' committed columns, where a proof of the same
+shards holds their forward passes too (§1).

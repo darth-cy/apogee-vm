@@ -11,11 +11,28 @@ publish.workspace = true
 # protocol entry points, and the verifier's `(key, proof, public inputs)`
 # signature holds because the wrapper adds nothing to the verifier's inputs --
 # it reads the statement out of the proof rather than taking a second copy of
-# it.
+# it. `host::check` holds an execution's witness to its circuits before it is
+# proved, committing nothing (`docs/spec/streaming.md` §7).
 [dependencies]
+# `host::check`: the row evaluator, the native channel sums, and the tamper
+# twins' cell writer for its tests.
+checker.workspace = true
+constants.workspace = true
+constraints.workspace = true
 emulator.workspace = true
+field.workspace = true
+gkr.workspace = true
 loader.workspace = true
 program.workspace = true
 prover.workspace = true
 verifier.workspace = true
 verifier-core.workspace = true
+# The check's own challenges, squeezed under `CIRCUIT_CHECK`.
+transcript.workspace = true
+
+[dev-dependencies]
+# The suites' guests, built from source, and the executor suites' inputs for
+# them (`crates/emulator/tests/common`, included by path).
+isa.workspace = true
+test-support.workspace = true
+trace.workspace = true

@@ -39,6 +39,16 @@
 //! exit-status check before the prover starts, is in `Proven::wall_nanos`
 //! alone.
 //!
+//! # Checking before proving
+//!
+//! [`check`] runs the execution [`prove`] would prove, under a cycle cap, and
+//! holds every shard's witness — built by the prover's own fills — to its
+//! circuit, committing and proving nothing: what a Prover Host runs on a
+//! candidate batch so that one whose proof would fail is refused before any
+//! proving starts (`docs/spec/streaming.md` §7). [`CheckFailure`] names what
+//! failed: the executor's error, the exit status, or the family, shard, row
+//! and relation or channel.
+//!
 //! # The proof archive
 //!
 //! [`proof_archive`] is the four files a proved block leaves on disk, which are
@@ -47,8 +57,11 @@
 //! format's reader is the CLI, so its writer lives beside the reader and there
 //! is one definition of it.
 
+pub use check::{check, CheckFailure, CheckReport};
 pub use prover::DEFAULT_MAX_IN_FLIGHT;
 pub use verifier::proof_archive;
+
+mod check;
 
 use std::time::Instant;
 

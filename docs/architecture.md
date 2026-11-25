@@ -67,6 +67,12 @@ The prover executes the guest twice: once to fix the statement and its challenge
 prove each shard as it fills. Its memory is bounded by the shards in flight, not by the execution
 ([streaming.md](spec/streaming.md)).
 
+Before proving, `host::check` runs the same execution under a cycle cap, builds every shard's
+witness through the prover's own fills, and holds it natively to everything the proof would
+establish: every row to its circuit, every channel, the public windows and the memory multiset,
+committing nothing. A batch whose proof would fail is refused before any proving starts
+([streaming.md](spec/streaming.md) §7).
+
 ## 3. How soundness composes
 
 Each shard's GKR pass ties its circuit's outputs to its base columns' claimed values, and its
@@ -131,6 +137,7 @@ own independent oracle.
 | each family's gates | row suites that build rows with Rust's own integer arithmetic and evaluate them through the checker; the arithmetic cores exhaustively at reduced word widths; **tamper twins**, a forged witness proved as an honest prover would and refused in the expected class |
 | the memory and lookup arguments | native evaluators in `checker` over executed traces |
 | the executor | its own trace's self-check and the arguments above; there is no second executor |
+| an execution's witness, before it is proved | `host::check`: every row through `checker::evaluate_rows`, the flat relations rather than the layered gates the prover evaluates, every channel, the windows and the multiset ([streaming.md](spec/streaming.md) §7) |
 
 The suites that prove real shards need up to 22 GB and run outside CI;
 `.github/workflows/ci.yml` lists them.
