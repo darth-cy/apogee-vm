@@ -282,10 +282,7 @@ fn prove_all(
 }
 
 /// Shard `(family, index)`'s honest columns with `mine` written into them, and
-/// its channels recounted as the honest prover would: a channel whose counts
-/// are the tamper keeps them, and one whose table does not hold a tampered
-/// tuple has no count and keeps its honest one — neither stops another
-/// channel's recount.
+/// its channels recounted as the honest prover would ([`tamper_columns`]).
 fn tampered_columns(
     setup: &ProverSetup,
     archive: &TraceArchive,
@@ -295,7 +292,33 @@ fn tampered_columns(
 ) -> Vec<(PolyAddress, MultilinearPoly)> {
     let mut columns =
         shard_columns(setup, archive, family, index, windows).unwrap_or_else(|e| panic!("{e}"));
-    for c in mine {
+    let mine: Vec<Cell> = mine.iter().map(|c| **c).collect();
+    tamper_columns(setup, (family, index), &mut columns, &mine);
+    columns
+}
+
+/// Shard `(family, index)`'s committed columns with `cells`' for that shard
+/// written into them, and its channels recounted as the honest prover would:
+/// a channel whose counts are the tamper keeps them, and one whose table does
+/// not hold a tampered tuple has no count and keeps its honest one — neither
+/// stops another channel's recount. The harness's own tamper of a shard, for
+/// any path that holds a shard's columns: `host::check`'s twins use it. Cells
+/// of other shards are ignored; a cell naming a column the shard lacks
+/// panics.
+pub fn tamper_columns(
+    setup: &ProverSetup,
+    (family, index): (FamilyId, u32),
+    columns: &mut [(PolyAddress, MultilinearPoly)],
+    cells: &[Cell],
+) {
+    let mine: Vec<&Cell> = cells
+        .iter()
+        .filter(|c| (c.family, c.shard) == (family, index))
+        .collect();
+    if mine.is_empty() {
+        return;
+    }
+    for c in &mine {
         let column = columns
             .iter_mut()
             .find(|(a, _)| *a == c.address)
@@ -312,7 +335,7 @@ fn tampered_columns(
         if mine.iter().any(|c| c.address == spec.multiplicity) {
             continue;
         }
-        let Ok(recount) = build_multiplicities(&circuit.artifact, &columns, slice::from_ref(spec))
+        let Ok(recount) = build_multiplicities(&circuit.artifact, columns, slice::from_ref(spec))
         else {
             continue;
         };
@@ -324,7 +347,6 @@ fn tampered_columns(
             slot.1 = column;
         }
     }
-    columns
 }
 
 #[cfg(test)]

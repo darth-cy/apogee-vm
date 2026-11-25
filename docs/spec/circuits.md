@@ -139,6 +139,7 @@ meaning. Sampled checks use eight pseudo-random points from fixed seeds.
 | `check_padding`, `check_padding_identity` | the padding contract and its product-tree clause, fraction trees exempt |
 | `check_lookup_discharge` | [lookup.md](lookup.md) §11's discharge rule, gating and compression re-derived |
 | `violated_relations`, `violated_lookups` | a witness row's row-local relations and range obligations |
+| `evaluate_rows` | a whole shard's base: every row-local relation on every row, the first broken one's row and name, and the outputs, the halving lists folded over the rows rather than materialized ([streaming.md](streaming.md) §7) |
 | `channel_sums`, `check_channel_roots` | each channel's sum and denominator product, folded row by row rather than by a tree, naming every tuple no table row holds; then the circuit's root pairs against them |
 | `memory_roots` | the two roots as products over the rows the halving phase reads |
 | `memory_columns_from_log`, `frame_witness_from_log` | an execution family's frame columns from the memory event log, where `trace` builds them from a shard's rows |
@@ -154,7 +155,9 @@ re-proved — then verifies a shard or the block and asserts the refusal's class
 channel too), or that a change breaking nothing verifies. A setup column cannot be recommitted, the
 key fixing it, so a twin that moves one — the image column, a generic-table row — is refused by the
 opening, `Opening`. It relies on the prover checking nothing ([gkr.md](gkr.md) §5) and runs on the
-archived path ([streaming.md](streaming.md) §6).
+archived path ([streaming.md](streaming.md) §6). `checker::tamper_columns` is its cell writer, the
+tamper and the recount on one shard's columns, which `host::check`'s twins write into the streamed
+witness ([streaming.md](streaming.md) §7).
 
 **A dump** (`checker::dump`, CLI in [tools.md](../tools.md) §4) prints the columns by address and
 name, each list's gates in [gkr.md](gkr.md) §1's template with their relations, the flat relations
