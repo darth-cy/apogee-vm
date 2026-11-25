@@ -47,12 +47,16 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use emulator::{GuestIo, ShardChunk, StreamedExecution, StreamingRun};
+use emulator::{EmuError, GuestIo, ShardChunk, StreamedExecution, StreamingRun};
 use rayon::prelude::*;
 use trace::{build_boundary_finals, init_windows, plan_shards, FrameSlice, RowSlice};
 use verifier_core::{
-    statement_shards, window_height, BlockProof, Commitment, PublicInputs, ShardProof,
+    statement_shards, window_height, BlockProof, BoundaryFinals, Commitment, PublicInputs,
+    ShardProof,
 };
+
+use constraints::PolyAddress;
+use poly::MultilinearPoly;
 
 use program::FamilyId;
 
@@ -183,7 +187,8 @@ fn pass1(
 ) -> Result<(GlobalCommitState, StreamedExecution), ProverError> {
     let started = Instant::now();
     let config = &setup.program.config;
-    let h = window_height(config).map_err(|e| ProverError::Trace(e.to_string()))?;
+    // A config with no window height is refused before the guest runs.
+    window_height(config).map_err(|e| ProverError::Trace(e.to_string()))?;
 
     let run = StreamingRun::new(&setup.program.image, io, &setup.program.tables, config)
         .map_err(|e| ProverError::Trace(e.to_string()))?;
@@ -195,41 +200,14 @@ fn pass1(
     let mut peak = piped.peak_in_flight;
     let done = piped.done;
     let filled = piped.results;
-
-    // The statement's variable-length record, all of it a function of the
-    // last-access tables and the profile: the window list, the shard counts and
-    // the register/pc boundary (`docs/spec/memory.md` §3.4, §4.1).
-    let windows = init_windows(&done.state, h);
-    let counts = shard_counts(config, &done.profile, &io.advice, &windows, h);
-    let boundary = build_boundary_finals(&done.state);
     report.cycles = done.execution.cycle_count;
-
-    // **Only an execution that exits 0 is provable** (`docs/spec/proof.md`
-    // §6, step 0). The status, `x10`'s final low word, exists once the guest
-    // has exited, which is here: refused before a window shard is committed,
-    // before the statement and before pass 2 proves any shard. The shards the
-    // execution filled have had their `M` columns committed by now, and that
-    // work is lost; a caller that would rather not pay it executes the guest
-    // first, as `host::prove` does.
-    let status = boundary.reg_values[9] as u32;
-    if status != 0 {
-        return Err(ProverError::NonzeroExit { status });
-    }
-
-    // The cut the streaming executor made is the plan's, family by family. It
-    // cannot differ -- both are `ceil(rows / height)` over the same rows -- and
-    // an assertion is what says so out loud rather than leaving the reader to
-    // check `flush_family` against `plan_shards`.
-    let plan = plan_shards(&done.profile, config);
-    for (family, count) in &plan.shards {
-        let n = filled.iter().filter(|((f, _), _)| f == family).count();
-        assert_eq!(
-            n,
-            *count as usize,
-            "streaming: {} filled {n} shards and the plan counts {count}",
-            program::family_name(*family)
-        );
-    }
+    let ids: Vec<ShardId> = filled.iter().map(|(id, _)| *id).collect();
+    let Record {
+        windows,
+        counts,
+        boundary,
+        status,
+    } = record(setup, io, &done, &ids)?;
     // Every shard's memory commitment in statement order: the filled shards'
     // from the pipeline, the window families' now.
     let order = statement_shards(config, &counts);
@@ -287,6 +265,65 @@ fn pass1(
         max_in_flight
     );
     Ok((global, done))
+}
+
+/// The statement's variable-length record of a finished execution, and its
+/// exit status.
+struct Record {
+    windows: Vec<u32>,
+    counts: Vec<u32>,
+    boundary: BoundaryFinals,
+    status: u32,
+}
+
+/// The record pass 1 commits, all of it a function of the last-access tables
+/// and the profile: the window list, the shard counts and the register/pc
+/// boundary (`docs/spec/memory.md` §3.4, §4.1). `filled` is every shard the
+/// execution filled.
+fn record(
+    setup: &ProverSetup,
+    io: &GuestIo,
+    done: &StreamedExecution,
+    filled: &[ShardId],
+) -> Result<Record, ProverError> {
+    let config = &setup.program.config;
+    let h = window_height(config).map_err(|e| ProverError::Trace(e.to_string()))?;
+    let windows = init_windows(&done.state, h);
+    let counts = shard_counts(config, &done.profile, &io.advice, &windows, h);
+    let boundary = build_boundary_finals(&done.state);
+
+    // **Only an execution that exits 0 is provable** (`docs/spec/proof.md`
+    // §6, step 0). The status, `x10`'s final low word, exists once the guest
+    // has exited, which is here: refused before a window shard is committed,
+    // before the statement and before pass 2 proves any shard. The shards the
+    // execution filled have had their `M` columns committed by now, and that
+    // work is lost; a caller that would rather not pay it executes the guest
+    // first, as `host::prove` does.
+    let status = boundary.reg_values[9] as u32;
+    if status != 0 {
+        return Err(ProverError::NonzeroExit { status });
+    }
+
+    // The cut the streaming executor made is the plan's, family by family. It
+    // cannot differ -- both are `ceil(rows / height)` over the same rows -- and
+    // an assertion is what says so out loud rather than leaving the reader to
+    // check `flush_family` against `plan_shards`.
+    let plan = plan_shards(&done.profile, config);
+    for (family, count) in &plan.shards {
+        let n = filled.iter().filter(|(f, _)| f == family).count();
+        assert_eq!(
+            n,
+            *count as usize,
+            "streaming: {} filled {n} shards and the plan counts {count}",
+            program::family_name(*family)
+        );
+    }
+    Ok(Record {
+        windows,
+        counts,
+        boundary,
+        status,
+    })
 }
 
 /// The fill's view of a shard a streaming run has just filled.
@@ -509,6 +546,176 @@ fn first_error<T>(results: Vec<Result<T, ProverError>>) -> Result<Vec<T>, Prover
 }
 
 // ---------------------------------------------------------------------------
+// The witness pass
+// ---------------------------------------------------------------------------
+
+/// One statement shard's committed columns, as pass 2 fills them for its
+/// proof: what [`witness_block_streaming`] hands its caller, shard by shard.
+pub struct ShardWitness {
+    pub family: FamilyId,
+    pub index: u32,
+    /// Every committed column, `M`, `W` and `S`, multiplicities last: the
+    /// family's fill and `trace::build_multiplicities`, which is what
+    /// `prove_shard_columns` receives in pass 2.
+    pub columns: Vec<(PolyAddress, MultilinearPoly)>,
+    /// The statement's `ZERO_WINDOWS` list for a window family's shard, whose
+    /// challenges read it (`verifier_core::shard_challenges`). Empty for a
+    /// shard the execution fills: that shard exists before the list does,
+    /// and its challenges do not read it.
+    pub windows: Vec<u32>,
+}
+
+/// What [`witness_block_streaming`] leaves.
+pub struct WitnessedBlock<T> {
+    /// The statement pass 1 commits, without its memory commitments and
+    /// roots: the streams, the exit status, the shard counts, the window list
+    /// and the boundary.
+    pub statement: PublicInputs,
+    /// The caller's result for every statement shard, in statement order.
+    pub shards: Vec<T>,
+    /// Pass 1's fields of a [`StreamingReport`]: the cycle and shard counts,
+    /// the most shards held at once, the wall clock and the executor's time.
+    pub report: StreamingReport,
+}
+
+/// Why [`witness_block_streaming`] stopped.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WitnessError<E> {
+    /// The executor stopped the guest: a fatal guest error, or
+    /// `EmuError::CycleLimit` past the cap.
+    Execution(EmuError),
+    /// The prover refused, as pass 1 would: a nonzero exit status, or a
+    /// column it cannot build.
+    Prover(ProverError),
+    /// The caller refused a shard.
+    Work(E),
+}
+
+/// One execution of `setup`'s program over `io`, every statement shard's
+/// committed columns built as pass 2 builds them and handed to `work`,
+/// committing and proving nothing: the witness a proof of the execution would
+/// be made from, for a caller that checks it first (`host::check`).
+///
+/// It is pass 1's execution, under a cap: `emulator::StreamingRun` stopped at
+/// `max_cycles` (`emulator::run_bounded`), the same image, input and advice,
+/// the same pipeline of `max_in_flight` workers, so the same bound on the
+/// shards held at once (`docs/spec/streaming.md` §5), and the same statement,
+/// whose record it returns. Where pass 1 commits a shard's `M` columns, this
+/// fills every column, multiplicities included, through the fill pass 2's
+/// proof takes them from, and calls `work` on them.
+///
+/// The failure returned is the earliest, as the pipeline's is: in fill order
+/// for the shards the execution fills, an executor failure after every shard
+/// it filled, then the record's — a nonzero exit status — and then the window
+/// shards' in statement order.
+pub fn witness_block_streaming<T: Send, E: Send>(
+    setup: &ProverSetup,
+    io: &GuestIo,
+    max_in_flight: usize,
+    max_cycles: u64,
+    work: impl Fn(ShardWitness) -> Result<T, E> + Sync,
+) -> Result<WitnessedBlock<T>, WitnessError<E>> {
+    assert!(max_in_flight >= 1, "max_in_flight must be at least 1");
+    let started = Instant::now();
+    let config = &setup.program.config;
+    window_height(config).map_err(|e| WitnessError::Prover(ProverError::Trace(e.to_string())))?;
+    let witness = |family, index, source: &ShardSource, windows: Vec<u32>| {
+        let columns =
+            crate::shard_columns_of(setup, family, source).map_err(WitnessError::Prover)?;
+        work(ShardWitness {
+            family,
+            index,
+            columns,
+            windows,
+        })
+        .map_err(WitnessError::Work)
+    };
+
+    let run = StreamingRun::new_bounded(
+        &setup.program.image,
+        io,
+        &setup.program.tables,
+        config,
+        max_cycles,
+    )
+    .map_err(WitnessError::Execution)?;
+    let piped = pipeline_with(
+        1,
+        run,
+        max_in_flight,
+        |chunk| {
+            let height = setup.registration(chunk.family).height;
+            let source = chunk_source(setup, io, chunk, height);
+            witness(chunk.family, chunk.index, &source, Vec::new())
+        },
+        WitnessError::Execution,
+    )?;
+    let done = piped.done;
+    let ids: Vec<ShardId> = piped.results.iter().map(|(id, _)| *id).collect();
+    let Record {
+        windows,
+        counts,
+        boundary,
+        status,
+    } = record(setup, io, &done, &ids).map_err(WitnessError::Prover)?;
+
+    let order = statement_shards(config, &counts);
+    let mut shards: Vec<Option<T>> = (0..order.len()).map(|_| None).collect();
+    for ((family, index), result) in piped.results {
+        shards[position(&order, family, index)] = Some(result);
+    }
+    // The window families last, over the final state, in batches under the
+    // same bound, as pass 1 commits them.
+    let pending: Vec<ShardId> = order
+        .iter()
+        .zip(&shards)
+        .filter(|(_, result)| result.is_none())
+        .map(|(id, _)| *id)
+        .collect();
+    let mut peak = piped.peak_in_flight;
+    for batch in pending.chunks(max_in_flight) {
+        peak = peak.max(batch.len());
+        let made: Vec<Result<T, WitnessError<E>>> = batch
+            .par_iter()
+            .map(|&(family, index)| {
+                let source = window_source(setup, io, &done, &windows, family, index);
+                witness(family, index, &source, windows.clone())
+            })
+            .collect();
+        for (&(family, index), result) in batch.iter().zip(made) {
+            shards[position(&order, family, index)] = Some(result?);
+        }
+    }
+    let report = StreamingReport {
+        cycles: done.execution.cycle_count,
+        shards: order.len(),
+        peak_in_flight: peak,
+        max_in_flight,
+        pass1_ns: started.elapsed().as_nanos() as u64,
+        pass1_execute_ns: piped.execute_ns,
+        ..StreamingReport::default()
+    };
+    let statement = PublicInputs {
+        input: done.execution.io.input.clone(),
+        output: done.execution.io.output.clone(),
+        exit_status: status,
+        shard_counts: counts,
+        windows,
+        boundary,
+        memory_commitments: Vec::new(),
+        memory_roots: Vec::new(),
+    };
+    Ok(WitnessedBlock {
+        statement,
+        shards: shards
+            .into_iter()
+            .map(|result| result.expect("every statement shard is filled or a window shard"))
+            .collect(),
+        report,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // The pipeline
 // ---------------------------------------------------------------------------
 
@@ -562,7 +769,22 @@ fn pipeline<T: Send>(
     workers: usize,
     work: impl Fn(&ShardChunk) -> Result<T, ProverError> + Sync,
 ) -> Result<Piped<T>, ProverError> {
-    let source = Mutex::new(Source::new(pass, workers, run));
+    pipeline_with(pass, run, workers, work, |e| {
+        ProverError::Trace(e.to_string())
+    })
+}
+
+/// [`pipeline`] with its own error type: `stopped` is how an executor failure
+/// reads as one, for [`witness_block_streaming`], whose caller matches on the
+/// executor's own error rather than its text.
+fn pipeline_with<T: Send, E: Send>(
+    pass: u8,
+    run: StreamingRun<'_>,
+    workers: usize,
+    work: impl Fn(&ShardChunk) -> Result<T, E> + Sync,
+    stopped: fn(EmuError) -> E,
+) -> Result<Piped<T>, E> {
+    let source = Mutex::new(Source::new(pass, workers, run, stopped));
     let joined: Vec<_> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..workers)
             .map(|_| scope.spawn(|| worker(&source, &work)))
@@ -596,16 +818,16 @@ fn pipeline<T: Send>(
 
 /// One worker: claim a shard, work it, give it back, claim the next — until
 /// nothing is left to claim or the pipeline has stopped.
-fn worker<T>(
-    source: &Mutex<Source<'_>>,
-    work: &impl Fn(&ShardChunk) -> Result<T, ProverError>,
+fn worker<T, E>(
+    source: &Mutex<Source<'_, E>>,
+    work: &impl Fn(&ShardChunk) -> Result<T, E>,
 ) -> Vec<(ShardId, T)> {
     let _stop = StopOnPanic(source);
     let mut mine = Vec::new();
     // The shard this worker last held, and whether its work failed: given back
     // in the same critical section that claims the next, so the count of shards
     // in flight never holds one twice or drops one.
-    let mut held: Option<(u64, Option<ProverError>)> = None;
+    let mut held: Option<(u64, Option<E>)> = None;
     loop {
         let claimed = {
             // A poisoned lock is a worker that panicked inside the executor,
@@ -635,9 +857,9 @@ fn worker<T>(
 
 /// Stops the pipeline when the worker holding it unwinds, so that one shard's
 /// panic costs the shards already in flight and not the rest of the block.
-struct StopOnPanic<'s, 'a>(&'s Mutex<Source<'a>>);
+struct StopOnPanic<'s, 'a, E>(&'s Mutex<Source<'a, E>>);
 
-impl Drop for StopOnPanic<'_, '_> {
+impl<E> Drop for StopOnPanic<'_, '_, E> {
     fn drop(&mut self) {
         // A poisoned lock means the panic was inside the executor, and every
         // other worker stops on the poison itself.
@@ -651,7 +873,7 @@ impl Drop for StopOnPanic<'_, '_> {
 
 /// What the workers share, behind the pipeline's one lock: the executor, the
 /// shards it filled that no worker has claimed, and the counts.
-struct Source<'a> {
+struct Source<'a, E> {
     /// 1 or 2, for the log and the assertions.
     pass: u8,
     /// How many workers there are, which no count of claims may pass.
@@ -671,13 +893,20 @@ struct Source<'a> {
     /// The executor's time, summed over every step any worker took.
     execute_ns: u64,
     /// The earliest failure in fill order, and its place.
-    failure: Option<(u64, ProverError)>,
+    failure: Option<(u64, E)>,
+    /// An executor failure, as a failure.
+    stopped: fn(EmuError) -> E,
     /// A failure or a panic has happened: nothing more is claimed.
     stop: bool,
 }
 
-impl<'a> Source<'a> {
-    fn new(pass: u8, workers: usize, run: StreamingRun<'a>) -> Source<'a> {
+impl<'a, E> Source<'a, E> {
+    fn new(
+        pass: u8,
+        workers: usize,
+        run: StreamingRun<'a>,
+        stopped: fn(EmuError) -> E,
+    ) -> Source<'a, E> {
         Source {
             pass,
             workers,
@@ -689,6 +918,7 @@ impl<'a> Source<'a> {
             peak: 0,
             execute_ns: 0,
             failure: None,
+            stopped,
             stop: false,
         }
     }
@@ -729,7 +959,7 @@ impl<'a> Source<'a> {
                     // Every shard filled before this step has been claimed —
                     // the executor steps only when none is waiting — so the
                     // failure's place is after all of them.
-                    self.fail(self.filled, ProverError::Trace(e.to_string()));
+                    self.fail(self.filled, (self.stopped)(e));
                     return None;
                 }
             }
@@ -782,7 +1012,7 @@ impl<'a> Source<'a> {
 
     /// A worker is done with the shard it held; `failed` is that shard's place
     /// in fill order and its error, if its work failed.
-    fn give_back(&mut self, failed: Option<(u64, ProverError)>) {
+    fn give_back(&mut self, failed: Option<(u64, E)>) {
         self.working -= 1;
         if let Some((seq, error)) = failed {
             self.fail(seq, error);
@@ -797,7 +1027,7 @@ impl<'a> Source<'a> {
     /// always worked to its end; if one of them fails too, it is recorded here,
     /// and it is earlier. A diagnostic that named a different shard on a
     /// different machine would be one nobody could reproduce.
-    fn fail(&mut self, seq: u64, error: ProverError) {
+    fn fail(&mut self, seq: u64, error: E) {
         if self.failure.as_ref().is_none_or(|(at, _)| seq < *at) {
             self.failure = Some((seq, error));
         }
@@ -942,7 +1172,7 @@ mod tests {
     fn the_guest_is_stepped_only_for_a_claim_with_nothing_waiting() {
         let guest = shards();
         let (want, _) = reference(&guest);
-        let mut source = Source::new(1, 2, run(&guest));
+        let mut source = Source::new(1, 2, run(&guest), |e| ProverError::Trace(e.to_string()));
         assert_eq!(source.filled, 0, "building the source steps nothing");
 
         let (first, a) = source.claim().expect("a first shard");

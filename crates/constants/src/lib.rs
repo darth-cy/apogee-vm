@@ -176,6 +176,12 @@ pub mod transcript_tags {
     /// `docs/spec/program.md` §8.
     pub const FAMILY_CIRCUIT: u64 = 31;
 
+    /// Bytes and challenges. Every message of the circuit check's own sponge
+    /// (`host::check`): the program identity, the public input and the
+    /// advice, then the challenges it evaluates the circuits at. On no proof
+    /// path. `docs/spec/streaming.md` §7.
+    pub const CIRCUIT_CHECK: u64 = 32;
+
     /// Every tag's name, indexed by `tag - 1`. **Documentation, never
     /// semantics**, as `challenge_slot::NAMES` is: the number is the tag, and
     /// nothing reads a name to decide anything. `checker::tape` renders a
@@ -184,7 +190,7 @@ pub mod transcript_tags {
     ///
     /// One entry per tag above, and `"RETIRED"` at the retired 13. The lookup
     /// itself lives in `checker::tape`.
-    pub const NAMES: [&str; 31] = [
+    pub const NAMES: [&str; 32] = [
         "PROTOCOL_SUITE",
         "PUBLIC_INPUTS",
         "SUMCHECK_ROUND",
@@ -216,6 +222,7 @@ pub mod transcript_tags {
         "PCS_CHALLENGE",
         "PCS_DIGEST",
         "FAMILY_CIRCUIT",
+        "CIRCUIT_CHECK",
     ];
 }
 

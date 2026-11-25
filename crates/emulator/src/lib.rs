@@ -102,6 +102,12 @@ pub enum EmuError {
     OutOfBounds { pc: u32, addr: u64 },
     /// Cycle `cycle`'s timestamps would pass the 38-bit clock.
     ClockOverflow { cycle: u64 },
+    /// The run reached cycle `limit + 1` under [`run_bounded`] or
+    /// [`StreamingRun::new_bounded`]: it executed `limit` cycles without
+    /// reaching `exit`. Raised before that cycle is recorded, like
+    /// [`EmuError::ClockOverflow`], which a cap at or above the clock's
+    /// `2^36 - 1` cycles leaves first.
+    CycleLimit { limit: u64 },
     /// The public input handed to the run is longer than a public window's
     /// payload, so no statement could carry it.
     ///
@@ -162,6 +168,10 @@ impl fmt::Display for EmuError {
                 "cycle {cycle} would pass the {}-bit timestamp clock",
                 memory::TS_BITS
             ),
+            EmuError::CycleLimit { limit } => write!(
+                f,
+                "the run passed its cap of {limit} cycles without reaching exit"
+            ),
             EmuError::DelegationFamilyAbsent { pc, number } => write!(
                 f,
                 "the delegation ecall {number:#x} at pc {pc:#010x} has no family in this \
@@ -190,8 +200,24 @@ fn check_io(io: &GuestIo) -> Result<(), EmuError> {
 
 /// Run a guest to its `exit`.
 pub fn run(image: &ProgramImage, io: &GuestIo) -> Result<Execution, EmuError> {
+    run_bounded(image, io, u64::MAX)
+}
+
+/// Run a guest to its `exit` in at most `max_cycles` cycles: a run that
+/// would execute cycle `max_cycles + 1` stops there with
+/// [`EmuError::CycleLimit`], so a guest that never exits is stopped.
+///
+/// The cap is checked where the clock is, once per cycle and in the same
+/// comparison (`Machine::commit`), so a bounded run costs what [`run`] costs;
+/// [`run`] is this at `u64::MAX`, which only the clock bounds.
+pub fn run_bounded(
+    image: &ProgramImage,
+    io: &GuestIo,
+    max_cycles: u64,
+) -> Result<Execution, EmuError> {
     check_io(io)?;
     let mut machine = Machine::new(image, io);
+    machine.cap(max_cycles);
     machine.run()?;
     machine.finish()
 }
@@ -304,6 +330,19 @@ impl<'a> StreamingRun<'a> {
         tables: &'a DecodedTables,
         config: &VmConfig,
     ) -> Result<StreamingRun<'a>, EmuError> {
+        StreamingRun::new_bounded(image, io, tables, config, u64::MAX)
+    }
+
+    /// [`StreamingRun::new`] stopped at `max_cycles`, as [`run_bounded`] is:
+    /// the step that would execute cycle `max_cycles + 1` fails with
+    /// [`EmuError::CycleLimit`].
+    pub fn new_bounded(
+        image: &ProgramImage,
+        io: &'a GuestIo,
+        tables: &'a DecodedTables,
+        config: &VmConfig,
+        max_cycles: u64,
+    ) -> Result<StreamingRun<'a>, EmuError> {
         assert!(
             tables.families.len() == config.families.len()
                 && tables
@@ -315,6 +354,7 @@ impl<'a> StreamingRun<'a> {
         );
         check_io(io)?;
         let mut machine = Machine::new(image, io);
+        machine.cap(max_cycles);
         machine.recorder = Some(Recorder::new(
             tables,
             config,
@@ -472,6 +512,11 @@ impl Cycle {
     }
 }
 
+/// The last cycle the 38-bit clock holds: cycle `c` ends at timestamp
+/// `TS_STEP·c + TS_STEP − 1`, which is below `2^TS_BITS` exactly up to
+/// `2^36 − 1` (`docs/spec/execution-trace.md` §1).
+const CLOCK_LAST_CYCLE: u64 = (1 << memory::TS_BITS) / memory::TS_STEP - 1;
+
 struct Machine<'a> {
     code: Vec<Fetch>,
     slot_base: u32,
@@ -483,6 +528,12 @@ struct Machine<'a> {
     /// initial write of every address, and a cycle-0 pc query could not
     /// strictly follow it.
     cycle: u64,
+    /// The last cycle this run may execute: the cap [`Machine::cap`] set, or
+    /// the clock's last, [`CLOCK_LAST_CYCLE`], whichever is lower. One
+    /// comparison per cycle checks both.
+    last_cycle: u64,
+    /// The cap a [`EmuError::CycleLimit`] names; `u64::MAX` for none.
+    max_cycles: u64,
     /// The public input this run was given: the window's payload, which
     /// `finish` reports as the statement's `input` whether or not the guest
     /// looked (`docs/spec/public-values.md` §9).
@@ -518,6 +569,8 @@ impl<'a> Machine<'a> {
             pc: image.entry,
             ram: HashMap::new(),
             cycle: 1,
+            last_cycle: CLOCK_LAST_CYCLE,
+            max_cycles: u64::MAX,
             public_input: &io.input,
             advice_end: guest_memory::ADVICE_ORIGIN as u64
                 + 4 * trace::advice_region_words(&io.advice),
@@ -573,6 +626,25 @@ impl<'a> Machine<'a> {
         Ok(out)
     }
 
+    /// Stop the run once it would pass `max_cycles` cycles.
+    fn cap(&mut self, max_cycles: u64) {
+        self.max_cycles = max_cycles;
+        self.last_cycle = max_cycles.min(CLOCK_LAST_CYCLE);
+    }
+
+    /// Why cycle `number`, past [`Machine::last_cycle`], may not run: the
+    /// clock if it is past the clock's last cycle, else the cap.
+    #[cold]
+    fn past_last(&self, number: u64) -> EmuError {
+        if number > CLOCK_LAST_CYCLE {
+            EmuError::ClockOverflow { cycle: number }
+        } else {
+            EmuError::CycleLimit {
+                limit: self.max_cycles,
+            }
+        }
+    }
+
     fn run(&mut self) -> Result<(), EmuError> {
         while self.exit.is_none() {
             self.step()?;
@@ -621,7 +693,7 @@ impl<'a> Machine<'a> {
         self.commit(&cycle, instr, pc, next_pc)
     }
 
-    /// Close a cycle: check the clock, hand the queries to the recorder, and
+    /// Close a cycle: check the clock and the cap, hand the queries to the recorder, and
     /// move the pc. The pc query itself — `pc` read, `next_pc` written, at
     /// slot 0 — is the recorder's to log, since every cycle has one.
     fn commit(
@@ -632,8 +704,8 @@ impl<'a> Machine<'a> {
         next_pc: u32,
     ) -> Result<(), EmuError> {
         let number = self.cycle;
-        if memory::TS_STEP * number + (memory::TS_STEP - 1) >= 1 << memory::TS_BITS {
-            return Err(EmuError::ClockOverflow { cycle: number });
+        if number > self.last_cycle {
+            return Err(self.past_last(number));
         }
         if let Some(recorder) = &mut self.recorder {
             recorder.record(number, pc, next_pc, instr, cycle);
@@ -2092,6 +2164,56 @@ mod tests {
             machine.step(),
             Err(EmuError::ClockOverflow { cycle: last + 1 })
         );
+    }
+
+    /// A guest that never exits is stopped at its cap: the cycle past it is
+    /// refused, by name, before anything is recorded for it.
+    #[test]
+    fn a_spinning_guest_stops_at_its_cap() {
+        let io = GuestIo {
+            input: Vec::new(),
+            advice: Vec::new(),
+        };
+        let image = spin();
+        assert_eq!(
+            run_bounded(&image, &io, 1000),
+            Err(EmuError::CycleLimit { limit: 1000 })
+        );
+        assert_eq!(
+            run_bounded(&image, &io, 0),
+            Err(EmuError::CycleLimit { limit: 0 })
+        );
+        let mut machine = Machine::new(&image, &io);
+        machine.cap(3);
+        for _ in 0..3 {
+            machine.step().expect("a cycle within the cap");
+        }
+        assert_eq!(machine.step(), Err(EmuError::CycleLimit { limit: 3 }));
+        assert_eq!(machine.cycle, 4, "the refused cycle is not counted");
+    }
+
+    /// A cap the clock reaches first leaves the clock's own error, at the
+    /// clock's last cycle as above it.
+    #[test]
+    fn a_cap_past_the_clock_leaves_the_clocks_error() {
+        let io = GuestIo {
+            input: Vec::new(),
+            advice: Vec::new(),
+        };
+        let image = spin();
+        for cap in [CLOCK_LAST_CYCLE, CLOCK_LAST_CYCLE + 1, u64::MAX - 1] {
+            let mut machine = Machine::new(&image, &io);
+            machine.cap(cap);
+            machine.cycle = CLOCK_LAST_CYCLE;
+            machine.step().expect("the clock's last cycle runs");
+            assert_eq!(
+                machine.step(),
+                Err(EmuError::ClockOverflow {
+                    cycle: CLOCK_LAST_CYCLE + 1
+                }),
+                "cap {cap}"
+            );
+        }
     }
 
     /// A full advice region, `ADVICE_WORDS` words from `ADVICE_ORIGIN`, ends at

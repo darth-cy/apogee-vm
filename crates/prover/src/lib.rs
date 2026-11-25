@@ -106,7 +106,10 @@ use verifier_core::{
 
 pub use fill::{family_fill, Fill, ShardRows, ShardSource};
 pub use phases::{advance, finish, prove_block};
-pub use streaming::{prove_block_streaming, StreamingReport, DEFAULT_MAX_IN_FLIGHT};
+pub use streaming::{
+    prove_block_streaming, witness_block_streaming, ShardWitness, StreamingReport, WitnessError,
+    WitnessedBlock, DEFAULT_MAX_IN_FLIGHT,
+};
 
 /// Every way the prover refuses. One flat enum.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -643,7 +646,7 @@ pub(crate) fn shard_columns_of(
 /// For a family whose rows are words rather than cycles — the window
 /// families — it is [`TRIVIAL_TS_WINDOW`]: such a family owns no part of the
 /// execution's time at all, and there is no column to read one off.
-fn ts_window(family: FamilyId, base: &BaseLayer) -> [u64; 2] {
+pub fn ts_window(family: FamilyId, base: &BaseLayer) -> [u64; 2] {
     if !constants::family::CYCLE_OWNING[family as usize] {
         return TRIVIAL_TS_WINDOW;
     }

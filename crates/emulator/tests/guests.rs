@@ -11,7 +11,7 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 
 use common::{image, instr_at, io, preprocess, traced, TRACED};
-use emulator::{run, trace_run, EmuError};
+use emulator::{run, run_bounded, trace_run, EmuError, StreamingRun};
 use loader::Slot;
 use test_support::{to_hex, Rng};
 
@@ -172,6 +172,30 @@ fn a_public_input_too_long_for_its_window_is_refused_by_name() {
 
 /// One core: the tracing path is the plain path plus a recorder, so both
 /// report the same execution, bit for bit.
+/// The cap counts cycles exactly: a run of `n` cycles finishes under a cap of
+/// `n` as it does unbounded, and under `n − 1` stops with the cap's error, the
+/// streaming tracer at the same cycle as the untraced run.
+#[test]
+fn a_run_finishes_under_a_cap_of_its_cycles_and_stops_under_one_less() {
+    let image = image("fib");
+    let io = io(&common::input_of("fib"));
+    let whole = run(&image, &io).unwrap();
+    let n = whole.cycle_count;
+    assert_eq!(run_bounded(&image, &io, n), Ok(whole));
+    let stopped = Err(EmuError::CycleLimit { limit: n - 1 });
+    assert_eq!(run_bounded(&image, &io, n - 1), stopped);
+    let (tables, config) = preprocess(&image);
+    let mut stream = StreamingRun::new_bounded(&image, &io, &tables, &config, n - 1).unwrap();
+    let streamed = loop {
+        match stream.next_shards() {
+            Ok(chunks) if chunks.is_empty() => panic!("the capped stream reached exit"),
+            Ok(_) => {}
+            Err(e) => break Err(e),
+        }
+    };
+    assert_eq!(streamed, stopped);
+}
+
 #[test]
 fn run_and_trace_run_are_one_execution() {
     for name in TRACED {

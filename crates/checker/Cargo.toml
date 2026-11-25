@@ -22,6 +22,9 @@ poly.workspace = true
 gkr-verify.workspace = true
 program.workspace = true
 prover.workspace = true
+# `evaluate_rows`: a shard's rows split over the pool, as the forward pass
+# splits them.
+rayon.workspace = true
 trace.workspace = true
 # The transcript-tape validator: `TranscriptEvent`, the global commit phase's
 # absorb sequence as the checker renders and diffs it.

@@ -212,6 +212,7 @@ dependencies = [
  "poly",
  "program",
  "prover",
+ "rayon",
  "sumcheck",
  "test-support",
  "trace",
@@ -491,10 +492,19 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 name = "host"
 version = "0.1.0"
 dependencies = [
+ "checker",
+ "constants",
+ "constraints",
  "emulator",
+ "field",
+ "gkr",
+ "isa",
  "loader",
  "program",
  "prover",
+ "test-support",
+ "trace",
+ "transcript",
  "verifier",
  "verifier-core",
 ]

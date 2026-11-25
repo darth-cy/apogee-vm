@@ -35,8 +35,8 @@ choosing, executes instruction by instruction to `EXIT` with status 0, having wr
 journal: no other status has a proof ([proof.md](spec/proof.md) §6). Nothing is claimed of the
 advice, and nothing is hidden: no proof is blinded.
 
-How the core coordinates with the Apogee Deployment Suite and apogee-host is canonical in
-[coordination/](../coordination/README.md).
+How the core coordinates with the other Apogee components is canonical in apogee-coordination
+(`../apogee-coordination/README.md` in the workspace, `github.com/darth-cy/apogee-coordination`).
 
 ## 2. From a binary to a proof
 
@@ -66,6 +66,12 @@ How the core coordinates with the Apogee Deployment Suite and apogee-host is can
 The prover executes the guest twice: once to fix the statement and its challenges, and once to
 prove each shard as it fills. Its memory is bounded by the shards in flight, not by the execution
 ([streaming.md](spec/streaming.md)).
+
+Before proving, `host::check` runs the same execution under a cycle cap, builds every shard's
+witness through the prover's own fills, and holds it natively to everything the proof would
+establish: every row to its circuit, every channel, the public windows and the memory multiset,
+committing nothing. A batch whose proof would fail is refused before any proving starts
+([streaming.md](spec/streaming.md) §7).
 
 ## 3. How soundness composes
 
@@ -113,7 +119,7 @@ shard's witness commitment before its lookup challenges ([proof.md](spec/proof.m
 | traps are not provable | a misaligned access, an access outside mapped memory, `ebreak` or a pc with no instruction ends an execution with no proof ([execution-trace.md](spec/execution-trace.md) §10) |
 | code is static | the instruction stream is the image decoded at load; one undecodable word in an executable segment refuses the program ([program.md](spec/program.md)) |
 | code size | `.text` within a decoded table's reach of its load address, 7.94 MiB at `2^22`, and the image within `bytecode_size_words`, 4 MiB by default ([program.md](spec/program.md) §5, §7) |
-| execution length | timestamps are 38 bits: `2^36 − 1` cycles ([execution-trace.md](spec/execution-trace.md) §1) |
+| execution length | timestamps are 38 bits: `2^36 − 1` cycles ([execution-trace.md](spec/execution-trace.md) §1); a caller's cap stops a run sooner, `CycleLimit` ([execution-trace.md](spec/execution-trace.md) §10) |
 | prover memory | set by the shards in flight ([streaming.md](spec/streaming.md) §5) |
 
 ## 6. How the code is checked
@@ -131,6 +137,7 @@ own independent oracle.
 | each family's gates | row suites that build rows with Rust's own integer arithmetic and evaluate them through the checker; the arithmetic cores exhaustively at reduced word widths; **tamper twins**, a forged witness proved as an honest prover would and refused in the expected class |
 | the memory and lookup arguments | native evaluators in `checker` over executed traces |
 | the executor | its own trace's self-check and the arguments above; there is no second executor |
+| an execution's witness, before it is proved | `host::check`: every row through `checker::evaluate_rows`, the flat relations rather than the layered gates the prover evaluates, every channel, the windows and the multiset ([streaming.md](spec/streaming.md) §7) |
 
 The suites that prove real shards need up to 22 GB and run outside CI;
 `.github/workflows/ci.yml` lists them.

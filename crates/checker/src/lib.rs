@@ -31,11 +31,13 @@ use poly::{MultilinearPoly, PolyBacking};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod memory;
+mod rows;
 mod tamper;
 mod tape;
 
 pub use memory::{frame_witness_from_log, memory_columns_from_log};
-pub use tamper::{Cell, Tamper, TamperHarness};
+pub use rows::{evaluate_rows, RowFailure};
+pub use tamper::{tamper_columns, Cell, Tamper, TamperHarness};
 pub use tape::{check_global_tape, expected_global_tape, global_tape, tape};
 
 /// Independent pseudo-random points per sampled check.
